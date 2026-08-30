@@ -36,7 +36,7 @@ from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
 from octowright.session._protocols import SessionLike
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     OperationGateInvariantError,
     SessionClosedError,
     SessionClosingError,

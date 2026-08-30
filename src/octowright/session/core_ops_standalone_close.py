@@ -26,7 +26,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.session.operation_gate import SessionClosedError
+from octowright.session.operation.gate import SessionClosedError
 
 log = get_logger(__name__)
 

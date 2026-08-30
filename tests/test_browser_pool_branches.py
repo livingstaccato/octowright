@@ -45,7 +45,7 @@ from octowright.browser_pool.relaunch import handoff_browser
 from octowright.browser_pool.roster import close_all, spawn_roster
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
-from octowright.session.operation_gate import SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import SessionClosedError, SessionClosingError
 from tests._pool_invariants import hold_operation, wait_for_active, wait_for_state, wait_until
 
 
@@ -73,7 +73,7 @@ def _fake_session(
     directly, so a bare mock gate would not exercise its actual state
     machine. ``_teardown_after_close_cutoff`` stands in for the real
     session's teardown body (the coordinator calls it, never ``.close()``)."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     gate = SessionOperationGate(instance_id, kind)
     session = SimpleNamespace(
@@ -1842,7 +1842,7 @@ class TestCloseCoordinatorFinallyResilience:
         report) fails the close cleanly with a bounded timeout instead of
         hanging every caller of reservation.wait() forever."""
         from octowright.browser_pool import close_helpers as _lc
-        from octowright.session.operation_gate import SessionOperationGate
+        from octowright.session.operation.gate import SessionOperationGate
 
         monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
         pool = BrowserPool()

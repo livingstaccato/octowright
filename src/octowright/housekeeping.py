@@ -424,7 +424,7 @@ async def _enforce_operation_active_timeout_once(*, log: Any) -> None:
     job exists instead of a per-gate timer.
     """
     from octowright.server import pool as _pool
-    from octowright.session.operation_gate import resolve_operation_active_timeout_seconds
+    from octowright.session.operation.gate import resolve_operation_active_timeout_seconds
 
     ceiling = resolve_operation_active_timeout_seconds()
     if ceiling is None:

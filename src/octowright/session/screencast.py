@@ -14,13 +14,13 @@ from typing import Any, LiteralString, Protocol
 
 from provide.telemetry import get_logger
 
-from octowright.session.operation_gate import (
+from octowright.session.operation.gate import (
     USE_DEFAULT,
     SessionClosedError,
     SessionClosingError,
     UseDefault,
 )
-from octowright.session.operation_gate_types import _join_after_cancellation
+from octowright.session.operation.gate.types import _join_after_cancellation
 
 log = get_logger(__name__)
 

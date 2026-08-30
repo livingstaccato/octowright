@@ -42,7 +42,7 @@ from octowright.http.routes._session_kinds import (
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.plugins.errors import ProtectedSessionCloseError
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
-from octowright.session.operation_gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
+from octowright.session.operation.gate import SessionBusyTimeoutError, SessionClosedError, SessionClosingError
 from octowright.session.screencast_config import screencast_config_block
 
 

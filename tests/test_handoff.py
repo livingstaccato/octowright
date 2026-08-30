@@ -41,7 +41,7 @@ def _fake_source(
     unconditionally once teardown actually runs (a duck type missing them
     used to be safe here only because the old tests mocked ``pool.close``
     away entirely, never reaching that code)."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     gate = SessionOperationGate(instance_id, kind)
     source = SimpleNamespace(
@@ -355,7 +355,7 @@ async def test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snap
     docstring warns about.
     """
     import octowright.browser_pool.relaunch as relaunch_mod
-    from octowright.session.operation_gate import SessionCloseAbortedError
+    from octowright.session.operation.gate import SessionCloseAbortedError
 
     _pop_manifest_noop(monkeypatch)
     pool = BrowserPool()

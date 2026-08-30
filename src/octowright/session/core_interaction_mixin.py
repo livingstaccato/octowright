@@ -26,7 +26,7 @@ from octowright.http_headers import (
 )
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
-from octowright.session.operation_gate import gated_operation
+from octowright.session.operation.gate import gated_operation
 
 log = get_logger(__name__)
 

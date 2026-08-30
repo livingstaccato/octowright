@@ -563,7 +563,7 @@ def _telemetry_fake_source(
     -- Task 8's close_original=True path drives ``_operation_gate`` directly
     via ``close_with_preparation``, so a bare SimpleNamespace can no longer
     stand in (mirrors ``tests/test_handoff.py::_fake_source``)."""
-    from octowright.session.operation_gate import SessionOperationGate
+    from octowright.session.operation.gate import SessionOperationGate
 
     gate = SessionOperationGate(instance_id, kind)
     source = SimpleNamespace(
