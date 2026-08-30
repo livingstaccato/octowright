@@ -34,6 +34,7 @@ from octowright.session.operation_gate import (
     SessionOperationGate,
     resolve_operation_active_timeout_seconds,
 )
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 _ENV = "OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS"
 
@@ -56,6 +57,29 @@ def _make_clock(start: float = 0.0) -> tuple[Callable[[], float], Callable[[floa
         state["now"] += delta
 
     return clock, advance
+
+
+async def _assert_cancelled(task: asyncio.Task[object]) -> None:
+    """Assert *task* was cancelled, without a bound that can be caught away.
+
+    ``async with asyncio.timeout(5): with pytest.raises(asyncio.CancelledError):
+    await task`` looks like a bounded wait, but it is not one: if the
+    ceiling never cancels *task*, ``asyncio.timeout``'s own deadline
+    cancels the awaiting *test* task instead, ``pytest.raises`` happily
+    catches that ``CancelledError`` (it is not checking WHICH task raised
+    it), and the surrounding ``async with`` block then exits normally --
+    the assertion passes whether or not production code did anything.
+    Confirmed by mutation: replacing ``owner.cancel()``
+    (``operation_gate.py``) with ``pass`` left every test using that shape
+    green, just five seconds slower.
+
+    ``asyncio.wait(..., timeout=...)`` does not cancel the awaited task on
+    timeout, so a regression here fails fast with an assertion instead of
+    passing slow.
+    """
+    done, _pending = await asyncio.wait({task}, timeout=5)
+    assert done, "owner task was never cancelled -- the ceiling did not act"
+    assert task.cancelled()
 
 
 # --- Resolver: off by default, falsey tokens, unparsable falls back to OFF ---
@@ -104,6 +128,89 @@ def test_explicit_invalid_override_raises(value: float) -> None:
 
 
 @pytest.mark.asyncio
+async def test_idle_gate_with_nothing_active_is_a_noop() -> None:
+    """The branch housekeeping hits every cycle for every idle session:
+    ``_owner_task``/``_root_operation``/``_active_since`` are all ``None``
+    on a fresh gate, and ``enforce_active_timeout`` must return ``False``
+    without touching anything. A regression here (e.g. an unconditional
+    ``self._clock() - active_since`` before the ``None`` checks) would raise
+    ``TypeError`` -- silently swallowed by housekeeping's per-session
+    ``except Exception``, disarming the backstop for every idle session
+    while only spamming logs, never failing loudly. The ceiling is
+    deliberately near-zero (0.001s) so a slow CI host can't make this flake
+    the other direction -- the point is "nothing active", not "a fast gate"."""
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
+    async with asyncio.timeout(5):
+        assert await gate.enforce_active_timeout(0.001) is False
+    assert gate.snapshot()["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_duration_exactly_at_the_ceiling_breaches() -> None:
+    """The comparison is ``duration < ceiling_seconds`` (early-return on
+    strictly less), so a duration exactly equal to the ceiling breaches --
+    pin the boundary explicitly (only 100-vs-60 and 5-vs-60 were covered
+    otherwise) so a refactor to ``<=`` can't silently move it unnoticed."""
+    clock, advance = _make_clock()
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30, clock=clock)
+    owner_entered = asyncio.Event()
+    never = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("wedged"):
+            owner_entered.set()
+            await never.wait()
+
+    owner_task = asyncio.create_task(owner())
+    async with asyncio.timeout(5):
+        await owner_entered.wait()
+
+    advance(60.0)  # exactly the ceiling, not past it
+    async with asyncio.timeout(5):
+        assert await gate.enforce_active_timeout(60.0) is True
+
+    await _assert_cancelled(owner_task)
+
+
+@pytest.mark.asyncio
+async def test_ceiling_breach_never_fires_the_call_timeout_hook() -> None:
+    """The separation between this backstop and Task 2's per-call
+    ``on_call_timeout`` hook is the load-bearing claim of the design
+    (asserted in this method's own docstring and in ``AGENTS.md``) --
+    verify it rather than merely never having wired a hook to accidentally
+    fire. Wedges INSIDE a real ``bounded()`` call with a budget generous
+    enough (1000s) that it could never expire on its own within this test,
+    so a passing assertion here proves the ceiling's plain
+    ``asyncio.CancelledError`` genuinely does not reach the hook -- not
+    just that nothing was listening."""
+    hook_calls: list[tuple[str, SessionCallTimeoutError]] = []
+
+    def on_call_timeout(operation_name: str, error: SessionCallTimeoutError) -> None:
+        hook_calls.append((operation_name, error))
+
+    gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30, on_call_timeout=on_call_timeout)
+    owner_entered = asyncio.Event()
+
+    async def owner() -> None:
+        async with gate.operation("wedged"):
+            owner_entered.set()
+            await bounded(asyncio.Event().wait(), operation="wedged_call", timeout=1000.0)
+
+    owner_task = asyncio.create_task(owner())
+    async with asyncio.timeout(5):
+        await owner_entered.wait()
+
+    # A ceiling of 0.0 breaches unconditionally against the real clock
+    # (duration is never negative), so no fake clock is needed here -- the
+    # scenario under test is the hook interaction, not clock arithmetic.
+    async with asyncio.timeout(5):
+        assert await gate.enforce_active_timeout(0.0) is True
+
+    await _assert_cancelled(owner_task)
+    assert hook_calls == []
+
+
+@pytest.mark.asyncio
 async def test_exceeding_ceiling_cancels_owner_and_breaks_gate() -> None:
     clock, advance = _make_clock()
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30, clock=clock)
@@ -123,9 +230,7 @@ async def test_exceeding_ceiling_cancels_owner_and_breaks_gate() -> None:
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(60.0) is True
 
-    async with asyncio.timeout(5):
-        with pytest.raises(asyncio.CancelledError):
-            await owner_task
+    await _assert_cancelled(owner_task)
 
     assert gate.snapshot()["state"] == "broken"
 
@@ -149,9 +254,7 @@ async def test_subsequent_operation_rejected_fast_not_queued() -> None:
     advance(100.0)
     async with asyncio.timeout(5):
         assert await gate.enforce_active_timeout(60.0) is True
-    async with asyncio.timeout(5):
-        with pytest.raises(asyncio.CancelledError):
-            await owner_task
+    await _assert_cancelled(owner_task)
 
     async def later() -> None:
         async with gate.operation("after"):
@@ -206,9 +309,7 @@ async def test_metric_increments_exactly_once_per_breach(monkeypatch: pytest.Mon
         # unwinding must see the state is no longer OPEN and return early.
         assert await gate.enforce_active_timeout(60.0) is False
 
-    async with asyncio.timeout(5):
-        with pytest.raises(asyncio.CancelledError):
-            await owner_task
+    await _assert_cancelled(owner_task)
 
     assert len(metric_cap.calls) == 1
     amount, attributes = metric_cap.calls[0]
@@ -257,9 +358,7 @@ async def test_other_gates_are_unaffected_by_one_gates_breach() -> None:
         assert await wedged_gate.enforce_active_timeout(60.0) is True
         assert await healthy_gate.enforce_active_timeout(60.0) is False
 
-    async with asyncio.timeout(5):
-        with pytest.raises(asyncio.CancelledError):
-            await wedged_task
+    await _assert_cancelled(wedged_task)
     assert wedged_gate.snapshot()["state"] == "broken"
 
     # The healthy session was never cancelled and finishes normally on its
