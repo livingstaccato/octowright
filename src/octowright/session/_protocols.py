@@ -90,7 +90,13 @@ class SessionLike(Protocol):
     # dispatcher. The remaining action methods (navigate, type_text,
     # press_key, etc.) are looked up dynamically through ``_ACTION_MAP``
     # so they don't need a declared signature here.
-    async def click(self, selector: str, *, timeout_ms: int | None = None) -> None: ...
+    async def click(
+        self,
+        selector: str,
+        *,
+        timeout_ms: int | None = None,
+        no_wait_after: bool = False,
+    ) -> None: ...
 
     async def fill(self, selector: str, value: str, *, timeout_ms: int | None = None) -> None: ...
 
