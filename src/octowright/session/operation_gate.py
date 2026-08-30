@@ -27,6 +27,7 @@ from octowright.session.operation_gate_types import (
     OperationGateInvariantError,
     OperationGateState,
     SessionBusyTimeoutError,
+    SessionCloseAbortedError,
     SessionClosedError,
     SessionClosingError,
     _LeaseToken,
@@ -43,6 +44,7 @@ __all__ = [
     "OperationGateSnapshot",
     "OperationGateState",
     "SessionBusyTimeoutError",
+    "SessionCloseAbortedError",
     "SessionClosedError",
     "SessionClosingError",
     "SessionOperationGate",
@@ -581,13 +583,26 @@ class SessionOperationGate(_CloseGateMixin):
         ``tests/test_operation_gate_integration.py::test_active_timeout_ceiling_unwedges_a_close_in_progress``.
         The one thing that does NOT happen on this path: the actual
         Playwright teardown inside ``close_operation``'s body never runs for
-        a reservation that was still queued (as opposed to already granted
-        and itself wedged mid-teardown, which this method can also cancel,
-        and which unwinds through the pre-existing ``_release_close``
-        cancellation branch instead) -- but an unclosed browser process on a
-        session that was already wedged and never going to close cleanly
-        either way predates this feature; what changes is that the caller
-        and the pool's own bookkeeping are no longer stuck waiting on it.
+        a reservation that was still queued -- but an unclosed browser
+        process on a session that was already wedged and never going to
+        close cleanly either way predates this feature; what changes is
+        that the caller and the pool's own bookkeeping are no longer stuck
+        waiting on it.
+
+        This method can ALSO cancel a close reservation that was already
+        granted and is itself wedged mid-teardown (e.g. a hung
+        ``context.close()``). CORRECTION -- disproved by driving it, not by
+        re-reading the call graph (an earlier version of this docstring
+        claimed the opposite): that does NOT unwind through
+        ``_release_close``'s cancellation branch. ``prepare_then_teardown``
+        swallows the ``CancelledError`` and returns it instead of raising,
+        so ``outcome`` stays ``"ok"`` and ``_release_close`` converts
+        nothing; the raw ``CancelledError`` reaches ``fail_close`` directly,
+        which normalizes it into ``SessionCloseAbortedError``. See that
+        class's docstring (``operation_gate_types.py``) and
+        ``_terminal_close_failure`` (``operation_gate_close.py``) for the
+        full mechanism, and ``relaunch._close_with_fallback_snapshot`` for
+        why the distinction from a plain ``SessionClosedError`` matters.
 
         Deliberately does NOT raise or publish a ``SessionCallTimeoutError``.
         That machinery (``session/timeouts.bounded``, this gate's

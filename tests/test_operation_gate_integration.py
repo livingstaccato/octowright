@@ -532,11 +532,16 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
     ``entry.reservation.wait()`` raised it as-is -- a ``BaseException`` an
     ``except Exception`` handler cannot catch, and one that marks the
     AWAITING task cancelled too. This test proves the caller instead gets an
-    ordinary, catchable ``SessionClosedError``.
+    ordinary, catchable ``SessionCloseAbortedError`` -- the ``SessionClosedError``
+    subclass ``_terminal_close_failure`` raises specifically for a close
+    aborted mid-teardown (Task 3 review round 3, D1), which
+    ``relaunch._close_with_fallback_snapshot`` relies on to tell this case
+    apart from an ordinary close-vs-eviction race (see
+    ``tests/test_handoff.py::test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snapshot``).
     """
     from octowright.browser_pool import close_helpers as _close_helpers
     from octowright.browser_pool.lifecycle import reserve_close_browser
-    from octowright.session.operation_gate import SessionClosedError
+    from octowright.session.operation_gate import SessionCloseAbortedError
 
     monkeypatch.setattr(_close_helpers, "remove_manifest_session", lambda _id: None)
     pool = BrowserPool()
@@ -566,7 +571,7 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
         assert await session._operation_gate.enforce_active_timeout(0.0) is True
 
     async with asyncio.timeout(5):
-        with pytest.raises(SessionClosedError):
+        with pytest.raises(SessionCloseAbortedError):
             await entry.reservation.wait()
 
     assert session.instance_id not in pool._sessions
