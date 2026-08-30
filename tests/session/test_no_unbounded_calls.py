@@ -119,7 +119,11 @@ def _unbounded_calls(path: Path) -> list[tuple[int, str]]:
 def test_no_unbounded_title_content_or_evaluate_calls() -> None:
     offenders = {}
     for path in sorted(SRC.rglob("*.py")):
-        rel = str(path.relative_to(SRC))
+        # as_posix(), not str(): on Windows str() yields backslash separators
+        # ('session\\aria_redaction.py'), which never match ALLOWED's forward-slash
+        # keys -- so every allowlisted line reported as an offender and this test
+        # failed on both Windows legs while passing on linux and macOS.
+        rel = path.relative_to(SRC).as_posix()
         allowed_lines = ALLOWED.get(rel, frozenset())
         lines = [(lineno, method) for lineno, method in _unbounded_calls(path) if lineno not in allowed_lines]
         if lines:
