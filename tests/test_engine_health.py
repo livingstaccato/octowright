@@ -214,3 +214,31 @@ async def test_engine_health_surfaced_in_octowright_status(monkeypatch: pytest.M
     finally:
         status_pool._engine_health.clear()
         status_pool._engine_health.update(original)
+
+
+async def test_an_unsupported_kind_is_clamped_rather_than_recorded_verbatim() -> None:
+    """A caller-supplied ``kind`` must not become a permanent status key.
+
+    ``kind`` reaches ``launch()`` straight from the caller and is validated
+    only deeper, in ``LaunchOptions.validate()``, so a launch that fails
+    validation still records health under whatever string was passed -- and
+    ``browser_launch``'s signature is ``kind: str``, not a ``Literal``, so
+    the MCP schema accepts anything. Unclamped, an LLM could fill a
+    never-evicted dict, echoed verbatim into every ``octowright_status()``,
+    with arbitrary strings.
+
+    Every other case in this file monkeypatches ``_launch_impl`` and so never
+    reaches validation, which is exactly why this went unnoticed until a
+    whole-branch review drove it. This one deliberately does NOT patch, so
+    the real validation path runs.
+    """
+    pool = BrowserPool()
+
+    for bogus in ("../../etc/passwd", "chrome", "Chromium", "x" * 80):
+        with pytest.raises(Exception):
+            await pool.launch(kind=bogus)
+        assert bogus not in pool.engine_health()
+
+    # The attempts are still visible, collapsed under a bounded key.
+    assert set(pool.engine_health()) <= {"chromium", "firefox", "webkit", "unknown"}
+    assert pool.engine_health()["unknown"]["outcome"] == "error"
