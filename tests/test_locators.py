@@ -35,8 +35,8 @@ class FakeLocator:
     def __post_init__(self) -> None:
         self.first = self
 
-    async def click(self, timeout: int = 5000) -> None:
-        self._clicks.append({"timeout": timeout})
+    async def click(self, timeout: int = 5000, no_wait_after: bool = False) -> None:
+        self._clicks.append({"timeout": timeout, "no_wait_after": no_wait_after})
 
     async def fill(self, value: str, timeout: int = 5000) -> None:
         self._fills.append({"value": value, "timeout": timeout})
@@ -223,6 +223,19 @@ async def test_click_by_calls_locator_click(tmp_path: Path) -> None:
     assert page._locator._clicks[0]["timeout"] == 3000
     # Recorder captured the action
     assert session.recorder.recorded[-1][0] == "click_by"  # type: ignore[union-attr]
+
+
+@pytest.mark.anyio
+async def test_click_by_forwards_and_records_no_wait_after(tmp_path: Path) -> None:
+    page = FakePage()
+    session = _make_session(page, tmp_path)
+
+    await session.click_by(role="button", role_name="Sign in", no_wait_after=True)
+
+    assert page._locator._clicks[-1]["no_wait_after"] is True
+    action, kwargs = session.recorder.recorded[-1]  # type: ignore[union-attr]
+    assert action == "click_by"
+    assert kwargs["no_wait_after"] is True
 
 
 @pytest.mark.anyio

@@ -92,6 +92,8 @@ def _get_text_by_full_action(
         "timeout_ms bounds the wait for the element, on BOTH the ARIA and selector "
         "paths (default 15000). Lower it when a click is expected to fail and you are "
         "probing — the default costs 15s per failed attempt.\n"
+        "Set no_wait_after=True when the click intentionally starts a navigation whose "
+        "load lifecycle is not expected to settle.\n"
         "Pass response_mode='outline' to get a compact browser_page_outline in the "
         "same call, or response_mode='brief' for the older aria-based brief snapshot."
     ),
@@ -108,6 +110,7 @@ async def browser_click(
     text_exact: bool = False,
     test_id: str | None = None,
     timeout_ms: int | None = None,
+    no_wait_after: bool = False,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     if not (selector or role or label or text or test_id):
@@ -124,12 +127,13 @@ async def browser_click(
                 text_exact=text_exact,
                 test_id=test_id,
                 timeout_ms=timeout_ms,
+                no_wait_after=no_wait_after,
             )
         elif selector:
             # Forward the timeout here too. It reached click_by above and was
             # dropped on this line, so an agent that set timeout_ms on a
             # selector click silently got the 15s default.
-            await session.click(selector, timeout_ms=timeout_ms)
+            await session.click(selector, timeout_ms=timeout_ms, no_wait_after=no_wait_after)
         else:
             raise ValueError("provide a selector or at least one ARIA locator (role/label/text/test_id)")
         res: dict[str, Any] = {"ok": True}

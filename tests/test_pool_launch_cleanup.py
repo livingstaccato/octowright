@@ -164,12 +164,13 @@ async def test_launch_failure_during_prepublication_setup_closes_recorder_determ
 
 
 @pytest.mark.anyio
-async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
-    """Redirector must call wait_for_load_state, not asyncio.sleep."""
+async def test_new_tab_redirector_waits_for_blank_tab_to_settle() -> None:
+    """Redirector waits for load state and a possible nonblank navigation."""
     from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
     from tests._operation_gate_fakes import OperationAwareFake
 
     waited: list[str] = []
+    waited_for_url: list[float] = []
     navigated: list[str] = []
 
     class FakePage:
@@ -181,6 +182,9 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
         async def wait_for_load_state(self, state: str, *, timeout: float) -> None:
             waited.append(state)
 
+        async def wait_for_url(self, _predicate: object, *, timeout: float) -> None:
+            waited_for_url.append(timeout)
+
         async def goto(self, url: str) -> None:
             navigated.append(url)
 
@@ -189,6 +193,7 @@ async def test_new_tab_redirector_uses_load_state_not_sleep() -> None:
     await asyncio.sleep(0.05)  # let the async task run
 
     assert "domcontentloaded" in waited
+    assert waited_for_url == [250]
     assert len(navigated) == 1  # redirected to /new-tab
 
 
@@ -218,6 +223,39 @@ async def test_new_tab_redirector_skips_programmatic_popups() -> None:
     await asyncio.sleep(0.05)
 
     assert navigated == []  # left alone
+
+
+@pytest.mark.anyio
+async def test_new_tab_redirector_yields_to_programmatic_context_navigation() -> None:
+    """context.new_page followed by goto must not race the default redirect."""
+    from octowright.browser_pool.launch_pipeline import _make_new_tab_redirector
+    from tests._operation_gate_fakes import OperationAwareFake
+
+    navigated: list[str] = []
+
+    class FakePage:
+        url = "about:blank"
+
+        async def opener(self) -> None:
+            return None
+
+        async def wait_for_load_state(self, _state: str, *, timeout: float) -> None:
+            del timeout
+
+        async def wait_for_url(self, predicate: object, *, timeout: float) -> None:
+            del timeout
+            self.url = "https://checkout.stripe.com/c/pay/cs_test_example"
+            assert callable(predicate)
+            assert predicate(self.url)
+
+        async def goto(self, url: str) -> None:
+            navigated.append(url)
+
+    handler = _make_new_tab_redirector(OperationAwareFake())
+    handler(FakePage())
+    await asyncio.sleep(0.1)
+
+    assert navigated == []
 
 
 def test_is_blank_newtab_url_matches_engine_new_tabs() -> None:

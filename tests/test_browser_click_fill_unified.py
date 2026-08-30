@@ -55,7 +55,7 @@ def _session(patch: MagicMock) -> _FakeSession:
 async def test_browser_click_css_selector_calls_session_click(_patch_pool: MagicMock) -> None:
     s = _session(_patch_pool)
     out = await _input.browser_click("i", selector="button.submit")
-    s.click.assert_awaited_once_with("button.submit", timeout_ms=None)
+    s.click.assert_awaited_once_with("button.submit", timeout_ms=None, no_wait_after=False)
     assert out["ok"] is True
 
 
@@ -105,6 +105,7 @@ async def test_browser_click_role_calls_session_click_by(_patch_pool: MagicMock)
         text_exact=False,
         test_id=None,
         timeout_ms=None,
+        no_wait_after=False,
     )
     s.click.assert_not_awaited()
 

@@ -501,6 +501,15 @@ class TestSemanticTimeoutPropagation:
         s.click_by.assert_awaited_once_with(role="button", timeout_ms=1000)
 
     @pytest.mark.anyio
+    async def test_no_wait_after_in_kwargs_added_to_semantic_click(self) -> None:
+        s = _full_session()
+        await _dispatch_via_simple(
+            s,
+            {"action": "click_by", "role": "button", "role_name": "Sign in", "no_wait_after": True},
+        )
+        s.click_by.assert_awaited_once_with(role="button", role_name="Sign in", no_wait_after=True)
+
+    @pytest.mark.anyio
     async def test_fallback_kwargs_strip_semantic_keys_but_keep_timeout_ms(self) -> None:
         """Fallback fill receives selector/value/timeout_ms — no role/label.
 
