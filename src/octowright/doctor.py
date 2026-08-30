@@ -338,18 +338,29 @@ def _engine_executable_exists(kind: str) -> bool:
 
 
 def check_storage() -> Check:
-    """Storage roots exist and are not world-readable where they hold secrets."""
+    """Storage roots exist and, on POSIX, are not readable by other local users.
+
+    The permission half is POSIX-only, and skipping it on Windows is a fix
+    rather than a gap. Windows has no POSIX mode bits: ``os.chmod`` there sets
+    only the read-only flag, and a directory's ``st_mode`` comes back with the
+    group and other bits set no matter who can actually reach it. Checking them
+    anyway made every Windows machine report "readable by other local users"
+    about roots that were fine -- a permanent false alarm, which is how a
+    diagnostic command teaches people to ignore it. Access there is governed by
+    ACLs, which this does not attempt to read.
+    """
     from octowright.defaults import MACROS_DIR, PROFILES_DIR, RECORDINGS_DIR
 
     private = {"recordings": RECORDINGS_DIR, "profiles": PROFILES_DIR}
     roots = {**private, "macros": MACROS_DIR}
-    data: dict[str, Any] = {}
+    posix = os.name != "nt"
+    data: dict[str, Any] = {"permissions_checked": posix}
     loose: list[str] = []
     for label, path in roots.items():
         exists = path.exists()
-        mode = oct(path.stat().st_mode & 0o777) if exists else None
+        mode = oct(path.stat().st_mode & 0o777) if exists and posix else None
         data[label] = {"path": str(path), "exists": exists, "mode": mode}
-        if exists and label in private and (path.stat().st_mode & 0o077):
+        if posix and exists and label in private and (path.stat().st_mode & 0o077):
             loose.append(f"{label} ({mode})")
     if loose:
         return Check(
@@ -358,6 +369,8 @@ def check_storage() -> Check:
             f"readable by other local users: {', '.join(loose)} — expected 0700",
             data,
         )
+    if not posix:
+        return Check("storage", "ok", "roots present (permissions are ACL-governed on Windows, not checked)", data)
     return Check("storage", "ok", "roots present with owner-only permissions", data)
 
 

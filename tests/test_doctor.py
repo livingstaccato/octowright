@@ -157,43 +157,64 @@ class TestBrowserInstallCheck:
 
 
 class TestStorageCheck:
-    def test_group_readable_profiles_are_flagged(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Profiles hold live session cookies; 0755 is a real finding."""
+    """The permission half is POSIX-only; see `doctor.check_storage`.
+
+    `os.chmod` on Windows sets only the read-only flag, and a directory's
+    `st_mode` comes back with group/other bits set regardless of who can reach
+    it -- so these three cannot be expressed there at all, and the check itself
+    deliberately does not run. `test_windows_reports_paths_without_a_verdict`
+    pins the other side of that.
+    """
+
+    def _roots(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path, Path]:
         recordings, profiles, macros = tmp_path / "rec", tmp_path / "prof", tmp_path / "mac"
         for path in (recordings, profiles, macros):
             path.mkdir()
-        os.chmod(profiles, 0o755)
-        os.chmod(recordings, 0o700)
+            os.chmod(path, 0o700)
         monkeypatch.setattr("octowright.defaults.RECORDINGS_DIR", recordings)
         monkeypatch.setattr("octowright.defaults.PROFILES_DIR", profiles)
         monkeypatch.setattr("octowright.defaults.MACROS_DIR", macros)
+        return recordings, profiles, macros
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not exist on Windows")
+    def test_group_readable_profiles_are_flagged(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Profiles hold live session cookies; 0755 is a real finding."""
+        _recordings, profiles, _macros = self._roots(monkeypatch, tmp_path)
+        os.chmod(profiles, 0o755)
         check = _doctor.check_storage()
         assert check.status == "warn"
         assert "profiles" in check.detail
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not exist on Windows")
     def test_owner_only_roots_pass(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        recordings, profiles, macros = tmp_path / "rec", tmp_path / "prof", tmp_path / "mac"
-        for path in (recordings, profiles, macros):
-            path.mkdir()
-            os.chmod(path, 0o700)
-        monkeypatch.setattr("octowright.defaults.RECORDINGS_DIR", recordings)
-        monkeypatch.setattr("octowright.defaults.PROFILES_DIR", profiles)
-        monkeypatch.setattr("octowright.defaults.MACROS_DIR", macros)
+        self._roots(monkeypatch, tmp_path)
         assert _doctor.check_storage().status == "ok"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits do not exist on Windows")
     def test_a_macros_dir_that_is_group_readable_is_not_flagged(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Only the roots that hold credentials are held to 0700."""
-        recordings, profiles, macros = tmp_path / "rec", tmp_path / "prof", tmp_path / "mac"
-        for path in (recordings, profiles, macros):
-            path.mkdir()
-            os.chmod(path, 0o700)
+        _recordings, _profiles, macros = self._roots(monkeypatch, tmp_path)
         os.chmod(macros, 0o755)
-        monkeypatch.setattr("octowright.defaults.RECORDINGS_DIR", recordings)
-        monkeypatch.setattr("octowright.defaults.PROFILES_DIR", profiles)
-        monkeypatch.setattr("octowright.defaults.MACROS_DIR", macros)
         assert _doctor.check_storage().status == "ok"
+
+    def test_windows_reports_paths_without_a_permission_verdict(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Windows must never warn about mode bits it does not have.
+
+        Checking them there made every Windows machine report "readable by
+        other local users" about roots that were fine -- caught by this file's
+        own CI legs, which is why the platform branch is asserted rather than
+        merely skipped.
+        """
+        self._roots(monkeypatch, tmp_path)
+        monkeypatch.setattr(_doctor.os, "name", "nt")
+        check = _doctor.check_storage()
+        assert check.status == "ok"
+        assert check.data["permissions_checked"] is False
+        assert check.data["profiles"]["mode"] is None
 
 
 class TestWorstStatus:
