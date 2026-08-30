@@ -44,6 +44,7 @@ uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
 uv run octowright cleanup        # prune stale recordings (NOT profiles or macro artifacts)
+uv run octowright doctor         # diagnose engines/processes/daemon/storage; --fix reaps orphans
 uv run octowright dashboard      # mint a single-use dashboard pairing code + /pair URL
 uv run octowright init           # scaffold a starter octowright project tree
 uv run octowright skill          # install/inspect the octowright agent skill
@@ -99,6 +100,50 @@ per-item capture is installed (one stray line per test on a green run), and
 writing under capture does not reach the dump either, since pytest drains the
 buffer at the end of every phase. `pytest_sessionfinish` removes the file, so a
 leftover always means "this is where a run that never reported died".
+
+### `octowright doctor`
+
+One command that answers "is this machine broken, or is octowright broken?".
+It exists because that question once took hours: a local suite wedged, and the
+answer turned out to be a WebKit build that could not navigate to
+`about:blank` -- provable in fifteen seconds with raw Playwright, but only once
+someone thought to ask.
+
+The engine probes are the point. Each drives a real headless browser through
+launch -> new_context -> new_page -> goto -> evaluate -> add_init_script using
+**raw Playwright and no octowright code**, and reports the first step that did
+not complete. That separation is the whole diagnostic value: if the probe
+fails the engine is broken and reading octowright's launch pipeline will not
+help; if the probe passes and octowright still cannot launch, the bug is ours.
+Routing the probe through `BrowserPool` would collapse the two cases back
+together and answer neither. On the machine that prompted this it prints, in
+seven seconds:
+
+```
+PASS  engine:chromium     launch -> page -> goto -> evaluate in 0.41s
+PASS  engine:firefox      launch -> page -> goto -> evaluate in 1.67s
+FAIL  engine:webkit       failed at step 'goto' after 4.49s: TargetClosedError: Page crashed
+```
+
+Each probe runs in its own **child interpreter**, and that is not tidiness. A
+wedged engine does not merely fail -- it leaves the driver and browser alive and
+the awaiting coroutine unkillable from inside its own loop, since cancelling
+releases the caller but cannot make the driver abandon a call already sent. In
+one process the second probe would inherit the first one's wreckage, which is
+exactly the confusion the command exists to remove. A child can simply be
+killed, and its driver and browsers die with it.
+
+The other checks are `daemon` (is the lockfile's leader real, or stale),
+`browsers:installed`, `processes:drivers`, `processes:browsers`, and `storage`
+(recordings and profiles at 0700 -- they hold typed input and live session
+cookies). `--fix` reaps orphaned drivers and browsers, and only ever processes
+whose parent is already gone, so a running daemon's own driver is never
+touched. `--json` emits the same data structurally, `--skip-engines` avoids
+launching anything, and the command exits 1 on any FAIL so CI can gate on it.
+
+Nothing tracked the driver processes before this. `process_reaper` reasons
+*from* the driver -- its orphan rule for a browser is "my driver died" -- so a
+leaked driver with no browsers under it was invisible to every existing tool.
 
 ### Unbounded Playwright calls: the setup half
 
