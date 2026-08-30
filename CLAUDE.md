@@ -100,6 +100,48 @@ writing under capture does not reach the dump either, since pytest drains the
 buffer at the end of every phase. `pytest_sessionfinish` removes the file, so a
 leftover always means "this is where a run that never reported died".
 
+### Unbounded Playwright calls: the setup half
+
+`session/timeouts.bounded()` originally covered `evaluate`, `title` and
+`content` — the calls a running page answers. A second incident showed the set
+was half the problem. On a WebKit build that could not navigate to
+`about:blank`, `page.evaluate` still answered in ~6s while
+`context.expose_binding`, `context.add_init_script` and `context.route`
+**never returned at all** (measured with raw Playwright and no octowright
+imported). Playwright gives none of them a `timeout` either.
+
+The consequence was worse than a slow launch. `browser_launch` wedged inside
+`_expose_viewport_binding`, several steps *before* the `page.goto` whose own
+30s timeout would have surfaced the broken engine as an ordinary error — so a
+bounded, reportable failure became an unbounded hang, and the engine-health
+block never got to record anything. The same launch now raises
+`SessionCallTimeoutError` in ~35s (verified three consecutive runs).
+
+Every one of those call sites is wrapped, and the AST scan in
+`tests/session/test_no_unbounded_calls.py` now covers `add_init_script`,
+`expose_binding`, `expose_function`, `route` and `unroute` alongside the
+original three, so a new setup call cannot quietly reintroduce it.
+
+### Test-suite driver reaping
+
+`tests/conftest.py` tracks every `BrowserPool` as it is constructed and, at
+each test's teardown, sends `SIGTERM` to the driver of any pool still holding
+one. A pool starts its Playwright driver lazily and only `shutdown_pool` ever
+calls `pw.stop()`, so the modules that launch a real browser and never shut
+their pool down leaked: measured at a **peak of 9 live
+`playwright/driver/node` children** under one pytest process, each holding a
+pipe, an OS process and an `asyncio-waitpid` thread. With the reaper the same
+119 tests peak at **1**, and run 24% faster (29.8s to 22.7s).
+
+Signalling a pid rather than awaiting `pool.shutdown()` is deliberate, and the
+graceful version was written first and reverted. An async autouse fixture *does*
+run for sync tests under `asyncio_mode = "auto"`, but it also forces an asyncio
+loop onto the trio half of every `pytest-anyio`-parametrized test, which then
+fails inside anyio's shielded `CancelScope` with "must be called from async
+context" — two `tests/test_roster.py` trio cases went red and were green again
+the moment the fixture stopped being autouse. A sync fixture that signals a pid
+needs no loop and cannot care which backend ran the test.
+
 ## Architecture
 
 ### Core Concepts
