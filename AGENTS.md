@@ -51,6 +51,55 @@ uv run octowright takeover       # detect + disable competing Playwright MCP plu
 uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 ```
 
+### Test-run bounds: per-test timeout and pinned order
+
+Two `[tool.pytest.ini_options]` settings exist because a wedged suite used to
+be unattributable. Both are deliberate and worth knowing before changing them.
+
+**`timeout = 300`, `timeout_method = "thread"` (pytest-timeout).** Nothing
+bounded a hung test before this. A target that stops answering — observed on a
+WebKit leg — hangs the run forever, because `page.on("crash")` never fires for
+a target that is merely *unresponsive*, and a local run was seen sitting on one
+test past 12.6 hours. 300s is measured, not taste: the slowest legitimate test
+observed locally is a two-participant headless WebKit scenario at 81s, and a
+whole CI leg finishes in ~10.5 minutes.
+
+The `thread` method is chosen over the platform default, and the default
+genuinely does not work here. With `signal`, pytest-timeout arms **one** alarm
+across the whole runtest protocol and cancels it at the end — so the alarm is
+spent the moment it fires. Measured on the reproducer: it fired in the call
+phase and failed the test as designed, then teardown wedged with no alarm left
+to arm and the process sat alive and silent 6+ minutes later. A bound a second
+wedge walks straight through is not a bound. `thread` uses a `threading.Timer`
+that dumps every thread's stack and calls `os._exit(1)`. The cost is real: the
+run dies at the first wedge instead of continuing, losing later results — still
+strictly better than a run that produces no name, no stacks and no results at
+all until someone kills it by hand.
+
+**`--randomly-seed=20260830` in `addopts`.** pytest-randomly otherwise reshuffles
+collection order every run from a time-derived seed. That is how an
+order-dependent failure gets found, and also how it becomes impossible to act
+on: a wedge lands on a different test each run, so "exclude the failing test and
+re-run" reports a NEW victim every time and reads as an inter-test leak that is
+not there. Pinning makes a run reproducible by default; shuffling is one flag
+away when it is the point: `--randomly-seed=last` to replay the previous run,
+an explicit integer to replay a specific one, or `--randomly-dont-reorganize`
+for source order. Not `-p no:randomly` — unloading the plugin also unregisters
+the `--randomly-seed` option that `addopts` passes, so pytest exits 4 with
+"unrecognized arguments"; use the plugin's own flag, which leaves the option
+parseable. Bump the constant to re-roll for everyone.
+
+**`.pytest-current-test` (git-ignored).** `tests/conftest.py` writes
+`<phase> <nodeid>` there at the start of every setup/call/teardown. pytest-
+timeout's dump titles each section with a THREAD name and the process exits
+before pytest can report the item, so under the suite's `-q` a timeout hands
+you a wall of stacks and no test name. A file rather than a print because
+stderr does not survive the trip — `pytest_runtest_logstart` fires before
+per-item capture is installed (one stray line per test on a green run), and
+writing under capture does not reach the dump either, since pytest drains the
+buffer at the end of every phase. `pytest_sessionfinish` removes the file, so a
+leftover always means "this is where a run that never reported died".
+
 ## Architecture
 
 ### Core Concepts

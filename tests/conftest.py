@@ -25,6 +25,74 @@ _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
 
+
+# Where the id of the currently-running test is parked so a killed run can still
+# be attributed. Git-ignored; rewritten in place rather than appended to, so it
+# always holds exactly one line.
+CURRENT_TEST_BREADCRUMB = Path(__file__).resolve().parent.parent / ".pytest-current-test"
+
+
+def _breadcrumb(item: pytest.Item, phase: str) -> None:
+    """Record which test/phase is in flight, for a run that dies without reporting.
+
+    pytest-timeout's ``thread`` method (see ``timeout_method`` in pyproject)
+    dumps every thread's stack and then calls ``os._exit(1)``. What it never
+    writes is the nodeid: ``dump_stacks`` titles each section with a THREAD
+    name, and the process dies before pytest can report which item was in
+    flight. Under the suite's ``-q`` that hands the operator a wall of stacks
+    and no test name -- the first thing anyone needs, and exactly what was
+    missing when a wedged run went unnamed for 12.6 hours.
+
+    A file rather than a print, because stderr does not survive the trip. Two
+    routes were measured and both failed: ``pytest_runtest_logstart`` fires
+    before per-item capture is installed, so it puts one stray line per test on
+    a green run; and writing under capture does not reach the dump either,
+    since pytest drains the buffer at the end of every phase and the capture
+    manager's own hookwrapper does not reliably enclose a conftest one. The
+    file has neither problem -- it costs one small write per phase, adds
+    nothing to any run's output, and is readable after the process is gone.
+
+    The phase is recorded too, because it changes the diagnosis: a wedge in
+    ``teardown`` (a hung ``pool.shutdown()``, say) is a different bug from one
+    in the test body.
+    """
+    try:
+        CURRENT_TEST_BREADCRUMB.write_text(f"{phase} {item.nodeid}\n")
+    except OSError:
+        # Diagnostics must never fail a test run. A read-only or full rootdir
+        # loses the breadcrumb; every other guard here still applies.
+        pass
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "setup")
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "call")
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "teardown")
+    yield
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Remove the breadcrumb on any run that reaches the end under its own power.
+
+    Its only meaning is "this is where a run that never reported died", so a
+    file left behind by a completed session would point at that session's last
+    test and misattribute the NEXT wedge.
+    """
+    _ = session, exitstatus
+    CURRENT_TEST_BREADCRUMB.unlink(missing_ok=True)
+
+
 _AMBIENT_OTLP_ENV_VARS = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
