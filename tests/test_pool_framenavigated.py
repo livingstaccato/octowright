@@ -34,6 +34,11 @@ import pytest
 import octowright.browser_pool.pool as pool_module
 from octowright.browser_pool import BrowserPool
 
+# Every test in this module launches a real browser through the pool.
+# Module-level rather than repeated per test, and enforced by the
+# `_reap_leaked_browser_drivers` guard in tests/conftest.py.
+pytestmark = pytest.mark.live_browser
+
 # ---------------------------------------------------------------------------
 # Stubs (mirrors the structure used by tests/test_pool_disconnect.py — kept
 # in this file rather than imported across test modules so each test file

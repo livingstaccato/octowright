@@ -39,6 +39,10 @@ CURRENT_TEST_BREADCRUMB = Path(__file__).resolve().parent.parent / ".pytest-curr
 # down cannot leak its Playwright driver into the rest of the session.
 _TRACKED_POOLS: weakref.WeakSet = weakref.WeakSet()
 
+# id() of every pool that actually started a driver during the current test.
+# Reset per test by the fixture below; ids only ever compared for membership.
+_REAL_DRIVER_STARTED: set[int] = set()
+
 
 def _install_pool_leak_tracking() -> None:
     """Record every BrowserPool as it is constructed.
@@ -69,6 +73,23 @@ def _install_pool_leak_tracking() -> None:
     tracked._octowright_leak_tracked = True  # type: ignore[attr-defined]
     BrowserPool.__init__ = tracked  # type: ignore[method-assign]
 
+    # `_ensure_pw` is the one place a REAL Playwright driver is started, which
+    # makes it the only honest signal for "this test drove a real browser".
+    # Most tests that call `pool.launch` never reach it -- they assign a double
+    # to `_pw` first -- so counting launches, or reading the source for
+    # `kind="webkit"`, would both be wrong.
+    original_ensure = BrowserPool._ensure_pw
+
+    @functools.wraps(original_ensure)
+    async def ensure_tracked(self):  # type: ignore[no-untyped-def]
+        started = self._pw is None
+        result = await original_ensure(self)
+        if started:
+            _REAL_DRIVER_STARTED.add(id(self))
+        return result
+
+    BrowserPool._ensure_pw = ensure_tracked  # type: ignore[method-assign]
+
 
 _install_pool_leak_tracking()
 
@@ -90,7 +111,7 @@ def _driver_pid(pw: object) -> int | None:
 
 
 @pytest.fixture(autouse=True)
-def _reap_leaked_browser_drivers() -> Iterator[None]:
+def _reap_leaked_browser_drivers(request: pytest.FixtureRequest) -> Iterator[None]:
     """Kill the Playwright driver of any pool the test left running.
 
     A pool starts its driver lazily (``_ensure_pw``) and only ``shutdown_pool``
@@ -114,7 +135,18 @@ def _reap_leaked_browser_drivers() -> Iterator[None]:
     them: a test that shuts its pool down properly clears ``_pw`` first and this
     finds nothing to do. It is a backstop, not a licence to skip cleanup.
     """
+    _REAL_DRIVER_STARTED.clear()
     yield
+    started_a_browser = bool(_REAL_DRIVER_STARTED)
+    _REAL_DRIVER_STARTED.clear()
+    if started_a_browser and request.node.get_closest_marker("live_browser") is None:
+        raise AssertionError(
+            f"{request.node.nodeid} started a real Playwright driver but is not marked "
+            "`live_browser`. Add @pytest.mark.live_browser, or stub the pool so it "
+            "never reaches `_ensure_pw`. An unmarked real launch is invisible to "
+            "`-m 'not live_browser'`, so a machine with one broken engine takes the "
+            "whole run down with it -- which is exactly how four such tests were found."
+        )
     for pool in list(_TRACKED_POOLS):
         pw = getattr(pool, "_pw", None)
         if pw is None:
