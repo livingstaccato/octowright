@@ -53,3 +53,4 @@ test_output*.txt
 # site-octowright-com's sync workflow, or any other consumer that reads from
 # demo/tutorial-export/.
 demo/tutorial-export/
+.pytest-current-test
