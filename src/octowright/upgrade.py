@@ -40,6 +40,42 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.18.0": [
+        "A browser that stops answering no longer hangs the caller forever. "
+        "evaluate, title, content and the context setup calls Playwright gives "
+        "no timeout of its own are now bounded (30s by default, "
+        "OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS). This is ON by default "
+        "because the alternative is not a slow call, it is a coroutine that "
+        "never returns: a real run wedged for 12.6 hours against a broken "
+        "WebKit with page.on('crash') silent, because a target that merely "
+        "stops replying never crashes.",
+        "octowright doctor tells you whether the machine is broken or "
+        "octowright is. It drives each engine through launch, page, goto and "
+        "evaluate using raw Playwright and no octowright code, and names the "
+        "step that failed -- so a bad WebKit reads as 'engine:webkit failed at "
+        "goto' in seconds instead of an afternoon in the launch pipeline. It "
+        "also reports the daemon, orphaned drivers and browsers, and storage "
+        "permissions; --fix reaps only processes whose parent is already gone.",
+        "browser_a11y_dragdrop drives the drag-and-drop that browser_drag "
+        "cannot. Accessible widgets usually implement the keyboard WAI-ARIA "
+        "pattern -- grab with a key, move with keys, drop with a key -- which "
+        "a synthetic mouse sequence never triggers. One atomic attempt per "
+        "call, exactly one verify_* required, and a failed drop releases the "
+        "grab instead of leaving the widget stuck in a state that is "
+        "indistinguishable from never having grabbed at all.",
+        "octowright_status now says which engine is broken. Per-engine launch "
+        "health records the last outcome for chromium, firefox and webkit "
+        "separately, so 'WebKit is broken on this machine, Chromium is fine' "
+        "is one status call rather than an hour of a 12.6-hour incident. An "
+        "engine never launched is absent rather than reported healthy -- 'no "
+        "data' and 'fine' are different answers.",
+        "An unresponsive target now has a name, a notification and a status "
+        "record. It is its own crash scope rather than being folded into "
+        "renderer crashes, and it deliberately does not auto-recover: the "
+        "target may still be executing, and force-replacing a page that is "
+        "merely slow makes things worse. Surfaced at "
+        "octowright_status()['crash']['unresponsive_recent'].",
+    ],
     "0.17.0": [
         "Terminal sessions are a plugin now, not part of core. PTY/SSH/telnet "
         "moved to the octowright-terminal distribution and core carries no "

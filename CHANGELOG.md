@@ -5,6 +5,88 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2026-08-31
+
+### Added
+- **`browser_a11y_dragdrop` — keyboard (WAI-ARIA APG) drag-and-drop.** `browser_drag`
+  drives Playwright's synthetic mouse sequence, which cannot operate a widget that
+  implements only the keyboard pattern — grab with a key, move with keys, drop with a
+  key — and that is what accessible drag-and-drop widgets usually implement. One
+  atomic attempt per call: grab → navigate → drop → poll-verify → release-on-failure.
+  Exactly one `verify_*` field is required, because there is no universal cross-widget
+  "it worked" signal and a heuristic that sometimes works would report success having
+  confirmed nothing. A failed verify presses `release_key`, since a grab that
+  succeeded with a drop that did not leaves the widget stuck in a state
+  indistinguishable from a grab that never registered. Replayable as the
+  `a11y_dragdrop` macro action and exported to the CLI script.
+- **`octowright doctor`.** One command that answers "is this machine broken, or is
+  octowright broken?". Each engine is driven through launch → new_context → new_page →
+  goto → evaluate using **raw Playwright and no octowright code**, and the first step
+  that did not complete is reported by name — so a bad WebKit reads as
+  `engine:webkit failed at step 'goto'` in seconds rather than an afternoon spent in
+  octowright's launch pipeline. Each probe runs in its own child interpreter, because
+  a wedged engine leaves the driver and browser alive and the awaiting coroutine
+  unkillable from inside its own loop; a child can simply be killed. Also reports the
+  daemon lockfile, installed browser builds, orphaned drivers, orphaned browsers, and
+  storage permissions. `--fix` reaps only processes whose parent is already gone,
+  `--json` emits the same data structurally, `--skip-engines` launches nothing, and
+  the command exits 1 on any failure so CI can gate on it.
+- **Per-engine launch health** at `octowright_status()["pool"]["engine_health"]`. The
+  pool already saw every launch and every failure per engine; it just never said so.
+  Diagnosing a real incident spent about an hour of a 12.6-hour wedge establishing one
+  fact — "WebKit is broken on this machine, Chromium is fine". An engine never
+  launched is **absent** rather than reported healthy: "no data" and "fine" are
+  different answers, and conflating them is what made that diagnosis slow. On failure
+  only the exception class name is recorded, never its message.
+- **`OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS`** — an opt-in active-duration ceiling
+  on a session's operation gate, checked from the periodic housekeeping loop rather
+  than a per-gate timer. OFF by default: cancelling in-flight browser work is a heavier
+  intervention than failing one call, and this is a backstop for call sites nobody has
+  bounded yet, not the primary fix.
+- **An unresponsive target is now its own crash scope**, with a notification, a metric
+  (`octowright_unresponsive_target_total`) and a status record at
+  `octowright_status()["crash"]["unresponsive_recent"]`. It deliberately does **not**
+  auto-recover: renderer-crash recovery replaces the dead page, which is right for an
+  actual crash and wrong here, since the target may still be executing and
+  force-replacing a page that is merely slow makes things worse.
+
+### Changed
+- **Playwright calls that Playwright will not bound are now bounded, ON by default**
+  (`OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS`, 30s). `evaluate`, `title`, `content`
+  and the context setup calls (`add_init_script`, `expose_binding`, `expose_function`,
+  `route`, `unroute`) accept no `timeout` of their own, so a target that stops
+  answering hangs the calling coroutine forever — observed as a full test run wedged
+  for 12.6 hours against a broken WebKit, with `page.on("crash")` silent because a
+  target that merely stops replying never crashes. This is ON by default, unlike this
+  project's other quotas, because it trades an unbounded hang for a bounded one rather
+  than trading away a working behaviour. An unparsable or non-positive value falls back
+  to the default rather than to disabled: a typo must not silently reintroduce the hang.
+  Measured consequence of the setup half: launch used to wedge inside
+  `expose_binding`, several steps *before* the `page.goto` whose own 30s timeout would
+  have surfaced a broken engine as an ordinary error.
+- `BrowserPool` records the last launch outcome per engine kind, clamped to the three
+  supported engines plus `unknown`, so a caller passing an arbitrary string cannot grow
+  one permanent status entry and one permanent metrics time series per distinct value.
+
+### Fixed
+- A ceiling breach that cancels the owning task no longer surfaces as a dead MCP
+  connection. `asyncio.CancelledError` is a `BaseException` the MCP library does not
+  convert, so the JSON-RPC dispatcher answered `CONNECTION_CLOSED` — killing the whole
+  connection including concurrent healthy calls, and telling the agent the daemon was
+  dead. The gate now absorbs its own cancellation and raises
+  `SessionOperationAbortedError`, distinguishing it from a genuine cancel by
+  `uncancel()`-ing back to the count captured when the task took ownership.
+- A cancelled close no longer leaks a bare `CancelledError` or masquerades as an
+  ordinary close race. Every path is normalized through one seam into
+  `SessionCloseAbortedError`, so "teardown was aborted, the browser's close state is
+  unconfirmed" stays distinguishable from "an external close won the race and the
+  browser is confirmed torn down" — which is what stops a handoff from launching a
+  replacement over an unconfirmed teardown.
+- An unresponsive target publishes from the **innermost** gated operation rather than
+  the root lease. The root-only version was reasoned from call-graph shape and was
+  wrong: callers that catch the wrapped timeout inside their own root lease and never
+  re-raise it meant nothing ever escaped a root frame, so nothing published at all.
+
 ## [0.17.0] - 2026-08-28
 
 ### Changed
