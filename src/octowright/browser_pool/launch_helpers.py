@@ -22,6 +22,7 @@ from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, PROFILES
 from octowright.personas import engine_profile_dir, load_persona
 from octowright.private_paths import secure_profile_tree
 from octowright.recorder import Recorder
+from octowright.session.timeouts import bounded
 from octowright.session_manifest import record_launch as _manifest_record_launch
 from octowright.session_manifest import run_manifest_transaction_async
 from octowright.ssrf_guard import install_navigation_guard
@@ -272,7 +273,10 @@ async def install_scoped_header_routes(
         return _handler
 
     for pattern in url_patterns:
-        await context.route(pattern, _make(dict(headers)))
+        await bounded(
+            context.route(pattern, _make(dict(headers))),
+            operation="browser_launch_scoped_header_route",
+        )
 
 
 async def install_context_routes(context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None) -> None:

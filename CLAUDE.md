@@ -44,12 +44,148 @@ uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
 uv run octowright cleanup        # prune stale recordings (NOT profiles or macro artifacts)
+uv run octowright doctor         # diagnose engines/processes/daemon/storage; --fix reaps orphans
 uv run octowright dashboard      # mint a single-use dashboard pairing code + /pair URL
 uv run octowright init           # scaffold a starter octowright project tree
 uv run octowright skill          # install/inspect the octowright agent skill
 uv run octowright takeover       # detect + disable competing Playwright MCP plugins
 uv run octowright test           # run the JSONL-driven test suite (CI-friendly)
 ```
+
+### Test-run bounds: per-test timeout and pinned order
+
+Two `[tool.pytest.ini_options]` settings exist because a wedged suite used to
+be unattributable. Both are deliberate and worth knowing before changing them.
+
+**`timeout = 300`, `timeout_method = "thread"` (pytest-timeout).** Nothing
+bounded a hung test before this. A target that stops answering — observed on a
+WebKit leg — hangs the run forever, because `page.on("crash")` never fires for
+a target that is merely *unresponsive*, and a local run was seen sitting on one
+test past 12.6 hours. 300s is measured, not taste: the slowest legitimate test
+observed locally is a two-participant headless WebKit scenario at 81s, and a
+whole CI leg finishes in ~10.5 minutes.
+
+The `thread` method is chosen over the platform default, and the default
+genuinely does not work here. With `signal`, pytest-timeout arms **one** alarm
+across the whole runtest protocol and cancels it at the end — so the alarm is
+spent the moment it fires. Measured on the reproducer: it fired in the call
+phase and failed the test as designed, then teardown wedged with no alarm left
+to arm and the process sat alive and silent 6+ minutes later. A bound a second
+wedge walks straight through is not a bound. `thread` uses a `threading.Timer`
+that dumps every thread's stack and calls `os._exit(1)`. The cost is real: the
+run dies at the first wedge instead of continuing, losing later results — still
+strictly better than a run that produces no name, no stacks and no results at
+all until someone kills it by hand.
+
+**`--randomly-seed=20260830` in `addopts`.** pytest-randomly otherwise reshuffles
+collection order every run from a time-derived seed. That is how an
+order-dependent failure gets found, and also how it becomes impossible to act
+on: a wedge lands on a different test each run, so "exclude the failing test and
+re-run" reports a NEW victim every time and reads as an inter-test leak that is
+not there. Pinning makes a run reproducible by default; shuffling is one flag
+away when it is the point: `--randomly-seed=last` to replay the previous run,
+an explicit integer to replay a specific one, or `--randomly-dont-reorganize`
+for source order. Not `-p no:randomly` — unloading the plugin also unregisters
+the `--randomly-seed` option that `addopts` passes, so pytest exits 4 with
+"unrecognized arguments"; use the plugin's own flag, which leaves the option
+parseable. Bump the constant to re-roll for everyone.
+
+**`.pytest-current-test` (git-ignored).** `tests/conftest.py` writes
+`<phase> <nodeid>` there at the start of every setup/call/teardown. pytest-
+timeout's dump titles each section with a THREAD name and the process exits
+before pytest can report the item, so under the suite's `-q` a timeout hands
+you a wall of stacks and no test name. A file rather than a print because
+stderr does not survive the trip — `pytest_runtest_logstart` fires before
+per-item capture is installed (one stray line per test on a green run), and
+writing under capture does not reach the dump either, since pytest drains the
+buffer at the end of every phase. `pytest_sessionfinish` removes the file, so a
+leftover always means "this is where a run that never reported died".
+
+### `octowright doctor`
+
+One command that answers "is this machine broken, or is octowright broken?".
+It exists because that question once took hours: a local suite wedged, and the
+answer turned out to be a WebKit build that could not navigate to
+`about:blank` -- provable in fifteen seconds with raw Playwright, but only once
+someone thought to ask.
+
+The engine probes are the point. Each drives a real headless browser through
+launch -> new_context -> new_page -> goto -> evaluate -> add_init_script using
+**raw Playwright and no octowright code**, and reports the first step that did
+not complete. That separation is the whole diagnostic value: if the probe
+fails the engine is broken and reading octowright's launch pipeline will not
+help; if the probe passes and octowright still cannot launch, the bug is ours.
+Routing the probe through `BrowserPool` would collapse the two cases back
+together and answer neither. On the machine that prompted this it prints, in
+seven seconds:
+
+```
+PASS  engine:chromium     launch -> page -> goto -> evaluate in 0.41s
+PASS  engine:firefox      launch -> page -> goto -> evaluate in 1.67s
+FAIL  engine:webkit       failed at step 'goto' after 4.49s: TargetClosedError: Page crashed
+```
+
+Each probe runs in its own **child interpreter**, and that is not tidiness. A
+wedged engine does not merely fail -- it leaves the driver and browser alive and
+the awaiting coroutine unkillable from inside its own loop, since cancelling
+releases the caller but cannot make the driver abandon a call already sent. In
+one process the second probe would inherit the first one's wreckage, which is
+exactly the confusion the command exists to remove. A child can simply be
+killed, and its driver and browsers die with it.
+
+The other checks are `daemon` (is the lockfile's leader real, or stale),
+`browsers:installed`, `processes:drivers`, `processes:browsers`, and `storage`
+(recordings and profiles at 0700 -- they hold typed input and live session
+cookies). `--fix` reaps orphaned drivers and browsers, and only ever processes
+whose parent is already gone, so a running daemon's own driver is never
+touched. `--json` emits the same data structurally, `--skip-engines` avoids
+launching anything, and the command exits 1 on any FAIL so CI can gate on it.
+
+Nothing tracked the driver processes before this. `process_reaper` reasons
+*from* the driver -- its orphan rule for a browser is "my driver died" -- so a
+leaked driver with no browsers under it was invisible to every existing tool.
+
+### Unbounded Playwright calls: the setup half
+
+`session/timeouts.bounded()` originally covered `evaluate`, `title` and
+`content` — the calls a running page answers. A second incident showed the set
+was half the problem. On a WebKit build that could not navigate to
+`about:blank`, `page.evaluate` still answered in ~6s while
+`context.expose_binding`, `context.add_init_script` and `context.route`
+**never returned at all** (measured with raw Playwright and no octowright
+imported). Playwright gives none of them a `timeout` either.
+
+The consequence was worse than a slow launch. `browser_launch` wedged inside
+`_expose_viewport_binding`, several steps *before* the `page.goto` whose own
+30s timeout would have surfaced the broken engine as an ordinary error — so a
+bounded, reportable failure became an unbounded hang, and the engine-health
+block never got to record anything. The same launch now raises
+`SessionCallTimeoutError` in ~35s (verified three consecutive runs).
+
+Every one of those call sites is wrapped, and the AST scan in
+`tests/session/test_no_unbounded_calls.py` now covers `add_init_script`,
+`expose_binding`, `expose_function`, `route` and `unroute` alongside the
+original three, so a new setup call cannot quietly reintroduce it.
+
+### Test-suite driver reaping
+
+`tests/conftest.py` tracks every `BrowserPool` as it is constructed and, at
+each test's teardown, sends `SIGTERM` to the driver of any pool still holding
+one. A pool starts its Playwright driver lazily and only `shutdown_pool` ever
+calls `pw.stop()`, so the modules that launch a real browser and never shut
+their pool down leaked: measured at a **peak of 9 live
+`playwright/driver/node` children** under one pytest process, each holding a
+pipe, an OS process and an `asyncio-waitpid` thread. With the reaper the same
+119 tests peak at **1**, and run 24% faster (29.8s to 22.7s).
+
+Signalling a pid rather than awaiting `pool.shutdown()` is deliberate, and the
+graceful version was written first and reverted. An async autouse fixture *does*
+run for sync tests under `asyncio_mode = "auto"`, but it also forces an asyncio
+loop onto the trio half of every `pytest-anyio`-parametrized test, which then
+fails inside anyio's shielded `CancelScope` with "must be called from async
+context" — two `tests/test_roster.py` trio cases went red and were green again
+the moment the fixture stopped being autouse. A sync fixture that signals a pid
+needs no loop and cannot care which backend ran the test.
 
 ## Architecture
 

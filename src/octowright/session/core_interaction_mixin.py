@@ -27,6 +27,7 @@ from octowright.http_headers import (
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.operation.gate import gated_operation
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -171,8 +172,11 @@ class SessionInteractionMixin(SessionLike):
                 hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
             )
         if url_pattern in self._active_routes:
-            await self.page.unroute(url_pattern, self._active_routes[url_pattern])
-        await self.page.route(url_pattern, _handler)
+            await bounded(
+                self.page.unroute(url_pattern, self._active_routes[url_pattern]),
+                operation="browser_mock_route",
+            )
+        await bounded(self.page.route(url_pattern, _handler), operation="browser_mock_route")
         self._active_routes[url_pattern] = _handler
         self.recorder.record(
             "mock_route",
@@ -230,8 +234,11 @@ class SessionInteractionMixin(SessionLike):
             await route.fallback(headers={**route.request.headers, **headers})
 
         if url_pattern in self._header_routes:
-            await self.context.unroute(url_pattern, self._header_routes[url_pattern])
-        await self.context.route(url_pattern, _handler)
+            await bounded(
+                self.context.unroute(url_pattern, self._header_routes[url_pattern]),
+                operation="browser_inject_headers",
+            )
+        await bounded(self.context.route(url_pattern, _handler), operation="browser_inject_headers")
         self._header_routes[url_pattern] = _handler
         # The registry above holds the closure; the headers it merges cannot be
         # read back out of it, so keep them for header_state().
@@ -250,7 +257,7 @@ class SessionInteractionMixin(SessionLike):
         self._injected_headers.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active header injection for pattern {url_pattern!r}")
-        await self.context.unroute(url_pattern, handler)
+        await bounded(self.context.unroute(url_pattern, handler), operation="browser_uninject_headers")
         self.recorder.record("uninject_headers", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 
@@ -325,7 +332,7 @@ class SessionInteractionMixin(SessionLike):
         handler = self._active_routes.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active mock for pattern {url_pattern!r}")
-        await self.page.unroute(url_pattern, handler)
+        await bounded(self.page.unroute(url_pattern, handler), operation="browser_unmock_route")
         self.recorder.record("unmock_route", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 
