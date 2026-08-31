@@ -198,6 +198,7 @@ dev = [
     "pytest-cov>=6.1.1",
     "pytest-randomly>=3.15.0",
     "pytest-rerunfailures>=14.0",
+    "pytest-timeout>=2.3.1",
     "pytest-xdist>=3.8.0",
     "reuse>=6.2.0",
     "ruff>=0.15.0",
@@ -224,6 +225,36 @@ terminal = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# No single test may hang the run. Nothing bounded a wedged test before this,
+# and the failure mode is not theoretical: a WebKit target that stops answering
+# takes the whole suite with it, because `page.on("crash")` never fires for a
+# target that is merely unresponsive and pytest waits forever by default. A
+# local `make test` was observed sitting on ONE live-browser test past the
+# 12.6-hour mark on 2026-08-29 -- with no test name in the output, since the
+# nodeid is only printed once a test FINISHES at the default verbosity.
+#
+# 300s is chosen against measurement, not taste: the slowest legitimate test
+# observed locally is a two-participant headless WebKit scenario at 81s, and a
+# whole CI leg finishes in ~10.5 minutes, so no single test comes close to this
+# on any runner. Raising it would weaken the bound; lowering it would start
+# failing real tests on a loaded machine.
+#
+# `thread` is chosen over the default, and the default does NOT work here --
+# measured, not assumed. With `signal` (the default wherever SIGALRM exists),
+# the plugin arms ONE alarm across the whole runtest protocol and cancels it at
+# the end, so the alarm is spent the moment it fires. On the reproducer above
+# it fired in the call phase, failed the test as designed -- and then teardown
+# wedged with no alarm left to arm, leaving the process alive and silent 6+
+# minutes later. A bound that a second wedge walks straight through is not a
+# bound. `thread` uses a `threading.Timer` that dumps every thread's stack and
+# calls `os._exit(1)`, which nothing in the test can outlast.
+#
+# The cost is real and worth stating: the run dies at the first wedge instead
+# of continuing, so results after it are lost. That is still strictly better
+# than today, where a wedge produces no test name, no stacks, and no results at
+# all until someone notices hours later and kills it by hand.
+timeout = 300
+timeout_method = "thread"
 addopts = [
     "-q",
     "--strict-markers",
@@ -232,6 +263,20 @@ addopts = [
     "--cov=src/octowright",
     "--cov-branch",
     "--cov-report=term-missing",
+    # pytest-randomly reshuffles collection order on every run from a
+    # time-derived seed. That is how an order-dependent failure gets found, and
+    # also how it becomes impossible to act on: a wedge or a flake lands on a
+    # different test each run, so "exclude the failing test and see" reports a
+    # NEW victim every time and reads as an inter-test leak that isn't there.
+    # An hour was spent on exactly that misreading. Pinning the seed makes a run
+    # reproducible by default; the shuffling is one flag away when it is the
+    # point -- `--randomly-seed=last` to replay the previous run, an explicit
+    # integer to replay a specific one, or `--randomly-dont-reorganize` for
+    # source order. NOT `-p no:randomly`: unloading the plugin also unregisters
+    # the option this line passes, so pytest exits 4 with "unrecognized
+    # arguments: --randomly-seed". Use the plugin's own flag, which leaves the
+    # option parseable. Bump this constant to re-roll the order for everyone.
+    "--randomly-seed=20260830",
 ]
 markers = [
     "live_browser: tests that require real browser engines installed",

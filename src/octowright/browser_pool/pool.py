@@ -41,6 +41,7 @@ from octowright.session.operation.gate import (
     SessionClosingError,
     resolve_operation_queue_timeout_seconds,
 )
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -368,7 +369,16 @@ class BrowserPool:
                 }
             raise ValueError(f"unknown viewport action: {action!r}")
 
-        await expose_binding("__octowright_viewport_action", _viewport_action)
+        # Bounded: `expose_binding` takes no timeout of its own, and a target
+        # that has stopped answering never returns from it. Measured against a
+        # WebKit build that could not navigate to about:blank -- `evaluate`
+        # still answered in ~6s while `expose_binding` never returned at all,
+        # so launch wedged HERE, several steps before the `page.goto` whose own
+        # 30s timeout would have surfaced the broken engine as an error.
+        await bounded(
+            expose_binding("__octowright_viewport_action", _viewport_action),
+            operation="browser_launch_expose_viewport_binding",
+        )
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
         # Body lives in browser_pool.relaunch (Task 8): the URL/profile

@@ -34,7 +34,28 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "octowright"
 # these two are never ambiguous. .evaluate() exists on both Page/Frame AND
 # Locator (with a real timeout=), so it needs the receiver-based exclusions
 # below.
-_UNBOUNDED_METHODS = frozenset({"title", "content", "evaluate"})
+_UNBOUNDED_METHODS = frozenset(
+    {
+        "title",
+        "content",
+        "evaluate",
+        # Context/page SETUP calls, added after a second incident. Playwright
+        # gives these no `timeout` either, and on a WebKit build that could not
+        # navigate to about:blank they were measured never returning at all --
+        # while `evaluate` on the same page still answered in ~6s. Launch
+        # therefore wedged in `expose_binding`, several steps BEFORE the
+        # `page.goto` whose own 30s timeout would have surfaced the broken
+        # engine as an ordinary error. The original three methods are the ones
+        # a running page answers; these are the ones a launch depends on, and
+        # missing them meant the guard could not see the hang that actually
+        # happened.
+        "add_init_script",
+        "expose_binding",
+        "expose_function",
+        "route",
+        "unroute",
+    }
+)
 
 # Narrow, commented allowlist: calls this scanner would otherwise flag that
 # are legitimately unbounded today. Each entry names the reason so a future

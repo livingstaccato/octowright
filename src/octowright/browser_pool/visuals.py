@@ -13,6 +13,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright.defaults import BADGE_OPACITY, get_default_url
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -309,7 +310,10 @@ async def wire_init_scripts(
     title_tag = _title_tag_for(profile, label, persona_emoji=persona_emoji, kind=kind)
     if title_tag:
         script = _title_tag_script().replace("__SUFFIX__", _json.dumps(title_tag))
-        await context.add_init_script(script=script)
+        await bounded(
+            context.add_init_script(script=script),
+            operation="browser_launch_init_script",
+        )
 
     if badge:
         badge_text = _badge_text_for(profile, label, instance_id, persona_emoji=persona_emoji, kind=kind)
@@ -327,7 +331,10 @@ async def wire_init_scripts(
             .replace("__DASHBOARD_URL__", _json.dumps(dashboard_url))
             .replace("__INSTANCE_ID__", _json.dumps(instance_id))
         )
-        await context.add_init_script(script=badge_script)
+        await bounded(
+            context.add_init_script(script=badge_script),
+            operation="browser_launch_init_script",
+        )
 
     # Macro status pill — overlay stays invisible until a running macro
     # pushes text via window.__octowright_macro_status.
@@ -337,7 +344,10 @@ async def wire_init_scripts(
         .replace("__ID_TAG__", _json.dumps(chip_text))
         .replace("__ID_COLOR__", _json.dumps(chip_color))
     )
-    await context.add_init_script(script=pill_script)
+    await bounded(
+        context.add_init_script(script=pill_script),
+        operation="browser_launch_init_script",
+    )
 
     viewport_payload = {
         "mode": viewport_mode,
@@ -355,7 +365,10 @@ async def wire_init_scripts(
         .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
         .replace("__VIEWPORT_TOKEN__", _json.dumps(viewport_token))
     )
-    await context.add_init_script(script=viewport_script)
+    await bounded(
+        context.add_init_script(script=viewport_script),
+        operation="browser_launch_init_script",
+    )
 
     # WebKit has no browser-chrome Cmd+T; inject a page-level handler so the
     # shortcut still opens /new-tab. Chromium/Firefox handle it natively (and
@@ -363,7 +376,13 @@ async def wire_init_scripts(
     # skip them here to avoid double-opening a tab.
     if kind == "webkit":
         shortcut_script = _newtab_shortcut_script().replace("__TARGET__", _json.dumps(get_default_url()))
-        await context.add_init_script(script=shortcut_script)
+        await bounded(
+            context.add_init_script(script=shortcut_script),
+            operation="browser_launch_init_script",
+        )
 
     if stabilize:
-        await context.add_init_script(script=render_stabilize_script())
+        await bounded(
+            context.add_init_script(script=render_stabilize_script()),
+            operation="browser_launch_init_script",
+        )

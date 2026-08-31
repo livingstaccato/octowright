@@ -19,6 +19,7 @@ from __future__ import annotations
 # decorator side effects. Order does not matter; F401 ignored intentionally.
 from octowright.cli import cleanup as _cleanup  # noqa: F401
 from octowright.cli import dashboard as _dashboard  # noqa: F401
+from octowright.cli import doctor as _doctor  # noqa: F401
 from octowright.cli import init_cmd as _init_cmd  # noqa: F401
 from octowright.cli import persona as _persona  # noqa: F401
 from octowright.cli import restart as _restart  # noqa: F401

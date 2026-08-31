@@ -229,6 +229,17 @@ def _orphaned_browser_pids(table: list[tuple[int, int, str]], candidate_pids: li
     return [pid for pid in candidate_pids if _is_orphaned_browser(ppid_by_pid[pid], live_pids)]
 
 
+def list_processes() -> list[tuple[int, int, str]]:
+    """(pid, ppid, command) for every process, for callers outside this module.
+
+    ``octowright doctor`` needs the same table to census Playwright DRIVER
+    processes, which this module deliberately does not track: its orphan rule
+    for browsers is "my driver died", so the driver is the thing it reasons
+    from rather than about.
+    """
+    return _list_processes()
+
+
 def find_browser_pids(scope: Scope, *, root_pid: int | None = None) -> list[int]:
     """Return live Playwright-managed browser PIDs matching ``scope``.
 

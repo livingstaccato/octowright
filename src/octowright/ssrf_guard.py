@@ -54,6 +54,7 @@ from urllib.parse import urljoin
 from provide.telemetry import get_logger
 
 from octowright import ssrf
+from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
@@ -126,5 +127,8 @@ async def install_navigation_guard(context: Any) -> None:
     """
     if not ssrf.policy_enabled():
         return
-    await context.route("**/*", _handle_route)
+    await bounded(
+        context.route("**/*", _handle_route),
+        operation="browser_install_navigation_guard",
+    )
     log.debug("octowright.ssrf.navigation_guard_installed")

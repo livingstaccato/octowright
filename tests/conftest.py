@@ -12,9 +12,12 @@ so demo-generation tooling never ships in the wheel. Tests that import it need
 
 from __future__ import annotations
 
+import functools
 import os
+import signal
 import socket
 import sys
+import weakref
 from collections.abc import Iterator
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -24,6 +27,171 @@ import pytest
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
+
+
+# Where the id of the currently-running test is parked so a killed run can still
+# be attributed. Git-ignored; rewritten in place rather than appended to, so it
+# always holds exactly one line.
+CURRENT_TEST_BREADCRUMB = Path(__file__).resolve().parent.parent / ".pytest-current-test"
+
+
+# Every BrowserPool built during the run, so a test that forgets to shut one
+# down cannot leak its Playwright driver into the rest of the session.
+_TRACKED_POOLS: weakref.WeakSet = weakref.WeakSet()
+
+
+def _install_pool_leak_tracking() -> None:
+    """Record every BrowserPool as it is constructed.
+
+    A pool starts its Playwright driver lazily (``_ensure_pw``) and only
+    ``shutdown_pool`` ever calls ``pw.stop()``. Of the test modules that launch
+    a real browser, most never shut their pool down -- so the drivers pile up:
+    9-10 live ``playwright/driver/node`` children under a single pytest process
+    were counted mid-run, each holding a pipe, an OS process and an
+    ``asyncio-waitpid`` thread for the rest of the session.
+
+    Patching the constructor rather than adding a registry to ``BrowserPool``
+    keeps this entirely in the tests, where the defect is: production has one
+    pool with an explicit lifecycle and needs no registry. The import costs
+    ~157ms once, at conftest import, against a suite that runs for minutes.
+    """
+    from octowright.browser_pool.pool import BrowserPool
+
+    original = BrowserPool.__init__
+    if getattr(original, "_octowright_leak_tracked", False):
+        return
+
+    @functools.wraps(original)
+    def tracked(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        original(self, *args, **kwargs)
+        _TRACKED_POOLS.add(self)
+
+    tracked._octowright_leak_tracked = True  # type: ignore[attr-defined]
+    BrowserPool.__init__ = tracked  # type: ignore[method-assign]
+
+
+_install_pool_leak_tracking()
+
+
+def _driver_pid(pw: object) -> int | None:
+    """OS pid of a live Playwright driver, or None if the chain has moved.
+
+    Playwright exposes no public handle on the node process it spawned, so this
+    walks ``_impl_obj._connection._transport._proc`` defensively: every hop is a
+    ``getattr`` and a broken chain simply means no reaping, never an error.
+    """
+    node: object | None = pw
+    for attr in ("_impl_obj", "_connection", "_transport", "_proc"):
+        node = getattr(node, attr, None)
+        if node is None:
+            return None
+    pid = getattr(node, "pid", None)
+    return pid if isinstance(pid, int) else None
+
+
+@pytest.fixture(autouse=True)
+def _reap_leaked_browser_drivers() -> Iterator[None]:
+    """Kill the Playwright driver of any pool the test left running.
+
+    A pool starts its driver lazily (``_ensure_pw``) and only ``shutdown_pool``
+    ever calls ``pw.stop()``. Most test modules that launch a real browser never
+    shut their pool down, so the drivers accumulate: 9-10 live
+    ``playwright/driver/node`` children were counted under a single pytest
+    process mid-run, each holding a pipe, an OS process and an
+    ``asyncio-waitpid`` thread for the rest of the session.
+
+    Signalling the process rather than awaiting ``pool.shutdown()`` is the
+    point, and the graceful version was tried first and reverted: an async
+    autouse fixture DOES run for sync tests under ``asyncio_mode = "auto"``, but
+    it also forces an asyncio loop onto the trio half of every
+    ``pytest-anyio``-parametrized test, and those then fail inside anyio's
+    shielded ``CancelScope`` with "must be called from async context"
+    (measured: two ``tests/test_roster.py`` trio cases went red, green again the
+    moment the fixture stopped being autouse). A sync fixture that signals a pid
+    needs no loop at all and so cannot care which backend the test ran on.
+
+    Autouse fixtures are set up before the test's own, so this tears down after
+    them: a test that shuts its pool down properly clears ``_pw`` first and this
+    finds nothing to do. It is a backstop, not a licence to skip cleanup.
+    """
+    yield
+    for pool in list(_TRACKED_POOLS):
+        pw = getattr(pool, "_pw", None)
+        if pw is None:
+            continue
+        # Clear first: the handle is dead either way once the process is gone,
+        # and leaving it set would make every later teardown retry a dead pid.
+        pool._pw = None
+        pid = _driver_pid(pw)
+        if pid is None:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            # Already gone, or not ours to signal. Nothing to clean up.
+            pass
+
+
+def _breadcrumb(item: pytest.Item, phase: str) -> None:
+    """Record which test/phase is in flight, for a run that dies without reporting.
+
+    pytest-timeout's ``thread`` method (see ``timeout_method`` in pyproject)
+    dumps every thread's stack and then calls ``os._exit(1)``. What it never
+    writes is the nodeid: ``dump_stacks`` titles each section with a THREAD
+    name, and the process dies before pytest can report which item was in
+    flight. Under the suite's ``-q`` that hands the operator a wall of stacks
+    and no test name -- the first thing anyone needs, and exactly what was
+    missing when a wedged run went unnamed for 12.6 hours.
+
+    A file rather than a print, because stderr does not survive the trip. Two
+    routes were measured and both failed: ``pytest_runtest_logstart`` fires
+    before per-item capture is installed, so it puts one stray line per test on
+    a green run; and writing under capture does not reach the dump either,
+    since pytest drains the buffer at the end of every phase and the capture
+    manager's own hookwrapper does not reliably enclose a conftest one. The
+    file has neither problem -- it costs one small write per phase, adds
+    nothing to any run's output, and is readable after the process is gone.
+
+    The phase is recorded too, because it changes the diagnosis: a wedge in
+    ``teardown`` (a hung ``pool.shutdown()``, say) is a different bug from one
+    in the test body.
+    """
+    try:
+        CURRENT_TEST_BREADCRUMB.write_text(f"{phase} {item.nodeid}\n")
+    except OSError:
+        # Diagnostics must never fail a test run. A read-only or full rootdir
+        # loses the breadcrumb; every other guard here still applies.
+        pass
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "setup")
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "call")
+    yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
+    _breadcrumb(item, "teardown")
+    yield
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Remove the breadcrumb on any run that reaches the end under its own power.
+
+    Its only meaning is "this is where a run that never reported died", so a
+    file left behind by a completed session would point at that session's last
+    test and misattribute the NEXT wedge.
+    """
+    _ = session, exitstatus
+    CURRENT_TEST_BREADCRUMB.unlink(missing_ok=True)
+
 
 _AMBIENT_OTLP_ENV_VARS = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
