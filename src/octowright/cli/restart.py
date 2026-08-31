@@ -31,6 +31,7 @@ clients; those followers are the client's stdio transport.
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import os
@@ -39,7 +40,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import click
@@ -391,6 +392,56 @@ def _reap_browsers(owned_browser_pids: Sequence[int] = ()) -> None:
     )
 
 
+@contextlib.contextmanager
+def _spawn_election_lock() -> Iterator[bool]:
+    """Hold the leader-election lock across restart's kill-and-respawn.
+
+    Restart was the ONE spawner that never took this lock. Every other path
+    does -- ``_leader_election._elect_under_lock`` and
+    ``serve._respawn_if_leader_gone`` -- and the latter's own comment states
+    the invariant it buys: holding the lock until the new daemon is confirmed
+    up makes a racing peer see the healthy leader and defer. That defence only
+    binds processes that take the lock, so restart was invisible to it.
+
+    The race, observed live on 2026-08-30 (two healthy leaders, pids 15s
+    apart): ``_stop_leader`` SIGKILLs the leader, so every connected follower's
+    bridge drops and each runs ``_respawn_if_leader_gone``. Those followers take
+    the lock, correctly see no leader and a free canonical port -- restart just
+    killed it -- and spawn one, binding 6286. ``_wait_for_port_free`` had
+    already observed the port free a moment earlier (TOCTOU), so restart then
+    spawns its own, which finds 6286 taken and lets ``http/lifespan`` port-walk
+    it to 6287. Two leaders. Worse, ``_health_candidates`` also probes the
+    LOCKFILE endpoint, so the follower's leader answered and restart printed
+    "daemon healthy" and exited 0 -- the split-brain it had just created was
+    reported as success.
+
+    Taking the lock BEFORE the kill is the load-bearing part: acquiring it
+    after would leave exactly the window the followers spawn in.
+
+    Yields whether the lock was actually held. On contention this deliberately
+    proceeds UNLOCKED rather than failing: restart is the recovery command,
+    reached when the daemon is wedged, and a restart that refuses to run
+    because a peer is mid-election is useless precisely when it is needed.
+    The degraded path is no worse than the old unconditional behaviour, and
+    ``_stop_leader(spawn_port=...)`` still reclaims a squatted port afterwards
+    -- the split-brain RECOVERY that has always existed here. Windows takes the
+    no-op branch inside ``election_lock`` and reports False.
+    """
+    from octowright.cli import _leader_election
+
+    try:
+        with singleton.election_lock(timeout=_leader_election._election_lock_timeout()):
+            yield True
+    except TimeoutError:
+        click.echo(
+            "WARNING: timed out waiting for the leader-election lock; another instance is "
+            "electing a leader. Proceeding without it — a concurrent spawn may bind a "
+            "bumped port (split-brain); re-run `octowright restart` if that happens.",
+            err=True,
+        )
+        yield False
+
+
 def _spawn_daemon(http_host: str, http_port: int) -> int:
     """Spawn a fresh detached daemon. Returns the launcher pid.
 
@@ -515,36 +566,46 @@ def restart(
     # When we're going to spawn, also reclaim the spawn port from a split-brain
     # leader squatting on it (otherwise the bind below fails and nothing starts).
     spawn_port = None if no_start else http_port
-    stopped, killed, owned_browsers = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
-    if not keep_browsers:
-        _reap_browsers(owned_browsers)
+    with contextlib.ExitStack() as stack:
+        # Only when we are going to spawn. Under --no-start there is no spawn of
+        # ours to serialize, and a follower replacing the leader we just stopped
+        # is that path doing its job -- holding the lock would delay it and
+        # prevent nothing. See _spawn_election_lock for the race this closes.
+        if not no_start:
+            stack.enter_context(_spawn_election_lock())
+        stopped, killed, owned_browsers = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
+        if not keep_browsers:
+            _reap_browsers(owned_browsers)
 
-    if no_start:
-        click.echo(f"done (stopped={stopped} sigkilled={killed}; not starting a new daemon)")
-        return
+        if no_start:
+            click.echo(f"done (stopped={stopped} sigkilled={killed}; not starting a new daemon)")
+            return
 
-    if not _wait_for_port_free(http_host, http_port, timeout):
-        click.echo(
-            f"WARNING: requested port {http_host}:{http_port} is still busy after {timeout:.1f}s; "
-            "not starting a daemon on a fallback port",
-            err=True,
-        )
-        ctx.exit(1)
+        if not _wait_for_port_free(http_host, http_port, timeout):
+            click.echo(
+                f"WARNING: requested port {http_host}:{http_port} is still busy after {timeout:.1f}s; "
+                "not starting a daemon on a fallback port",
+                err=True,
+            )
+            ctx.exit(1)
 
-    launcher_pid = _spawn_daemon(http_host, http_port)
-    healthy_url = _wait_for_health(http_host, http_port, timeout)
-    if healthy_url is not None:
-        if stopped == 0 and killed == 0:
-            # Nothing was running before — be explicit so an agent invoking
-            # restart as a recovery action can see that no prior daemon was
-            # found and a fresh one was started.
-            click.echo(f"no prior daemon; started new one at PID {launcher_pid}")
+        launcher_pid = _spawn_daemon(http_host, http_port)
+        # Confirm health while STILL holding the lock: releasing before the new
+        # daemon binds would let a waiting follower acquire it, still see no
+        # leader, and spawn the competitor this exists to prevent.
+        healthy_url = _wait_for_health(http_host, http_port, timeout)
+        if healthy_url is not None:
+            if stopped == 0 and killed == 0:
+                # Nothing was running before — be explicit so an agent invoking
+                # restart as a recovery action can see that no prior daemon was
+                # found and a fresh one was started.
+                click.echo(f"no prior daemon; started new one at PID {launcher_pid}")
+            else:
+                click.echo(f"restarted daemon (stopped={stopped} sigkilled={killed}; new launcher PID {launcher_pid})")
+            click.echo(f"daemon healthy at {healthy_url}")
         else:
-            click.echo(f"restarted daemon (stopped={stopped} sigkilled={killed}; new launcher PID {launcher_pid})")
-        click.echo(f"daemon healthy at {healthy_url}")
-    else:
-        click.echo(
-            f"WARNING: daemon did not become healthy within {timeout:.1f}s — check ``octowright serve`` logs",
-            err=True,
-        )
-        ctx.exit(1)
+            click.echo(
+                f"WARNING: daemon did not become healthy within {timeout:.1f}s — check ``octowright serve`` logs",
+                err=True,
+            )
+            ctx.exit(1)
