@@ -451,9 +451,19 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     if it was busy, leaving the probe target out of sync.
     """
     octowright = _resolve_octowright_entry()
-    # Resolved entrypoint path + literal flags, no shell.
+    # --daemon-mode is REQUIRED, not cosmetic: it tells serve to run the leader
+    # directly and SKIP leader election (``cli/serve`` dispatches on it before
+    # ``_ensure_leader_or_inline`` is ever reached), which is exactly what
+    # ``daemonize.spawn_daemon`` does for the same reason. Without it the
+    # spawned process runs the full singleton election and blocks acquiring the
+    # election lock -- the lock this very command now holds across spawn and
+    # health-confirm. That is not a deadlock but a guaranteed stall: the child
+    # waits out our whole health budget, we report "daemon did not become
+    # healthy", release the lock on the way out, and the daemon then starts ~10s
+    # late. Observed live after the lock was introduced; the tests missed it
+    # because they stub _spawn_daemon and so never see this argv.
     proc = subprocess.Popen(  # nosec B603
-        [octowright, "serve", "--http-host", http_host, "--http-port", str(http_port)],
+        [octowright, "serve", "--daemon-mode", "--http-host", http_host, "--http-port", str(http_port)],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
