@@ -40,6 +40,16 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.19.1": [
+        "octowright restart works again. 0.19.0 made it hold the "
+        "leader-election lock across kill -> spawn -> confirm, but it spawned "
+        "the daemon without --daemon-mode, so the child ran leader election "
+        "and blocked on the lock its own parent was holding. Restart waited "
+        "out its whole health budget, printed 'daemon did not become healthy' "
+        "and exited 1, and the daemon then started about ten seconds later. "
+        "Every restart on 0.19.0 reported failure while actually working, "
+        "slowly -- upgrade if you are on it.",
+    ],
     "0.19.0": [
         "octowright doctor now names a wedged coreaudiod, which is the cause "
         "behind a WebKit that cannot load any page. WebKit's GPU process calls "

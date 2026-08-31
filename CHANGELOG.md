@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.1] - 2026-08-31
+
+### Fixed
+- **`octowright restart` reported failure on every run (regression in 0.19.0).** 0.19.0
+  made restart hold the leader-election lock across kill → spawn → confirm, closing a
+  split-brain race — but `restart._spawn_daemon` did not pass `--daemon-mode`, and that
+  flag is what tells `serve` to run the leader directly and **skip election**
+  (`cli/serve` dispatches on it before `_ensure_leader_or_inline` is reached, which is
+  why `daemonize.spawn_daemon` has always passed it). Without it the spawned child ran
+  the full singleton election and blocked acquiring the election lock **its own parent
+  held**: restart waited out its entire health budget, printed
+  `WARNING: daemon did not become healthy within 10.0s`, **exited 1**, released the
+  lock on the way out, and the daemon bound ~10s later. So every restart on 0.19.0
+  reported failure and exited non-zero while actually working, slowly — and scripts or
+  CI gating on `octowright restart` saw a hard failure. Fixed by passing
+  `--daemon-mode`, matching the other spawner; verified live at 12s with
+  `daemon healthy` and a single listener. 0.19.0's lock tests could not catch this —
+  they stub `_spawn_daemon` wholesale and so never see the argv — so
+  `TestSpawnedDaemonArgv` now asserts the real command line, including that both
+  spawners agree on `serve --daemon-mode` shape.
+
 ## [0.19.0] - 2026-08-31
 
 ### Added
