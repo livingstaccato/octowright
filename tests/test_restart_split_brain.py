@@ -154,3 +154,56 @@ class TestSplitBrainPrevention:
         assert result.exit_code == 0, result.output
         assert "election lock" in result.output
         assert "spawn" in events, "a contended lock must not abort the restart"
+
+
+class TestSpawnedDaemonArgv:
+    """The spawned daemon must skip election, or restart's own lock stalls it.
+
+    Regression, shipped and caught live: restart began holding the election
+    lock across spawn + health-confirm, but ``_spawn_daemon`` did not pass
+    ``--daemon-mode``. ``cli/serve`` dispatches on that flag BEFORE
+    ``_ensure_leader_or_inline``, so without it the child ran the full
+    singleton election and blocked acquiring the very lock its parent held --
+    waiting out the whole health budget, so restart reported "daemon did not
+    become healthy" and the daemon started ~10s late.
+
+    ``TestSplitBrainPrevention`` could not catch this: it stubs
+    ``_spawn_daemon`` wholesale and so never sees the argv. This asserts the
+    real command line.
+    """
+
+    def _captured_argv(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        seen: dict[str, list[str]] = {}
+
+        class _FakePopen:
+            pid = 4242
+
+            def __init__(self, args: list[str], **_kw: Any) -> None:
+                seen["args"] = args
+
+        monkeypatch.setattr(restart_mod.subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(restart_mod, "_resolve_octowright_entry", lambda: "/x/bin/octowright")
+        restart_mod._spawn_daemon("127.0.0.1", 6286)
+        return seen["args"]
+
+    def test_spawn_passes_daemon_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        argv = self._captured_argv(monkeypatch)
+        assert "--daemon-mode" in argv, (
+            "without --daemon-mode the child runs leader election and blocks on the "
+            "election lock restart holds across spawn+health"
+        )
+
+    def test_spawn_still_pins_host_and_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The health probe that follows must target the endpoint we asked for."""
+        argv = self._captured_argv(monkeypatch)
+        assert argv[argv.index("--http-host") + 1] == "127.0.0.1"
+        assert argv[argv.index("--http-port") + 1] == "6286"
+
+    def test_spawn_argv_matches_daemonize_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Both spawners must agree: ``serve --daemon-mode`` then host/port.
+
+        They are the only two places a daemon is started; drift between them is
+        what produced the stall.
+        """
+        argv = self._captured_argv(monkeypatch)
+        assert argv[1:3] == ["serve", "--daemon-mode"]
