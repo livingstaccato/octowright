@@ -356,6 +356,22 @@ class TestReapSafety:
 
 
 class TestCli:
+    @pytest.fixture(autouse=True)
+    def _no_telemetry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Neutralize telemetry setup for CLI invocations.
+
+        setup_telemetry() is process-global: a SECOND call in the same process
+        makes OpenTelemetry refuse to override its provider and log
+        "Overriding of current TracerProvider is not allowed" to stdout, which
+        breaks the --json contract. Each real `octowright doctor` is a fresh
+        process so production never hits it, but CliRunner invokes in-process --
+        which made test_json_output_is_machine_readable pass or fail purely on
+        whether it ran before or after another CLI test (it fails in source
+        order; the pinned random seed happened to hide it).
+        """
+        monkeypatch.setattr("octowright.cli.doctor.setup_telemetry", lambda *a, **k: None)
+        monkeypatch.setattr("octowright.cli.doctor.shutdown_telemetry", lambda *a, **k: None)
+
     def test_skip_engines_runs_without_launching_anything(self) -> None:
         result = CliRunner().invoke(_cli(), ["doctor", "--skip-engines"])
         assert result.exit_code == 0, result.output
@@ -385,3 +401,108 @@ def _cli() -> Any:
     from octowright.cli import cli
 
     return cli
+
+
+class TestFollowersCheck:
+    """Doctor must notice a follower running code the daemon is not.
+
+    A follower survives a leader restart by design, so upgrading and restarting
+    updates the leader and nothing else. Found live: followers two releases
+    behind a current leader, driving browsers, while doctor reported all-PASS --
+    because no check looked at followers at all.
+    """
+
+    def _summary(self, versions: dict[str, int], *, dead: int = 0) -> dict[str, Any]:
+        return {
+            "follower_versions": versions,
+            "follower_count": sum(versions.values()),
+            "dead_follower_count": dead,
+        }
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch, leader: str | None, summary: dict[str, Any]) -> None:
+        async def _leader() -> str | None:
+            return leader
+
+        monkeypatch.setattr(_doctor, "_running_leader_version", _leader)
+        monkeypatch.setattr("octowright.bridge_state.read_state", lambda _p: {})
+        monkeypatch.setattr("octowright.bridge_state.summarize_state", lambda _s: summary)
+
+    async def test_matching_followers_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 3}))
+        check = await _doctor.check_followers()
+        assert check.status == "ok"
+        assert check.name == "followers"
+
+    async def test_a_stale_follower_warns_and_names_the_action(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Warn, not fail: it is a deployment state, not a broken machine — and
+        the detail has to say a daemon restart will NOT fix it, which is the
+        counterintuitive part."""
+        self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 2, "0.17.0": 1}))
+        check = await _doctor.check_followers()
+        assert check.status == "warn"
+        assert "0.17.0" in check.detail
+        assert "reconnect" in check.detail
+        assert "daemon restart cannot" in check.detail
+        assert check.data["stale_followers"] == 1
+
+    async def test_it_compares_against_the_running_daemon_not_this_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Doctor usually runs from a checkout already upgraded past the daemon.
+
+        Comparing against this process's VERSION would report skew against a
+        version nobody is running -- and would call a follower that MATCHES the
+        live daemon stale.
+        """
+        self._patch(monkeypatch, "0.17.0", self._summary({"0.17.0": 2}))
+        check = await _doctor.check_followers()
+        assert check.status == "ok", "followers match the daemon that is actually answering"
+        assert check.data["leader_version"] == "0.17.0"
+
+    async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With nothing answering there is no version to compare against."""
+        self._patch(monkeypatch, None, self._summary({"0.17.0": 1}))
+        check = await _doctor.check_followers()
+        assert check.status == "skip"
+
+    async def test_no_live_followers_is_ok_not_a_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dead followers are filtered upstream; zero live ones is a clean state."""
+        self._patch(monkeypatch, "0.19.1", self._summary({}, dead=4))
+        check = await _doctor.check_followers()
+        assert check.status == "ok"
+        assert check.data["dead_followers_ignored"] == 4
+
+
+class TestJsonOutputPurity:
+    """--json must stay a single parseable document.
+
+    The followers check probes /api/health over a client that logs an INFO
+    "HTTP Request: ..." line. The tree once carried two such clients under
+    different logger names, and only the one a check happened to import was
+    exercised -- so this pins the SET against the installed modules rather than
+    trusting that today's single entry stays sufficient.
+    """
+
+    def test_every_http_client_logger_is_covered(self) -> None:
+        """Pins the SET, so re-adding a second client forces a decision here.
+
+        A check importing a client absent from this set emits an unsilenced
+        request log and breaks --json invisibly.
+        """
+        from octowright.cli import doctor as _cli_doctor
+
+        assert set(_cli_doctor._HTTP_CLIENT_LOGGERS) == {"httpx2"}
+
+    def test_the_named_loggers_are_the_ones_that_actually_log_requests(self) -> None:
+        """Guards against the set drifting from reality (a rename, a swapped client).
+
+        Asserted by importing each module and reading its logger name, rather
+        than trusting the literal above.
+        """
+        import importlib
+
+        from octowright.cli import doctor as _cli_doctor
+
+        for name in _cli_doctor._HTTP_CLIENT_LOGGERS:
+            module = importlib.import_module(name)
+            assert module.__name__ == name, f"{name} does not name a real client module"

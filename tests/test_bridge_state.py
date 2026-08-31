@@ -56,6 +56,16 @@ async def test_async_state_transactions_keep_event_loop_responsive(monkeypatch: 
     await transaction
 
 
+def _all_alive(_pid: int) -> bool:
+    """Liveness predicate for fixtures built from synthetic PIDs.
+
+    summarize_state issues a real liveness syscall by default; these fixtures
+    use PIDs like "1"/"2"/"3", whose real liveness varies by machine, so the
+    arithmetic under test would become machine-dependent without this.
+    """
+    return True
+
+
 def test_windows_state_lock_locks_one_byte_and_unlocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "bridge-state.json"
     calls: list[tuple[int, int, int]] = []
@@ -231,8 +241,9 @@ def test_summarize_state_totals_followers_and_latest_error() -> None:
         "events": [{"event": "snapshot"}, {"event": "snapshot"}],
     }
 
-    assert bridge_state.summarize_state(data) == {
+    assert bridge_state.summarize_state(data, is_alive=_all_alive) == {
         "follower_count": 2,
+        "dead_follower_count": 0,
         "event_count": 2,
         "total_in_flight": 5,
         "total_reconnect_attempts": 7,
@@ -261,8 +272,9 @@ def test_summarize_state_ignores_bad_shapes() -> None:
         "events": "not events",
     }
 
-    assert bridge_state.summarize_state(data) == {
+    assert bridge_state.summarize_state(data, is_alive=_all_alive) == {
         "follower_count": 2,
+        "dead_follower_count": 0,
         "event_count": 0,
         "total_in_flight": 0,
         "total_reconnect_attempts": 0,
@@ -278,6 +290,7 @@ def test_summarize_state_ignores_bad_shapes() -> None:
 def test_summarize_state_handles_non_dict_followers() -> None:
     assert bridge_state.summarize_state({"followers": "bad", "events": []}) == {
         "follower_count": 0,
+        "dead_follower_count": 0,
         "event_count": 0,
         "total_in_flight": 0,
         "total_reconnect_attempts": 0,
@@ -324,7 +337,7 @@ def test_version_skew_is_reported_rather_than_left_to_forensics() -> None:
         "events": [],
     }
 
-    summary = bridge_state.summarize_state(data)
+    summary = bridge_state.summarize_state(data, is_alive=_all_alive)
 
     assert summary["leader_version"] == VERSION
     assert summary["follower_versions"] == {"0.14.4": 2, VERSION: 1, bridge_state.UNKNOWN_FOLLOWER_VERSION: 1}
@@ -658,3 +671,77 @@ def test_concurrent_record_snapshot_keeps_both_followers(tmp_path: Path, monkeyp
 
     data = json.loads(path.read_text())
     assert set(data["followers"]) == {"111", "222"}
+
+
+class TestDeadFollowersAreNotCountedAsStale:
+    """A recorded follower that has exited must not be reported as live skew.
+
+    Found live: octowright_status reported 8 stale followers "running older
+    code"; the two investigated were BOTH already-exited processes. Acting on
+    the count meant chasing ghosts. _prune_dead_followers only runs when a
+    follower WRITES, and a follower that stopped writing is precisely the one
+    most likely to be dead, so the read path has to check for itself.
+    """
+
+    def _state(self) -> dict:
+        return {
+            "followers": {
+                "101": {"ts": 1.0, "follower_version": VERSION},
+                "202": {"ts": 2.0, "follower_version": "0.17.0"},
+            },
+            "events": [],
+        }
+
+    def test_a_dead_stale_follower_is_dropped_from_the_count(self) -> None:
+        summary = bridge_state.summarize_state(self._state(), is_alive=lambda pid: pid != 202)
+        assert summary["stale_follower_count"] == 0, "an exited follower is not running anything"
+        assert summary["follower_versions"] == {VERSION: 1}
+        assert summary["dead_follower_count"] == 1
+        assert summary["follower_count"] == 1
+
+    def test_a_live_stale_follower_is_still_reported(self) -> None:
+        """The guard must not swallow the real case it exists alongside."""
+        summary = bridge_state.summarize_state(self._state(), is_alive=_all_alive)
+        assert summary["stale_follower_count"] == 1
+        assert summary["dead_follower_count"] == 0
+        assert summary["stale_follower_hint"]
+
+    def test_dead_followers_do_not_inflate_totals_or_latest_error(self) -> None:
+        """Counters and last_error come from live followers only.
+
+        A dead follower's final error is usually its connection dying, which
+        would otherwise surface as the bridge's newest error forever.
+        """
+        state = {
+            "followers": {
+                "101": {"ts": 1.0, "follower_version": VERSION, "in_flight": 1},
+                "202": {"ts": 9.0, "follower_version": VERSION, "in_flight": 7, "last_error": "ghost"},
+            },
+            "events": [],
+        }
+        summary = bridge_state.summarize_state(state, is_alive=lambda pid: pid != 202)
+        assert summary["total_in_flight"] == 1
+        assert summary["latest_error"] is None
+
+    def test_an_unparsable_pid_key_is_kept(self) -> None:
+        """Conservative direction: over-report a follower rather than drop a real one.
+
+        Matches _prune_dead_followers, which treats an unparsable key the same way.
+        """
+        state = {"followers": {"not-a-pid": {"ts": 1.0, "follower_version": "0.17.0"}}, "events": []}
+        summary = bridge_state.summarize_state(state, is_alive=lambda _pid: False)
+        assert summary["follower_count"] == 1
+        assert summary["stale_follower_count"] == 1
+
+    def test_the_default_predicate_is_a_real_liveness_check(self) -> None:
+        """Production must not silently keep the old count-everything behaviour."""
+        state = {
+            "followers": {
+                str(os.getpid()): {"ts": 1.0, "follower_version": VERSION},
+                "999999": {"ts": 2.0, "follower_version": "0.17.0"},
+            },
+            "events": [],
+        }
+        summary = bridge_state.summarize_state(state)
+        assert summary["dead_follower_count"] == 1, "pid 999999 should not be alive"
+        assert summary["stale_follower_count"] == 0

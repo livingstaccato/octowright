@@ -157,7 +157,7 @@ async def _awaitable(value: Any) -> Any:
 async def test_canonical_port_serves_octowright_classifies_health(monkeypatch: pytest.MonkeyPatch) -> None:
     """The probe returns True only for a 200 /api/health with an octowright body,
     False for non-octowright responses and unreachable ports."""
-    import httpx
+    import httpx2
 
     class _Resp:
         def __init__(self, status: int, body: Any) -> None:
@@ -189,19 +189,19 @@ async def test_canonical_port_serves_octowright_classifies_health(monkeypatch: p
         return lambda **_k: _Client(resp=resp, exc=exc)
 
     # live octowright
-    monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(200, {"ok": True, "version": "0.10.0"})))
+    monkeypatch.setattr(httpx2, "AsyncClient", client_factory(resp=_Resp(200, {"ok": True, "version": "0.10.0"})))
     assert await _election._canonical_port_serves_octowright(None, None) is True
 
     # 200 but not octowright shape
-    monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(200, {"status": "other"})))
+    monkeypatch.setattr(httpx2, "AsyncClient", client_factory(resp=_Resp(200, {"status": "other"})))
     assert await _election._canonical_port_serves_octowright(None, None) is False
 
     # non-200
-    monkeypatch.setattr(httpx, "AsyncClient", client_factory(resp=_Resp(503, {"ok": True})))
+    monkeypatch.setattr(httpx2, "AsyncClient", client_factory(resp=_Resp(503, {"ok": True})))
     assert await _election._canonical_port_serves_octowright(None, None) is False
 
     # unreachable
-    monkeypatch.setattr(httpx, "AsyncClient", client_factory(exc=httpx.ConnectError("down")))
+    monkeypatch.setattr(httpx2, "AsyncClient", client_factory(exc=httpx2.ConnectError("down")))
     assert await _election._canonical_port_serves_octowright(None, None) is False
 
 

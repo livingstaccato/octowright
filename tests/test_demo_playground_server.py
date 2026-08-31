@@ -22,7 +22,7 @@ import asyncio
 import socket
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 # The server module is out-of-wheel (demo/playground/server.py). The tests
@@ -56,7 +56,7 @@ async def _start_server() -> PlaygroundServer:
 async def test_index_serves_static_html() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + "/")
         assert r.status_code == 200
         assert "Octowright Test Range" in r.text
@@ -69,7 +69,7 @@ async def test_index_serves_static_html() -> None:
 async def test_logo_asset_served_as_svg() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + "/otto.svg")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("image/svg+xml")
@@ -82,7 +82,7 @@ async def test_logo_asset_served_as_svg() -> None:
 async def test_favicon_alias_serves_logo_without_404() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + "/favicon.ico")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("image/svg+xml")
@@ -105,7 +105,7 @@ async def test_favicon_alias_serves_logo_without_404() -> None:
 async def test_showcase_pages_are_served(path: str, expected: str) -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + path)
         assert r.status_code == 200
         assert expected in r.text
@@ -117,7 +117,7 @@ async def test_showcase_pages_are_served(path: str, expected: str) -> None:
 async def test_state_starts_empty() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + "/api/state")
         state = r.json()
         assert state["canvas"][0][0] is None
@@ -132,7 +132,7 @@ async def test_state_starts_empty() -> None:
 async def test_claim_tile_updates_state() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.post(
                 s.url + "/api/claim",
                 json={"row": 2, "col": 3, "colour": "#abc", "claimed_by": "p1"},
@@ -149,7 +149,7 @@ async def test_claim_tile_updates_state() -> None:
 async def test_claim_tile_out_of_bounds_returns_400() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.post(
                 s.url + "/api/claim",
                 json={"row": 99, "col": 0, "colour": "#fff", "claimed_by": "p1"},
@@ -164,7 +164,7 @@ async def test_claim_tile_out_of_bounds_returns_400() -> None:
 async def test_form_step_appended() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             await client.post(
                 s.url + "/api/form-step",
                 json={"step": 1, "label": "name", "value": "Tim"},
@@ -185,7 +185,7 @@ async def test_form_step_appended() -> None:
 async def test_event_appended_to_shared_log() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.post(
                 s.url + "/api/event",
                 json={"source": "network-lab", "kind": "ping", "message": "GET /api/ping 200"},
@@ -202,7 +202,7 @@ async def test_event_appended_to_shared_log() -> None:
 async def test_ping_echo_and_error_endpoints_are_deterministic() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             ping = await client.get(s.url + "/api/ping")
             echo = await client.post(s.url + "/api/echo", json={"value": "octowright"})
             err = await client.get(s.url + "/api/error")
@@ -218,7 +218,7 @@ async def test_ping_echo_and_error_endpoints_are_deterministic() -> None:
 async def test_download_report_endpoint_returns_csv_attachment() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             r = await client.get(s.url + "/api/download/report.csv")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/csv")
@@ -232,7 +232,7 @@ async def test_download_report_endpoint_returns_csv_attachment() -> None:
 async def test_reset_clears_state() -> None:
     s = await _start_server()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             await client.post(
                 s.url + "/api/claim",
                 json={"row": 0, "col": 0, "colour": "#000", "claimed_by": "p1"},
@@ -265,7 +265,7 @@ async def test_sse_delivers_snapshot_then_events() -> None:
 
         async def consume() -> None:
             async with (
-                httpx.AsyncClient(timeout=httpx.Timeout(5.0, read=5.0)) as client,
+                httpx2.AsyncClient(timeout=httpx2.Timeout(5.0, read=5.0)) as client,
                 client.stream("GET", s.url + "/api/events") as resp,
             ):
                 buffer = ""
@@ -285,7 +285,7 @@ async def test_sse_delivers_snapshot_then_events() -> None:
             if received:
                 break
             await asyncio.sleep(0.05)
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             await client.post(
                 s.url + "/api/claim",
                 json={"row": 4, "col": 5, "colour": "#0f0", "claimed_by": "p1"},

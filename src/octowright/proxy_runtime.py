@@ -22,7 +22,7 @@ from contextlib import suppress
 from typing import Any
 
 import anyio
-import httpx
+import httpx2
 from mcp.client.streamable_http import streamable_http_client
 from mcp.server.stdio import stdio_server
 from provide.telemetry import get_logger
@@ -235,13 +235,13 @@ async def monitor_leader_health(
     The inline windowed retry remains the sole authority on giving up. Keeps
     watching (re-fires) so a still-silent connection is unstuck again."""
     failures = 0
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx2.AsyncClient(timeout=5.0) as client:
         while True:
             await anyio.sleep(interval)
             try:
                 response = await client.get(health_url)
                 ok = response.status_code == 200
-            except (httpx.HTTPError, OSError):
+            except (httpx2.HTTPError, OSError):
                 ok = False
             if ok:
                 failures = 0
@@ -281,7 +281,7 @@ async def consume_leader_notifications(
     cancelled = anyio.get_cancelled_exc_class()
     # No read timeout (SSE is long-lived); bound only the connect handshake so a
     # dead leader fails fast into the reconnect backoff instead of hanging.
-    timeout = httpx.Timeout(None, connect=BRIDGE_CONNECT_TIMEOUT_SECONDS)
+    timeout = httpx2.Timeout(None, connect=BRIDGE_CONNECT_TIMEOUT_SECONDS)
     attempt = 0
     while True:
         events_url = _events_url_from_mcp(resolve_leader_url(fallback_mcp_url))
@@ -291,7 +291,7 @@ async def consume_leader_notifications(
         headers = {"X-Octowright-Token": token} if token else {}
         try:
             async with (
-                httpx.AsyncClient(timeout=timeout) as client,
+                httpx2.AsyncClient(timeout=timeout) as client,
                 client.stream("GET", events_url, headers=headers) as response,
             ):
                 if response.status_code != 200:
@@ -334,10 +334,10 @@ async def _forward_sse_notifications(lines: Any, local_write: Any) -> None:
 
 
 async def leader_health_alive(health_url: str) -> bool:
-    async with httpx.AsyncClient(timeout=5.0) as client:
+    async with httpx2.AsyncClient(timeout=5.0) as client:
         try:
             response = await client.get(health_url)
-        except (httpx.HTTPError, OSError):
+        except (httpx2.HTTPError, OSError):
             return False
     return response.status_code == 200
 
