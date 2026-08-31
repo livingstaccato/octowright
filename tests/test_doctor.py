@@ -16,6 +16,7 @@ without a browser anywhere.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,86 @@ class TestEngineProbe:
         monkeypatch.setattr(_doctor, "_engine_probe_source", lambda kind: "import sys; sys.exit(3)")
         check = await _doctor.probe_engine("firefox", timeout=30)
         assert check.status == "fail"
+
+
+class TestCoreAudioCheck:
+    """The wedge that silently breaks WebKit on macOS.
+
+    Observed 2026-08-30: coreaudiod's HAL stopped answering, WebKit's GPU
+    process blocked in CoreAudio on startup and was watchdog-killed on a loop,
+    and every WebKit navigation died with no crash report. `killall coreaudiod`
+    fixed it. These pin the reporting, not CoreAudio itself, so they run
+    anywhere.
+    """
+
+    async def test_a_responding_coreaudio_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            _doctor,
+            "_coreaudio_probe_source",
+            lambda: 'import json; print(json.dumps({"ok": True, "status": 0, "elapsed_s": 0.1}))',
+        )
+        check = await _doctor.check_coreaudio(timeout=30)
+        assert check.status == "ok"
+        assert check.name == "audio:coreaudio"
+
+    async def test_a_wedged_coreaudio_is_killed_and_names_the_remedy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The real failure: the call never returns, so the probe must be killed.
+
+        The detail has to carry the fix. A bare "CoreAudio is wedged" sends the
+        reader back to WebKit, which is exactly the hour this check exists to
+        save.
+        """
+        monkeypatch.setattr(_doctor, "_coreaudio_probe_source", lambda: "import time; time.sleep(120)")
+        check = await _doctor.check_coreaudio(timeout=1.0)
+        assert check.status == "fail"
+        assert check.data["hung"] is True
+        assert "killall coreaudiod" in check.detail
+        # The point of naming WebKit here is that the SYMPTOM shows up there.
+        assert "WebKit" in check.detail
+
+    async def test_a_nonzero_osstatus_warns_rather_than_failing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An answer is an answer: the daemon is alive, so this is not the wedge."""
+        monkeypatch.setattr(
+            _doctor,
+            "_coreaudio_probe_source",
+            lambda: 'import json; print(json.dumps({"ok": False, "status": -4})) ',
+        )
+        check = await _doctor.check_coreaudio(timeout=30)
+        assert check.status == "warn"
+        assert "-4" in check.detail
+
+    async def test_a_silent_probe_warns_instead_of_claiming_health(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_doctor, "_coreaudio_probe_source", lambda: "import sys; sys.exit(3)")
+        check = await _doctor.check_coreaudio(timeout=30)
+        assert check.status == "warn"
+
+    async def test_it_runs_even_when_engine_probes_are_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """--skip-engines turns off the symptom probe; the cause check stays on."""
+        if sys.platform != "darwin":
+            pytest.skip("macOS-only check")
+        monkeypatch.setattr(
+            _doctor,
+            "_coreaudio_probe_source",
+            lambda: 'import json; print(json.dumps({"ok": True, "status": 0}))',
+        )
+        checks = await _doctor.run_checks(engines=False)
+        assert any(c.name == "audio:coreaudio" for c in checks)
+
+    async def test_it_is_absent_off_macos_rather_than_a_permanent_skip_line(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A SKIP line on every Linux run is noise a reader learns to ignore."""
+        monkeypatch.setattr(_doctor.sys, "platform", "linux")
+        for name in (
+            "check_daemon",
+            "check_browser_installs",
+            "check_stray_drivers",
+            "check_orphan_browsers",
+            "check_storage",
+        ):
+            monkeypatch.setattr(_doctor, name, lambda: _doctor.Check("x", "ok", ""))
+        checks = await _doctor.run_checks(engines=False)
+        assert not any(c.name == "audio:coreaudio" for c in checks)
 
 
 class TestStrayDrivers:

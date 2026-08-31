@@ -44,7 +44,7 @@ uv run octowright selftest       # list MCP tools without a client
 uv run octowright scenario list  # list loaded scenarios
 uv run octowright persona list   # list saved personas (also: persona create/show/delete)
 uv run octowright cleanup        # prune stale recordings (NOT profiles or macro artifacts)
-uv run octowright doctor         # diagnose engines/processes/daemon/storage; --fix reaps orphans
+uv run octowright doctor         # diagnose engines/processes/daemon/storage/coreaudio; --fix reaps orphans
 uv run octowright dashboard      # mint a single-use dashboard pairing code + /pair URL
 uv run octowright init           # scaffold a starter octowright project tree
 uv run octowright skill          # install/inspect the octowright agent skill
@@ -134,12 +134,40 @@ exactly the confusion the command exists to remove. A child can simply be
 killed, and its driver and browsers die with it.
 
 The other checks are `daemon` (is the lockfile's leader real, or stale),
-`browsers:installed`, `processes:drivers`, `processes:browsers`, and `storage`
+`browsers:installed`, `processes:drivers`, `processes:browsers`, `storage`
 (recordings and profiles at 0700 -- they hold typed input and live session
-cookies). `--fix` reaps orphaned drivers and browsers, and only ever processes
+cookies), and, on macOS only, `audio:coreaudio`. `--fix` reaps orphaned drivers and browsers, and only ever processes
 whose parent is already gone, so a running daemon's own driver is never
 touched. `--json` emits the same data structurally, `--skip-engines` avoids
 launching anything, and the command exits 1 on any FAIL so CI can gate on it.
+
+`audio:coreaudio` is a browser check wearing an audio check's name, and it
+earns its place by naming a CAUSE the engine probe can only report as a
+symptom. WebKit's GPU process calls into CoreAudio on every startup
+(`GPUConnectionToWebProcess::enableMediaPlaybackIfNecessary`). When
+`coreaudiod`'s HAL is wedged that call never returns, so WebKit's own watchdog
+declares the GPU process unresponsive after ~3s, SIGKILLs it, relaunches it,
+and it hangs again -- WebContent never gets a renderer and every navigation
+dies. Diagnosed on 2026-08-30: WebKit failed `goto about:blank` at ~6.7s with
+**no crash report**, the GPU pid changed three times in a single six-second
+run, and the unified log said it outright (`GPUProcessProxy::didBecomeUnresponsive`,
+`gpuProcessExited: reason=Unresponsive`, with the SIGKILL sent by the Playwright
+UI process itself). `sample` on the live GPU process showed its main thread in
+`HALC_ProxySystem::HALC_ProxySystem -> mach_msg` in 100% of samples. It was not
+a WebKit, Playwright, or octowright bug: `system_profiler SPAudioDataType` hung
+identically with no browser involved, and `killall coreaudiod` took the same
+probe from never completing to 0.97s end to end.
+
+Two implementation details are load-bearing. The probe runs in a **child
+process** that is reaped with `proc.kill()` (SIGKILL) rather than SIGTERM: the
+wedged call blocks in `mach_msg`, where a pending SIGTERM cannot be delivered,
+so plain `timeout` does not kill it and `timeout -s KILL` does (measured -- exit
+137). And it runs even under `--skip-engines`, because it costs 0.12-0.15s
+(measured on a healthy machine, against 0.46s for the `system_profiler`
+equivalent) and stays useful precisely when the slow probes are turned off. It
+is gated to macOS in `run_checks` rather than returning a `skip` from the check
+itself, so Linux runs carry no permanent SKIP line for a check that can never
+apply there.
 
 Nothing tracked the driver processes before this. `process_reaper` reasons
 *from* the driver -- its orphan rule for a browser is "my driver died" -- so a
