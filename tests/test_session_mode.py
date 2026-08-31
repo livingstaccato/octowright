@@ -39,6 +39,7 @@ def isolated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yield pool, profiles
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_session_true_creates_tmpdir_not_persistent_dir(isolated_pool) -> None:
     """session=True must NOT create anything under PROFILES_DIR."""
@@ -63,6 +64,7 @@ async def test_session_true_creates_tmpdir_not_persistent_dir(isolated_pool) -> 
         await pool.shutdown()
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_session_true_reuses_tmpdir_across_launches(isolated_pool) -> None:
     """Same (label, kind) gets the same tmpdir — close+reopen keeps state in-daemon."""
@@ -132,6 +134,7 @@ async def test_session_and_profile_are_mutually_exclusive(isolated_pool) -> None
         await pool.shutdown()
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_anonymous_session_launches_do_not_reuse_tmpdir(isolated_pool) -> None:
     pool, _ = isolated_pool
@@ -164,6 +167,7 @@ async def test_anonymous_session_launches_do_not_reuse_tmpdir(isolated_pool) -> 
         await pool.shutdown()
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_session_mode_records_user_data_dir(
     isolated_pool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -185,6 +189,7 @@ async def test_session_mode_records_user_data_dir(
         await pool.close_all()
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_session_tmpdir_wiped_on_pool_shutdown(isolated_pool) -> None:
     """Daemon shutdown removes session tmpdirs."""

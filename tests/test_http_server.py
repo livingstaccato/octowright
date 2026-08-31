@@ -793,6 +793,7 @@ def test_session_markdown_404_when_file_missing(client: TestClient, isolated_rec
     assert r.json()["error"] == "no markdown cache available for this session"
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_markdown_endpoint_roundtrip_live_and_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("playwright")

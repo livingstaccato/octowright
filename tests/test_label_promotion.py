@@ -15,6 +15,11 @@ from pathlib import Path
 
 import pytest
 
+# Every test in this module launches a real browser through the pool.
+# Module-level rather than repeated per test, and enforced by the
+# `_reap_leaked_browser_drivers` guard in tests/conftest.py.
+pytestmark = pytest.mark.live_browser
+
 
 @pytest.fixture
 def isolated_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

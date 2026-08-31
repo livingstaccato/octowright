@@ -77,6 +77,7 @@ def test_macro_pill_chip_falls_back_to_short_id() -> None:
     assert text == "abcd"
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
     """Init script must inject the pill API; show/hide round-trip must work,
@@ -186,6 +187,7 @@ async def test_macro_status_pill_renders_and_responds(tmp_path) -> None:
         _pool.RECORDINGS_DIR = original_pool
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_macro_pill_alt_modifier_toggles_pointer_events(tmp_path) -> None:
     """Holding Alt must flip the pill from click-through to clickable."""
@@ -269,6 +271,7 @@ async def test_macro_pill_alt_modifier_toggles_pointer_events(tmp_path) -> None:
         _pool.RECORDINGS_DIR = original_pool
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_macro_pill_modal_close_button_and_backdrop(tmp_path) -> None:
     """X button and backdrop click both dismiss the run-history modal."""
@@ -347,6 +350,7 @@ async def test_macro_pill_modal_close_button_and_backdrop(tmp_path) -> None:
         _pool.RECORDINGS_DIR = original_pool
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_macro_slowmo_delays_dispatch(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """slowmo_ms must add a real per-action delay before dispatch.
