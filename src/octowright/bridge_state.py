@@ -247,8 +247,17 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _partition_live(followers: dict[str, Any], is_alive: Callable[[int], bool]) -> tuple[dict[str, Any], int]:
+def _partition_live(
+    followers: dict[str, Any],
+    is_alive: Callable[[int], bool],
+    *,
+    keep_key: str | None = None,
+) -> tuple[dict[str, Any], int]:
     """Split recorded followers into (live, dead_count) by PID liveness.
+
+    ``keep_key`` is retained unconditionally without a liveness check, for the
+    write path's own follower -- it is alive by definition, and checking it
+    would spend a syscall to learn that.
 
     ``_prune_dead_followers`` already drops dead entries, but only when a
     follower WRITES a snapshot. Nothing prunes on the read path, so a reader
@@ -265,6 +274,9 @@ def _partition_live(followers: dict[str, Any], is_alive: Callable[[int], bool]) 
     live: dict[str, Any] = {}
     dead = 0
     for key, snap in followers.items():
+        if key == keep_key:
+            live[key] = snap
+            continue
         try:
             alive = is_alive(int(key))
         except (TypeError, ValueError):
@@ -274,6 +286,19 @@ def _partition_live(followers: dict[str, Any], is_alive: Callable[[int], bool]) 
         else:
             dead += 1
     return live, dead
+
+
+def stale_follower_count(versions: dict[str, int], baseline: str) -> int:
+    """How many recorded followers are NOT on ``baseline``.
+
+    Two callers ask this against DIFFERENT baselines and must not drift on
+    anything else: ``summarize_state`` compares against this process's own
+    ``VERSION``, while ``doctor.check_followers`` compares against the version
+    the RUNNING daemon reports. Only the baseline differs; the rule for what
+    counts as stale is shared here so a later change (semver-aware comparison,
+    special-casing ``unknown``) cannot land in one and miss the other.
+    """
+    return sum(count for version, count in versions.items() if version != baseline)
 
 
 def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | None = None) -> dict[str, Any]:
@@ -299,7 +324,7 @@ def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | 
     followers, dead_followers = _partition_live(followers, check)
     in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
     versions = _follower_version_counts(followers)
-    stale = sum(count for version, count in versions.items() if version != VERSION)
+    stale = stale_follower_count(versions, VERSION)
     return {
         "follower_count": len(followers),
         # Recorded-but-exited followers, dropped from every count above. Surfaced
@@ -354,18 +379,7 @@ def _prune_dead_followers(followers: dict[str, Any], *, keep_pid: int) -> dict[s
     (the follower currently recording — alive by definition). This bounds the
     registry to live followers instead of accumulating every PID ever seen.
     """
-    keep_key = str(keep_pid)
-    kept: dict[str, Any] = {}
-    for key, snap in followers.items():
-        if key == keep_key:
-            kept[key] = snap
-            continue
-        try:
-            alive = _pid_alive(int(key))
-        except (TypeError, ValueError):
-            alive = True  # unparsable PID key -> keep (conservative)
-        if alive:
-            kept[key] = snap
+    kept, _dead = _partition_live(followers, _pid_alive, keep_key=str(keep_pid))
     return kept
 
 
