@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 from typing import Any
 
 import click
@@ -52,6 +53,14 @@ def doctor(skip_engines: bool, engine_timeout: float | None, as_json: bool, fix:
     Exits 1 if any check failed, so CI can gate on it.
     """
     from octowright import doctor as _doctor
+
+    # The followers check probes /api/health over httpx, whose INFO-level
+    # "HTTP Request: ..." line would otherwise land on stdout -- noise in the
+    # table and FATAL under --json, where the output contract is a single
+    # parseable document. Silenced here rather than in doctor.py: which streams
+    # carry what is a CLI presentation concern, and a library function should
+    # not mutate global logging state on its caller's behalf.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     setup_telemetry()
     try:

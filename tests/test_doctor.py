@@ -385,3 +385,73 @@ def _cli() -> Any:
     from octowright.cli import cli
 
     return cli
+
+
+class TestFollowersCheck:
+    """Doctor must notice a follower running code the daemon is not.
+
+    A follower survives a leader restart by design, so upgrading and restarting
+    updates the leader and nothing else. Found live: followers two releases
+    behind a current leader, driving browsers, while doctor reported all-PASS --
+    because no check looked at followers at all.
+    """
+
+    def _summary(self, versions: dict[str, int], *, dead: int = 0) -> dict[str, Any]:
+        return {
+            "follower_versions": versions,
+            "follower_count": sum(versions.values()),
+            "dead_follower_count": dead,
+        }
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch, leader: str | None, summary: dict[str, Any]) -> None:
+        async def _leader() -> str | None:
+            return leader
+
+        monkeypatch.setattr(_doctor, "_running_leader_version", _leader)
+        monkeypatch.setattr("octowright.bridge_state.read_state", lambda _p: {})
+        monkeypatch.setattr("octowright.bridge_state.summarize_state", lambda _s: summary)
+
+    async def test_matching_followers_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 3}))
+        check = await _doctor.check_followers()
+        assert check.status == "ok"
+        assert check.name == "followers"
+
+    async def test_a_stale_follower_warns_and_names_the_action(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Warn, not fail: it is a deployment state, not a broken machine — and
+        the detail has to say a daemon restart will NOT fix it, which is the
+        counterintuitive part."""
+        self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 2, "0.17.0": 1}))
+        check = await _doctor.check_followers()
+        assert check.status == "warn"
+        assert "0.17.0" in check.detail
+        assert "reconnect" in check.detail
+        assert "daemon restart cannot" in check.detail
+        assert check.data["stale_followers"] == 1
+
+    async def test_it_compares_against_the_running_daemon_not_this_process(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Doctor usually runs from a checkout already upgraded past the daemon.
+
+        Comparing against this process's VERSION would report skew against a
+        version nobody is running -- and would call a follower that MATCHES the
+        live daemon stale.
+        """
+        self._patch(monkeypatch, "0.17.0", self._summary({"0.17.0": 2}))
+        check = await _doctor.check_followers()
+        assert check.status == "ok", "followers match the daemon that is actually answering"
+        assert check.data["leader_version"] == "0.17.0"
+
+    async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With nothing answering there is no version to compare against."""
+        self._patch(monkeypatch, None, self._summary({"0.17.0": 1}))
+        check = await _doctor.check_followers()
+        assert check.status == "skip"
+
+    async def test_no_live_followers_is_ok_not_a_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Dead followers are filtered upstream; zero live ones is a clean state."""
+        self._patch(monkeypatch, "0.19.1", self._summary({}, dead=4))
+        check = await _doctor.check_followers()
+        assert check.status == "ok"
+        assert check.data["dead_followers_ignored"] == 4
