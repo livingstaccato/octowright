@@ -57,7 +57,7 @@ async def test_leader_health_alive_returns_true_for_http_200(monkeypatch: pytest
         async def get(self, _url: str) -> FakeResponse:
             return FakeResponse(200)
 
-    monkeypatch.setattr(supervisor.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(supervisor.httpx2, "AsyncClient", FakeClient)
 
     assert await supervisor.leader_health_alive("http://leader.invalid/api/health") is True
 
@@ -75,9 +75,9 @@ async def test_leader_health_alive_returns_false_for_http_error(monkeypatch: pyt
             return None
 
         async def get(self, _url: str) -> FakeResponse:
-            raise supervisor.httpx.ConnectError("down")
+            raise supervisor.httpx2.ConnectError("down")
 
-    monkeypatch.setattr(supervisor.httpx, "AsyncClient", FailingClient)
+    monkeypatch.setattr(supervisor.httpx2, "AsyncClient", FailingClient)
 
     assert await supervisor.leader_health_alive("http://leader.invalid/api/health") is False
 
@@ -100,7 +100,7 @@ async def test_health_monitor_calls_failure_hook(monkeypatch: pytest.MonkeyPatch
         async def get(self, _url: str) -> FakeResponse:
             return FakeResponse()
 
-    monkeypatch.setattr(supervisor.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(supervisor.httpx2, "AsyncClient", FakeClient)
     unhealthy: list[bool] = []
 
     async with anyio.create_task_group() as tg:
@@ -371,7 +371,7 @@ async def test_silent_sse_is_unstuck_so_follower_reconnects(monkeypatch: pytest.
         async def get(self, _u: str) -> _Resp:
             return _Resp()
 
-    monkeypatch.setattr(supervisor.httpx, "AsyncClient", _HClient)
+    monkeypatch.setattr(supervisor.httpx2, "AsyncClient", _HClient)
 
     connects = {"n": 0}
 

@@ -452,7 +452,7 @@ class BridgeSupervisor:
         instantly failed when we resume.
 
         Deliberately does NOT force a reconnect: if the leader connection died
-        during the freeze, the reactive path (a read/send error or the httpx
+        during the freeze, the reactive path (a read/send error or the httpx2
         timeout → reset → resume on a freshly-handshaken session) reconnects on
         its own; if the connection survived, requests keep flowing. Forcing a
         reconnect here instead races the in-flight forward and strands the very

@@ -398,6 +398,84 @@ def check_daemon() -> Check:
     )
 
 
+async def check_followers() -> Check:
+    """Do the live followers run the same code as the daemon answering for them?
+
+    A follower is a subprocess its MCP client owns, and it deliberately SURVIVES
+    a leader restart so the client is not dropped. The consequence is that
+    upgrading octowright and restarting the daemon updates the leader and
+    nothing else: every connected client keeps running whatever follower it
+    spawned, until that client reconnects. Observed here with followers two
+    releases behind a current leader, driving browsers, with `doctor` reporting
+    all-PASS -- because nothing in doctor looked at followers at all.
+
+    Compared against the RUNNING DAEMON's version rather than this process's
+    ``VERSION``: doctor is usually invoked from a checkout that has already been
+    upgraded, so its own version is what the daemon *will* be after a restart,
+    not what is answering now. Using it would report skew against a version
+    nobody is running.
+
+    A warn, never a fail: skew is a deployment state the operator resolves per
+    client, not a broken machine, and `--fix` cannot touch it (killing a
+    follower just breaks that client's session -- the client does not respawn a
+    dead stdio server).
+    """
+    from octowright import defaults
+    from octowright.bridge_state import read_state, summarize_state
+
+    leader = await _running_leader_version()
+    if leader is None:
+        return Check("followers", "skip", "no daemon answering — nothing to compare followers against", {})
+
+    summary = summarize_state(read_state(defaults.BRIDGE_STATE_PATH))
+    versions: dict[str, int] = summary.get("follower_versions") or {}
+    live = summary.get("follower_count", 0)
+    dead = summary.get("dead_follower_count", 0)
+    # summarize_state compares against THIS process's VERSION; recompute against
+    # the daemon that is actually answering.
+    stale = sum(count for version, count in versions.items() if version != leader)
+    data = {
+        "leader_version": leader,
+        "follower_versions": versions,
+        "live_followers": live,
+        "stale_followers": stale,
+        "dead_followers_ignored": dead,
+    }
+    if not live:
+        return Check("followers", "ok", f"no live followers (leader {leader})", data)
+    if stale:
+        spread = ", ".join(f"{v} x{c}" for v, c in sorted(versions.items()) if v != leader)
+        return Check(
+            "followers",
+            "warn",
+            f"{stale} of {live} live follower(s) behind leader {leader} ({spread}) — "
+            "each client must reconnect; a daemon restart cannot update them",
+            data,
+        )
+    return Check("followers", "ok", f"all {live} live follower(s) on leader version {leader}", data)
+
+
+async def _running_leader_version() -> str | None:
+    """Version reported by the daemon currently answering, or None if none is."""
+    import httpx2
+
+    from octowright.singleton import pid_is_alive, read_lock
+
+    info = read_lock()
+    if info is None or not pid_is_alive(info.pid):
+        return None
+    try:
+        async with httpx2.AsyncClient(timeout=2.0) as client:
+            response = await client.get(f"http://{info.http_host}:{info.http_port}/api/health")
+        if response.status_code != 200:
+            return None
+        body = response.json()
+    except (httpx2.HTTPError, OSError, ValueError):
+        return None
+    version = body.get("version") if isinstance(body, dict) else None
+    return version if isinstance(version, str) and version else None
+
+
 def check_browser_installs() -> Check:
     """Are the engine builds Playwright expects actually on disk?
 
@@ -497,6 +575,10 @@ async def run_checks(
     # sub-second check that stays useful when the probes are turned off.
     if sys.platform == "darwin":
         checks.append(await check_coreaudio())
+    # Cheap (one loopback probe) and, like coreaudio, most useful exactly when
+    # the engine probes are skipped: it answers "is this deployment consistent",
+    # which no other check covers.
+    checks.append(await check_followers())
     if not engines:
         checks.append(Check("engines", "skip", "engine probes skipped (--skip-engines)", {}))
         return checks

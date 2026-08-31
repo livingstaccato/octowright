@@ -238,7 +238,7 @@ async def test_health_monitor_unsticks_after_consecutive_failures(monkeypatch: p
             calls += 1
             return FakeResponse()
 
-    monkeypatch.setattr(runtime.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(runtime.httpx2, "AsyncClient", FakeClient)
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(runtime.monitor_leader_health, "http://leader/api/health", 0.01, 2, lambda: unstuck.append(True))

@@ -162,7 +162,7 @@ SESSION_TYPE_NAMES = frozenset({"BrowserSession", "SessionLike"})
 GENERIC_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 
 # Conventional-name seeds that collide with common non-Playwright libraries
-# (httpx.Response/Request, Starlette's Request/WebSocket) badly enough that
+# (httpx2.Response/Request, Starlette's Request/WebSocket) badly enough that
 # an UNANNOTATED local/parameter with one of these names in a file that
 # imports one of those libraries is more likely a false positive than a real
 # Playwright handle. Suppressed only in files showing that import evidence;
@@ -171,7 +171,10 @@ GENERIC_TYPING_MODULES = frozenset({"typing", "typing_extensions"})
 # other conventional name (page/frame/context/locator/dialog/route/etc.) was
 # checked repo-wide and has no such collision, so this set stays narrow.
 AMBIGUOUS_SEED_NAMES = frozenset({"request", "response", "websocket"})
-AMBIGUOUS_NAME_LIBRARY_MODULES = frozenset({"httpx", "starlette"})
+# ``httpx`` is retained alongside ``httpx2``: the name carries the same
+# Response/Request collision, and dropping it would make this vocabulary depend
+# on which client a file happens to import rather than on the collision itself.
+AMBIGUOUS_NAME_LIBRARY_MODULES = frozenset({"httpx", "httpx2", "starlette"})
 
 TARGET_METHOD = "_target"
 GATE_METHOD = "operation"

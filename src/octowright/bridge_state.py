@@ -13,7 +13,7 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -229,7 +229,66 @@ def _follower_totals(followers: dict[str, Any]) -> tuple[int, int, int, str | No
     return totals[0], totals[1], totals[2], latest_error
 
 
-def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
+def _pid_alive(pid: int) -> bool:
+    """True if a process with this PID exists.
+
+    Delegates to :func:`octowright.singleton.pid_is_alive`, which is
+    cross-platform — on Windows it uses ``OpenProcess`` rather than
+    ``os.kill(pid, 0)`` (which never reports a dead PID on Windows, so a
+    POSIX-only check treated every dead follower as alive and never pruned).
+    Conservative: ambiguous outcomes (permission denied) count as ALIVE so live
+    followers are never pruned; an unusable/overflowing PID prunes.
+    """
+    from octowright.singleton import pid_is_alive
+
+    try:
+        return pid_is_alive(pid)
+    except (OverflowError, ValueError):
+        return False
+
+
+def _partition_live(followers: dict[str, Any], is_alive: Callable[[int], bool]) -> tuple[dict[str, Any], int]:
+    """Split recorded followers into (live, dead_count) by PID liveness.
+
+    ``_prune_dead_followers`` already drops dead entries, but only when a
+    follower WRITES a snapshot. Nothing prunes on the read path, so a reader
+    sees a dead follower for as long as no follower happens to write -- and a
+    follower that has stopped writing is exactly the one most likely to be
+    dead. Observed live: two entries reported as stale followers "running older
+    code", both of which were already-exited processes; acting on that count
+    meant chasing ghosts.
+
+    An unparsable PID key is treated as LIVE, matching ``_prune_dead_followers``:
+    the conservative direction is to over-report a follower, not to silently
+    drop one that exists.
+    """
+    live: dict[str, Any] = {}
+    dead = 0
+    for key, snap in followers.items():
+        try:
+            alive = is_alive(int(key))
+        except (TypeError, ValueError):
+            alive = True
+        if alive:
+            live[key] = snap
+        else:
+            dead += 1
+    return live, dead
+
+
+def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | None = None) -> dict[str, Any]:
+    """Summarize bridge state, counting only followers whose PID is still alive.
+
+    ``is_alive`` is injectable so tests can be deterministic: the default issues
+    a real liveness syscall per follower (cheap -- ``os.kill(pid, 0)``), which
+    would otherwise make a fixture's synthetic PIDs machine-dependent.
+
+    Resolved at CALL time rather than as a default argument value. A default of
+    ``is_alive=_pid_alive`` binds the function object when this module is
+    imported, so monkeypatching ``bridge_state._pid_alive`` would silently have
+    no effect -- a trap for any caller's test that patches the obvious name.
+    """
+    check = is_alive if is_alive is not None else _pid_alive
     followers = state.get("followers")
     events = state.get("events")
     if not isinstance(followers, dict):
@@ -237,11 +296,16 @@ def summarize_state(state: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(events, list):
         events = []
 
+    followers, dead_followers = _partition_live(followers, check)
     in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
     versions = _follower_version_counts(followers)
     stale = sum(count for version, count in versions.items() if version != VERSION)
     return {
         "follower_count": len(followers),
+        # Recorded-but-exited followers, dropped from every count above. Surfaced
+        # rather than silently discarded so a shrinking follower_count is
+        # explainable instead of looking like followers vanishing.
+        "dead_follower_count": dead_followers,
         "event_count": len(events),
         "total_in_flight": in_flight,
         "total_reconnect_attempts": reconnect_attempts,
@@ -283,24 +347,6 @@ def _follower_version_counts(followers: dict[str, Any]) -> dict[str, int]:
 
 def _int_value(value: Any) -> int:
     return value if isinstance(value, int) and value > 0 else 0
-
-
-def _pid_alive(pid: int) -> bool:
-    """True if a process with this PID exists.
-
-    Delegates to :func:`octowright.singleton.pid_is_alive`, which is
-    cross-platform — on Windows it uses ``OpenProcess`` rather than
-    ``os.kill(pid, 0)`` (which never reports a dead PID on Windows, so a
-    POSIX-only check treated every dead follower as alive and never pruned).
-    Conservative: ambiguous outcomes (permission denied) count as ALIVE so live
-    followers are never pruned; an unusable/overflowing PID prunes.
-    """
-    from octowright.singleton import pid_is_alive
-
-    try:
-        return pid_is_alive(pid)
-    except (OverflowError, ValueError):
-        return False
 
 
 def _prune_dead_followers(followers: dict[str, Any], *, keep_pid: int) -> dict[str, Any]:

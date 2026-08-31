@@ -243,7 +243,7 @@ class TestProbeHttpAlive:
     @pytest.mark.anyio
     async def test_200_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTTP 200 from /api/health → True."""
-        import httpx
+        import httpx2
 
         async def fake_get(self: Any, url: str) -> Any:
             response = MagicMock()
@@ -254,13 +254,13 @@ class TestProbeHttpAlive:
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         client.get = fake_get.__get__(client)
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: client)
+        monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kw: client)
         assert await probe_http_alive(_info()) is True
 
     @pytest.mark.anyio
     async def test_non_200_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """500 from /api/health → False (the leader is sick)."""
-        import httpx
+        import httpx2
 
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
@@ -268,37 +268,37 @@ class TestProbeHttpAlive:
         response = MagicMock()
         response.status_code = 500
         client.get = AsyncMock(return_value=response)
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: client)
+        monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kw: client)
         assert await probe_http_alive(_info()) is False
 
     @pytest.mark.anyio
     async def test_http_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """httpx.HTTPError swallowed → False."""
-        import httpx
+        """httpx2.HTTPError swallowed → False."""
+        import httpx2
 
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
-        client.get = AsyncMock(side_effect=httpx.ConnectError("nope"))
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: client)
+        client.get = AsyncMock(side_effect=httpx2.ConnectError("nope"))
+        monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kw: client)
         assert await probe_http_alive(_info()) is False
 
     @pytest.mark.anyio
     async def test_os_error_returns_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OSError (e.g. socket-not-connected) swallowed → False."""
-        import httpx
+        import httpx2
 
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         client.get = AsyncMock(side_effect=OSError("no socket"))
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: client)
+        monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kw: client)
         assert await probe_http_alive(_info()) is False
 
     @pytest.mark.anyio
     async def test_url_uses_info_host_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The probed URL uses info.http_host + http_port + /api/health."""
-        import httpx
+        import httpx2
 
         captured: list[str] = []
 
@@ -312,7 +312,7 @@ class TestProbeHttpAlive:
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=None)
         client.get = fake_get.__get__(client)
-        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: client)
+        monkeypatch.setattr(httpx2, "AsyncClient", lambda **_kw: client)
         await probe_http_alive(_info(http_host="10.0.0.1", http_port=12345))
         assert captured == ["http://10.0.0.1:12345/api/health"]
 

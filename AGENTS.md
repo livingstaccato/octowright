@@ -136,10 +136,38 @@ killed, and its driver and browsers die with it.
 The other checks are `daemon` (is the lockfile's leader real, or stale),
 `browsers:installed`, `processes:drivers`, `processes:browsers`, `storage`
 (recordings and profiles at 0700 -- they hold typed input and live session
-cookies), and, on macOS only, `audio:coreaudio`. `--fix` reaps orphaned drivers and browsers, and only ever processes
+cookies), `followers`, and, on macOS only, `audio:coreaudio`. `--fix` reaps orphaned drivers and browsers, and only ever processes
 whose parent is already gone, so a running daemon's own driver is never
 touched. `--json` emits the same data structurally, `--skip-engines` avoids
 launching anything, and the command exits 1 on any FAIL so CI can gate on it.
+
+`followers` answers "is this deployment consistent". A follower is a subprocess
+its MCP client owns and it deliberately SURVIVES a leader restart so the client
+is not dropped -- so upgrading octowright and restarting the daemon updates the
+leader and **nothing else**, and every connected client keeps running whatever
+follower it spawned until that client reconnects. Observed with followers two
+releases behind a current leader, driving browsers, while `doctor` reported
+all-PASS, because nothing in it looked at followers at all. It compares against
+the **running daemon's** version (read from `/api/health`), not this process's
+`VERSION`: doctor is usually invoked from a checkout already upgraded past the
+daemon, so its own version is what the daemon *will* be after a restart, and
+comparing against it would report skew against a version nobody is running --
+and call a follower that matches the live daemon stale. It warns rather than
+fails (a deployment state, not a broken machine) and `--fix` deliberately does
+not touch it: killing a follower just breaks that client's session, since a
+client does not respawn a dead stdio server.
+
+**Dead followers are not counted.** `bridge_state._prune_dead_followers` drops
+exited followers, but only when a follower WRITES a snapshot -- and a follower
+that has stopped writing is precisely the one most likely to be dead. Nothing
+pruned on the READ path, so `octowright_status()["bridge"]` reported 8 stale
+followers "running older code" of which the two investigated were **both
+already-exited processes**. `summarize_state` now partitions by PID liveness
+first (`is_alive` is injectable so tests stay deterministic; the default issues
+a real `os.kill(pid, 0)`), reports the discarded count as `dead_follower_count`
+so a shrinking `follower_count` is explainable, and keeps an unparsable PID key
+as live -- the conservative direction is to over-report a follower, not to drop
+a real one.
 
 `audio:coreaudio` is a browser check wearing an audio check's name, and it
 earns its place by naming a CAUSE the engine probe can only report as a

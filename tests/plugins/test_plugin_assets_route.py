@@ -122,7 +122,7 @@ def test_a_plugin_with_no_frontend_is_404(tmp_path, monkeypatch):
 @pytest.mark.parametrize("path", ["../secret.txt", "sub/../../secret.txt", "..%2Fsecret.txt"])
 def test_traversal_is_refused(served, tmp_path, path):
     """NOTE on what this actually exercises: the two literal-``../`` cases
-    never reach containment. httpx (the test client) performs RFC 3986
+    never reach containment. httpx2 (the test client) performs RFC 3986
     dot-segment normalization client-side before the request is even sent, so
     ``/plugins/my-plugin/../secret.txt`` is rewritten to ``/plugins/secret.txt``
     ahead of the route match; that 404s because no plugin is registered under

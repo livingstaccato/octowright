@@ -74,7 +74,7 @@ async def _canonical_port_serves_octowright(http_host: str | None, http_port: in
     (e.g. 6286 → 6287) and bind a SECOND leader beside the healthy one (observed
     live). So before spawning, confirm the canonical port isn't already octowright.
     """
-    import httpx
+    import httpx2
 
     from octowright.defaults import HTTP_HOST, HTTP_PORT
     from octowright.http.exposure import is_loopback_host
@@ -84,13 +84,13 @@ async def _canonical_port_serves_octowright(http_host: str | None, http_port: in
     probe_host = host if is_loopback_host(host) else "127.0.0.1"
     port = http_port if http_port is not None else HTTP_PORT
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx2.AsyncClient(timeout=2.0) as client:
             response = await client.get(f"http://{probe_host}:{port}/api/health")
         if response.status_code != 200:
             return False
         body = response.json()
         return isinstance(body, dict) and body.get("ok") is True
-    except (httpx.HTTPError, OSError, ValueError):
+    except (httpx2.HTTPError, OSError, ValueError):
         return False
 
 

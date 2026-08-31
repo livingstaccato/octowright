@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any
 
 import anyio
-import httpx
+import httpx2
 import pytest
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -183,7 +183,7 @@ async def test_restart_disconnects_followers_then_a_fresh_client_reconnects(tmp_
 
 
 async def _wait_health(port: int, timeout: float = 40.0) -> None:
-    async with httpx.AsyncClient(timeout=5) as client:
+    async with httpx2.AsyncClient(timeout=5) as client:
         with anyio.fail_after(timeout):
             while True:
                 try:

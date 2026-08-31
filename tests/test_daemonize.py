@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 
 from octowright import daemonize as _daemon
@@ -126,11 +126,11 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
                 # in the daemon path). Keep waiting.
                 continue
             try:
-                resp = httpx.get(
+                resp = httpx2.get(
                     f"http://{info['http_host']}:{info['http_port']}/api/health",
                     timeout=2.0,
                 )
-            except (httpx.HTTPError, OSError):
+            except (httpx2.HTTPError, OSError):
                 continue
             if resp.status_code == 200:
                 daemon_pid = pid
@@ -152,7 +152,7 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
 
         info = _read_lock(lock_path)
         assert info is not None and info.get("pid") == daemon_pid, "lockfile mutated unexpectedly"
-        resp = httpx.get(f"http://{info['http_host']}:{info['http_port']}/api/health", timeout=2.0)
+        resp = httpx2.get(f"http://{info['http_host']}:{info['http_port']}/api/health", timeout=2.0)
         assert resp.status_code == 200, f"daemon HTTP unhealthy after parent kill: {resp.status_code}"
     finally:
         # Always clean up — kill both parent and daemon if either is still alive.

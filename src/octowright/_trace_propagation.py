@@ -6,7 +6,7 @@
 """W3C trace-context propagation across the follower→leader HTTP-MCP bridge.
 
 The follower's ``BridgeSupervisor`` calls ``streamablehttp_client(...)`` which
-opens an httpx ``AsyncClient`` under the hood. Without help, OTel spans on the
+opens an httpx2 ``AsyncClient`` under the hood. Without help, OTel spans on the
 follower side and on the leader side appear as two disconnected trees — same
 ``service.name`` only correlates by timestamp.
 
@@ -14,7 +14,7 @@ This module adds two seams so the two sides chain via the W3C ``traceparent``
 header:
 
 * :func:`build_tracing_http_client` — builds the bridge's ``httpx2.AsyncClient``
-  that installs a request event hook on the httpx client. Every outbound
+  that installs a request event hook on the httpx2 client. Every outbound
   request gets its current OTel context injected (``opentelemetry.propagate``).
 * :class:`TraceContextExtractionMiddleware` — ASGI middleware to wrap the
   leader's ``/mcp`` mount. Extracts the W3C context from incoming headers and
@@ -46,10 +46,10 @@ except ImportError:  # pragma: no cover - OTel SDK is a soft dep
 
 
 async def _inject_traceparent_hook(request: httpx2.Request) -> None:
-    """httpx event hook: inject the current OTel context into request headers."""
+    """httpx2 event hook: inject the current OTel context into request headers."""
     if not _OTEL_AVAILABLE:
         return
-    # propagate.inject mutates the carrier in place; httpx Headers is dict-like
+    # propagate.inject mutates the carrier in place; httpx2 Headers is dict-like
     # enough for the default W3CTraceContextPropagator (which only does setdefault).
     try:
         _otel_propagate.inject(request.headers)

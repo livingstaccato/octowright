@@ -20,11 +20,11 @@ from collections.abc import Iterable
 from typing import cast
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
-import httpcore
-import httpx
+import httpcore2
+import httpx2
 from defusedxml import ElementTree  # type: ignore[import-untyped]
-from httpcore._backends.auto import AutoBackend
-from httpx._config import DEFAULT_LIMITS, create_ssl_context
+from httpcore2._backends.auto import AutoBackend
+from httpx2._config import DEFAULT_LIMITS, create_ssl_context
 
 from octowright.mcp_types import (
     BrowserActionSuggestion,
@@ -61,7 +61,7 @@ _COMMON_SITE_PATHS = (
 _DEFAULT_SITE_TERMS = ("docs", "documentation", "api", "pricing", "login", "signin", "signup", "support", "contact")
 
 
-class _PinnedDNSBackend(httpcore.AsyncNetworkBackend):
+class _PinnedDNSBackend(httpcore2.AsyncNetworkBackend):
     def __init__(self, host_to_ips: dict[str, list[str]]) -> None:
         self._host_to_ips = host_to_ips
         self._backend = AutoBackend()
@@ -72,8 +72,8 @@ class _PinnedDNSBackend(httpcore.AsyncNetworkBackend):
         port: int,
         timeout: float | None = None,
         local_address: str | None = None,
-        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
-    ) -> httpcore.AsyncNetworkStream:
+        socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
+    ) -> httpcore2.AsyncNetworkStream:
         pinned = self._host_to_ips.get(host.lower())
         connect_host = pinned[0] if pinned else host
         return await self._backend.connect_tcp(
@@ -88,18 +88,18 @@ class _PinnedDNSBackend(httpcore.AsyncNetworkBackend):
         self,
         path: str,
         timeout: float | None = None,
-        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
-    ) -> httpcore.AsyncNetworkStream:  # pragma: nocover
+        socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
+    ) -> httpcore2.AsyncNetworkStream:  # pragma: nocover
         return await self._backend.connect_unix_socket(path, timeout=timeout, socket_options=socket_options)
 
     async def sleep(self, seconds: float) -> None:
         await self._backend.sleep(seconds)
 
 
-class _PinnedDNSAsyncHTTPTransport(httpx.AsyncHTTPTransport):
+class _PinnedDNSAsyncHTTPTransport(httpx2.AsyncHTTPTransport):
     def __init__(self, host_to_ips: dict[str, list[str]]) -> None:
         ssl_context = create_ssl_context(verify=True, cert=None, trust_env=True)
-        self._pool = httpcore.AsyncConnectionPool(
+        self._pool = httpcore2.AsyncConnectionPool(
             ssl_context=ssl_context,
             max_connections=DEFAULT_LIMITS.max_connections,
             max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
@@ -196,7 +196,7 @@ def _checked_public_target(url: str) -> tuple[str, list[str]]:
     return host, _check_hostname(host, resolve_host=True)
 
 
-def _redirect_target(response_url: str, response: httpx.Response) -> str | None:
+def _redirect_target(response_url: str, response: httpx2.Response) -> str | None:
     if response.status_code not in {301, 302, 303, 307, 308}:
         return None
     location = response.headers.get("location")
@@ -205,13 +205,13 @@ def _redirect_target(response_url: str, response: httpx.Response) -> str | None:
     return urljoin(response_url, location)
 
 
-def _check_content_type(response: httpx.Response, *, require_html: bool) -> None:
+def _check_content_type(response: httpx2.Response, *, require_html: bool) -> None:
     content_type = response.headers.get("content-type", "")
     if require_html and "html" not in content_type.lower() and content_type:
         raise ValueError(f"web discovery expected HTML, got content-type {content_type!r}")
 
 
-async def _read_limited_text(response: httpx.Response) -> str:
+async def _read_limited_text(response: httpx2.Response) -> str:
     chunks: list[bytes] = []
     total = 0
     async for chunk in response.aiter_bytes():
@@ -231,10 +231,10 @@ async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str
     pinned: dict[str, list[str]] = {}
     host, ips = _checked_public_target(current_url)
     pinned[host] = ips
-    async with httpx.AsyncClient(
+    async with httpx2.AsyncClient(
         transport=_PinnedDNSAsyncHTTPTransport(pinned),
         follow_redirects=False,
-        timeout=httpx.Timeout(10.0, read=10.0),
+        timeout=httpx2.Timeout(10.0, read=10.0),
         headers={"user-agent": "octowright-web-discovery/1.0"},
     ) as client:
         for _ in range(_MAX_REDIRECTS + 1):
@@ -250,7 +250,7 @@ async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str
                 response.raise_for_status()
                 _check_content_type(response, require_html=require_html)
                 return response_url, await _read_limited_text(response)
-    raise httpx.TooManyRedirects(f"Exceeded {_MAX_REDIRECTS} redirects while fetching {url!r}")
+    raise httpx2.TooManyRedirects(f"Exceeded {_MAX_REDIRECTS} redirects while fetching {url!r}")
 
 
 async def _fetch_html(url: str) -> tuple[str, str]:
@@ -511,7 +511,7 @@ async def web_site_links(url: str, query: str = "", limit: int = 12) -> WebSiteL
     sitemap_urls: list[str] = []
     try:
         _, robots = await _fetch_text(urljoin(origin, "/robots.txt"))
-    except (httpx.HTTPError, ValueError):
+    except (httpx2.HTTPError, ValueError):
         robots = ""
     if robots:
         sources.append("robots")
@@ -523,7 +523,7 @@ async def web_site_links(url: str, query: str = "", limit: int = 12) -> WebSiteL
     for sitemap_url in sitemap_urls[:5]:
         try:
             _, sitemap = await _fetch_text(sitemap_url)
-        except (httpx.HTTPError, ValueError):
+        except (httpx2.HTTPError, ValueError):
             continue
         for loc in _sitemap_links(sitemap):
             _merge_link(links, seen, _link_from_url(loc, source="sitemap"))

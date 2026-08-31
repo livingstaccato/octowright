@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from octowright.browser_pool import BrowserPool
@@ -70,7 +70,7 @@ async def test_form_flow_posts_three_steps_via_octowright_session(
         await page.fill("#notes", "integration local run")
         await page.click("#submit")
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             for _ in range(30):
                 state = (await client.get(f"{integration_local_base_url}/api/state")).json()
                 if len(state["form_steps"]) == 3:
@@ -119,7 +119,7 @@ async def test_shared_canvas_claims_propagate_between_two_browsers(
         await page_1.click('[data-testid="tile-1-1"]')
         await page_2.click('[data-testid="tile-1-2"]')
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             for _ in range(30):
                 state = (await client.get(f"{integration_local_base_url}/api/state")).json()
                 if state["canvas"][1][1] and state["canvas"][1][2]:
@@ -188,7 +188,7 @@ async def test_network_lab_buttons_hit_deterministic_server_endpoints(
             await asyncio.sleep(0.1)
         assert "status: 418" in text
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(2.0)) as client:
+        async with httpx2.AsyncClient(timeout=httpx2.Timeout(2.0)) as client:
             state = (await client.get(f"{integration_local_base_url}/api/state")).json()
         messages = [entry["message"] for entry in state["events"] if entry["source"] == "network-lab"]
         assert any("GET /api/ping 200" in msg for msg in messages)
