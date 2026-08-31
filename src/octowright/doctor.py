@@ -421,7 +421,7 @@ async def check_followers() -> Check:
     dead stdio server).
     """
     from octowright import defaults
-    from octowright.bridge_state import read_state, summarize_state
+    from octowright.bridge_state import read_state, stale_follower_count, summarize_state
 
     leader = await _running_leader_version()
     if leader is None:
@@ -432,8 +432,9 @@ async def check_followers() -> Check:
     live = summary.get("follower_count", 0)
     dead = summary.get("dead_follower_count", 0)
     # summarize_state compares against THIS process's VERSION; recompute against
-    # the daemon that is actually answering.
-    stale = sum(count for version, count in versions.items() if version != leader)
+    # the daemon that is actually answering, through the same shared predicate
+    # so only the baseline differs.
+    stale = stale_follower_count(versions, leader)
     data = {
         "leader_version": leader,
         "follower_versions": versions,

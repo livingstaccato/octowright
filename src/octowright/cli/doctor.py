@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
-import logging
 from typing import Any
 
 import click
@@ -17,13 +16,6 @@ from provide.telemetry import setup_telemetry, shutdown_telemetry
 
 from octowright.cli._root import cli
 from octowright.doctor import Check
-
-# Every HTTP client in the dependency tree that logs requests at INFO.
-# Every HTTP client in the dependency tree that logs requests at INFO. A tuple
-# rather than one literal because the tree previously carried two clients that
-# log the same line under DIFFERENT logger names; only the one a check happened
-# to import was exercised, so a single name silently stopped being sufficient.
-_HTTP_CLIENT_LOGGERS = ("httpx2",)
 
 _MARK = {"ok": "PASS", "warn": "WARN", "fail": "FAIL", "skip": "SKIP"}
 _COLOR = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "cyan"}
@@ -60,17 +52,6 @@ def doctor(skip_engines: bool, engine_timeout: float | None, as_json: bool, fix:
     Exits 1 if any check failed, so CI can gate on it.
     """
     from octowright import doctor as _doctor
-
-    # The followers check probes /api/health over HTTP, whose client logs an
-    # INFO-level "HTTP Request: ..." line that would land on stdout -- noise in
-    # the table and FATAL under --json, where the output contract is a single
-    # parsable document.
-    #
-    # Silenced here rather than in doctor.py: which streams carry what is a CLI
-    # presentation concern, and a library function should not mutate global
-    # logging state on its caller's behalf.
-    for _http_logger in _HTTP_CLIENT_LOGGERS:
-        logging.getLogger(_http_logger).setLevel(logging.WARNING)
 
     setup_telemetry()
     try:

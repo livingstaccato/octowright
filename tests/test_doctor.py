@@ -489,9 +489,9 @@ class TestJsonOutputPurity:
         A check importing a client absent from this set emits an unsilenced
         request log and breaks --json invisibly.
         """
-        from octowright.cli import doctor as _cli_doctor
+        from octowright.cli import _root
 
-        assert set(_cli_doctor._HTTP_CLIENT_LOGGERS) == {"httpx2"}
+        assert set(_root._HTTP_CLIENT_LOGGERS) == {"httpx2"}
 
     def test_the_named_loggers_are_the_ones_that_actually_log_requests(self) -> None:
         """Guards against the set drifting from reality (a rename, a swapped client).
@@ -501,8 +501,8 @@ class TestJsonOutputPurity:
         """
         import importlib
 
-        from octowright.cli import doctor as _cli_doctor
+        from octowright.cli import _root
 
-        for name in _cli_doctor._HTTP_CLIENT_LOGGERS:
+        for name in _root._HTTP_CLIENT_LOGGERS:
             module = importlib.import_module(name)
             assert module.__name__ == name, f"{name} does not name a real client module"
