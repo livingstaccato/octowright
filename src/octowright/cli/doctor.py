@@ -18,6 +18,9 @@ from provide.telemetry import setup_telemetry, shutdown_telemetry
 from octowright.cli._root import cli
 from octowright.doctor import Check
 
+# Every HTTP client in the dependency tree that logs requests at INFO.
+_HTTP_CLIENT_LOGGERS = ("httpx", "httpx2")
+
 _MARK = {"ok": "PASS", "warn": "WARN", "fail": "FAIL", "skip": "SKIP"}
 _COLOR = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "cyan"}
 
@@ -54,13 +57,22 @@ def doctor(skip_engines: bool, engine_timeout: float | None, as_json: bool, fix:
     """
     from octowright import doctor as _doctor
 
-    # The followers check probes /api/health over httpx, whose INFO-level
-    # "HTTP Request: ..." line would otherwise land on stdout -- noise in the
-    # table and FATAL under --json, where the output contract is a single
-    # parseable document. Silenced here rather than in doctor.py: which streams
-    # carry what is a CLI presentation concern, and a library function should
-    # not mutate global logging state on its caller's behalf.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # The followers check probes /api/health over HTTP, and both client
+    # libraries this project depends on log an INFO-level "HTTP Request: ..."
+    # line that would land on stdout -- noise in the table and FATAL under
+    # --json, where the output contract is a single parseable document.
+    #
+    # BOTH are silenced deliberately. The tree carries httpx 0.x AND httpx2 2.x
+    # (the MCP 2.0 SDK needs the 2.x client; see pyproject), they log under
+    # SEPARATE logger names, and only the one a check happens to import is
+    # exercised -- so silencing just the current one leaves a trap where adding
+    # a check that reaches for the other reintroduces the bug invisibly.
+    #
+    # Silenced here rather than in doctor.py: which streams carry what is a CLI
+    # presentation concern, and a library function should not mutate global
+    # logging state on its caller's behalf.
+    for _http_logger in _HTTP_CLIENT_LOGGERS:
+        logging.getLogger(_http_logger).setLevel(logging.WARNING)
 
     setup_telemetry()
     try:

@@ -356,6 +356,22 @@ class TestReapSafety:
 
 
 class TestCli:
+    @pytest.fixture(autouse=True)
+    def _no_telemetry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Neutralize telemetry setup for CLI invocations.
+
+        setup_telemetry() is process-global: a SECOND call in the same process
+        makes OpenTelemetry refuse to override its provider and log
+        "Overriding of current TracerProvider is not allowed" to stdout, which
+        breaks the --json contract. Each real `octowright doctor` is a fresh
+        process so production never hits it, but CliRunner invokes in-process --
+        which made test_json_output_is_machine_readable pass or fail purely on
+        whether it ran before or after another CLI test (it fails in source
+        order; the pinned random seed happened to hide it).
+        """
+        monkeypatch.setattr("octowright.cli.doctor.setup_telemetry", lambda *a, **k: None)
+        monkeypatch.setattr("octowright.cli.doctor.shutdown_telemetry", lambda *a, **k: None)
+
     def test_skip_engines_runs_without_launching_anything(self) -> None:
         result = CliRunner().invoke(_cli(), ["doctor", "--skip-engines"])
         assert result.exit_code == 0, result.output
@@ -455,3 +471,38 @@ class TestFollowersCheck:
         check = await _doctor.check_followers()
         assert check.status == "ok"
         assert check.data["dead_followers_ignored"] == 4
+
+
+class TestJsonOutputPurity:
+    """--json must stay a single parseable document.
+
+    The followers check probes /api/health, and BOTH HTTP clients in this tree
+    log an INFO "HTTP Request: ..." line -- httpx 0.x and httpx2 2.x (the MCP
+    2.0 SDK needs the 2.x client), under separate logger names. Only the one a
+    check happens to import is exercised, so a test that merely parses today's
+    output cannot see the other lying in wait.
+    """
+
+    def test_every_http_client_logger_is_covered(self) -> None:
+        """Pins the SET, not just the one currently reached.
+
+        Adding a check that imports the other client would otherwise
+        reintroduce unparsable --json output invisibly.
+        """
+        from octowright.cli import doctor as _cli_doctor
+
+        assert set(_cli_doctor._HTTP_CLIENT_LOGGERS) == {"httpx", "httpx2"}
+
+    def test_the_named_loggers_are_the_ones_that_actually_log_requests(self) -> None:
+        """Guards against the set drifting from reality (a rename, a swapped client).
+
+        Asserted by importing each module and reading its logger name, rather
+        than trusting the literal above.
+        """
+        import importlib
+
+        from octowright.cli import doctor as _cli_doctor
+
+        for name in _cli_doctor._HTTP_CLIENT_LOGGERS:
+            module = importlib.import_module(name)
+            assert module.__name__ == name, f"{name} does not name a real client module"
