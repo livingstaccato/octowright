@@ -53,6 +53,12 @@ DEFAULT_ENGINE_TIMEOUT_SECONDS = 30.0
 # which is how a test run accumulated nine of them unnoticed.
 _DRIVER_PATH_SUBSTRING = "playwright/driver/node"
 
+# Budget for the CoreAudio probe. Measured on a healthy machine at 0.12-0.15s
+# (three consecutive runs, including interpreter startup and framework load),
+# so this is ~35x headroom. It only has to be long enough that a slow machine
+# is never mistaken for a wedged daemon; a wedged one never answers at all.
+_COREAUDIO_TIMEOUT_SECONDS = 5.0
+
 
 @dataclass(frozen=True)
 class Check:
@@ -219,6 +225,108 @@ def _parse_probe_output(stdout: bytes | None) -> dict[str, Any] | None:
     return None
 
 
+def _coreaudio_probe_source() -> str:
+    """Source for a child that asks CoreAudio for the size of the device list.
+
+    Deliberately the SAME call WebKit's GPU process makes on startup rather
+    than an approximation of it: ``AudioObjectGetPropertyData`` against the
+    system object drives ``HALSystem::InitializeDevices``, which is the exact
+    frame the GPU process was found blocked in. Probing anything else would
+    answer a question nobody asked.
+
+    ctypes rather than shelling out to ``system_profiler``: it is the same
+    underlying call at a fraction of the cost (0.12s against 0.46s measured
+    on a healthy machine), and it needs no parsing to decide the verdict.
+    """
+    return (
+        "import ctypes, json, time\n"
+        "t0 = time.monotonic()\n"
+        "ca = ctypes.CDLL('/System/Library/Frameworks/CoreAudio.framework/CoreAudio')\n"
+        "class A(ctypes.Structure):\n"
+        "    _fields_ = [('s', ctypes.c_uint32), ('c', ctypes.c_uint32), ('e', ctypes.c_uint32)]\n"
+        "def f(v):\n"
+        "    return (ord(v[0]) << 24) | (ord(v[1]) << 16) | (ord(v[2]) << 8) | ord(v[3])\n"
+        "addr = A(f('dev#'), f('glob'), 0)\n"
+        "size = ctypes.c_uint32(0)\n"
+        "st = ca.AudioObjectGetPropertyDataSize(\n"
+        "    ctypes.c_uint32(1), ctypes.byref(addr), ctypes.c_uint32(0), None, ctypes.byref(size))\n"
+        "print(json.dumps({'ok': st == 0, 'status': int(st), 'elapsed_s': round(time.monotonic() - t0, 3)}))\n"
+    )
+
+
+async def check_coreaudio(*, timeout: float = _COREAUDIO_TIMEOUT_SECONDS) -> Check:
+    """CoreAudio answers, so WebKit's GPU process can finish starting.
+
+    This is a browser check wearing an audio check's name. WebKit's GPU process
+    calls into CoreAudio on every startup
+    (``GPUConnectionToWebProcess::enableMediaPlaybackIfNecessary``); when
+    ``coreaudiod``'s HAL is wedged that call never returns, WebKit's own
+    watchdog declares the GPU process unresponsive after ~3s and SIGKILLs it,
+    relaunches it, and it hangs again -- so WebContent never gets a renderer
+    and every navigation dies. Observed on 2026-08-30 as a WebKit that failed
+    ``goto about:blank`` at ~6.7s with no crash report and a GPU pid that
+    changed three times in one six-second run. ``killall coreaudiod`` fixed it
+    outright: the same probe went from never completing to 0.97s end to end.
+
+    It runs in a child process for a reason the engine probes share and then
+    exceed: the wedged call blocks in ``mach_msg``, where a pending SIGTERM
+    cannot be delivered, so ``timeout`` alone does not kill it (measured:
+    plain ``timeout`` failed and ``timeout -s KILL`` returned 137). Only
+    ``proc.kill()`` -- SIGKILL on POSIX -- reliably reaps it.
+
+    Cheap enough to run even under ``--skip-engines``, which is the point: it
+    names the CAUSE, where the WebKit engine probe reports only the symptom.
+    """
+    started = time.monotonic()
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        _coreaudio_probe_source(),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        async with asyncio.timeout(timeout):
+            stdout, stderr = await proc.communicate()
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return Check(
+            name="audio:coreaudio",
+            status="fail",
+            detail=(
+                f"CoreAudio did not answer in {timeout:g}s — coreaudiod is wedged. "
+                "WebKit's GPU process hangs on startup and is watchdog-killed, so WebKit "
+                "cannot load any page. Fix: sudo killall coreaudiod (it respawns)."
+            ),
+            data={"hung": True, "elapsed_s": round(time.monotonic() - started, 2)},
+        )
+
+    elapsed = round(time.monotonic() - started, 2)
+    payload = _parse_probe_output(stdout)
+    if payload is None:
+        tail = (stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        return Check(
+            name="audio:coreaudio",
+            status="warn",
+            detail=f"probe produced no result in {elapsed}s: {tail[-1] if tail else '(no output)'}",
+            data={"elapsed_s": elapsed},
+        )
+    if not payload.get("ok"):
+        return Check(
+            name="audio:coreaudio",
+            status="warn",
+            detail=f"CoreAudio answered with OSStatus {payload.get('status')} in {elapsed}s",
+            data={"elapsed_s": elapsed, "status": payload.get("status")},
+        )
+    return Check(
+        name="audio:coreaudio",
+        status="ok",
+        detail=f"CoreAudio answered in {elapsed}s",
+        data={"elapsed_s": elapsed},
+    )
+
+
 def _process_table() -> list[tuple[int, int, str]]:
     from octowright.process_reaper import list_processes
 
@@ -381,6 +489,14 @@ async def run_checks(
 ) -> list[Check]:
     """Every check, engine probes last because they are the slow ones."""
     checks = [check_daemon(), check_browser_installs(), check_stray_drivers(), check_orphan_browsers(), check_storage()]
+    # macOS only, and gated here rather than returning a "skip" from the check
+    # itself: CoreAudio is the wedge that silently breaks WebKit on a Mac, and
+    # a permanent SKIP line on every Linux run is noise a reader learns to
+    # scroll past. Ordered before the engine probes so the CAUSE is on screen
+    # above the symptom, and outside the --skip-engines return because it is a
+    # sub-second check that stays useful when the probes are turned off.
+    if sys.platform == "darwin":
+        checks.append(await check_coreaudio())
     if not engines:
         checks.append(Check("engines", "skip", "engine probes skipped (--skip-engines)", {}))
         return checks
