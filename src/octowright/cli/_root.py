@@ -25,6 +25,22 @@ import click
 # decision is reflected in the return value, not in the log line.
 logging.getLogger("provide.telemetry._otel").setLevel(logging.WARNING)
 
+# The HTTP client logs every request at INFO ("HTTP Request: GET ... 200 OK").
+# That lands on stdout ahead of machine-parseable output -- it broke
+# `doctor --json` outright -- and every command that probes an endpoint has the
+# same exposure: `restart`'s health poll and `serve --wait-ready`, whose
+# documented contract is printing its MCP URL on stdout. Silenced once here, at
+# CLI-package import, rather than per command, so a future JSON-emitting or
+# health-polling command does not have to rediscover it.
+# A tuple rather than one literal because the tree previously carried two
+# clients that log the same line under DIFFERENT logger names; only the one a
+# check happened to import was exercised, so a single name silently stopped
+# being sufficient.
+_HTTP_CLIENT_LOGGERS = ("httpx2",)
+
+for _http_logger in _HTTP_CLIENT_LOGGERS:
+    logging.getLogger(_http_logger).setLevel(logging.WARNING)
+
 
 @click.group(invoke_without_command=True, context_settings={"help_option_names": ["-h", "--help"]})
 @click.pass_context
