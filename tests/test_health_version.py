@@ -192,9 +192,15 @@ def test_stale_followers_come_with_an_action() -> None:
     the obvious one — restarting the daemon cannot update a follower."""
     from octowright import bridge_state
 
-    stale = bridge_state.summarize_state({"followers": {"1": {"follower_version": "0.0.1"}}, "events": []})
+    # summarize_state counts only followers whose PID is alive. "1" is init on
+    # POSIX and so happens to be alive there, but that is luck rather than
+    # intent -- and it does not hold on Windows. Inject the predicate so the
+    # hint, which is what this test is about, is exercised on every platform.
+    alive = {"is_alive": lambda _pid: True}
+    stale = bridge_state.summarize_state({"followers": {"1": {"follower_version": "0.0.1"}}, "events": []}, **alive)
     current = bridge_state.summarize_state(
         {"followers": {"1": {"follower_version": VERSION}}, "events": []},
+        **alive,
     )
 
     assert "reconnect" in stale["stale_follower_hint"].lower()

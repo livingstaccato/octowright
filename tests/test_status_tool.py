@@ -53,6 +53,12 @@ def test_status_includes_bridge_diagnostics(monkeypatch, tmp_path: Path) -> None
 
     state_path = tmp_path / "bridge-state.json"
     monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", state_path)
+    # summarize_state counts only followers whose PID is alive. 321 is a
+    # synthetic PID whose real liveness varies by machine -- it happened to
+    # exist locally and did not on CI, so this passed here and failed every CI
+    # leg with `assert 0 == 1`. This test is about the diagnostics payload, not
+    # liveness.
+    monkeypatch.setattr("octowright.bridge_state._pid_alive", lambda _pid: True)
     bridge_state.record_snapshot(
         path=state_path,
         follower_pid=321,
