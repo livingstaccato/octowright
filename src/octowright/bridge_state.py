@@ -276,13 +276,19 @@ def _partition_live(followers: dict[str, Any], is_alive: Callable[[int], bool]) 
     return live, dead
 
 
-def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] = _pid_alive) -> dict[str, Any]:
+def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | None = None) -> dict[str, Any]:
     """Summarize bridge state, counting only followers whose PID is still alive.
 
     ``is_alive`` is injectable so tests can be deterministic: the default issues
     a real liveness syscall per follower (cheap -- ``os.kill(pid, 0)``), which
     would otherwise make a fixture's synthetic PIDs machine-dependent.
+
+    Resolved at CALL time rather than as a default argument value. A default of
+    ``is_alive=_pid_alive`` binds the function object when this module is
+    imported, so monkeypatching ``bridge_state._pid_alive`` would silently have
+    no effect -- a trap for any caller's test that patches the obvious name.
     """
+    check = is_alive if is_alive is not None else _pid_alive
     followers = state.get("followers")
     events = state.get("events")
     if not isinstance(followers, dict):
@@ -290,7 +296,7 @@ def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] = 
     if not isinstance(events, list):
         events = []
 
-    followers, dead_followers = _partition_live(followers, is_alive)
+    followers, dead_followers = _partition_live(followers, check)
     in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
     versions = _follower_version_counts(followers)
     stale = sum(count for version, count in versions.items() if version != VERSION)

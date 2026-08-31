@@ -376,6 +376,10 @@ def test_status_bridge_block_caps_exposed_followers(monkeypatch, tmp_path: Path)
     }
     state_path.write_text(json.dumps({"followers": followers, "events": []}))
     monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", state_path)
+    # summarize_state drops followers whose PID is dead. These are synthetic
+    # PIDs, so their real liveness varies by machine and by run -- this test is
+    # about the exposure CAP, not liveness.
+    monkeypatch.setattr("octowright.bridge_state._pid_alive", lambda _pid: True)
 
     snap = octowright_status()
 
