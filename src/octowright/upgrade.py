@@ -40,6 +40,28 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.19.2": [
+        "octowright doctor now checks your FOLLOWERS. A follower is a "
+        "subprocess its MCP client owns and it survives a leader restart by "
+        "design, so upgrading octowright and restarting the daemon updates the "
+        "leader and nothing else -- every connected client keeps running "
+        "whatever it spawned until that client reconnects. Found live with "
+        "followers two releases behind a current leader, driving browsers, "
+        "while doctor reported all-PASS. It compares against the RUNNING "
+        "daemon's version and warns rather than fails, because the fix is per "
+        "client, not per machine.",
+        "Dead followers are no longer counted as stale. octowright_status "
+        "reported 8 followers 'running older code'; the two investigated were "
+        "both already-exited processes, so acting on the count meant chasing "
+        "ghosts. Exited followers are now filtered out and reported separately "
+        "as dead_follower_count.",
+        "One HTTP client instead of two. httpx 0.x and httpx2 both shipped, "
+        "and both log the same request line under different logger names -- "
+        "which put `doctor --json` one import away from emitting output no "
+        "parser could read. Everything is on httpx2 now, including the "
+        "SSRF DNS-pinning transport, whose pin was re-verified end to end "
+        "rather than assumed from a green test run.",
+    ],
     "0.19.1": [
         "octowright restart works again. 0.19.0 made it hold the "
         "leader-election lock across kill -> spawn -> confirm, but it spawned "
