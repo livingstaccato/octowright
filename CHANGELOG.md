@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **One liveness partitioner, one staleness rule, one logger gate.** Cleanup over
+  the follower accounting that landed in 0.19.2, all three of the same shape: a rule
+  stated once and implemented twice. `_prune_dead_followers` hand-rolled the loop
+  `_partition_live` had just generalized — same PID parse, same "unparsable key
+  counts as alive" conservative default, differing only in its `keep_pid` carve-out —
+  and now calls it with a `keep_key` argument, so the write path and the read path
+  share one implementation of a convention that is easy to change in one place and
+  miss in the other. `stale_follower_count` extracts the version predicate that
+  `summarize_state` and `doctor.check_followers` each spelled out; the two
+  deliberately compare against **different baselines** (this process's `VERSION`
+  against the version the running daemon reports) and that difference is the whole
+  point of the followers check, so it stays — but a later change to the rule itself
+  can no longer land in one and silently skip the other.
+- **HTTP-client logger silencing moved to the CLI root.** It sat in `doctor()`'s
+  body; it now sits in `cli/_root.py` beside the `provide.telemetry._otel` line that
+  has been there for the same reason. Per-command was the wrong altitude —
+  `restart`'s health poll and `serve --wait-ready`, whose contract is printing its
+  MCP URL on stdout, have the same exposure and were not covered. One deliberate
+  side effect, named rather than hidden: `cli/serve.py` imports `_root`, so the
+  **daemon** silences httpx2 at INFO too and stops logging a request line per
+  `web_*` tool fetch (3 lines in an 11.5k-line daemon log on the machine this was
+  measured on). Judged an acceptable trade — that line is per-request noise — but it
+  is a behavior change, not a pure refactor.
+
 ## [0.19.2] - 2026-08-31
 
 ### Added
@@ -2230,6 +2257,7 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.19.2...main
 [0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...main
 [0.10.1]: https://github.com/livingstaccato/octowright/compare/v0.10.0...v0.10.1
 [0.9.1]: https://github.com/livingstaccato/octowright/compare/v0.9.0...v0.9.1
