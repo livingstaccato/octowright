@@ -56,6 +56,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
     ]
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_concurrent_ensure_pw_initializes_playwright_once(monkeypatch: pytest.MonkeyPatch) -> None:
     pool = BrowserPool()

@@ -62,6 +62,7 @@ async def test_viewport_pill_carries_a_null_inset_when_it_was_not_measured() -> 
     assert any('"inset_w": null' in script and '"inset_h": null' in script for script in scripts)
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_viewport_pill_requires_one_second_alt_hold() -> None:
     pytest.importorskip("playwright")
@@ -110,6 +111,7 @@ async def test_viewport_pill_requires_one_second_alt_hold() -> None:
         await pool.close_all()
 
 
+@pytest.mark.live_browser
 @pytest.mark.asyncio
 async def test_viewport_pill_is_quiet_bottom_indicator_with_compact_popover() -> None:
     pytest.importorskip("playwright")

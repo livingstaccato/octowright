@@ -32,6 +32,7 @@ def anyio_backend() -> str:
     reason="WebKit popup blocker on virtualized macOS CI runners closes "
     "programmatic about:blank popups; runs locally on real macOS desktops",
 )
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_popup_page_dialog_listener_fires(tmp_path, monkeypatch):
     monkeypatch.setenv("OCTOWRIGHT_RECORDINGS", str(tmp_path / "rec"))

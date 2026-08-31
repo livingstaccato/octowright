@@ -268,6 +268,7 @@ async def test_unsafe_launch_allocates_no_session_driver_or_recording(
     assert calls == []
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_persistent_launch_waits_for_profile_lifecycle_lock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -298,6 +299,7 @@ async def test_persistent_launch_waits_for_profile_lifecycle_lock(monkeypatch: p
     await pool.close(result["instance_id"], force=True)
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,6 +344,7 @@ async def test_launch_cancelled_during_nav_leaves_no_registered_session(monkeypa
     assert pool._sessions == {}
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
@@ -375,6 +378,7 @@ async def test_external_close_evicts_session(monkeypatch: pytest.MonkeyPatch, li
     await _wait_until(lambda: any("evicted_externally" in m for m in listeners_log.messages()))
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_browser_disconnected_evicts_session(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
@@ -417,6 +421,7 @@ def _capture_session_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     return captured
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_page_crash_marks_session_and_notifies(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
@@ -451,6 +456,7 @@ async def test_page_crash_marks_session_and_notifies(
     assert any("page_crashed" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_eviction_after_crash_reports_reason_crashed(
@@ -491,6 +497,7 @@ async def test_eviction_after_crash_reports_reason_crashed(
     assert closed and closed[-1].reason == "crashed"
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_external_close_without_crash_stays_user_close(
@@ -540,6 +547,7 @@ async def _wait_until(predicate: Any, *, timeout: float = 5.0) -> None:
     raise AssertionError(f"condition was not met within {timeout:.1f}s")
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_all_pages_closed_runs_full_session_close(
@@ -585,6 +593,7 @@ async def test_all_pages_closed_runs_full_session_close(
     assert any("octowright.browser.evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.MonkeyPatch) -> None:
     """If a popup closes but the main page stays open, the session must NOT
@@ -614,6 +623,7 @@ async def test_one_page_close_with_survivor_does_not_evict(monkeypatch: pytest.M
     assert iid in pool._sessions, "main page is still alive, session must survive"
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture) -> None:
@@ -646,6 +656,7 @@ async def test_multiple_signals_only_evict_once(monkeypatch: pytest.MonkeyPatch,
     assert len(evictions) == 1, f"expected exactly one eviction log; got {len(evictions)}"
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_explicit_close_does_not_emit_external_log(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
@@ -684,6 +695,7 @@ async def test_explicit_close_does_not_emit_external_log(
     assert not any("evicted_externally" in m for m in messages), messages
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_external_close_after_explicit_close_is_noop(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
@@ -717,6 +729,7 @@ async def test_external_close_after_explicit_close_is_noop(
     assert not any("evicted_externally" in m for m in messages), messages
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_external_close_one_of_two_keeps_survivor(monkeypatch: pytest.MonkeyPatch) -> None:
     """Closing one session externally must not affect siblings."""
@@ -754,6 +767,7 @@ async def test_external_close_one_of_two_keeps_survivor(monkeypatch: pytest.Monk
     assert listed == {iid_b}
 
 
+@pytest.mark.live_browser
 @pytest.mark.anyio
 async def test_persistent_context_has_no_browser_disconnect(monkeypatch: pytest.MonkeyPatch) -> None:
     """For persistent contexts the Browser handle is None — wire only the
