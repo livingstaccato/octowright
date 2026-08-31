@@ -39,7 +39,14 @@ def test_release_metadata_is_synchronized() -> None:
         assert data["version"] == RELEASE_VERSION, manifest
 
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    first_release_heading = next(line for line in changelog.splitlines() if line.startswith("## ["))
+    # The newest RELEASE section must name this version. A leading
+    # "## [Unreleased]" is the Keep a Changelog holding pen for merged-but-
+    # unshipped work and is deliberately skipped -- it carries no version, so
+    # matching it against VERSION would fail the moment anything lands between
+    # releases, which is most of the time.
+    first_release_heading = next(
+        line for line in changelog.splitlines() if line.startswith("## [") and not line.startswith("## [Unreleased]")
+    )
     assert first_release_heading.startswith(f"## [{RELEASE_VERSION}]")
 
 
