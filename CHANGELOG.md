@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2026-08-31
+
+### Added
+- **`octowright doctor` checks follower version skew.** A follower is a subprocess its
+  MCP client owns, and it deliberately **survives** a leader restart so the client is
+  not dropped — so upgrading octowright and restarting the daemon updates the leader
+  and **nothing else**, and every connected client keeps running whatever follower it
+  spawned until that client reconnects. Observed with followers two releases behind a
+  current leader, driving browsers, while `doctor` reported all-PASS, because nothing
+  in it looked at followers at all. The check compares against the **running daemon's**
+  version (from `/api/health`) rather than this process's `VERSION` — doctor is usually
+  invoked from a checkout already upgraded past the daemon, so comparing against its
+  own version would report skew against a version nobody is running, and would call a
+  follower that matches the live daemon stale. It **warns** rather than fails (a
+  deployment state, not a broken machine) and `--fix` deliberately cannot touch it:
+  killing a follower just breaks that client's session, since a client does not respawn
+  a dead stdio server.
+
+### Fixed
+- **Dead followers were counted as stale.** `octowright_status` reported 8 stale
+  followers "running older code than the leader"; the two investigated were **both
+  already-exited processes**. `bridge_state._prune_dead_followers` drops exited entries,
+  but only when a follower **writes** a snapshot — and a follower that has stopped
+  writing is precisely the one most likely to be dead — so nothing pruned on the read
+  path. `summarize_state` now partitions by PID liveness first and reports the
+  discarded count as `dead_follower_count`, so a shrinking `follower_count` is
+  explainable rather than looking like followers vanishing. An unparsable PID key is
+  kept, matching `_prune_dead_followers`: the conservative direction is to over-report
+  a follower, not to drop a real one.
+- **`octowright doctor --json` could emit unparsable output.** The followers check
+  probes `/api/health`, and the HTTP client logs an INFO `HTTP Request: ...` line that
+  landed on stdout ahead of the JSON — noise in the table, fatal for a caller parsing
+  the document.
+
+### Changed
+- **One HTTP client instead of two.** The tree carried both httpx 0.x and httpx2 (the
+  MCP 2.0 SDK requires the 2.x client), and the cost was not theoretical: both log the
+  same request line under **separate logger names**, so silencing one left `--json` a
+  single import away from breaking again. Everything now uses httpx2 — including
+  `server/web.py`, whose SSRF DNS-pinning transport subclasses `AsyncHTTPTransport`
+  over an `httpcore` connection pool and reads the private `_config`; `httpx2`/
+  `httpcore2` expose all of it with identical shapes. The pin was verified
+  behaviourally rather than assumed from passing (mocked) tests: a hostname with no
+  public DNS reached the daemon through its pin, and the same request through a
+  transport pinning a different name was refused. `httpx`/`httpcore` 1.x are no longer
+  dependencies.
+
 ## [0.19.1] - 2026-08-31
 
 ### Fixed
