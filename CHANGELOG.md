@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2026-08-31
+
+### Added
+- **`octowright doctor` detects a wedged `coreaudiod` (macOS).** WebKit's GPU process
+  calls into CoreAudio on every startup
+  (`GPUConnectionToWebProcess::enableMediaPlaybackIfNecessary`); when `coreaudiod`'s
+  HAL is wedged that call never returns, WebKit's own watchdog declares the GPU
+  process unresponsive after ~3s, SIGKILLs it, relaunches it, and it hangs again — so
+  WebContent never gets a renderer and every navigation dies, with **no crash report
+  written anywhere**. Diagnosed live: WebKit failed `goto("about:blank")` at ~6.7s and
+  the GPU pid changed three times in a single six-second run. Not a WebKit, Playwright
+  or octowright bug — `system_profiler SPAudioDataType` hung identically with no
+  browser involved, and `killall coreaudiod` took the same probe from never completing
+  to 0.97s end to end. The engine probe could only report the symptom
+  (`failed at step 'goto'`), which sends the reader into WebKit; the new
+  `audio:coreaudio` check names the cause and the remedy. It probes the same
+  CoreAudio call WebKit makes, in a child process reaped with **SIGKILL** (the wedged
+  call blocks in `mach_msg`, where a pending SIGTERM cannot be delivered), costs
+  0.12–0.15s measured on a healthy machine, and runs even under `--skip-engines`.
+  macOS-gated so other platforms carry no permanent SKIP line.
+
+### Fixed
+- **`octowright restart` can no longer create a split-brain.** It was the only spawner
+  that never took the leader-election lock — `_leader_election._elect_under_lock` and
+  `serve._respawn_if_leader_gone` both do — so it was invisible to every guard built to
+  prevent exactly this. Observed live as two healthy leaders 15s apart: `_stop_leader`
+  SIGKILLs the leader, every follower's bridge drops and each runs
+  `_respawn_if_leader_gone`, which takes the lock, correctly sees no leader and a free
+  canonical port, and spawns one on 6286; `_wait_for_port_free` had seen that port free
+  a moment earlier (TOCTOU), so restart spawns its own, which `http/lifespan`
+  port-walks to 6287. It was **reported as success** because `_health_candidates` also
+  probes the lockfile endpoint, so the follower's leader answered and restart printed
+  `daemon healthy` and exited 0. Restart now holds the lock across
+  kill → wait-for-port-free → spawn → confirm-healthy; taking it *before* the kill is
+  load-bearing. On lock contention it warns and proceeds rather than failing (it is the
+  recovery command, reached when the daemon is wedged), with the existing port-reclaim
+  as backstop. `--no-start` deliberately stays lock-free.
+
 ## [0.18.0] - 2026-08-31
 
 ### Added
