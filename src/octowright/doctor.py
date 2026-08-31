@@ -457,7 +457,7 @@ async def check_followers() -> Check:
 
 async def _running_leader_version() -> str | None:
     """Version reported by the daemon currently answering, or None if none is."""
-    import httpx
+    import httpx2
 
     from octowright.singleton import pid_is_alive, read_lock
 
@@ -465,12 +465,12 @@ async def _running_leader_version() -> str | None:
     if info is None or not pid_is_alive(info.pid):
         return None
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx2.AsyncClient(timeout=2.0) as client:
             response = await client.get(f"http://{info.http_host}:{info.http_port}/api/health")
         if response.status_code != 200:
             return None
         body = response.json()
-    except (httpx.HTTPError, OSError, ValueError):
+    except (httpx2.HTTPError, OSError, ValueError):
         return None
     version = body.get("version") if isinstance(body, dict) else None
     return version if isinstance(version, str) and version else None

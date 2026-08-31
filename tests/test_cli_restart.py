@@ -426,7 +426,7 @@ def test_wait_for_health_follows_lockfile_auto_bumped_port(monkeypatch: pytest.M
         calls.append(url)
         return _Response(200 if url == "http://127.0.0.1:8766/api/health" else 503)
 
-    monkeypatch.setattr("httpx.get", fake_get)
+    monkeypatch.setattr("httpx2.get", fake_get)
 
     assert _restart_mod._wait_for_health("127.0.0.1", 8765, timeout=1) == "http://127.0.0.1:8766/"
     assert calls[:2] == [

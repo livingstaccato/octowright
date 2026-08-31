@@ -486,7 +486,7 @@ def _health_candidates(host: str, port: int) -> list[str]:
 def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
     """Poll ``/api/health`` until it answers 200, or ``timeout`` elapses.
 
-    Uses ``httpx`` rather than ``urllib.request.urlopen`` so bandit's B310
+    Uses ``httpx2`` rather than ``urllib.request.urlopen`` so bandit's B310
     (file:// / custom-scheme risk on urlopen) doesn't fire — the scheme is
     fixed to http here, but B310 can't see that statically.
 
@@ -494,16 +494,16 @@ def _wait_for_health(host: str, port: int, timeout: float) -> str | None:
     to a higher port when the requested port is busy, so the lockfile endpoint
     is authoritative after spawn.
     """
-    import httpx
+    import httpx2
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for url in _health_candidates(host, port):
             try:
-                response = httpx.get(url, timeout=1.0)
+                response = httpx2.get(url, timeout=1.0)
                 if response.status_code == 200:
                     return url.rsplit("/api/health", 1)[0] + "/"
-            except httpx.HTTPError:
+            except httpx2.HTTPError:
                 pass
         time.sleep(_POLL_INTERVAL_S)
     return None

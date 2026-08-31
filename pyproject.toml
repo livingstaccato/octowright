@@ -38,10 +38,12 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml>=0.7.1",
+    # httpx 0.x is on its way out: everything has moved to httpx2 EXCEPT
+    # server/web.py, which subclasses AsyncHTTPTransport for DNS pinning and
+    # imports from the private httpx._config. That is SSRF-defense code, so it
+    # migrates on its own with its own verification rather than riding along.
+    # Both names exist in httpx2, so this is the last dependency on httpx 0.x.
     "httpx>=0.27",
-    # The follower bridge hands MCP 2.0 a ready-made httpx2 client (the SDK
-    # dropped the 1.x httpx_client_factory). The rest of the codebase still uses
-    # httpx 0.x, including two private-API touchpoints in server/web.py.
     "httpx2>=2.5.0",
     "mcp>=2.0.0",
     "playwright>=1.47.0",
