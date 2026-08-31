@@ -159,14 +159,14 @@ async def probe_http_alive(info: LeaderInfo, timeout: float = 2.0) -> bool:
     can't detect that. This is the second half of liveness; callers should
     combine it with :func:`is_stale` (PID check) to decide whether to take over.
     """
-    import httpx
+    import httpx2
 
     url = f"http://{info.http_host}:{info.http_port}/api/health"
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx2.AsyncClient(timeout=timeout) as client:
             response = await client.get(url)
             return response.status_code == 200
-    except (httpx.HTTPError, OSError):
+    except (httpx2.HTTPError, OSError):
         return False
 
 
