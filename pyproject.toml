@@ -38,12 +38,13 @@ classifiers = [
 ]
 dependencies = [
     "defusedxml>=0.7.1",
-    # httpx 0.x is on its way out: everything has moved to httpx2 EXCEPT
-    # server/web.py, which subclasses AsyncHTTPTransport for DNS pinning and
-    # imports from the private httpx._config. That is SSRF-defense code, so it
-    # migrates on its own with its own verification rather than riding along.
-    # Both names exist in httpx2, so this is the last dependency on httpx 0.x.
-    "httpx>=0.27",
+    # One HTTP client, deliberately. The tree briefly carried both httpx 0.x and
+    # httpx2 (the MCP 2.0 SDK requires the 2.x client), and the cost was not
+    # theoretical: both log an INFO "HTTP Request: ..." line under SEPARATE
+    # logger names, so silencing one left `octowright doctor --json` one import
+    # away from emitting unparsable output. server/web.py was the last holdout
+    # -- it subclasses AsyncHTTPTransport for DNS pinning and reads the private
+    # _config -- and httpx2/httpcore2 expose both with identical shapes.
     "httpx2>=2.5.0",
     "mcp>=2.0.0",
     "playwright>=1.47.0",

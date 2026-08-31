@@ -476,22 +476,22 @@ class TestFollowersCheck:
 class TestJsonOutputPurity:
     """--json must stay a single parseable document.
 
-    The followers check probes /api/health, and BOTH HTTP clients in this tree
-    log an INFO "HTTP Request: ..." line -- httpx 0.x and httpx2 2.x (the MCP
-    2.0 SDK needs the 2.x client), under separate logger names. Only the one a
-    check happens to import is exercised, so a test that merely parses today's
-    output cannot see the other lying in wait.
+    The followers check probes /api/health over a client that logs an INFO
+    "HTTP Request: ..." line. The tree once carried two such clients under
+    different logger names, and only the one a check happened to import was
+    exercised -- so this pins the SET against the installed modules rather than
+    trusting that today's single entry stays sufficient.
     """
 
     def test_every_http_client_logger_is_covered(self) -> None:
-        """Pins the SET, not just the one currently reached.
+        """Pins the SET, so re-adding a second client forces a decision here.
 
-        Adding a check that imports the other client would otherwise
-        reintroduce unparsable --json output invisibly.
+        A check importing a client absent from this set emits an unsilenced
+        request log and breaks --json invisibly.
         """
         from octowright.cli import doctor as _cli_doctor
 
-        assert set(_cli_doctor._HTTP_CLIENT_LOGGERS) == {"httpx", "httpx2"}
+        assert set(_cli_doctor._HTTP_CLIENT_LOGGERS) == {"httpx2"}
 
     def test_the_named_loggers_are_the_ones_that_actually_log_requests(self) -> None:
         """Guards against the set drifting from reality (a rename, a swapped client).

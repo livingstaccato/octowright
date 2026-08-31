@@ -159,7 +159,7 @@ async def test_fetch_text_rejects_redirects_to_non_public_hosts(monkeypatch: pyt
         async def aiter_bytes(self) -> object:
             raise AssertionError("redirect response body should not be read")
 
-    monkeypatch.setattr(_web.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(_web.httpx2, "AsyncClient", FakeClient)
 
     with pytest.raises(ValueError, match="non-public host"):
         await _web._fetch_text("https://example.com/")
@@ -206,7 +206,7 @@ async def test_fetch_text_stops_reading_after_byte_cap(monkeypatch: pytest.Monke
                 chunks_read += 1
                 yield chunk
 
-    monkeypatch.setattr(_web.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(_web.httpx2, "AsyncClient", FakeClient)
 
     _, text = await _web._fetch_text("https://example.com/")
 
