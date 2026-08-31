@@ -40,6 +40,25 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.19.0": [
+        "octowright doctor now names a wedged coreaudiod, which is the cause "
+        "behind a WebKit that cannot load any page. WebKit's GPU process calls "
+        "into CoreAudio on every startup; when the HAL stops answering, that "
+        "call never returns, WebKit's own watchdog kills the GPU process after "
+        "about three seconds, relaunches it, and it hangs again -- so every "
+        "navigation dies with no crash report anywhere. Diagnosed live: the "
+        "engine probe could only say 'failed at goto', which sends you into "
+        "WebKit, the wrong place. The new audio:coreaudio check costs 0.15s, "
+        "runs even under --skip-engines, and prints the remedy "
+        "(sudo killall coreaudiod) on the same line.",
+        "octowright restart can no longer create the split-brain it recovers "
+        "from. It was the one spawner that never took the leader-election "
+        "lock, so killing the leader let every follower's respawn race it: two "
+        "healthy daemons, one port-walked to a bumped port -- and restart "
+        "printed 'daemon healthy' and exited 0 because its health probe also "
+        "accepts the lockfile endpoint. It now holds the lock across "
+        "kill -> spawn -> confirm.",
+    ],
     "0.18.0": [
         "A browser that stops answering no longer hangs the caller forever. "
         "evaluate, title, content and the context setup calls Playwright gives "
