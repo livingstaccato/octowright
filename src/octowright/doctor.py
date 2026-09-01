@@ -34,6 +34,8 @@ from typing import Any, Literal
 
 from provide.telemetry import get_logger
 
+from octowright.singleton import pid_is_alive, read_lock
+
 log = get_logger(__name__)
 
 Status = Literal["ok", "warn", "fail", "skip"]
@@ -398,6 +400,55 @@ def check_daemon() -> Check:
     )
 
 
+async def check_canonical_port() -> Check:
+    """Whether a SECOND, uncoordinated leader is also alive on the canonical port.
+
+    ``check_daemon`` only reports on the lockfile's recorded leader. A daemon
+    started outside octowright's own election path -- e.g. a systemd unit
+    whose ``ExecStart`` runs ``serve --daemon-mode`` directly, which by design
+    skips the lock/election check -- can bind the canonical port at the same
+    moment a CLI-triggered spawn wins the race and lands on a bumped port
+    instead. Both stay alive; the lockfile records only one of them, so
+    ``check_daemon`` alone reports a clean single leader while a second one
+    answers unrecorded.
+    """
+    from octowright import defaults
+    from octowright.cli._leader_election import _canonical_port_serves_octowright
+
+    info = read_lock()
+    if info is None or not pid_is_alive(info.pid):
+        return Check("daemon:canonical-port", "skip", "no live recorded leader -- nothing to cross-check", {})
+
+    canonical_host, canonical_port = defaults.HTTP_HOST, defaults.HTTP_PORT
+    data = {"canonical_port": canonical_port, "leader_port": info.http_port}
+    if info.http_port == canonical_port:
+        return Check(
+            "daemon:canonical-port",
+            "ok",
+            f"leader is on the canonical port ({canonical_host}:{canonical_port})",
+            data,
+        )
+
+    if await _canonical_port_serves_octowright(None, None):
+        return Check(
+            "daemon:canonical-port",
+            "fail",
+            f"two live daemons: the recorded leader on {info.http_host}:{info.http_port}, and a SECOND, "
+            f"uncoordinated one answering on the canonical port {canonical_host}:{canonical_port} -- "
+            "likely a systemd/launchd-managed daemon started outside octowright's election lock; "
+            "run `octowright restart --keep-browsers` to reclaim the canonical port",
+            data,
+        )
+    return Check(
+        "daemon:canonical-port",
+        "warn",
+        f"leader is on {info.http_host}:{info.http_port}, not the canonical port "
+        f"{canonical_host}:{canonical_port} -- it port-walked away from a conflict that may have "
+        "since cleared",
+        data,
+    )
+
+
 async def check_followers() -> Check:
     """Do the live followers run the same code as the daemon answering for them?
 
@@ -579,6 +630,7 @@ async def run_checks(
     # Cheap (one loopback probe) and, like coreaudio, most useful exactly when
     # the engine probes are skipped: it answers "is this deployment consistent",
     # which no other check covers.
+    checks.append(await check_canonical_port())
     checks.append(await check_followers())
     if not engines:
         checks.append(Check("engines", "skip", "engine probes skipped (--skip-engines)", {}))

@@ -473,6 +473,84 @@ class TestFollowersCheck:
         assert check.data["dead_followers_ignored"] == 4
 
 
+class TestCanonicalPortCheck:
+    """Doctor must notice a SECOND leader alive on the canonical port.
+
+    ``check_daemon`` only reports on the lockfile's recorded leader. A daemon
+    started outside octowright's own election path -- e.g. a systemd unit
+    whose ExecStart runs `serve --daemon-mode` directly, which by design skips
+    the lock/election check -- can bind the canonical port at the same moment
+    a CLI-triggered spawn wins the race and lands on a bumped port instead.
+    Both stay alive; the lockfile records only one of them, so `check_daemon`
+    alone reports a clean single leader while a second one answers
+    unrecorded.
+    """
+
+    def _leader(self, *, pid: int = 111, port: int) -> Any:
+        from octowright.singleton import LeaderInfo
+
+        return LeaderInfo(pid=pid, http_host="127.0.0.1", http_port=port, mcp_url="http://x", started_at=0.0)
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch, *, info: Any, alive: bool, canonical_answers: bool) -> None:
+        monkeypatch.setattr(_doctor, "read_lock", lambda: info)
+        monkeypatch.setattr(_doctor, "pid_is_alive", lambda _pid: alive)
+
+        async def _canonical(_host: str | None, _port: int | None) -> bool:
+            return canonical_answers
+
+        monkeypatch.setattr("octowright.cli._leader_election._canonical_port_serves_octowright", _canonical)
+
+    async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, info=None, alive=False, canonical_answers=False)
+        check = await _doctor.check_canonical_port()
+        assert check.status == "skip"
+
+    async def test_a_dead_recorded_leader_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``check_daemon`` already reports a stale lock; this check adds nothing there."""
+        from octowright import defaults
+
+        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=False, canonical_answers=False)
+        check = await _doctor.check_canonical_port()
+        assert check.status == "skip"
+
+    async def test_leader_already_on_the_canonical_port_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright import defaults
+
+        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True, canonical_answers=True)
+        check = await _doctor.check_canonical_port()
+        assert check.status == "ok"
+        assert check.name == "daemon:canonical-port"
+
+    async def test_leader_walked_off_canonical_with_nothing_there_now_warns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The leader is on a bumped port and nothing currently answers on the
+        canonical one -- suspicious (it walked away from SOMETHING once), but
+        not proof of a live second daemon right now."""
+        from octowright import defaults
+
+        bumped = defaults.HTTP_PORT + 1
+        self._patch(monkeypatch, info=self._leader(port=bumped), alive=True, canonical_answers=False)
+        check = await _doctor.check_canonical_port()
+        assert check.status == "warn"
+        assert str(bumped) in check.detail
+        assert str(defaults.HTTP_PORT) in check.detail
+
+    async def test_leader_on_a_bumped_port_with_canonical_also_alive_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The unambiguous split-brain signal: two live daemons at once."""
+        from octowright import defaults
+
+        bumped = defaults.HTTP_PORT + 1
+        self._patch(monkeypatch, info=self._leader(pid=111, port=bumped), alive=True, canonical_answers=True)
+        check = await _doctor.check_canonical_port()
+        assert check.status == "fail"
+        assert "two live daemons" in check.detail
+        assert "restart --keep-browsers" in check.detail
+        assert check.data == {"canonical_port": defaults.HTTP_PORT, "leader_port": bumped}
+
+
 class TestJsonOutputPurity:
     """--json must stay a single parseable document.
 
