@@ -166,8 +166,9 @@ The `../provide-uterm` sibling checkout is no longer needed and a plain `uv run`
 fails without it: provide-uterm is on PyPI (2026-08-26) and the path sources are gone from
 `pyproject.toml`. `uv lock --check` passes and `uv run` leaves `uv.lock` untouched — do not
 reach for `--frozen` locally to work around a failure that cannot occur any more. Finding #7
-is resolved by publication; the plugin itself is still installed from this repo (the
-`terminal` dependency group), not from PyPI.
+is resolved by publication. The plugin itself was published later, alongside core
+0.19.2 on 2026-08-31 (`pip install octowright-terminal` resolves 0.1.0); a source
+checkout still installs it from this repo via the `terminal` dependency group.
 
 
 ---
