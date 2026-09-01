@@ -10,7 +10,7 @@ SPDX-Comment: Part of octowright.
 Current totals (verified against `selftest` 2026-08-20 at 129 tools on a core install): **95** profile-scoped + **7** always-on + **27** all-only = **129 total**.
 
 With the `terminal` session-kind plugin enabled (`OCTOWRIGHT_PLUGINS=terminal` —
-source-install only today, see `packages/octowright-terminal/README.md`), the
+on PyPI as of core 0.19.2, see `packages/octowright-terminal/README.md`), the
 `terminals` profile it declares adds 7 more tools for **136 total**.
 
 ## Profiles
