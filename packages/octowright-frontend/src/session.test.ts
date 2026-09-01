@@ -152,11 +152,11 @@ describe("buildLayout", () => {
 });
 
 describe("installDashboardAuthRequiredNotice", () => {
-  it("renders one actionable re-pair alert for a stream expiry", () => {
+  it("renders one actionable re-pair gate for a stream expiry", () => {
     const dispose = installDashboardAuthRequiredNotice(root);
     window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
     window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
-    expect(root.querySelectorAll('[data-testid="dashboard-auth-required"]')).toHaveLength(1);
+    expect(root.querySelectorAll('[data-testid="pairing-gate"]')).toHaveLength(1);
     expect(root.textContent).toContain("octowright dashboard");
     dispose();
   });
@@ -167,6 +167,26 @@ describe("installDashboardAuthRequiredNotice", () => {
     renderSessionBootError(root, new Error("401"));
     expect(root.textContent).toContain("octowright dashboard");
     expect(root.textContent).not.toContain("Session failed to load");
+  });
+
+  it("names the session so a locked-out reader knows the recording still exists", () => {
+    installDashboardAuthRequiredNotice(root, "abc123");
+    window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+    const note = root.querySelector('[data-testid="pairing-gate-session"]');
+    expect(note?.textContent).toContain("abc123");
+    expect(note?.textContent).toContain("browser_recording_path");
+  });
+
+  it("distinguishes a refused bearer from a link that never carried one", () => {
+    installDashboardAuthRequiredNotice(root);
+    window.dispatchEvent(
+      new CustomEvent("octowright:dashboard-auth-required", { detail: { reason: "rejected" } }),
+    );
+    const gate = root.querySelector('[data-testid="pairing-gate"]');
+    expect(gate?.getAttribute("data-reason")).toBe("rejected");
+    // The two causes are one 401 from here, so the copy must not pick one.
+    expect(gate?.textContent).toContain("restarted");
+    expect(gate?.textContent).toContain("expire");
   });
 });
 

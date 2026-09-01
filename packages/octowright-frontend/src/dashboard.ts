@@ -8,7 +8,12 @@
 // scenario-panels, persona-grid, dashboard-state, dashboard-panels).
 
 import { deleteRecording, getPersonaSizes, relaunchSession, startScenario } from "./api.js";
-import { bootstrapDashboardAuth, DASHBOARD_AUTH_REQUIRED_EVENT, isolateDashboardTabAuth } from "./dashboard-auth.js";
+import {
+  authRequiredReason,
+  bootstrapDashboardAuth,
+  DASHBOARD_AUTH_REQUIRED_EVENT,
+  isolateDashboardTabAuth,
+} from "./dashboard-auth.js";
 import type { DashboardEventStreamHandle } from "./dashboard-events.js";
 import { openDashboardEventStream } from "./dashboard-events.js";
 import type { PanelDef, PanelInstance } from "./dashboard-panels.js";
@@ -17,6 +22,7 @@ import type { DashboardScope, DashboardState } from "./dashboard-state.js";
 import { EMPTY_STATE, loadState, parseInvalidateScopes, refreshScopedState } from "./dashboard-state.js";
 import { openMacroEditor, openMacroRepairPreview } from "./macro-editor.js";
 import { renderMacroList } from "./macro-list.js";
+import { renderPairingGate } from "./pairing-gate.js";
 import { openPersonaEditor } from "./persona-editor.js";
 import { renderPersonaGrid } from "./persona-grid.js";
 import { renderSavedScenarios, renderScenarioList } from "./scenario-panels.js";
@@ -259,6 +265,12 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
       ? await refreshScopedState(dashboardCurrentState, scopes)
       : await loadState(dashboardCurrentState);
     if (disposed) return;
+    // `loadState` catches each scope's 401 into `state.errors` and leaves that
+    // scope's EMPTY default in place, so rendering it would print "No live
+    // sessions." while sessions are running. The 401 handler runs synchronously
+    // inside those fetches, so `authBlocked` is already set here on the very
+    // first tick and the false state is never painted at all.
+    if (authBlocked) return;
     dashboardCurrentState = state;
     if (dashboardPanels === null) {
       dashboardPanels = renderDashboard(root, state);
@@ -306,13 +318,19 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
     }, REFRESH_MS);
   };
 
-  const authRequired = (): void => {
+  const authRequired = (event: Event): void => {
     if (authBlocked) return;
     authBlocked = true;
     source?.close();
     source = null;
     stopPolling();
-    showSnackbar("Dashboard pairing expired. Run `octowright dashboard` and open the new URL.", true);
+    // A snackbar used to carry this, and it was the only accurate thing on the
+    // page — for 3.5 seconds. What outlived it was a panel tree asserting "No
+    // live sessions." and a banner promising a retry that `stopPolling` had
+    // just cancelled. Replace the tree instead: there is nothing behind this
+    // panel worth seeing, because none of it was ever fetched.
+    dashboardPanels = null;
+    renderPairingGate(root, { reason: authRequiredReason(event) });
   };
   window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
 

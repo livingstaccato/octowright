@@ -6,6 +6,7 @@
     const OPACITY = __OPACITY__;
     const DASHBOARD_URL = __DASHBOARD_URL__;
     const INSTANCE_ID = __INSTANCE_ID__;
+    const PAIRING_REQUIRED = __PAIRING_REQUIRED__;
     const BADGE_ID = "__octowright_badge__";
     const OVERLAY_ID = "__octowright_badge_overlay__";
 
@@ -90,6 +91,18 @@
             links.appendChild(a);
         });
         ov.appendChild(links);
+
+        // These links cannot carry a pairing code and never will: a code is
+        // single-use with a 60s TTL, and this script runs IN THE PAGE, where
+        // every site the browser visits could read one. Say so here rather
+        // than letting the link look broken -- the page it opens explains the
+        // rest and hands over the commands.
+        if (PAIRING_REQUIRED) {
+            const hint = document.createElement("div");
+            hint.textContent = "needs pairing — the page will show you how";
+            Object.assign(hint.style, { marginTop: "7px", fontSize: "9px", color: "#7a7a8a", textAlign: "center" });
+            ov.appendChild(hint);
+        }
 
         const footer = document.createElement("div");
         footer.textContent = "Esc or click outside · Alt+click to reopen";

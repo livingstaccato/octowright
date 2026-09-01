@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setDashboardBearer } from "./dashboard-auth.js";
+import { handleDashboardUnauthorized, setDashboardBearer } from "./dashboard-auth.js";
 import { mountLivePreview } from "./live-preview.js";
 
 class FakeWebSocket {
@@ -448,11 +448,16 @@ describe("mountLivePreview — live session", () => {
     handle.destroy();
   });
 
-  it("does not downgrade to direct image polling when pairing expires between fallback ticks", async () => {
+  it("does not downgrade to direct image polling when pairing is lost between fallback ticks", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
     sessionStorage.clear();
-    setDashboardBearer({ bearer: "soon-expired", expires_at: Date.now() / 1000 + 1 });
+    // A grant is dropped when the LEADER refuses it, not when a local clock
+    // says so -- the leader's window slides on use, so the browser no longer
+    // self-evicts on a stored `expires_at`. `handleDashboardUnauthorized` is
+    // exactly what a 401 runs, so losing pairing mid-preview is simulated by
+    // calling it rather than by minting an already-stale bearer.
+    setDashboardBearer({ bearer: "revoked-mid-preview", expires_at: Date.now() / 1000 + 3600 });
     const fetchFn = vi.fn(async () => new Response("frame", { status: 200 }));
     const handle = mountLivePreview(container, {
       sessionId: "live-local-expiry",
@@ -468,11 +473,13 @@ describe("mountLivePreview — live session", () => {
     await vi.waitFor(() => expect(img?.src).toBe("blob:frame-1"));
     img?.dispatchEvent(new Event("load"));
 
+    handleDashboardUnauthorized();
     await vi.advanceTimersByTimeAsync(1500);
 
     const playBtn = container.querySelector<HTMLButtonElement>('[data-testid="live-preview-play"]');
     const error = container.querySelector<HTMLElement>('[data-testid="live-preview-error"]');
     expect(fetchFn).toHaveBeenCalledTimes(1);
+    // The load-bearing assertion: no unauthenticated direct-URL poll.
     expect(img?.src).toBe("blob:frame-1");
     expect(playBtn?.disabled).toBe(true);
     expect(error?.textContent).toContain("pairing expired");
