@@ -474,16 +474,15 @@ class TestFollowersCheck:
 
 
 class TestCanonicalPortCheck:
-    """Doctor must notice a SECOND leader alive on the canonical port.
+    """Doctor must notice a SECOND leader alive beside the recorded one.
 
     ``check_daemon`` only reports on the lockfile's recorded leader. A daemon
     started outside octowright's own election path -- e.g. a systemd unit
     whose ExecStart runs `serve --daemon-mode` directly, which by design skips
-    the lock/election check -- can bind the canonical port at the same moment
-    a CLI-triggered spawn wins the race and lands on a bumped port instead.
-    Both stay alive; the lockfile records only one of them, so `check_daemon`
-    alone reports a clean single leader while a second one answers
-    unrecorded.
+    the lock/election check -- can bind a port at the same moment a
+    CLI-triggered spawn lands on another. Both stay alive; the lockfile
+    records only one of them, so `check_daemon` alone reports a clean single
+    leader while a second one answers unrecorded.
     """
 
     def _leader(self, *, pid: int = 111, port: int) -> Any:
@@ -491,17 +490,34 @@ class TestCanonicalPortCheck:
 
         return LeaderInfo(pid=pid, http_host="127.0.0.1", http_port=port, mcp_url="http://x", started_at=0.0)
 
-    def _patch(self, monkeypatch: pytest.MonkeyPatch, *, info: Any, alive: bool, canonical_answers: bool) -> None:
+    def _patch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        info: Any,
+        alive: bool,
+        live_ports: set[int] | None = None,
+    ) -> list[int]:
+        """Wire the lockfile and make only ``live_ports`` answer as octowright.
+
+        Per-port rather than a single boolean: a fake that answers for every
+        port cannot tell "probed the canonical port" from "probed the whole
+        walk range", which is the distinction these tests exist to pin.
+        """
+        answered = live_ports or set()
+        probed: list[int] = []
         monkeypatch.setattr(_doctor, "read_lock", lambda: info)
         monkeypatch.setattr(_doctor, "pid_is_alive", lambda _pid: alive)
 
-        async def _canonical(_host: str | None, _port: int | None) -> bool:
-            return canonical_answers
+        async def _probe(_host: str | None, port: int | None) -> bool:
+            probed.append(port if port is not None else -1)
+            return port in answered
 
-        monkeypatch.setattr("octowright.cli._leader_election._canonical_port_serves_octowright", _canonical)
+        monkeypatch.setattr("octowright.cli._leader_election._canonical_port_serves_octowright", _probe)
+        return probed
 
     async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._patch(monkeypatch, info=None, alive=False, canonical_answers=False)
+        self._patch(monkeypatch, info=None, alive=False)
         check = await _doctor.check_canonical_port()
         assert check.status == "skip"
 
@@ -509,17 +525,48 @@ class TestCanonicalPortCheck:
         """``check_daemon`` already reports a stale lock; this check adds nothing there."""
         from octowright import defaults
 
-        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=False, canonical_answers=False)
+        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=False)
         check = await _doctor.check_canonical_port()
         assert check.status == "skip"
 
-    async def test_leader_already_on_the_canonical_port_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_leader_alone_on_the_canonical_port_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from octowright import defaults
 
-        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True, canonical_answers=True)
+        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True)
         check = await _doctor.check_canonical_port()
         assert check.status == "ok"
         assert check.name == "daemon:canonical-port"
+        assert check.data["second_daemon_ports"] == []
+
+    async def test_ok_is_earned_by_probing_the_whole_walk_range(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An `ok` that only probed the canonical port would be unfounded.
+
+        `cli/serve._on_http_bound` writes the lock with whatever port it bound,
+        so which daemon the lockfile records is decided by bind order. The
+        unrecorded one is just as likely to be on a bumped port.
+        """
+        from octowright import defaults
+
+        probed = self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True)
+        await _doctor.check_canonical_port()
+
+        expected = list(range(defaults.HTTP_PORT + 1, defaults.HTTP_PORT + defaults.HTTP_PORT_RETRIES + 1))
+        assert sorted(probed) == expected
+        assert defaults.HTTP_PORT not in probed, "the leader's own port must not be probed as an intruder"
+
+    async def test_second_daemon_on_a_bumped_port_fails_even_though_the_leader_is_canonical(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The half a canonical-port-only probe would have silently blessed."""
+        from octowright import defaults
+
+        bumped = defaults.HTTP_PORT + 1
+        self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True, live_ports={bumped})
+        check = await _doctor.check_canonical_port()
+        assert check.status == "fail"
+        assert "two live daemons" in check.detail
+        assert str(bumped) in check.detail
+        assert check.data["second_daemon_ports"] == [bumped]
 
     async def test_leader_walked_off_canonical_with_nothing_there_now_warns(
         self, monkeypatch: pytest.MonkeyPatch
@@ -530,9 +577,10 @@ class TestCanonicalPortCheck:
         from octowright import defaults
 
         bumped = defaults.HTTP_PORT + 1
-        self._patch(monkeypatch, info=self._leader(port=bumped), alive=True, canonical_answers=False)
+        self._patch(monkeypatch, info=self._leader(port=bumped), alive=True)
         check = await _doctor.check_canonical_port()
         assert check.status == "warn"
+        assert "port-walked" in check.detail
         assert str(bumped) in check.detail
         assert str(defaults.HTTP_PORT) in check.detail
 
@@ -543,12 +591,42 @@ class TestCanonicalPortCheck:
         from octowright import defaults
 
         bumped = defaults.HTTP_PORT + 1
-        self._patch(monkeypatch, info=self._leader(pid=111, port=bumped), alive=True, canonical_answers=True)
+        self._patch(
+            monkeypatch,
+            info=self._leader(pid=111, port=bumped),
+            alive=True,
+            live_ports={defaults.HTTP_PORT},
+        )
         check = await _doctor.check_canonical_port()
         assert check.status == "fail"
         assert "two live daemons" in check.detail
         assert "restart --keep-browsers" in check.detail
-        assert check.data == {"canonical_port": defaults.HTTP_PORT, "leader_port": bumped}
+        assert check.data["canonical_port"] == defaults.HTTP_PORT
+        assert check.data["leader_port"] == bumped
+
+    async def test_a_configured_port_outside_the_walk_range_warns_and_never_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """`defaults.HTTP_PORT` comes from DOCTOR's env, not the daemon's.
+
+        The systemd/launchd deployment this check targets is exactly the one
+        whose `Environment=OCTOWRIGHT_HTTP_PORT=...` an operator's interactive
+        shell does not share. Reporting that as a split-brain would be a false
+        FAIL, and doctor exits 1 on any FAIL.
+        """
+        from octowright import defaults
+
+        far = defaults.HTTP_PORT + 700
+        probed = self._patch(
+            monkeypatch,
+            info=self._leader(port=far),
+            alive=True,
+            live_ports={defaults.HTTP_PORT},
+        )
+        check = await _doctor.check_canonical_port()
+        assert check.status == "warn"
+        assert "OCTOWRIGHT_HTTP_PORT" in check.detail
+        assert probed == [], "a port mismatch this large is a config difference, not a probe target"
 
 
 class TestJsonOutputPurity:
