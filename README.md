@@ -419,7 +419,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 129 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 131 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
