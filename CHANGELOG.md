@@ -5,7 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.20.0] - 2026-09-01
+
+### Added
+- **`octowright doctor` now detects a second, uncoordinated daemon.** `check_daemon`
+  reports only on the leader the *lockfile names*, so a daemon started outside
+  octowright's election path — a systemd unit whose `ExecStart` runs
+  `serve --daemon-mode` directly skips the lock by design — can bind a port while a
+  CLI-triggered spawn lands on another. Both stay up, the lockfile records one, and
+  `doctor` reported a clean single leader while a second one answered unrecorded.
+  The new `daemon:canonical-port` check probes every port the leader is *not* on
+  that a leader of this deployment could hold — the canonical port plus the
+  contiguous `HTTP_PORT_RETRIES` walk range — concurrently, and fails naming them
+  with the `restart --keep-browsers` remedy. Which daemon the lockfile records is a
+  **race**, not a property (`cli/serve._on_http_bound` writes the lock with whatever
+  port it actually bound, *after* the walk), so probing only the canonical port
+  would have returned a clean `ok` for half the cases the check exists to catch. A
+  leader *outside* the walk range is a warn rather than a fail: `defaults.HTTP_PORT`
+  is read from the *doctor process's* environment, and the systemd/launchd
+  deployment this targets is exactly the one carrying an
+  `Environment=OCTOWRIGHT_HTTP_PORT=…` an operator's shell does not share — calling
+  that a split-brain would be a false FAIL, and doctor exits 1 on any FAIL.
+
+### Fixed
+- **An unpaired dashboard now says why it is empty.** Clicking **dashboard ↗** or
+  **recording ↗** in a launched browser's corner badge landed on a page that was
+  false in three directions at once: every panel printed an affirmative empty state
+  (**"No live sessions."**) while sessions were running, because `loadState` catches
+  each scope's 401 and leaves that scope's EMPTY default in place; a banner promised
+  **"Retrying automatically."** after `authRequired` had already called
+  `stopPolling()`; and the one accurate message was a snackbar that self-hid after
+  3.5 seconds. Nothing on the settled page said the word "pairing" or named a
+  command, so a *locked* dashboard read as a *broken* one. Those badge links cannot
+  be fixed at the link — a pairing code is single-use with a 60s TTL, `/api/pair/mint`
+  requires the capability token from the 0600 lockfile, and the init script that
+  would carry a baked-in code runs *in the page*, where every site the browser
+  visits could read it. An unpaired arrival now renders a blocking gate naming what
+  happened, why the gate exists, and every route back in with copyable commands;
+  `bootDashboard`'s tick bails before rendering, so the false panel tree is never
+  painted at all. It distinguishes only the two states a browser can actually tell
+  apart — no bearer was ever held, versus one the leader refused — because "it
+  expired" and "the daemon restarted and forgot every pairing" are the same 401 from
+  there. A bookmark, a typed address, and a leader restart all arrive the same way.
+
+### Changed
+- **Dashboard pairing no longer expires while you are using it.** The bearer's 8h
+  window was *absolute from redemption* — `_validated_bearer_digest` only did
+  `move_to_end`, which is LRU position and not expiry — so a dashboard someone had
+  been watching all day died mid-use and landed on the unpaired page. The window now
+  slides on use, capped by an immovable 7-day ceiling so a bearer that keeps being
+  poked cannot live forever. This costs no renewal endpoint and no client
+  bookkeeping: an open dashboard holds the `/api/dashboard/events` SSE stream, which
+  revalidates its lease on every heartbeat, so "the tab is open" already reaches the
+  store roughly every 15 seconds. Validating and sliding are deliberately one
+  operation, so a bearer already past its deadline cannot be revived by being asked
+  about. The browser correspondingly stops self-evicting on the `expires_at` it
+  stored at redemption — that value is the deadline *as of issue* and therefore a
+  lower bound, so honouring it locally discarded credentials the leader still
+  accepted.
 
 ### Changed
 - **One liveness partitioner, one staleness rule, one logger gate.** Cleanup over
@@ -2257,7 +2314,7 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.19.2...main
+[0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.2...v0.20.0
 [0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...main
 [0.10.1]: https://github.com/livingstaccato/octowright/compare/v0.10.0...v0.10.1
 [0.9.1]: https://github.com/livingstaccato/octowright/compare/v0.9.0...v0.9.1
