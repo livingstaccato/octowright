@@ -449,7 +449,7 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 ### Frontend
 
-TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
+TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `packages/octowright-frontend/src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
 
 ### Terminal Sessions (plugin)
 
