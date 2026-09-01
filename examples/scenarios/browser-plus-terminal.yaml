@@ -4,7 +4,7 @@ description: |
   running a shell — both launched, recorded, and torn down by one scenario.
 
   The terminal participant requires the octowright-terminal session-kind plugin,
-  enabled via OCTOWRIGHT_PLUGINS=terminal (source-install only today; see
+  enabled via OCTOWRIGHT_PLUGINS=terminal (pip install octowright-terminal; see
   packages/octowright-terminal/README.md). Without it, scenario_start raises a
   clear "unsupported kind" error naming OCTOWRIGHT_PLUGINS as the fix, rather
   than failing obscurely. Terminal participants are skipped by browser-only steps

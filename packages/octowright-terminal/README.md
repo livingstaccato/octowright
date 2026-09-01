@@ -6,7 +6,9 @@ This package is entirely optional. Octowright core has no terminal-specific code
 
 ## Installation
 
-This package is **not on PyPI yet** — `uv pip install octowright-terminal` still answers "No matching distribution found". Its dependencies are all there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout any more (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
+This package is **on PyPI** — `uv pip install octowright-terminal` resolves 0.1.0. It first shipped alongside core 0.19.2 on 2026-08-31, from the same GitHub Release. Its dependencies were already there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
+
+Installing it only makes the plugin *discoverable*; enabling it stays a separate, deliberate act via `OCTOWRIGHT_PLUGINS=terminal`.
 
 The release path is wired: the octowright repo's `release.yml` builds this package into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so the next release is its first upload. One thing gates that, and it is not something the repo can do for itself — PyPI needs a trusted publisher for the `octowright-terminal` project, registered as a *pending publisher* because the name has never been uploaded. Until it lands, install from the repo:
 

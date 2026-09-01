@@ -76,8 +76,9 @@ dependencies = [
 # (plugin)") moved them out to the packages/octowright-terminal workspace
 # member entirely -- core has no code left that would use provide-uterm, so
 # an extra installing it into *this* distribution would have nothing to do.
-# Install the terminal plugin as its own package instead (source-checkout
-# only today; see packages/octowright-terminal/README.md).
+# Install the terminal plugin as its own package instead: it is on PyPI as of
+# core 0.19.2 (`pip install octowright-terminal`), and a source checkout uses
+# the `terminal` dependency group; see packages/octowright-terminal/README.md.
 
 [project.urls]
 Homepage = "https://github.com/livingstaccato/octowright"
