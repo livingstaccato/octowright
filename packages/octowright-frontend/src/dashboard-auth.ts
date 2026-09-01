@@ -1,6 +1,7 @@
 /** Origin-scoped dashboard bearer lifecycle. No cookies or localStorage. */
 
 import { clearDashboardMediaAuth } from "./dashboard-media-auth.js";
+import type { PairingGateReason } from "./pairing-gate.js";
 
 export const DASHBOARD_AUTH_STORAGE_KEY = "octowright.dashboard.auth.v1";
 export const DASHBOARD_AUTH_REQUIRED_EVENT = "octowright:dashboard-auth-required";
@@ -19,6 +20,10 @@ interface StoredDashboardBearer {
   bearer: string;
   expiresAt: number;
   tabId: string;
+}
+
+export interface DashboardAuthRequiredDetail {
+  reason: PairingGateReason;
 }
 
 interface DashboardAuthBootstrapOptions {
@@ -138,6 +143,18 @@ export function setDashboardBearer(grant: DashboardBearerGrant, storage?: Storag
   );
 }
 
+/**
+ * Return the stored bearer, if this tab holds a structurally valid one.
+ *
+ * Deliberately does NOT drop a bearer whose stored `expiresAt` has passed.
+ * The leader's window slides on every use (`http/pairing.DashboardPairingState._touch`),
+ * and an open dashboard's SSE stream revalidates roughly every 15 seconds — so
+ * `expiresAt` is the deadline as of issue, a LOWER BOUND on validity, not the
+ * real one. Evicting on it would throw away a live credential after 8 hours
+ * and drop the user on the pairing gate while the leader was still happy to
+ * answer. The leader is the only authority on whether a bearer is good; a
+ * stale one costs exactly one 401, which routes to the same gate anyway.
+ */
 export function getDashboardBearer(storage?: Storage): string | null {
   const target = currentSessionStorage(storage);
   if (!target) return null;
@@ -151,8 +168,7 @@ export function getDashboardBearer(storage?: Storage): string | null {
       typeof parsed.expiresAt !== "number" ||
       !Number.isFinite(parsed.expiresAt) ||
       typeof parsed.tabId !== "string" ||
-      !parsed.tabId ||
-      parsed.expiresAt <= Date.now() / 1000
+      !parsed.tabId
     ) {
       clearDashboardBearer(target);
       return null;
@@ -218,13 +234,32 @@ export function dashboardWebSocketProtocols(storage?: Storage): string[] {
   return bearer ? [DASHBOARD_WS_PROTOCOL, `${DASHBOARD_WS_BEARER_PREFIX}${bearer}`] : [];
 }
 
+/**
+ * Drop the bearer and announce that the dashboard needs pairing.
+ *
+ * The event carries WHY, because the two cases want different copy and only
+ * this frame can tell them apart: having held a bearer the leader then refused
+ * ("expired, or the daemon restarted") is a different message from never
+ * having had one at all ("this link carries no code"), and by the time a
+ * listener runs the bearer is already cleared.
+ */
 export function handleDashboardUnauthorized(storage?: Storage): boolean {
   const hadBearer = getDashboardBearer(storage) !== null;
   clearDashboardBearer(storage);
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new Event(DASHBOARD_AUTH_REQUIRED_EVENT));
+    window.dispatchEvent(
+      new CustomEvent<DashboardAuthRequiredDetail>(DASHBOARD_AUTH_REQUIRED_EVENT, {
+        detail: { reason: hadBearer ? "rejected" : "never-paired" },
+      }),
+    );
   }
   return hadBearer;
+}
+
+/** Read the reason off an auth-required event, defaulting to the safer copy. */
+export function authRequiredReason(event: Event): PairingGateReason {
+  const detail = (event as CustomEvent<Partial<DashboardAuthRequiredDetail>>).detail;
+  return detail?.reason === "rejected" ? "rejected" : "never-paired";
 }
 
 export function isDashboardAuthClose(event: Pick<CloseEvent, "code" | "reason">): boolean {

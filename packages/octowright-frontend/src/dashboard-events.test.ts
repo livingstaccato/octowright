@@ -392,9 +392,27 @@ describe("bootDashboard dashboard invalidation stream", () => {
     await dashboard.bootDashboard(root);
 
     expect(dashboardEventMocks.openDashboardEventStream).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("Dashboard pairing expired");
+    // The blocking gate, not a snackbar that self-hides after 3.5s.
+    expect(root.querySelector('[data-testid="pairing-gate"]')).not.toBeNull();
+    expect(root.textContent).toContain("octowright dashboard");
     await vi.advanceTimersByTimeAsync(15_000);
     expect(apiMocks.getSessions).toHaveBeenCalledOnce();
+  });
+
+  it("never paints the empty panels that a 401 leaves behind", async () => {
+    apiMocks.getSessions.mockImplementationOnce(async () => {
+      window.dispatchEvent(new Event("octowright:dashboard-auth-required"));
+      throw new Error("pairing required");
+    });
+
+    await dashboard.bootDashboard(root);
+
+    // `loadState` catches each scope's 401 and leaves its EMPTY default, so
+    // rendering the tree asserted "No live sessions." while sessions ran, and
+    // promised a retry that `stopPolling` had already cancelled.
+    expect(root.textContent).not.toContain("No live sessions");
+    expect(root.textContent).not.toContain("Retrying automatically");
+    expect(root.querySelector('[data-testid="dashboard-degraded"]')).toBeNull();
   });
 
   it("keeps the reconnecting fetch stream open and polls after an error", async () => {
