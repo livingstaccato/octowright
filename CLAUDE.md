@@ -134,9 +134,33 @@ exactly the confusion the command exists to remove. A child can simply be
 killed, and its driver and browsers die with it.
 
 The other checks are `daemon` (is the lockfile's leader real, or stale),
-`browsers:installed`, `processes:drivers`, `processes:browsers`, `storage`
+`daemon:canonical-port`, `browsers:installed`, `processes:drivers`,
+`processes:browsers`, `storage`
 (recordings and profiles at 0700 -- they hold typed input and live session
-cookies), `followers`, and, on macOS only, `audio:coreaudio`. `--fix` reaps orphaned drivers and browsers, and only ever processes
+cookies), `followers`, and, on macOS only, `audio:coreaudio`.
+
+`daemon:canonical-port` answers a question `daemon` structurally cannot: is a
+SECOND daemon also alive. `check_daemon` reports only on the leader the
+lockfile names, and a daemon started outside octowright's election path -- a
+systemd unit whose `ExecStart` runs `serve --daemon-mode` directly skips the
+lock by design -- can bind a port while a CLI-triggered spawn lands on
+another. Both stay up; the lockfile records one; `daemon` reports a clean
+single leader. Which one it records is a **race**, not a property:
+`cli/serve._on_http_bound` writes the lock with whatever port it actually
+bound, *after* the walk, for every non-`--no-singleton` leader. So the
+unrecorded daemon can be on the canonical port or on a bumped one depending
+only on bind order, and probing just the canonical port would return a clean
+`ok` for half the cases the check exists to catch. It therefore probes every
+port the leader is NOT on that a leader of this deployment could hold --
+canonical plus the contiguous `HTTP_PORT_RETRIES` walk range -- concurrently,
+and FAILs naming them, with the `restart --keep-browsers` remedy. A leader
+*outside* that range is reported as a **warn**, not a fail: `defaults.HTTP_PORT`
+is read from the *doctor process's* own environment at import time, so a
+recorded port the walk cannot reach almost certainly means the daemon was
+started with a different `OCTOWRIGHT_HTTP_PORT` than the operator's shell has
+-- and that is precisely the systemd/launchd deployment this check targets.
+Calling that a split-brain would be a false FAIL, and doctor exits 1 on any
+FAIL. `--fix` reaps orphaned drivers and browsers, and only ever processes
 whose parent is already gone, so a running daemon's own driver is never
 touched. `--json` emits the same data structurally, `--skip-engines` avoids
 launching anything, and the command exits 1 on any FAIL so CI can gate on it.
@@ -425,7 +449,7 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 ### Frontend
 
-TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
+TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `packages/octowright-frontend/src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
 
 ### Terminal Sessions (plugin)
 
