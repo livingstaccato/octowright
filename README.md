@@ -436,7 +436,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
-| `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; not yet on PyPI — source-install only, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
+| `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; `pip install octowright-terminal`, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
 | `all` (or unset) | Default — every core-install tool registers. | 129 |
 
