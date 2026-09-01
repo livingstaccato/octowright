@@ -163,3 +163,42 @@ async def test_webkit_gets_newtab_shortcut_script(monkeypatch: pytest.MonkeyPatc
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest.mark.anyio
+async def test_real_assets_leave_no_unsubstituted_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every ``__NAME__`` in a shipped asset must have a matching ``.replace()``.
+
+    The other wiring tests monkeypatch ``_read_asset``, so they exercise the
+    substitution machinery against a stub and would not notice a placeholder
+    added to the real ``badge.js`` with no replacement behind it. That failure
+    is silent and total: the injected source is a syntax error, so the whole
+    script dies and the launch still reports success -- the badge simply never
+    appears. This reads the real assets.
+    """
+    import re
+
+    import octowright.browser_pool.visuals as vis
+
+    monkeypatch.setattr(vis, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
+
+    scripts: list[str] = []
+
+    class FakeCtx:
+        async def add_init_script(self, *, script: str) -> None:
+            scripts.append(script)
+
+    await vis.wire_init_scripts(
+        FakeCtx(),
+        profile="tanuki-tim",
+        label="x",
+        instance_id="fakeid000001",
+        kind="chromium",
+        badge=True,
+        badge_position="bottom-right",
+        stabilize=True,
+    )
+
+    assert scripts, "no init scripts were wired"
+    leftovers = sorted({match for script in scripts for match in re.findall(r"__[A-Z][A-Z0-9_]*__", script)})
+    assert leftovers == [], f"unsubstituted asset placeholders: {leftovers}"
