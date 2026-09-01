@@ -303,6 +303,14 @@ async def wire_init_scripts(
     """Inject title-tag, badge, macro-pill, and (optional) stabilize scripts."""
     import json as _json
 
+    # Local, like the two above, and for a stricter reason: this is the only
+    # thing `browser_pool` wants from `http/`, and importing it at module
+    # scope would put the whole Starlette stack in the import graph of a
+    # package embedders use without ever serving HTTP. The repo already keeps
+    # `http_headers` / `console_levels` / `dashboard_events` at the package
+    # root for exactly this, but `pairing_required` reads a security policy
+    # that belongs beside its enforcement, so the import moves instead of it.
+    from octowright.http.pairing import pairing_required
     from octowright.stabilize import render_stabilize_script
 
     persona_emoji = _resolve_persona_emoji(profile)
@@ -330,6 +338,14 @@ async def wire_init_scripts(
             .replace("__OPACITY__", _json.dumps(BADGE_OPACITY))
             .replace("__DASHBOARD_URL__", _json.dumps(dashboard_url))
             .replace("__INSTANCE_ID__", _json.dumps(instance_id))
+            # The overlay's links carry no pairing code and cannot be given
+            # one -- see the note at their construction in badge.js. This is
+            # the policy only; whether the gate is actually enforced also
+            # depends on the leader having a capability token to pair against
+            # (`pairing_anchor_available`), which is app state this process
+            # has no handle on here. Over-warning costs one grey line; not
+            # warning costs a link that looks broken.
+            .replace("__PAIRING_REQUIRED__", _json.dumps(pairing_required()))
         )
         await bounded(
             context.add_init_script(script=badge_script),

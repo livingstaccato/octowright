@@ -27,6 +27,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 from provide.telemetry import get_logger
 from starlette.requests import HTTPConnection
@@ -40,7 +41,20 @@ PAIR_CODE_TTL_SECONDS = 60.0
 # A human reading an agent's message needs longer than an operator pasting
 # from their own terminal. Still single-use and loopback-only.
 MCP_PAIR_CODE_TTL_SECONDS = 600.0
+# The IDLE window: a bearer dies this long after it was last used, not this
+# long after it was minted. An open dashboard holds an SSE stream that
+# revalidates its lease on every heartbeat (`routes/events.py`), so "the tab
+# is open" already reaches the store roughly every 15 seconds and slides the
+# deadline for free -- no renewal endpoint, no client bookkeeping. Before
+# this was a sliding window it was an absolute one, and a dashboard someone
+# had been watching all day died mid-use at the 8-hour mark with the terrible
+# unpaired page as the only explanation.
 DASHBOARD_SESSION_TTL_SECONDS = 8 * 60 * 60.0
+# The HARD ceiling a slide can never push past. Sliding alone would let a
+# bearer that keeps being poked live forever, which would make this the one
+# credential in the tree with no bounded life. A week is far longer than any
+# real dashboard sitting and short enough to stay a bound.
+DASHBOARD_SESSION_MAX_LIFETIME_SECONDS = 7 * 24 * 60 * 60.0
 MAX_PAIR_CODES = 32
 MAX_DASHBOARD_SESSIONS = 32
 DASHBOARD_STATE_ATTR = "dashboard_pairing"
@@ -83,6 +97,26 @@ class DashboardBearerGrant:
     expires_at: int
 
 
+@dataclass(frozen=True)
+class _SessionWindow:
+    """One bearer's sliding idle deadline and its immovable hard deadline.
+
+    Both are monotonic-clock values. ``deadline`` is the one that decides
+    validity, so a slide can extend the idle half without ever reaching past
+    the ceiling set when the bearer was issued.
+    """
+
+    idle_deadline: float
+    hard_deadline: float
+
+    @property
+    def deadline(self) -> float:
+        return min(self.idle_deadline, self.hard_deadline)
+
+
+_ExpiryT = TypeVar("_ExpiryT", float, _SessionWindow)
+
+
 class DashboardPairingState:
     """One app's bounded one-time-code and dashboard-session stores."""
 
@@ -94,6 +128,7 @@ class DashboardPairingState:
         wall_clock: Callable[[], float] = time.time,
         code_ttl: float = PAIR_CODE_TTL_SECONDS,
         session_ttl: float = DASHBOARD_SESSION_TTL_SECONDS,
+        session_max_lifetime: float = DASHBOARD_SESSION_MAX_LIFETIME_SECONDS,
         max_codes: int = MAX_PAIR_CODES,
         max_sessions: int = MAX_DASHBOARD_SESSIONS,
     ) -> None:
@@ -101,10 +136,11 @@ class DashboardPairingState:
         self._wall_clock = wall_clock
         self._code_ttl = code_ttl
         self._session_ttl = session_ttl
+        self._session_max_lifetime = session_max_lifetime
         self._max_codes = max(1, max_codes)
         self._max_sessions = max(1, max_sessions)
         self._codes: OrderedDict[bytes, float] = OrderedDict()
-        self._sessions: OrderedDict[bytes, float] = OrderedDict()
+        self._sessions: OrderedDict[bytes, _SessionWindow] = OrderedDict()
         self._expected_token_digest = self._digest(expected_token) if expected_token else None
 
     def __repr__(self) -> str:
@@ -118,7 +154,7 @@ class DashboardPairingState:
         return hashlib.sha256(value.encode("utf-8")).digest()
 
     @staticmethod
-    def _constant_time_key_match(store: OrderedDict[bytes, float], candidate: bytes) -> bytes | None:
+    def _constant_time_key_match(store: OrderedDict[bytes, _ExpiryT], candidate: bytes) -> bytes | None:
         return next((known for known in store if hmac.compare_digest(known, candidate)), None)
 
     @property
@@ -164,7 +200,11 @@ class DashboardPairingState:
             digest = self._digest(bearer)
             if digest not in self._sessions:
                 break
-        self._sessions[digest] = self._monotonic_clock() + self._session_ttl
+        now = self._monotonic_clock()
+        self._sessions[digest] = _SessionWindow(
+            idle_deadline=now + self._session_ttl,
+            hard_deadline=now + self._session_max_lifetime,
+        )
         self._trim(self._sessions, self._max_sessions)
         return DashboardBearerGrant(
             bearer=bearer,
@@ -181,7 +221,7 @@ class DashboardPairingState:
         match = self._constant_time_key_match(self._sessions, self._digest(bearer))
         if match is None:
             return None
-        self._sessions.move_to_end(match)
+        self._touch(match)
         return match
 
     def _bearer_digest_ok(self, digest: bytes) -> bool:
@@ -189,20 +229,39 @@ class DashboardPairingState:
         match = self._constant_time_key_match(self._sessions, digest)
         if match is None:
             return False
-        self._sessions.move_to_end(match)
+        self._touch(match)
         return True
 
+    def _touch(self, digest: bytes) -> None:
+        """Slide a live bearer's idle deadline forward and refresh its LRU spot.
+
+        Validating and sliding are deliberately the same operation: a check
+        that succeeds is proof the credential is in use, and a check that fails
+        never reaches here, so an expired bearer cannot be revived by being
+        asked about. Re-assigning an existing key leaves its position alone, so
+        ``move_to_end`` is still what keeps ``_trim`` evicting the least
+        recently used session rather than the oldest one.
+        """
+        window = self._sessions[digest]
+        self._sessions[digest] = _SessionWindow(
+            idle_deadline=self._monotonic_clock() + self._session_ttl,
+            hard_deadline=window.hard_deadline,
+        )
+        self._sessions.move_to_end(digest)
+
     @staticmethod
-    def _trim(store: OrderedDict[bytes, float], limit: int) -> None:
+    def _trim(store: OrderedDict[bytes, _ExpiryT], limit: int) -> None:
         while len(store) > limit:
             store.popitem(last=False)
 
     def _prune_expired(self) -> None:
         now = self._monotonic_clock()
-        for store in (self._codes, self._sessions):
-            for digest, expiry in list(store.items()):
-                if expiry <= now:
-                    del store[digest]
+        for code_digest, code_expiry in list(self._codes.items()):
+            if code_expiry <= now:
+                del self._codes[code_digest]
+        for session_digest, window in list(self._sessions.items()):
+            if window.deadline <= now:
+                del self._sessions[session_digest]
 
 
 @dataclass(frozen=True)

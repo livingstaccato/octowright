@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from octowright.http.pairing import (
+    DASHBOARD_SESSION_MAX_LIFETIME_SECONDS,
     DASHBOARD_SESSION_TTL_SECONDS,
     DASHBOARD_STATE_ATTR,
     DASHBOARD_WS_BEARER_PREFIX,
@@ -518,3 +519,80 @@ def test_new_tab_exempt_from_pairing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_ENV, "1")
     with _client() as client:
         assert client.get("/new-tab").status_code == 200
+
+
+# ── Sliding idle window ──────────────────────────────────────────────────────
+#
+# A bearer's deadline used to be absolute from redemption, so a dashboard
+# somebody had been watching all day died mid-use at the 8-hour mark. Use now
+# slides it. The open dashboard's SSE stream revalidates its lease every
+# heartbeat, so "the tab is open" already reaches the store without any
+# renewal endpoint -- these tests pin the store half of that.
+
+
+def test_bearer_use_slides_the_idle_deadline_forward() -> None:
+    clock = _Clock()
+    state = DashboardPairingState(expected_token=_TOKEN, monotonic_clock=clock, session_ttl=10.0)
+    bearer = _redeem(state)
+
+    # Three pokes inside the window carry it well past an absolute 10s TTL.
+    for _ in range(3):
+        clock.now += 8.0
+        assert state.bearer_ok(bearer)
+
+    assert clock.now > 10.0
+
+
+def test_bearer_still_expires_when_it_is_not_used() -> None:
+    clock = _Clock()
+    state = DashboardPairingState(expected_token=_TOKEN, monotonic_clock=clock, session_ttl=10.0)
+    bearer = _redeem(state)
+    clock.now += 11.0
+    assert not state.bearer_ok(bearer)
+
+
+def test_expired_bearer_is_not_revived_by_being_checked() -> None:
+    """Validating and sliding are one operation, so a failed check cannot renew."""
+    clock = _Clock()
+    state = DashboardPairingState(expected_token=_TOKEN, monotonic_clock=clock, session_ttl=10.0)
+    bearer = _redeem(state)
+    clock.now += 11.0
+    assert not state.bearer_ok(bearer)
+    assert not state.bearer_ok(bearer)
+
+
+def test_hard_deadline_outranks_any_amount_of_sliding() -> None:
+    """Sliding alone would give a poked bearer unbounded life; the cap is the bound."""
+    clock = _Clock()
+    state = DashboardPairingState(
+        expected_token=_TOKEN,
+        monotonic_clock=clock,
+        session_ttl=10.0,
+        session_max_lifetime=25.0,
+    )
+    bearer = _redeem(state)
+    for _ in range(3):
+        clock.now += 8.0
+        assert state.bearer_ok(bearer)
+
+    clock.now += 2.0  # t=26, past the 25s ceiling despite continuous use
+    assert not state.bearer_ok(bearer)
+
+
+def test_sliding_keeps_lru_eviction_ordering() -> None:
+    """A slide re-assigns the key, which does not reorder -- move_to_end must stay."""
+    state = DashboardPairingState(expected_token=_TOKEN, max_sessions=2)
+    first = _redeem(state)
+    second = _redeem(state)
+
+    assert state.bearer_ok(first)  # first is now the most recently used
+    third = _redeem(state)  # evicts the least recently used, which is `second`
+
+    assert state.bearer_ok(first)
+    assert state.bearer_ok(third)
+    assert not state.bearer_ok(second)
+
+
+def test_shipped_windows_are_ordered_and_positive() -> None:
+    assert DASHBOARD_SESSION_TTL_SECONDS > 0
+    assert DASHBOARD_SESSION_MAX_LIFETIME_SECONDS > DASHBOARD_SESSION_TTL_SECONDS

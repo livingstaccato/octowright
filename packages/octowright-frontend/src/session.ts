@@ -12,6 +12,7 @@ import {
 } from "./api.js";
 import { renderConsolePanel } from "./console-panel.js";
 import {
+  authRequiredReason,
   DASHBOARD_AUTH_REQUIRED_EVENT,
   downloadDashboardMedia,
   getDashboardBearer,
@@ -22,6 +23,7 @@ import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboar
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
+import { renderPairingGate } from "./pairing-gate.js";
 import type { MountStream, StreamContext } from "./plugin-contract.js";
 import { loadPluginRegistry, resolveRenderer } from "./plugin-registry.js";
 import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
@@ -588,16 +590,17 @@ export function renderFooter(target: HTMLElement, detail: SessionDetail): void {
   }
 }
 
-export function installDashboardAuthRequiredNotice(root: HTMLElement): () => void {
-  const onAuthRequired = (): void => {
-    if (root.querySelector('[data-testid="dashboard-auth-required"]')) return;
-    const note = document.createElement("p");
-    note.className = "note note--missing";
-    note.setAttribute("role", "alert");
-    note.setAttribute("data-testid", "dashboard-auth-required");
-    note.textContent =
-      "Dashboard pairing expired. Run `octowright dashboard` and open the new URL to reconnect this session.";
-    root.prepend(note);
+export function installDashboardAuthRequiredNotice(root: HTMLElement, sessionId?: string): () => void {
+  const onAuthRequired = (event: Event): void => {
+    if (root.querySelector('[data-testid="pairing-gate"]')) return;
+    // Replaces the pane rather than prepending to it. A one-line note above a
+    // session view that never loaded competes with the entrypoint's generic
+    // load-error for the same space and loses; the gate is the whole answer to
+    // why this pane is empty, so it gets the whole pane.
+    renderPairingGate(root, {
+      reason: authRequiredReason(event),
+      ...(sessionId ? { sessionId } : {}),
+    });
   };
   window.addEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
   return () => window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, onAuthRequired);
@@ -682,7 +685,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   // Install before tab isolation and the first guarded fetch: both can clear a
   // missing/expired bearer synchronously, and the actionable state must not be
   // lost behind the entrypoint's generic load-error fallback.
-  const removeAuthRequiredNotice = installDashboardAuthRequiredNotice(root);
+  const removeAuthRequiredNotice = installDashboardAuthRequiredNotice(root, sessionId);
   window.addEventListener("beforeunload", removeAuthRequiredNotice, { once: true });
   await isolateDashboardTabAuth();
   const detail = await getSession(sessionId);
@@ -854,7 +857,10 @@ export function appendForTest(events: RecordingEvent[], target: HTMLElement, bas
 }
 
 export function renderSessionBootError(root: HTMLElement, error: unknown): void {
-  if (root.querySelector('[data-testid="dashboard-auth-required"]')) return;
+  // A 401 reaches here as an ordinary boot failure, so "Session failed to
+  // load: 401" would overwrite the gate that already explained the same 401
+  // in terms the reader can act on.
+  if (root.querySelector('[data-testid="pairing-gate"]')) return;
   root.textContent = `Session failed to load: ${(error as Error).message}`;
 }
 
