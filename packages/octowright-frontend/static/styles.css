@@ -1484,3 +1484,88 @@ code, .mono { font-family: var(--mono); }
   text-align: center;
   font-size: 13px;
 }
+
+/* ── Pairing gate ──────────────────────────────────────────
+   Replaces the dashboard or session pane when there is no usable bearer.
+   Full-width because it is the whole answer to why the pane is empty, not a
+   decoration on top of a page that never loaded. */
+
+.pairing-gate {
+  grid-column: 1 / -1;
+  max-width: 720px;
+  margin: 32px auto;
+  padding: 28px 30px;
+  background: var(--bg-1);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius);
+  font-family: var(--sans);
+  color: var(--fg-2);
+  line-height: 1.6;
+}
+
+.pairing-gate__headline {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.pairing-gate__lede { margin: 0 0 12px; font-size: 13px; }
+.pairing-gate__why { margin: 0 0 20px; font-size: 13px; color: var(--fg-3); }
+
+.pairing-gate__session {
+  margin: 0 0 20px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+.pairing-gate__routes-heading {
+  margin: 0 0 12px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.pairing-gate__routes { margin: 0; padding-left: 22px; }
+.pairing-gate__route { margin-bottom: 16px; }
+.pairing-gate__route::marker { color: var(--accent); font-weight: 600; }
+.pairing-gate__route-lead { margin: 0 0 6px; font-size: 13px; color: var(--fg); }
+.pairing-gate__route-detail { margin: 6px 0 0; font-size: 12px; color: var(--fg-3); }
+
+.pairing-gate__command-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.pairing-gate__command {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-ligatures: none;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.pairing-gate__copy { flex: 0 0 auto; }
+
+.pairing-gate__opt-out {
+  margin: 22px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-3);
+}

@@ -46,14 +46,20 @@ describe("dashboard bearer storage", () => {
     expect(document.cookie).not.toContain("secret-bearer");
   });
 
-  it("drops expired or malformed records", () => {
-    setDashboardBearer({ bearer: "expired", expires_at: nowSeconds - 1 });
-    expect(getDashboardBearer()).toBeNull();
-    expect(sessionStorage.length).toBe(0);
-
+  it("drops malformed records", () => {
     sessionStorage.setItem("octowright.dashboard.auth.v1", "not-json");
     expect(getDashboardBearer()).toBeNull();
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps a bearer past its stored expiry, because the leader's window slides", () => {
+    // `expires_at` is the deadline as of issue. The leader slides it on every
+    // use, and an open dashboard's SSE stream revalidates every heartbeat, so
+    // this value is a LOWER BOUND on validity rather than the real deadline.
+    // Self-evicting on it threw away live credentials after 8 hours and put
+    // the user on the pairing gate while the leader was still answering.
+    setDashboardBearer({ bearer: "still-good", expires_at: nowSeconds - 1 });
+    expect(getDashboardBearer()).toBe("still-good");
   });
 
   it("merges Authorization with caller headers", () => {
