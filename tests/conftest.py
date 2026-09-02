@@ -17,6 +17,7 @@ import os
 import signal
 import socket
 import sys
+import tempfile
 import weakref
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,6 +28,28 @@ import pytest
 _TOOLS = Path(__file__).resolve().parent.parent / "tools"
 if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep an operator's real ``plugins.yaml`` out of the whole test run.
+
+    ``octowright.server._state`` resolves ``plugin_discovery.enabled_names()``
+    at MODULE IMPORT TIME (a process-wide singleton), which happens the moment
+    the first test module imports it during collection -- before any per-test
+    autouse fixture gets a chance to run. So a developer who has enabled a
+    plugin locally (a documented, supported setup, e.g. via
+    ``~/.config/octowright/plugins.yaml``) makes every test asserting "nothing
+    is enabled by default" fail on their machine and nowhere else, and no
+    fixture can undo it after the fact. ``pytest_configure`` runs before
+    collection ever imports a test module, so it is the one hook early enough.
+    Left set for the whole session rather than restored, matching that the
+    thing it is protecting is itself resolved once for the whole session.
+    """
+    del config
+    os.environ.pop("OCTOWRIGHT_PLUGINS", None)
+    config_home = tempfile.mkdtemp(prefix="octowright-test-config-")
+    os.environ["XDG_CONFIG_HOME"] = config_home
+    os.environ["APPDATA"] = config_home
 
 
 # Where the id of the currently-running test is parked so a killed run can still

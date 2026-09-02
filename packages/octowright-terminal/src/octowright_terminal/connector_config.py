@@ -61,7 +61,12 @@ def ssh_connector_config(
     if user is not None:
         cfg["username"] = user
     if key_path is not None:
-        cfg["client_key_path"] = key_path
+        # ``client_key``, NOT ``client_key_path``. Both sit in the connector's
+        # allow-list, but it *raises* on ``client_key_path`` (and so does the
+        # egress chokepoint), so emitting it made every keyed SSH launch fail
+        # with "client_key_path is not supported". ``client_key`` is appended
+        # as a plain string and asyncssh resolves a string as a file path.
+        cfg["client_key"] = key_path
     if password is not None:
         cfg["password"] = password
     if known_hosts is not None:

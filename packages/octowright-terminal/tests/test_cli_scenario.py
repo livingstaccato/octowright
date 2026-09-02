@@ -54,10 +54,22 @@ _SCENARIO = textwrap.dedent(
 def _run_scenario_start(
     scenarios_dir: Path, recordings_dir: Path, *, plugins: str | None
 ) -> subprocess.CompletedProcess[str]:
+    # Isolate the plugin-enable resolution from the DEVELOPER'S OWN config.
+    # `enabled_names` falls through from OCTOWRIGHT_PLUGINS to
+    # `user_config_dir()/plugins.yaml`, so popping the env var alone leaves the
+    # subprocess reading ~/.config/octowright/plugins.yaml — and an operator
+    # who has enabled the terminal plugin (a documented, supported setup) made
+    # the "not enabled" case below fail on their machine and nowhere else.
+    # Repointing the config dir at an empty tmp dir makes "default" mean
+    # default. APPDATA is the Windows arm of the same lookup.
+    config_home = recordings_dir.parent / "config-home"
+    config_home.mkdir(parents=True, exist_ok=True)
     env = {
         **os.environ,
         "OCTOWRIGHT_SCENARIOS_DIR": str(scenarios_dir),
         "OCTOWRIGHT_RECORDINGS": str(recordings_dir),
+        "XDG_CONFIG_HOME": str(config_home),
+        "APPDATA": str(config_home),
     }
     env.pop("OCTOWRIGHT_PLUGINS", None)
     if plugins is not None:
