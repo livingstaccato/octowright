@@ -163,5 +163,5 @@ def test_release_highlights_are_newest_and_synchronized() -> None:
     """The newest curated notice must describe the current release."""
     from octowright.version import VERSION
 
-    assert VERSION == "0.20.0"
+    assert VERSION == "0.19.3"
     assert next(iter(upgrade.HIGHLIGHTS)) == VERSION

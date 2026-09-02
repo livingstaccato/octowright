@@ -40,7 +40,7 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
-    "0.20.0": [
+    "0.19.3": [
         "An unpaired dashboard now tells you how to get in. The corner badge's "
         "dashboard and recording links carry no pairing code -- they cannot, "
         "since a code is single-use with a 60s TTL and the script holding one "
