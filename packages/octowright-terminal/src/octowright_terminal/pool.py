@@ -21,11 +21,15 @@ from collections.abc import Iterator
 from typing import Any
 from uuid import uuid4
 
+from provide.telemetry import get_logger
+
 from octowright.plugins.contract import CloseResult, LaunchResult
 from octowright.plugins.session_launch import PluginContext
 from octowright_terminal.engine import TerminalEngine
 from octowright_terminal.errors import ProtectedTerminalCloseError
 from octowright_terminal.session import TerminalSession
+
+log = get_logger(__name__)
 
 
 class TerminalPool:
@@ -49,7 +53,14 @@ class TerminalPool:
         # so ctx.begin_session discards the opening-row-only recording on our
         # behalf -- this pool no longer owns that rollback.
         async with self._ctx.begin_session(instance_id=instance_id, label=label, profile=profile) as launch:
-            engine = TerminalEngine(launch.instance_id, label, kind, connector_config, launch.recorder)
+            engine = TerminalEngine(
+                launch.instance_id,
+                label,
+                kind,
+                connector_config,
+                launch.recorder,
+                on_stopped=lambda: self._evict_stopped(instance_id),
+            )
             session = TerminalSession(
                 instance_id=launch.instance_id,
                 kind=launch.kind,
@@ -82,7 +93,47 @@ class TerminalPool:
                 raise
         async with self._lock:
             self._sessions[instance_id] = session
+        # A connector can die inside start() -- before the line above -- so the
+        # stop notification would have fired with nothing yet to evict. Re-check
+        # after registering and evict here instead. Ordering makes this safe in
+        # both directions: if the death happens after registration the callback
+        # does the eviction, and `_evict_stopped` is idempotent, so a race that
+        # runs both is harmless.
+        if engine.stopped:
+            self._evict_stopped(instance_id)
         return result
+
+    def _evict_stopped(self, instance_id: str) -> None:
+        """Drop a terminal whose connector has ended from the registry.
+
+        Sync and lock-free on purpose: this is called from an asyncio
+        done-callback (``engine._on_poll_done`` -> ``_record_stop``), which
+        cannot await. It mirrors core's ``_accept_external_close_nowait`` seam
+        -- the pool's ``asyncio.Lock`` serializes launch/close sequences rather
+        than protecting dict atomicity, and a single ``pop`` is atomic under the
+        GIL, so taking the lock would buy nothing and could not be done from
+        here anyway.
+
+        Identity is checked rather than assumed: ``pop`` alone would let a
+        late callback for a dead terminal evict a live session that reused the
+        id. Idempotent, so the launch-race path and the callback path can both
+        run.
+
+        Without this a terminal whose connector died stayed in ``_sessions``
+        and kept appearing in ``list_sessions`` (and so in the dashboard and
+        ``terminal_list``) as though it were live, until somebody closed it by
+        hand.
+        """
+        session = self._sessions.get(instance_id)
+        if session is None:
+            return
+        if self._sessions.pop(instance_id, None) is not session:
+            return
+        log.info(
+            "terminal.evicted_on_stop",
+            instance_id=instance_id,
+            connector_type=session.connector_type,
+        )
 
     def get(self, instance_id: str) -> TerminalSession:
         if instance_id not in self._sessions:

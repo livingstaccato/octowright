@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -108,3 +109,59 @@ async def test_close_all_attempts_every_session_and_aggregates_failures(ctx) -> 
     assert message.index("first") < message.index("third")
     assert "first failed" in message
     assert "third failed" in message
+
+
+async def test_dead_connector_is_evicted_from_the_registry(ctx) -> None:
+    """A terminal whose connector ends must stop being listed as live.
+
+    The engine has always NOTICED the death (``_on_poll_done`` records a stop
+    and logs ``terminal.poll_loop.died``), but the pool never learned:
+    ``list_sessions`` reads ``_sessions`` with no liveness filter and
+    ``_sessions.pop`` ran only inside ``close()``. So a dropped SSH connection
+    or an exited shell kept appearing in ``terminal_list`` and the dashboard as
+    though it were live, until somebody closed it by hand.
+    """
+    pool = TerminalPool(ctx)
+    try:
+        # /bin/true exits immediately, so the poll loop sees a disconnected
+        # connector and records an "eof" stop without any help from the test.
+        result = await pool.launch(kind="pty", connector_config={"command": "/bin/true"}, label="dies")
+        iid = result["instance_id"]
+
+        for _ in range(100):
+            if pool.maybe_get(iid) is None:
+                break
+            await asyncio.sleep(0.05)
+
+        assert pool.maybe_get(iid) is None, "dead terminal still resolvable"
+        assert [s["instance_id"] for s in pool.list_sessions()] == []
+        assert list(pool.iter_sessions()) == []
+    finally:
+        await pool.close_all(force=True)
+
+
+async def test_eviction_is_identity_checked_and_idempotent(ctx) -> None:
+    """A late callback must not evict a live session that reused the id.
+
+    ``pop(instance_id)`` alone would; the seam compares identity first. Also
+    covers the launch-race path calling ``_evict_stopped`` a second time.
+    """
+    pool = TerminalPool(ctx)
+    try:
+        result = await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}, label="alive")
+        iid = result["instance_id"]
+        live = pool.get(iid)
+
+        # Impersonate a stale callback for a DIFFERENT session that once held
+        # this id: identity differs, so the live entry must survive.
+        pool._sessions[iid] = live
+        stale = SimpleNamespace(connector_type="pty")
+        pool._sessions["ghost"] = stale
+        pool._evict_stopped("ghost")
+        assert "ghost" not in pool._sessions
+        pool._evict_stopped("ghost")  # idempotent: second call is a no-op
+        assert pool.maybe_get(iid) is live
+
+        pool._evict_stopped("never-existed")  # unknown id is a no-op
+    finally:
+        await pool.close_all(force=True)

@@ -121,6 +121,10 @@ async def test_poll_done_preserves_original_error_when_stop_record_fails() -> No
     engine._recorder = FailingRecorder()
     engine._stop_recorded = False
     engine._poll_error = None
+    # Bypassing __init__ means every engine attribute _record_stop touches has
+    # to be declared here; the stop notification the pool uses to evict a dead
+    # terminal is one of them.
+    engine._on_stopped = None
 
     task = asyncio.create_task(fail_poll())
     with pytest.raises(RuntimeError, match="connector poll failed"):

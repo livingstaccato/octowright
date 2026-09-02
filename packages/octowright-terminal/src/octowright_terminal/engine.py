@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import re
+from collections.abc import Callable
 from typing import Any, cast
 
 from provide.telemetry import get_logger
@@ -84,6 +85,7 @@ class TerminalEngine:
         connector_type: str,
         connector_config: dict[str, Any],
         recorder: Recorder,
+        on_stopped: Callable[[], None] | None = None,
     ) -> None:
         ensure_connector_registered(connector_type)
         cfg = dict(connector_config)
@@ -100,6 +102,11 @@ class TerminalEngine:
         self._stop_evt = asyncio.Event()
         self._stop_recorded = False
         self._poll_error: BaseException | None = None
+        # Sync, fire-once notification that this terminal has ended, however it
+        # ended. The pool supplies it so it can drop the registry entry; the
+        # engine deliberately holds no pool reference, mirroring how core wires
+        # `_evict` into a session rather than handing the session a pool.
+        self._on_stopped = on_stopped
 
     async def start(self) -> None:
         with span(
@@ -221,6 +228,30 @@ class TerminalEngine:
             # Count the terminal-ended event once, whichever path got here first
             # (explicit stop() or the poll loop's EOF detection).
             _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})
+            if self._on_stopped is not None:
+                try:
+                    self._on_stopped()
+                except Exception as exc:
+                    # Same reasoning as the recorder guard above: this runs from
+                    # an asyncio done-callback, where an escaping exception is
+                    # reported against the task and buries the connector error
+                    # that actually caused the stop.
+                    log.warning(
+                        "terminal.stop_notify.failed",
+                        instance_id=self._instance_id,
+                        reason=reason,
+                        error=repr(exc),
+                    )
+
+    @property
+    def stopped(self) -> bool:
+        """Whether this terminal has ended, by any route.
+
+        The pool reads it to close a launch-time race: the connector can die
+        during ``start()``, i.e. before the session is in the registry, so the
+        stop notification would fire with nothing to evict.
+        """
+        return self._stop_recorded
 
     async def stop(self) -> None:
         with span(
