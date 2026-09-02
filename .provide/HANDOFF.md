@@ -5,12 +5,11 @@
 **Status date:** 2026-08-11
 **Closed out:** 2026-09-01 (at v0.19.3).
 
-> **State of this document.** Every item across all four stacked handoffs below is
-> resolved except **one**, and that one is named here so nobody has to hunt for it:
-> **residual #11** — a terminal whose connector dies stays listed in the terminal
-> plugin's pool as if it were live. It is plugin-side work now
-> (`packages/octowright-terminal`), half already fixed, and restated accurately in
-> Batch B.
+> **State of this document: fully closed out.** Every item across all four stacked
+> handoffs below is resolved. The last one — **residual #11**, a terminal whose
+> connector dies staying listed as if live — was fixed the same day in
+> `packages/octowright-terminal`; see Batch B for the design and why the engine
+> still holds no pool reference.
 >
 > The 2026-09-01 pass closed the rest by *doing* them rather than re-filing them:
 > H4a and H4b were exercised live with evidence recorded inline, #18b turned out to
@@ -87,13 +86,23 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] residual #13 DONE: leader shutdown now calls `pool.shutdown()` (`cli/serve._shutdown_browser_pool_on_shutdown`)
       so the shared Playwright driver is stopped and session tmpdirs are removed on daemon exit — the reaper only
       killed browser *processes*.
-- [ ] residual #11 STILL OPEN — **restated 2026-09-01, narrower and now plugin-side.** Terminal left core,
-      so this is `packages/octowright-terminal`, not `src/octowright/`. Half of it is already fixed: the engine
-      DOES notice a dead poll loop (`engine._on_poll_done` -> `_record_stop(reason)`, logging
-      `terminal.poll_loop.died`). The remaining gap is only that the POOL never learns —
-      `pool.list_sessions` reads `self._sessions` with no liveness filter, and `_sessions.pop` runs only
-      inside `close()`. So a terminal whose connector died stays listed as if live until someone closes it
-      by hand. Needs `uv sync --group terminal` to test.
+- [x] residual #11 DONE 2026-09-01 (plugin-side; terminal left core). The engine already NOTICED a dead
+      poll loop (`_on_poll_done` -> `_record_stop`, logging `terminal.poll_loop.died`); the gap was that the
+      POOL never learned, so `list_sessions` kept reporting a dead terminal as live until someone closed it
+      by hand. `TerminalEngine` now takes an optional sync `on_stopped` callback, fired exactly once from
+      inside `_record_stop`'s existing `_stop_recorded` guard, and `TerminalPool.launch` supplies one that
+      drops the registry entry. The engine still holds **no pool reference** — the original blocker — which
+      is the same shape core uses, wiring `_evict` into a session rather than handing the session a pool.
+      Three details are load-bearing: eviction is **identity-checked** (a bare `pop` would let a late
+      callback for a dead terminal evict a live session that reused the id), **sync and lock-free**
+      (it runs from an asyncio done-callback that cannot await; the pool's lock serializes launch/close
+      sequences rather than protecting dict atomicity, and a single `pop` is atomic under the GIL), and
+      the launch **re-checks `engine.stopped` after registering**, because a connector can die inside
+      `start()` — before the entry exists — so the callback would otherwise fire with nothing to evict.
+      Both paths are idempotent, so a race that runs both is harmless. Covered by
+      `test_dead_connector_is_evicted_from_the_registry` (a `/bin/true` connector that exits on its own,
+      verified to FAIL without the fix with "dead terminal still resolvable") and
+      `test_eviction_is_identity_checked_and_idempotent`.
 - [x] residual #19 DONE: panels now render a per-panel `stale — refresh failed` badge driven by
       `DashboardState.errors` (`PanelDef.isDegraded`, `dashboard-panels.applyDegraded`). NOTE: a global
       `dashboard-degraded` banner already existed; the badge is complementary — the banner summarizes
