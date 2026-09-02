@@ -40,6 +40,29 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.19.3": [
+        "An unpaired dashboard now tells you how to get in. The corner badge's "
+        "dashboard and recording links carry no pairing code -- they cannot, "
+        "since a code is single-use with a 60s TTL and the script holding one "
+        "would run in the page where every site could read it -- so clicking "
+        "them landed on a dashboard asserting 'No live sessions.' while "
+        "sessions were running, promising a retry it had already cancelled, "
+        "with the only accurate message a toast that vanished after 3.5s. It "
+        "is now a blocking page that names what happened and hands you the "
+        "commands.",
+        "Dashboard pairing stops expiring while you are using it. The 8-hour "
+        "window was absolute from the moment you paired, so a dashboard you "
+        "had been watching all day died mid-use. It now slides on use -- the "
+        "open tab's own event stream keeps it alive -- under a hard 7-day "
+        "ceiling.",
+        "octowright doctor detects a SECOND daemon. check_daemon only ever "
+        "reports on the one leader the lockfile names, so a systemd- or "
+        "launchd-started daemon that skipped the election lock answered "
+        "unrecorded while doctor called the deployment clean. The new check "
+        "probes every port a leader of this deployment could hold, because "
+        "which of the two the lockfile records is a race rather than a "
+        "property.",
+    ],
     "0.19.2": [
         "octowright doctor now checks your FOLLOWERS. A follower is a "
         "subprocess its MCP client owns and it survives a leader restart by "
