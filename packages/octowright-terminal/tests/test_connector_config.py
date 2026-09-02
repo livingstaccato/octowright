@@ -35,7 +35,7 @@ def test_ssh_config_emits_only_connector_keys() -> None:
         "port": 2222,
         "host": "h",
         "username": "me",
-        "client_key_path": "/k",
+        "client_key": "/k",
         "known_hosts": "/kh",
     }
     assert "cols" not in cfg and "rows" not in cfg and "command" not in cfg
