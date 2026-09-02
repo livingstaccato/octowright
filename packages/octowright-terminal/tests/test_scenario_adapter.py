@@ -84,7 +84,7 @@ def test_ssh_explicit_args_win_over_persona_defaults():
     assert kwargs["kind"] == "ssh"
     assert cfg["host"] == "explicit-host"  # participant wins
     assert cfg["username"] == "deploy"  # persona default
-    assert cfg["client_key_path"] == "/k" and cfg["known_hosts"] == "/kh"
+    assert cfg["client_key"] == "/k" and cfg["known_hosts"] == "/kh"
     assert "command" not in cfg and "cols" not in cfg
 
 
