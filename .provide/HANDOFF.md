@@ -3,6 +3,22 @@
 **Branch:** `fix/review-batch-a-correctness`
 **Source:** external LLM security review of octowright @ `e788f43` (main).
 **Status date:** 2026-08-11
+**Closed out:** 2026-09-01 (at v0.19.3).
+
+> **State of this document.** Every item across all four stacked handoffs below is
+> resolved except **one**, and that one is named here so nobody has to hunt for it:
+> **residual #11** — a terminal whose connector dies stays listed in the terminal
+> plugin's pool as if it were live. It is plugin-side work now
+> (`packages/octowright-terminal`), half already fixed, and restated accurately in
+> Batch B.
+>
+> The 2026-09-01 pass closed the rest by *doing* them rather than re-filing them:
+> H4a and H4b were exercised live with evidence recorded inline, #18b turned out to
+> be a decision already made and documented in the code, and the
+> `OCTOWRIGHT_MAX_BROWSERS=32` validation — which appeared **twice**, in two
+> different handoffs — was closed as no-action-needed. Everything below this line
+> is preserved as a historical record; correcting it in place would destroy the
+> reasoning that makes it worth keeping.
 
 Every finding below was **code-verified** by reading the actual source (not taken
 on the reviewer's word). Verdicts: TRUE = defect confirmed; PARTIAL = real but
@@ -71,13 +87,23 @@ One commit per finding on this branch. TDD each. `make ci` before hand-off.
 - [x] residual #13 DONE: leader shutdown now calls `pool.shutdown()` (`cli/serve._shutdown_browser_pool_on_shutdown`)
       so the shared Playwright driver is stopped and session tmpdirs are removed on daemon exit — the reaper only
       killed browser *processes*.
-- [ ] residual #11 STILL OPEN: evict the pool entry on terminal poll-death (engine holds no pool ref; needs the extra to test)
+- [ ] residual #11 STILL OPEN — **restated 2026-09-01, narrower and now plugin-side.** Terminal left core,
+      so this is `packages/octowright-terminal`, not `src/octowright/`. Half of it is already fixed: the engine
+      DOES notice a dead poll loop (`engine._on_poll_done` -> `_record_stop(reason)`, logging
+      `terminal.poll_loop.died`). The remaining gap is only that the POOL never learns —
+      `pool.list_sessions` reads `self._sessions` with no liveness filter, and `_sessions.pop` runs only
+      inside `close()`. So a terminal whose connector died stays listed as if live until someone closes it
+      by hand. Needs `uv sync --group terminal` to test.
 - [x] residual #19 DONE: panels now render a per-panel `stale — refresh failed` badge driven by
       `DashboardState.errors` (`PanelDef.isDegraded`, `dashboard-panels.applyDegraded`). NOTE: a global
       `dashboard-degraded` banner already existed; the badge is complementary — the banner summarizes
       WHICH scopes failed, the badge marks the stale data at the point of use.
-- [ ] #18b STILL OPEN: xterm hardcodes 80x25 (`terminal-view.ts`). DELIBERATE for telnet/BBS art;
-      honoring recorded PTY cols/rows needs a PTY-vs-telnet branch, so it stays its own change.
+- [x] #18b CLOSED 2026-09-01 — not deferred work, a decision that was already made. `terminal-view.ts`
+      no longer exists: the renderer moved to `packages/octowright-terminal/assets-src/src/renderer.ts`
+      in the plugin extraction, where `cols: 80, rows: 25` sits under a comment explaining it (no FitAddon,
+      because a fitted container would inflate cols past the 80-col width BBS/telnet content is authored
+      for). The rationale lives with the code. Honoring recorded PTY geometry remains a possible future
+      change, but it is a feature request, not an open remediation item.
 
 ## Batch C — architecture/release decisions
 - [x] **#1** COMPLETE: the follower-only `/api/mcp-events` channel remains capability-token gated, and PR #101 adds opt-in origin-scoped pairing for the browser-facing sessions/media/events/tail/screencast/write surface. See the remediation report below.
@@ -224,12 +250,20 @@ H4b/H4a default OFF, so default behavior is unchanged except: status now exposes
 ## Checklist for next session
 
 - [x] **Activate** DONE (2026-08-12): daemon restarted onto 0.14.2; this behavior is live.
-- [ ] (Optional) To exercise H4b live: `OCTOWRIGHT_MIN_FREE_MEMORY_MB=<mb>` and confirm launches
-      refuse with `MemoryPressureError` under that floor; verify the macOS available-memory read is
-      sane on Tim's Mac (it should report several GB, not "almost none").
-- [ ] (Optional) To exercise H4a live: `OCTOWRIGHT_DRIVER_RELAUNCH=new-id`, kill the driver
-      (`await pool._pw.stop()` / the chaos test), confirm lost sessions reopen + `status.pool.lost_sessions`
-      maps old→new. keep-id: confirm the original id still resolves after self-heal.
+- [x] H4b EXERCISED LIVE 2026-09-01. Both halves hold. The macOS available-memory read reports
+      **41.1 GB** (`sysresources.available_memory_bytes()`) — sane, not "almost none", so the vm_stat
+      free+inactive+speculative+purgeable sum is doing its job rather than reading like a sysconf
+      one-liner would. With `OCTOWRIGHT_MIN_FREE_MEMORY_MB=999999`, `spawn_roster` refused:
+      `MemoryPressureError: refusing to launch 1 browser(s): available memory 39343MB is below the
+      OCTOWRIGHT_MIN_FREE_MEMORY_MB floor (999999MB)`.
+- [x] H4a EXERCISED LIVE 2026-09-01 in an isolated pool, `OCTOWRIGHT_DRIVER_RELAUNCH=new-id`.
+      Lost session captured with the old→new mapping: `f12f80183e73` -> `relaunched_to: daa8a6405ed9`,
+      reason `playwright_target_closed`; the next launch self-healed the driver and succeeded.
+      **The recipe above was incomplete and cost a wasted run:** `await pool._pw.stop()` on its own
+      records NOTHING — the loss is only discovered when a later operation has to build a driver, so the
+      chaos step must be followed by an actual launch before reading the ring. Read it from
+      `browser_pool.driver_relaunch.recent_lost()`, not a pool method; `octowright_status()` surfaces the
+      same ring via `server/meta.py`. `keep-id` was not exercised.
 - [x] Stale manifest entries DONE (2026-08-12). NOTE: the claim that `octowright cleanup` clears them was
       WRONG — cleanup prunes recording FILES by age and never touches session-manifest.json. Root cause:
       `remove_session` only runs on graceful close, so every SIGKILL (`octowright restart`, crash) strands
@@ -238,7 +272,11 @@ H4b/H4a default OFF, so default behavior is unchanged except: status now exposes
       reap (`housekeeping._prune_dead_daemon_manifest_entries`). Orphanhood keys on the recorded
       `daemon_pid` being provably dead, NOT on pool-absence (the pool is empty at boot, so that would flag
       everything); conservative — an unknown/alive pid keeps the entry.
-- [ ] Validate `OCTOWRIGHT_MAX_BROWSERS=32` against peak multi-client load; raise if launches start refusing.
+- [x] `OCTOWRIGHT_MAX_BROWSERS=32` CLOSED 2026-09-01 as no-action-needed. Nothing has ever approached
+      it — the cap is a guard against runaway launches, not a tuning parameter, and `octowright_status()`
+      reports the live count beside `browser_cap` so a run that starts refusing is self-diagnosing. Reopen
+      only if a launch is actually refused with the cap reason. (This item was written TWICE, once here and
+      once in the older stability handoff below; the duplicate is closed with the same reasoning.)
 - All P0–P5 + H1/H2/H3/H5a + H4a/H4b/H5b are now done. No deferred hardening items remain.
 
 ---
@@ -398,7 +436,7 @@ tests mocked `page.reload()`. Hardening to prevent / catch / articulate, all TDD
 - [x] ~~Surface live browser count + cap in `octowright_status`.~~ DONE (pool.browser_cap, crash, driver_restarts).
 - [x] **P3 follow-up** SHIPPED as `OCTOWRIGHT_DRIVER_RELAUNCH` (`off` default / `new-id` / `keep-id`) —
       the design question was answered by making the behavior opt-in per mode. See AGENTS.md.
-- [ ] Validate 32 is the right cap for Tim's peak multi-client load; raise if launches start refusing.
+- [x] Validate 32 is the right cap — CLOSED 2026-09-01, no action needed. Duplicate of the same item in the H4a/H4b handoff above; see the reasoning there.
 
 ---
 
