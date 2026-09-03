@@ -259,6 +259,20 @@ asyncio_mode = "auto"
 # all until someone notices hours later and kills it by hand.
 timeout = 300
 timeout_method = "thread"
+# pytest's own default list, plus `mutants`. mutmut copies the whole project --
+# `conftest.py` included -- into `mutants/` and leaves it there, and pytest then
+# walks it as an ordinary directory: a bare `pytest` at the repo root dies in
+# collection with `ImportPathMismatchError` on the duplicated `tests.conftest`,
+# and under `-p no:randomly` with "option names {'--randomly-seed'} already
+# added", because both copies of the root conftest register the stand-in that
+# exists so mutmut can run at all. Running `make mutmut` once therefore made a
+# bare `pytest` unusable until the directory was deleted by hand. `make test`
+# passes `tests/` explicitly and never noticed.
+#
+# This setting REPLACES the built-in list rather than extending it, so the
+# defaults are restated here; dropping one would quietly start collecting
+# `build/`, `dist/` or `node_modules/`.
+norecursedirs = ["*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}", "mutants"]
 addopts = [
     "-q",
     "--strict-markers",

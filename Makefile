@@ -49,6 +49,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run --active python scripts/check_operation_gate_architecture.py
 	uv run --active python scripts/check_agent_docs_sync.py
 	uv run --active python scripts/check_telemetry_docs.py
+	uv run --active python scripts/check_tool_inventory_docs.py
 	uv run --active python scripts/check_mutmut_selection.py
 	uv run --active python scripts/check_vulture.py
 	uv run --active python scripts/check_xenon.py

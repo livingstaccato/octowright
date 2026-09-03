@@ -6,7 +6,7 @@ This package is entirely optional. Octowright core has no terminal-specific code
 
 ## Installation
 
-This package is **on PyPI** — `uv pip install octowright-terminal` resolves 0.1.0. It first shipped alongside core 0.19.2 on 2026-08-31, from the same GitHub Release. Its dependencies were already there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
+This package is **on PyPI** — `uv pip install octowright-terminal` resolves, imports, and registers its entry point in a clean venv. It first shipped alongside core 0.19.2 on 2026-08-31, from the same GitHub Release. Its dependencies were already there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
 
 Installing it only makes the plugin *discoverable*; enabling it stays a separate, deliberate act via `OCTOWRIGHT_PLUGINS=terminal`.
 
@@ -16,7 +16,7 @@ The release path is wired: the octowright repo's `release.yml` builds this packa
 uv pip install ./packages/octowright-terminal   # from an octowright checkout
 ```
 
-**Versions here move independently of core's.** This package is at 0.1.0 while core is at 0.17.0, because locking them would force a plugin release on every core release even when nothing here changed. The practical consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's do not.
+**Versions here move independently of core's.** This package was at 0.1.1 against core's 0.19.4 when this was written, because locking them would force a plugin release on every core release even when nothing here changed. Read the two `pyproject.toml` files rather than this sentence for the current pairing. The practical consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's do not.
 
 It needs a core carrying the plugin machinery (`octowright.plugins`). **0.17.0 is the first release that does** — the published wheel contains `octowright/plugins/`. That floor is declared here as `octowright>=0.17.0`, so an older core fails at resolve time with a readable error instead of installing cleanly and then dying at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`.
 
@@ -83,6 +83,17 @@ To rebuild the renderer after editing `assets-src/src/renderer.ts`, see `assets-
 ## Child-exit EOF
 
 The poll loop ends a session with `terminal_stop` reason `"eof"` when `connector.is_connected()` flips. The PTY connector's master fd is non-blocking, so a `b""` read is a true EOF: Linux raises `EIO`, macOS returns `b""`, and the connector flips `_connected` on either, so EOF detection is cross-platform. An unexpected poll-loop death (any exception other than a clean return or a `stop()`-driven cancellation) is recorded as reason `"error"` instead, so a `poll_messages()` or recorder failure doesn't vanish silently.
+
+## Eviction: what happens after the connector dies
+
+The engine's stop callback hands the pool the engine and the stop reason, and `TerminalPool._evict_stopped` drops that session from `_sessions`. Four details are load-bearing, each of them a bug that was shipped and then fixed:
+
+- **A deliberate close is not an eviction.** `pool.close` awaits `session.close()` *before* popping, so the callback fires while the session is still registered. Without the reason, an ordinary close logged `terminal.evicted_on_stop` and the session would have been torn down twice; the callback returns early on reason `"closed"`.
+- **Identity is checked against the engine, not the id.** A `get(id)` followed by `pop(id) is not session` has no await between the reads, so it compared a value with itself and the stale-callback case it guarded against went undetected. The engine passes *itself*, so a relaunch that reused the id is spared.
+- **Dropping is not enough — the session is torn down.** `_sessions` holds the only reference (core keeps no parallel table), so removing the entry without closing left the SSH transport or PTY child alive and the recorder's file handle open. `_evict_stopped` runs from a *sync* asyncio done-callback and cannot await, so teardown is scheduled onto a held task set. `drain_evictions()` is the seam `close_all` awaits — and the one tests wait on instead of sleeping a guessed interval.
+- **An evicted id does not answer like an id that never existed.** A bounded ledger (the last `_EVICTED_LEDGER_MAX = 64` evictions) lets the lookup error name the connector type and the cause, because once the session is gone every `terminal_*` tool fails at pool lookup and that error is the last place that can say why. The launch-race path reports the engine's real `stop_reason` rather than a hardcoded `"eof"`.
+
+Eviction also publishes the `sessions` dashboard invalidation, so an open dashboard drops the dead terminal immediately rather than on its next poll.
 
 ## Scenario participants
 

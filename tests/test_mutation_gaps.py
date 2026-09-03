@@ -15,6 +15,14 @@ That distinction is the point. A line like ``strict_json=True`` or
 ``.replace("-", "_")`` is a deliberate decision someone made once; without an
 assertion, deleting it is a silent, green-tested behaviour change. Each test
 below names the decision it pins.
+
+**Re-verified 2026-09-03**, because the mutmut nightly had been dead since
+2026-08-31 (it failed every night while reporting ``survived: 0``, which reads
+like a passing score rather than a harness that never started -- see the root
+conftest). Nothing in here could have been re-run in that window, so every one
+of the five mutants below was applied to ``src/`` by hand and its test watched
+to fail. All five still die. A test that only passes against correct code
+proves nothing about whether it would notice the code becoming wrong.
 """
 
 from __future__ import annotations
@@ -26,7 +34,7 @@ from pathlib import Path
 import pytest
 
 # ---------------------------------------------------------------------------
-# macros/storage.py:67 -- save_macro(..., strict_json=True)
+# macros/storage.py -- save_macro(..., strict_json=True)
 # ---------------------------------------------------------------------------
 
 
@@ -60,7 +68,7 @@ def test_save_macro_rejects_a_malformed_recording_line(tmp_path: Path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# macros/execution.py:71 -- key normalization in _redact_args_for_response
+# macros/execution.py -- key normalization in _redact_args_for_response
 # ---------------------------------------------------------------------------
 
 
@@ -97,7 +105,7 @@ def test_non_credential_arg_names_are_left_readable() -> None:
 
 
 # ---------------------------------------------------------------------------
-# personas.py:292 -- create_persona's mkdir(parents=True)
+# personas.py -- create_persona's mkdir(parents=True)
 # ---------------------------------------------------------------------------
 
 
