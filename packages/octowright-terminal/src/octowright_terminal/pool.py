@@ -114,7 +114,11 @@ class TerminalPool:
         # does the eviction, and `_evict_stopped` is idempotent, so a race that
         # runs both is harmless.
         if engine.stopped:
-            self._evict_stopped(session.instance_id, engine, "eof")
+            # The engine's own reason, never a literal: this path polls
+            # `stopped` after the fact rather than receiving a notification, so
+            # assuming "eof" here reported a connector that died throwing as a
+            # clean end-of-file.
+            self._evict_stopped(session.instance_id, engine, engine.stop_reason or "eof")
         return result
 
     def _stop_notifier(self, instance_id: str) -> Callable[[TerminalEngine, str], None]:

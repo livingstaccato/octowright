@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from octowright_terminal import pool as pool_module
+from octowright_terminal.engine import TerminalEngine
 from octowright_terminal.errors import ProtectedTerminalCloseError
 from octowright_terminal.pool import TerminalPool
 
@@ -271,6 +272,102 @@ async def test_eviction_invalidates_the_dashboard(ctx, monkeypatch) -> None:
     await pool.drain_evictions()
 
     assert published == ["sessions"]
+
+
+async def test_poll_loop_death_evicts_and_tears_down_without_deadlock(ctx) -> None:
+    """The `error` stop arrives from a different call site than `eof`.
+
+    An EOF stop is recorded from INSIDE `_poll_loop`; an unexpected exception is
+    recorded from `_on_poll_done`, an asyncio done-callback. Teardown then calls
+    `engine.stop()`, which awaits `_poll_task` -- the very task whose completion
+    triggered this. Scheduling teardown instead of running it inline is what
+    keeps that from awaiting itself, and this exercises the path rather than
+    reasoning about it.
+    """
+    pool = TerminalPool(ctx)
+    try:
+        iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+        session = pool.get(iid)
+
+        async def explode() -> list[object]:
+            raise RuntimeError("connector blew up")
+
+        session.engine._connector.poll_messages = explode
+
+        await _wait_until(lambda: pool.maybe_get(iid) is None)
+        assert pool.maybe_get(iid) is None, "a poll-loop death must evict"
+
+        await asyncio.wait_for(pool.drain_evictions(), timeout=10.0)
+        assert session.recorder._fh.closed, "error-path eviction leaked its recording handle"
+
+        with pytest.raises(KeyError) as exc_info:
+            pool.get(iid)
+        assert "error" in str(exc_info.value)
+    finally:
+        await pool.close_all(force=True)
+
+
+async def test_close_racing_an_eviction_is_safe(ctx) -> None:
+    """`pool.close` and an eviction teardown can both close one session.
+
+    `close` awaits `session.close()` before popping, so a connector dying at
+    that moment schedules a teardown for a session `close` is already tearing
+    down. Both must be able to run: `engine.stop()` clears `_poll_task`,
+    suppresses a second `connector.stop()`, and `_record_stop` is fire-once,
+    while `Recorder.close` checks `_fh.closed` -- so the second pass is a
+    no-op rather than an error surfacing to the caller.
+    """
+    pool = TerminalPool(ctx)
+    iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+    session = pool.get(iid)
+
+    # Two closes of the same live session, concurrently, as the race would.
+    results = await asyncio.gather(
+        pool.close(iid, force=True),
+        pool._teardown_evicted(session),
+        return_exceptions=True,
+    )
+    assert not any(isinstance(r, BaseException) for r in results), results
+    assert pool.maybe_get(iid) is None
+    assert session.recorder._fh.closed
+
+    # And a third, sequential, close still does not raise.
+    await pool._teardown_evicted(session)
+    await pool.close_all(force=True)
+
+
+async def test_launch_race_eviction_reports_the_real_stop_reason(ctx, monkeypatch) -> None:
+    """The launch-race path must not invent a reason.
+
+    A connector can die inside `start()`, before the session is registered, so
+    `launch` re-checks `engine.stopped` and evicts itself. That path had no way
+    to learn HOW the terminal died -- the engine recorded only a boolean -- so
+    it passed a hardcoded "eof". A launch that died with an `error` was then
+    logged and reported to the caller as a clean end-of-file, which is exactly
+    backwards: the error case is the one worth diagnosing.
+    """
+    real_start = TerminalEngine.start
+
+    async def start_then_die(self) -> None:
+        await real_start(self)
+        # What `_on_poll_done` does for an unexpected poll-loop death, but
+        # landing before `launch` has registered the session.
+        self._record_stop("error")
+
+    monkeypatch.setattr(TerminalEngine, "start", start_then_die)
+
+    pool = TerminalPool(ctx)
+    try:
+        iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+        await pool.drain_evictions()
+
+        assert pool.maybe_get(iid) is None, "a terminal that died during start must not stay registered"
+        with pytest.raises(KeyError) as exc_info:
+            pool.get(iid)
+        assert "error" in str(exc_info.value)
+        assert "eof" not in str(exc_info.value)
+    finally:
+        await pool.close_all(force=True)
 
 
 async def test_lookup_after_eviction_says_the_connector_died(ctx) -> None:
