@@ -559,6 +559,19 @@ def leader_stubs(monkeypatch: pytest.MonkeyPatch) -> _LeaderStubs:
 
     monkeypatch.setattr(_watchdog_mod, "idle_watchdog", fake_watchdog)
 
+    # The boot orphan reap was the one thing on this path still doing real
+    # work: `_run_leader` runs it through `asyncio.to_thread` and it scans the
+    # machine's process table. That is what pushed these tests past their
+    # budget on a loaded Windows runner -- observed as a bare TimeoutError
+    # whose traceback ended inside `reap_orphan_browsers_at_boot`. `serve.py`
+    # imports it inside the function, so patching the source module catches the
+    # call. Stubbing it is the fix rather than widening the budget a third
+    # time: the wait exists to catch a hung leader, and it cannot do that while
+    # it is also absorbing however long a process scan takes.
+    from octowright import housekeeping as _housekeeping_mod
+
+    monkeypatch.setattr(_housekeeping_mod, "reap_orphan_browsers_at_boot", lambda **_kw: None)
+
     # Capture lock writes/removes without touching real lockfile.
     from octowright import singleton as _sn
 
@@ -582,15 +595,19 @@ def _leader_kwargs(**overrides: Any) -> dict[str, Any]:
 
 
 # All four asyncio.wait_for(leader_task, ...) calls below share this budget.
-# 2.0s flaked with a bare TimeoutError on Windows CI runners under load --
-# first observed on test_singleton_writes_lock_on_bind_and_removes_on_exit
-# (the one exercising both the HTTP-serve and singleton-lock subsystems at
-# once), then independently on test_keep_alive_skips_watchdog_spawn (which
-# skips a whole subsystem and does markedly less work) in a later run. That
-# rules out "only the busiest test is tight" -- Windows CI scheduling
-# jitter can push any of these four over 2.0s, not just the one doing the
-# most (mocked) work. Widened uniformly rather than per-test. Nothing here
-# does real I/O, so this still fails fast on an actual hang.
+# History worth keeping, because it took two widenings to find the real cause:
+# 2.0s flaked with a bare TimeoutError on Windows CI runners, first on
+# test_singleton_writes_lock_on_bind_and_removes_on_exit and later on
+# test_keep_alive_skips_watchdog_spawn -- which does markedly less work, so
+# "only the busiest test is tight" was ruled out and the budget was widened
+# uniformly to 5.0s. It flaked again at 5.0s on windows amd64, and that
+# traceback finally named the cause: `reap_orphan_browsers_at_boot`, scanning
+# the real process table on a loaded runner. The claim that "nothing here does
+# real I/O" was simply false.
+#
+# The reaper is stubbed in `leader_stubs` now, so the claim holds and this
+# budget guards what it was meant to guard -- a genuinely hung leader -- rather
+# than absorbing however long a process scan happens to take.
 _LEADER_WAIT_TIMEOUT = 5.0
 
 
