@@ -1,5 +1,6 @@
 # Validate documentation links with lychee.
-# Policy: this workflow uses only `uses:` action steps — no inline `run:` scripts.
+# Policy: no logic inline in this file — steps are `uses:` actions, except one
+# one-line `run:` that invokes a `ci/` script (the form CLAUDE.md allows).
 name: 🔗 Links
 
 on:
@@ -37,12 +38,23 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # A release PR's own CHANGELOG compare link points at a tag that is only
+      # pushed after the merge, so it 404s for the life of the PR. Emit an
+      # exclusion for exactly that one URL — narrow on purpose, so a typo'd tag
+      # is still caught; see the script for the full reasoning.
+      - id: exclusions
+        name: Compute the pending-release link exclusion
+        run: python ci/build_lychee_exclusions.py >> "$GITHUB_OUTPUT"
+
       # Scan README/CHANGELOG/AGENTS + all docs; fail the job on any broken link.
+      # CLI `--exclude` adds to `.lychee.toml`'s list rather than replacing it
+      # (verified against lychee 0.24).
       - name: Check links with lychee
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: >-
             --config .lychee.toml
+            --exclude '${{ steps.exclusions.outputs.exclude }}'
             './README.md'
             './CHANGELOG.md'
             './AGENTS.md'
