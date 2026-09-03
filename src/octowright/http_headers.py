@@ -16,6 +16,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from octowright.url_patterns import validate_url_pattern
+
 # Bounds on a caller-supplied header map. It rides EVERY request the browser
 # makes, so it is capped rather than trusted to be small.
 MAX_EXTRA_HTTP_HEADERS = 32
@@ -135,6 +137,10 @@ def validate_extra_http_header_urls(url_patterns: Any) -> None:
             raise ValueError("extra_http_headers_urls entries must not be empty")
         if len(pattern) > MAX_EXTRA_HTTP_HEADER_URL_CHARS:
             raise ValueError(f"URL pattern exceeds {MAX_EXTRA_HTTP_HEADER_URL_CHARS} chars")
+        # A length cap alone does not bound the MATCH cost: the measured
+        # attack is eighteen characters. These globs become context routes
+        # exactly like `inject_headers`, so they need the same wildcard bound.
+        validate_url_pattern(pattern, field="extra_http_headers_urls")
 
 
 def redact_header_values(headers: dict[str, str], mode: str) -> dict[str, str]:

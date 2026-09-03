@@ -28,6 +28,7 @@ from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
+from octowright.url_patterns import validate_url_pattern
 
 log = get_logger(__name__)
 
@@ -155,6 +156,7 @@ class SessionInteractionMixin(SessionLike):
         webkit; pinned by ``tests/test_route_order_live.py``). Without this
         mirror, installing the mock second would silently drop the headers.
         """
+        validate_url_pattern(url_pattern, field="url_pattern")
 
         async def _handler(route: Any) -> None:
             await route.fulfill(
@@ -220,6 +222,7 @@ class SessionInteractionMixin(SessionLike):
         injector never runs. An exact-pattern collision is warned about here;
         an overlapping-glob collision cannot be detected and is documented.
         """
+        validate_url_pattern(url_pattern, field="url_pattern")
         _reject_redacted_headers(headers)
         validate_extra_http_headers(headers)
         if url_pattern in self._active_routes:
