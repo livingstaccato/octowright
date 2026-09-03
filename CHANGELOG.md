@@ -2432,7 +2432,9 @@ history that led to the first published release.
 [0.13.10]: https://github.com/livingstaccato/octowright/compare/v0.13.9...v0.13.10
 [0.13.9]: https://github.com/livingstaccato/octowright/compare/v0.13.8...v0.13.9
 [0.13.8]: https://github.com/livingstaccato/octowright/compare/v0.13.7...v0.13.8
-[0.13.7]: https://github.com/livingstaccato/octowright/compare/v0.13.4...v0.13.7
+[0.13.7]: https://github.com/livingstaccato/octowright/compare/v0.13.6...v0.13.7
+[0.13.6]: https://github.com/livingstaccato/octowright/compare/v0.13.5...v0.13.6
+[0.13.5]: https://github.com/livingstaccato/octowright/compare/v0.13.4...v0.13.5
 [0.13.4]: https://github.com/livingstaccato/octowright/compare/v0.13.3...v0.13.4
 [0.13.3]: https://github.com/livingstaccato/octowright/compare/v0.13.2...v0.13.3
 [0.13.2]: https://github.com/livingstaccato/octowright/compare/v0.13.1...v0.13.2
