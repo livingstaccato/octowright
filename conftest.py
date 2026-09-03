@@ -61,6 +61,39 @@ if _running_under_mutmut:
     _os.register_at_fork(after_in_child=_noop_setproctitle_in_child)
 
 
+def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:
+    """Keep ``--randomly-seed`` parseable when pytest-randomly is unloaded.
+
+    ``addopts`` pins ``--randomly-seed`` so a bare ``pytest`` is reproducible,
+    and that option is registered by pytest-randomly. Unloading the plugin with
+    ``-p no:randomly`` therefore unregisters the option that ``addopts`` still
+    passes, and pytest exits 4 with ``unrecognized arguments:
+    --randomly-seed=...`` before collecting anything.
+
+    That is a documented trap for anyone typing the flag by hand, but mutmut
+    3.x hardcodes ``["-x", "-q", "-p", "no:randomly", "-p", "no:random-order"]``
+    (``mutmut/__main__.py``) with no way to configure it off, so ``make mutmut``
+    could not run at all -- the nightly job failed for three consecutive nights
+    with ``BadTestExecutionCommandsException`` while still reporting
+    ``survived: 0``, which reads like a passing mutation score rather than a
+    harness that never started. pytest-randomly registers no ini option, so the
+    seed cannot move out of ``addopts`` to sidestep this.
+
+    Registering an inert stand-in only when the real plugin is absent keeps the
+    flag parseable without shadowing it when it is present. Seeding is
+    pytest-randomly's job; with the plugin unloaded there is no ordering to
+    seed, so accepting and ignoring the value is the whole contract.
+    """
+    if pluginmanager.hasplugin("randomly"):
+        return
+    parser.addoption(
+        "--randomly-seed",
+        action="store",
+        default=None,
+        help="Inert stand-in accepted while pytest-randomly is unloaded (see conftest).",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _isolate_session_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep tests from writing stale browser entries to the user's manifest.
