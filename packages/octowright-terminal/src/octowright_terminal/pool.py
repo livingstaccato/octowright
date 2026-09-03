@@ -17,12 +17,15 @@ an obligation this pool has to remember.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+import weakref
+from collections import OrderedDict
+from collections.abc import Callable, Iterator
 from typing import Any
 from uuid import uuid4
 
 from provide.telemetry import get_logger
 
+from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.plugins.contract import CloseResult, LaunchResult
 from octowright.plugins.session_launch import PluginContext
 from octowright_terminal.engine import TerminalEngine
@@ -31,12 +34,23 @@ from octowright_terminal.session import TerminalSession
 
 log = get_logger(__name__)
 
+#: How many evicted terminals to remember the cause of. Bounded because the
+#: only consumer is the lookup error for an id a caller still holds, and an
+#: agent's handle goes stale within a few tool calls -- this is a diagnostic
+#: courtesy, not a history.
+_EVICTED_LEDGER_MAX = 64
+
 
 class TerminalPool:
     def __init__(self, ctx: PluginContext) -> None:
         self._ctx = ctx
         self._sessions: dict[str, TerminalSession] = {}
         self._lock = asyncio.Lock()
+        # Teardowns scheduled by `_evict_stopped`, held so the event loop does
+        # not garbage-collect a task nobody awaits, and so `drain_evictions`
+        # has something to wait on.
+        self._evict_tasks: set[asyncio.Task[None]] = set()
+        self._evicted: OrderedDict[str, tuple[str, str]] = OrderedDict()
 
     async def launch(
         self,
@@ -59,7 +73,7 @@ class TerminalPool:
                 kind,
                 connector_config,
                 launch.recorder,
-                on_stopped=lambda: self._evict_stopped(instance_id),
+                on_stopped=self._stop_notifier(launch.instance_id),
             )
             session = TerminalSession(
                 instance_id=launch.instance_id,
@@ -92,7 +106,7 @@ class TerminalPool:
                 await engine.stop()
                 raise
         async with self._lock:
-            self._sessions[instance_id] = session
+            self._sessions[session.instance_id] = session
         # A connector can die inside start() -- before the line above -- so the
         # stop notification would have fired with nothing yet to evict. Re-check
         # after registering and evict here instead. Ordering makes this safe in
@@ -100,11 +114,30 @@ class TerminalPool:
         # does the eviction, and `_evict_stopped` is idempotent, so a race that
         # runs both is harmless.
         if engine.stopped:
-            self._evict_stopped(instance_id)
+            self._evict_stopped(session.instance_id, engine, "eof")
         return result
 
-    def _evict_stopped(self, instance_id: str) -> None:
-        """Drop a terminal whose connector has ended from the registry.
+    def _stop_notifier(self, instance_id: str) -> Callable[[TerminalEngine, str], None]:
+        """Build the engine's stop callback without giving the engine the pool.
+
+        The engine outlives this call only as long as the pool holds it, but the
+        callback is stored ON the engine, so a strong ``self`` here would make
+        pool -> _sessions -> session -> engine -> callback -> pool a cycle that
+        only the collector can break. A weak reference keeps the ownership
+        one-directional; a notification arriving after the pool is gone has
+        nothing to evict and is correctly a no-op.
+        """
+        poolref = weakref.ref(self)
+
+        def _notify(engine: TerminalEngine, reason: str) -> None:
+            pool = poolref()
+            if pool is not None:
+                pool._evict_stopped(instance_id, engine, reason)
+
+        return _notify
+
+    def _evict_stopped(self, instance_id: str, engine: TerminalEngine, reason: str) -> None:
+        """Drop and tear down a terminal whose connector has ended.
 
         Sync and lock-free on purpose: this is called from an asyncio
         done-callback (``engine._on_poll_done`` -> ``_record_stop``), which
@@ -114,31 +147,108 @@ class TerminalPool:
         GIL, so taking the lock would buy nothing and could not be done from
         here anyway.
 
-        Identity is checked rather than assumed: ``pop`` alone would let a
-        late callback for a dead terminal evict a live session that reused the
-        id. Idempotent, so the launch-race path and the callback path can both
-        run.
+        ``reason`` separates the two ways a terminal ends. ``pool.close`` awaits
+        ``session.close()`` BEFORE popping the registry entry, so a deliberate
+        close reaches this callback with the session still registered; without
+        the reason every ordinary close logged an eviction and would now be torn
+        down twice. A ``"closed"`` stop therefore returns immediately and lets
+        ``close``/``close_all`` finish their own sequence.
 
-        Without this a terminal whose connector died stayed in ``_sessions``
-        and kept appearing in ``list_sessions`` (and so in the dashboard and
-        ``terminal_list``) as though it were live, until somebody closed it by
-        hand.
+        Identity is checked against the engine the callback belongs to, not
+        against a value re-read from the same dict: ``session = get(id)`` then
+        ``pop(id) is not session`` has no await between the two reads, so it
+        compares a value with itself and can never fail -- the stale-callback
+        case it was written for went undetected. The check also runs BEFORE the
+        removal, so a rejected notification cannot leave a hole it then has to
+        put back.
+
+        Teardown is SCHEDULED rather than merely dropped. Removing the entry
+        discards the only reference to the session (core keeps no parallel
+        table), so an eviction that does not close leaks the connector's
+        transport or PTY child and the recorder's file handle, and
+        ``close_all`` can no longer reach it at shutdown -- a worse bug than the
+        stale ``list_sessions`` entry this seam exists to fix.
         """
+        if reason == "closed":
+            return
         session = self._sessions.get(instance_id)
-        if session is None:
+        if session is None or session.engine is not engine:
             return
-        if self._sessions.pop(instance_id, None) is not session:
-            return
-        log.info(
+        del self._sessions[instance_id]
+        self._remember_eviction(instance_id, session.connector_type, reason)
+        log.warning(
             "terminal.evicted_on_stop",
             instance_id=instance_id,
             connector_type=session.connector_type,
+            reason=reason,
         )
+        publish_dashboard_invalidation_nowait("sessions")
+        self._schedule_teardown(session)
+
+    def _remember_eviction(self, instance_id: str, connector_type: str, reason: str) -> None:
+        self._evicted[instance_id] = (connector_type, reason)
+        while len(self._evicted) > _EVICTED_LEDGER_MAX:
+            self._evicted.popitem(last=False)
+
+    def _schedule_teardown(self, session: TerminalSession) -> None:
+        try:
+            task = asyncio.create_task(self._teardown_evicted(session))
+        except RuntimeError:
+            # No running loop: nothing can be awaited from here, and the caller
+            # is already off the normal path (a pool driven outside an event
+            # loop). Say so rather than dropping the session silently.
+            log.warning("terminal.evicted_teardown.unscheduled", instance_id=session.instance_id)
+            return
+        self._evict_tasks.add(task)
+        task.add_done_callback(self._evict_tasks.discard)
+
+    async def _teardown_evicted(self, session: TerminalSession) -> None:
+        try:
+            await session.close()
+        except Exception as exc:
+            # The connector is already dead; this close is best-effort cleanup
+            # of whatever it still held. Failing loudly here would only surface
+            # as an unretrievable task exception.
+            log.warning(
+                "terminal.evicted_teardown.failed",
+                instance_id=session.instance_id,
+                error=repr(exc),
+            )
+
+    async def drain_evictions(self) -> None:
+        """Await teardowns that ``_evict_stopped`` scheduled.
+
+        ``close_all`` calls it so shutdown does not race a connector that died
+        moments earlier; tests call it so they can assert on teardown without
+        sleeping for a guessed interval.
+        """
+        while self._evict_tasks:
+            await asyncio.gather(*tuple(self._evict_tasks), return_exceptions=True)
 
     def get(self, instance_id: str) -> TerminalSession:
-        if instance_id not in self._sessions:
-            raise KeyError(f"no terminal session {instance_id!r}")
-        return self._sessions[instance_id]
+        session = self._sessions.get(instance_id)
+        if session is None:
+            raise KeyError(self._missing_session_message(instance_id))
+        return session
+
+    def _missing_session_message(self, instance_id: str) -> str:
+        """Explain a lookup miss, naming the connector death when we saw one.
+
+        Once a dead terminal is evicted every ``terminal_*`` tool fails here, so
+        this is the last place that can say WHY. Without it an agent is told
+        "no terminal session 'abc'" -- the same answer it gets for an id that
+        never existed -- about a terminal it just watched work, and
+        ``send_input``'s "input was NOT delivered" guard is unreachable because
+        the session is gone before the engine can raise it.
+        """
+        evicted = self._evicted.get(instance_id)
+        if evicted is None:
+            return f"no terminal session {instance_id!r}"
+        connector_type, reason = evicted
+        return (
+            f"terminal session {instance_id!r} is gone: its {connector_type} connector "
+            f"ended ({reason}) and the session was evicted. Launch a new terminal."
+        )
 
     def maybe_get(self, instance_id: str) -> TerminalSession | None:
         return self._sessions.get(instance_id)
@@ -165,7 +275,7 @@ class TerminalPool:
     async def close(self, instance_id: str, *, force: bool = False) -> CloseResult:
         session = self.maybe_get(instance_id)
         if session is None:
-            raise KeyError(f"no terminal session {instance_id!r}")
+            raise KeyError(self._missing_session_message(instance_id))
         if session.protected and not force:
             raise ProtectedTerminalCloseError(f"terminal {instance_id!r} is protected; pass force=True to close it")
         await session.close()
@@ -188,6 +298,10 @@ class TerminalPool:
                 continue
             async with self._lock:
                 self._sessions.pop(instance_id, None)
+        # A connector that died moments before shutdown has its teardown in
+        # flight rather than in `_sessions`; without this, close_all returns
+        # while that child/transport is still being released.
+        await self.drain_evictions()
         if failures:
             detail = "; ".join(f"{instance_id}: {type(exc).__name__}: {exc}" for instance_id, exc in failures)
             raise RuntimeError(f"failed to close {len(failures)} terminal session(s): {detail}") from failures[0][1]

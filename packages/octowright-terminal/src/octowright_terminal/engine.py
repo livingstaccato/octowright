@@ -85,7 +85,7 @@ class TerminalEngine:
         connector_type: str,
         connector_config: dict[str, Any],
         recorder: Recorder,
-        on_stopped: Callable[[], None] | None = None,
+        on_stopped: Callable[[TerminalEngine, str], None] | None = None,
     ) -> None:
         ensure_connector_registered(connector_type)
         cfg = dict(connector_config)
@@ -102,10 +102,13 @@ class TerminalEngine:
         self._stop_evt = asyncio.Event()
         self._stop_recorded = False
         self._poll_error: BaseException | None = None
-        # Sync, fire-once notification that this terminal has ended, however it
-        # ended. The pool supplies it so it can drop the registry entry; the
-        # engine deliberately holds no pool reference, mirroring how core wires
-        # `_evict` into a session rather than handing the session a pool.
+        # Sync, fire-once notification that this terminal has ended, carrying
+        # HOW it ended so the pool can tell a deliberate close from a connector
+        # that died -- without the reason every ordinary close looked like an
+        # eviction. The engine hands itself to the callback rather than letting
+        # the callback close over it: the pool needs the engine's identity to
+        # reject a stale notification, and capturing it in the closure would
+        # make the callback that lives on this engine point back at it.
         self._on_stopped = on_stopped
 
     async def start(self) -> None:
@@ -230,7 +233,7 @@ class TerminalEngine:
             _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})
             if self._on_stopped is not None:
                 try:
-                    self._on_stopped()
+                    self._on_stopped(self, reason)
                 except Exception as exc:
                     # Same reasoning as the recorder guard above: this runs from
                     # an asyncio done-callback, where an escaping exception is
