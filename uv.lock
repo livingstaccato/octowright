@@ -1931,7 +1931,7 @@ terminal = [{ name = "octowright-terminal", editable = "packages/octowright-term
 
 [[package]]
 name = "octowright-terminal"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/octowright-terminal" }
 dependencies = [
     { name = "octowright" },

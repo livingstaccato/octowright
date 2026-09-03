@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.4] - 2026-09-03
+
+### Fixed
+- **An evicted terminal is now torn down, not just dropped.** `_evict_stopped`
+  removed the session from `_sessions` and returned. That registry holds the
+  only reference — core keeps no parallel table — so `session.close()` never
+  ran: the connector's SSH transport or PTY child stayed alive, the recorder's
+  file handle stayed open, and `close_all` could no longer reach the session at
+  shutdown. Strictly worse than the stale listing the eviction was added to fix.
+  Teardown is now scheduled onto a held task set (`_evict_stopped` runs from a
+  sync asyncio done-callback and cannot await), with `drain_evictions()` as the
+  seam `close_all` and the tests wait on.
+- **`engine.stop()` no longer re-raises a dead poll task's exception.** It
+  awaited the task under `suppress(CancelledError)` only, so a poll task that
+  died of its own accord aborted the rest of teardown — re-leaking the handle on
+  the one path where the terminal died badly enough to matter, and leaving the
+  session registered because `pool.close()` propagated before its `pop`. The
+  exception is already logged, recorded as an `error` stop, and kept in
+  `_poll_error` by `_on_poll_done`, so it is suppressed rather than surfaced
+  twice. `TerminalSession.close` also closes the recorder in a `finally`.
+- **The eviction identity guard could never fire.** `session = get(id)` followed
+  by `pop(id) is not session` has no await between the reads, so it compared a
+  value with itself and the stale-callback case it was written for went
+  undetected; the destructive `pop` also ran before the check. The engine now
+  passes itself to the callback, so identity is checked against the engine the
+  notification belongs to, before removal.
+- **A deliberate close is no longer reported as an eviction.** `pool.close`
+  awaits `session.close()` before popping, so the callback fired while the
+  session was still registered: `terminal.evicted_on_stop` logged once per
+  ordinary close, and post-teardown the session would have been closed twice.
+  The callback now carries the stop reason and returns early on `"closed"`.
+- **An evicted id no longer answers like an id that never existed.** Every
+  `terminal_*` tool failed at pool lookup with no hint the connector had died,
+  and `send_input`'s "input was NOT delivered" guard became unreachable. A
+  bounded ledger lets the lookup error name the connector and the cause. The
+  launch-race path reports the engine's real stop reason rather than a
+  hardcoded `eof`.
+- **Eviction publishes the `sessions` dashboard invalidation** it never sent, so
+  an open dashboard learns immediately instead of on its next poll.
+- **`browser_launch`'s terminal counterpart emits `client_key`, not
+  `client_key_path`.** The connector rejects the latter, so SSH key auth was
+  silently ignored. (#187)
+
+### Changed
+- The engine's stop callback holds the pool weakly, so an engine no longer keeps
+  a reference cycle back to the pool that owns it.
+
+### Internal
+- `ci/run_terminal_plugin_tests.sh` runs its tool-surface assertions against an
+  isolated config dir. They shell out to `octowright selftest`, which reads
+  ambient env, so "an unconfigured daemon registers 0 `terminal_*` tools" was
+  false on any machine whose real `plugins.yaml` enables the plugin — failing
+  locally and passing in CI.
+- Test-suite config isolation: `tests/conftest.py` now removes the temp config
+  tree it creates, and documents that the redirect covers profiles, scenarios,
+  macros, goldens, upload staging and Advisor state — not just `plugins.yaml`.
+  The terminal plugin suite gets the same isolation, applied at module scope
+  because pytest imports an argument directory's conftest before
+  `pytest_configure` runs.
+- The mutmut nightly runs again. It had failed every night since 2026-08-31
+  while reporting `survived: 0`: `addopts` pins `--randomly-seed`, mutmut
+  hardcodes `-p no:randomly`, and unloading the plugin unregisters the option
+  the flag needs. The root conftest registers an inert stand-in only when the
+  real plugin is absent. A second cause followed — `scripts/` is not copied into
+  mutmut's `mutants/` workdir, so a LOC-guard test's import aborted the run.
+- Two test waits no longer rest on unmeasured durations: the uvicorn probe polls
+  `Server.started` against a deadline instead of sleeping 0.5s, and the
+  leader-branch tests stub `reap_orphan_browsers_at_boot` rather than widening
+  their budget a third time to absorb a real process-table scan.
+
 ## [0.19.3] - 2026-09-01
 
 ### Added
