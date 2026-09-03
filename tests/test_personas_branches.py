@@ -475,3 +475,46 @@ def test_persona_dir_empty_slug_propagates_error(fresh_personas):
     """If the name slugs to empty, persona_dir should raise (not return PROFILES_DIR)."""
     with pytest.raises(ValueError, match="produced an empty slug"):
         fresh_personas.persona_dir("---")
+
+
+# ─── call-site wiring, not just the helpers ──────────────────────────────────
+#
+# `_credential_cmd_argv` is covered thoroughly above by calling it directly,
+# which is exactly why a mutant at its CALL SITE survived: mutating
+# `_exec_credential_cmd`'s `cred_name` argument to `None` changed what the
+# helper receives, and no test went through the caller. Testing a helper
+# directly says nothing about whether its caller wires it up correctly.
+
+
+def test_exec_credential_cmd_passes_the_field_name_through(fresh_personas):
+    """The error must name the field, which only holds if the caller forwards it.
+
+    Mutating `_credential_cmd_argv(cmd_str, persona_name, cred_name)` to pass
+    `None` leaves every direct-call test above green and turns a real
+    diagnostic into "field None:".
+    """
+    with pytest.raises(fresh_personas.MissingCredential) as exc:
+        fresh_personas._exec_credential_cmd("echo a | b", "dante", "api_token")
+
+    assert "api_token" in str(exc.value)
+
+
+def test_validate_credentials_still_validates_a_present_mapping(fresh_personas):
+    """A doc that HAS credentials must be validated, not skipped.
+
+    The guard is `if "credentials" not in doc or creds is None: return`.
+    Inverting it to `creds is not None` makes every populated mapping return
+    early, so nothing downstream is checked and an invalid persona loads
+    clean. Only a doc with a *bad* credentials mapping can see the
+    difference -- a doc with a good one is accepted either way.
+    """
+    with pytest.raises(ValueError, match="credentials"):
+        fresh_personas._validate_credentials(
+            {"credentials": {"not_a_secret_field": "x"}}  # pragma: allowlist secret
+        )
+
+
+def test_validate_credentials_accepts_an_explicit_null(fresh_personas):
+    """`credentials: null` is the documented way to declare none, and must not raise."""
+    fresh_personas._validate_credentials({"credentials": None})
+    fresh_personas._validate_credentials({})
