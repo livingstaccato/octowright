@@ -44,5 +44,14 @@ class TerminalSession:
     async def close(self) -> None:
         # Protected-close refusal is enforced by TerminalPool.close (which holds
         # the force gate); this performs the actual teardown unconditionally.
-        await self.engine.stop()
-        self.recorder.close()
+        #
+        # `finally`, so a failing connector teardown cannot strand the recording
+        # handle. The recorder is this process's own file; the connector is a
+        # child process or a socket that may already be broken, and letting the
+        # riskier half decide whether the safer half runs is backwards. A
+        # failing `stop()` still propagates -- the caller should hear about it --
+        # but the file is closed either way.
+        try:
+            await self.engine.stop()
+        finally:
+            self.recorder.close()

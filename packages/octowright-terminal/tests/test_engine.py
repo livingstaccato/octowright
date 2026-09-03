@@ -115,16 +115,17 @@ async def test_poll_done_preserves_original_error_when_stop_record_fails() -> No
     async def fail_poll() -> None:
         raise RuntimeError("connector poll failed")
 
-    engine = object.__new__(TerminalEngine)
-    engine._instance_id = "eng-failed"
-    engine._connector_type = "pty"
-    engine._recorder = FailingRecorder()
-    engine._stop_recorded = False
-    engine._poll_error = None
-    # Bypassing __init__ means every engine attribute _record_stop touches has
-    # to be declared here; the stop notification the pool uses to evict a dead
-    # terminal is one of them.
-    engine._on_stopped = None
+    # A REAL engine, not an `object.__new__` shell with its private fields hand-
+    # set. That bypass made every attribute `_record_stop` touches this test's
+    # problem: adding `_on_stopped` for the pool's dead-terminal eviction (#186)
+    # broke this unrelated test with an AttributeError rather than a real
+    # signal, and the next such field would have done it again. Running the real
+    # __init__ costs nothing here -- PTYConnector's own __init__ only validates
+    # and stores config, so no child is spawned and there is nothing to tear
+    # down as long as we never call start(). The failing recorder goes in
+    # through the constructor's own parameter, leaving the double injected by
+    # this test the one thing it is actually about.
+    engine = TerminalEngine("eng-failed", "cat", "pty", {"command": "/bin/cat"}, FailingRecorder())
 
     task = asyncio.create_task(fail_poll())
     with pytest.raises(RuntimeError, match="connector poll failed"):

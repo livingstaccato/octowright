@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import os
+import shutil
 import signal
 import socket
 import sys
@@ -30,8 +31,13 @@ if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
 
 
+# The throwaway user-config tree ``pytest_configure`` installs, parked at module
+# scope so ``pytest_unconfigure`` can find it again. None until configure runs.
+_TEST_CONFIG_HOME: str | None = None
+
+
 def pytest_configure(config: pytest.Config) -> None:
-    """Keep an operator's real ``plugins.yaml`` out of the whole test run.
+    """Relocate the run's whole user-config tree to a throwaway directory.
 
     ``octowright.server._state`` resolves ``plugin_discovery.enabled_names()``
     at MODULE IMPORT TIME (a process-wide singleton), which happens the moment
@@ -44,12 +50,62 @@ def pytest_configure(config: pytest.Config) -> None:
     collection ever imports a test module, so it is the one hook early enough.
     Left set for the whole session rather than restored, matching that the
     thing it is protecting is itself resolved once for the whole session.
+
+    Early enough *here*, and only just. pytest imports an argument directory's
+    conftest BEFORE calling this hook (measured), so a conftest whose own
+    module-level imports reach ``octowright.server`` has already lost the race
+    -- which is why the terminal plugin's suite sets these same variables at
+    module scope instead; see ``packages/octowright-terminal/tests/conftest.py``.
+    This file gets away with the hook because the only octowright module it
+    imports at module scope is ``browser_pool.pool``, which does not pull
+    ``_state`` in. Adding an import here that does would silently defeat this.
+
+    ``plugins.yaml`` is the reason, but nowhere near the reach.
+    ``XDG_CONFIG_HOME`` (``APPDATA`` on Windows) feeds
+    ``config_paths.user_config_dir()``, which ``defaults`` resolves at ITS
+    import time into ``PROFILES_DIR``, ``SCENARIOS_DIR``, ``GOLDENS_DIR``,
+    ``MACROS_DIR``, ``UPLOAD_STAGING_DIR`` and ``ADVISOR_STATE_PATH`` -- so the
+    entire user-config tree moves, profiles included, and a profile dir holds
+    live session cookies for every site that persona logged into. Wide is the
+    direction we want, and tests that spawn a real daemon rely on it (the child
+    reads the variable at its own import time and writes into the throwaway
+    tree). It is spelled out because the narrow "keep plugins.yaml out" framing
+    reads as though a developer's profiles were still in play, and they are not.
+
+    What it does NOT cover: ``XDG_STATE_HOME`` and ``XDG_CACHE_HOME`` are left
+    alone, so ``RECORDINGS_DIR``, ``CAPTURES_DIR``, ``SESSION_MANIFEST_PATH``
+    and ``LOCK_PATH`` still resolve into the developer's real tree and each test
+    that touches them isolates them itself. A temp config home is not the
+    blanket hermeticity it can look like.
     """
+    global _TEST_CONFIG_HOME
     del config
     os.environ.pop("OCTOWRIGHT_PLUGINS", None)
-    config_home = tempfile.mkdtemp(prefix="octowright-test-config-")
-    os.environ["XDG_CONFIG_HOME"] = config_home
-    os.environ["APPDATA"] = config_home
+    _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="octowright-test-config-")
+    os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
+    os.environ["APPDATA"] = _TEST_CONFIG_HOME
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Remove the throwaway config tree, because nothing else ever will.
+
+    It has to be a ``mkdtemp`` rather than a ``tmp_path``: it must exist before
+    pytest's own tmp machinery does. Nothing deleted it, so every run left one
+    behind -- seven were sitting in the temp dir when this was written, three of
+    them holding an ``octowright/upgrade.json`` that a daemon spawned by a test
+    had written into the relocated tree.
+
+    Deliberately not airtight, and it cannot be made so: pytest-timeout's
+    ``thread`` method ends a wedged run with ``os._exit(1)`` (see "Test-run
+    bounds" in CLAUDE.md), which runs no atexit handler and no pytest hook. The
+    runs that leave the most behind are therefore exactly the ones this misses;
+    it only stops every ORDINARY run from adding to the pile. ``ignore_errors``
+    is the same principle in miniature -- a failed cleanup must never be how an
+    otherwise-green run reports red.
+    """
+    del config
+    if _TEST_CONFIG_HOME is not None:
+        shutil.rmtree(_TEST_CONFIG_HOME, ignore_errors=True)
 
 
 # Where the id of the currently-running test is parked so a killed run can still
