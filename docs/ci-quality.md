@@ -10,7 +10,19 @@ make test
 ```
 
 `make lint` runs ruff lint/format checks, `mypy`, scoped `ty` checks for `src/octowright/http`,
-`bandit` security checks, codespell, and SPDX header validation.
+`bandit` security checks, codespell, SPDX header validation, and `detect-secrets` against
+`.secrets.baseline`. It then runs the repo's own guard scripts, each of which exists because
+something drifted silently once:
+
+| Guard | Fails when |
+|---|---|
+| `check_max_loc.py` | any Python file exceeds 777 lines. |
+| `check_operation_gate_architecture.py` | Playwright is reached outside the session operation gate. |
+| `check_agent_docs_sync.py` | `CLAUDE.md` is not a byte-for-byte copy of `AGENTS.md`. |
+| `check_telemetry_docs.py` | an emitted metric or MCP notification is undocumented in `AGENTS.md`. |
+| `check_tool_inventory_docs.py` | a tool count or list in `docs/architecture/mcp-tool-inventory.md`, its PlantUML diagram, `README.md` or `docs/getting-started.md` disagrees with the live registry. |
+| `check_mutmut_selection.py` | a test that covers a mutated module is missing from the mutmut selection. |
+| `check_vulture.py` / `check_xenon.py` | dead code or cyclomatic complexity rises above the committed baseline. |
 
 `ty` is intentionally scoped to `src/octowright/http` in CI while broader-package baseline diagnostics
 outside changed modules are being worked down. Use this non-gating probe command to assess expansion:
