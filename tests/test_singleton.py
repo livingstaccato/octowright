@@ -119,7 +119,18 @@ async def test_probe_http_alive_against_running_starlette() -> None:
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", loop="asyncio")
     server = uvicorn.Server(config)
     server_task = asyncio.create_task(server.serve())
-    await asyncio.sleep(0.5)
+    # Wait for uvicorn to report itself bound, rather than guessing how long
+    # that takes. This was a flat `sleep(0.5)`: on a loaded runner the socket
+    # was not listening yet, so `probe_http_alive` got a connection refused and
+    # the test failed asserting `is True` -- a failure about the sleep, not
+    # about the probe. `Server.started` is set at the end of uvicorn's own
+    # startup, so it answers the actual question; the deadline only bounds a
+    # server that never comes up at all.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10.0
+    while not server.started and loop.time() < deadline:
+        await asyncio.sleep(0.01)
+    assert server.started, "uvicorn did not bind within the deadline"
     try:
         info = singleton.LeaderInfo(
             pid=os.getpid(),
