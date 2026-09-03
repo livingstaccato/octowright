@@ -191,3 +191,131 @@ def test_empty_argv_raises_validation_error_not_permission_error(tmp_path, fresh
     msg = str(excinfo.value)
     assert "empty" in msg.lower()
     assert "OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS" not in msg
+
+
+# ---------------------------------------------------------------------------
+# The two gates are mutually exclusive, and the audit trail is a contract.
+#
+# Everything below kills a mutant that survived the 2026-08-27 run. The gate
+# itself was well covered on the argv side; what nothing asserted was how a
+# command gets CLASSIFIED between the two gates, and whether the warning the
+# docstring calls "audit-able" actually identifies anything.
+# ---------------------------------------------------------------------------
+
+
+def test_bash_with_no_script_is_still_classified_as_shell_form(tmp_path, fresh_personas, monkeypatch):
+    """``bash -c`` — exactly two tokens — is the boundary of the shell check.
+
+    ``len(argv) >= 2`` is what makes a two-token ``bash -c`` read as shell
+    form. Relax it to ``> 2`` and the classification silently flips: the
+    command stops being shell form and falls through to the argv allowlist
+    instead. Both still refuse here, so a test asserting only "it raised"
+    passes either way -- which is why this asserts WHICH gate refused.
+
+    It matters because the two errors tell an operator to do different things
+    (set the shell opt-in vs. use an allowlisted helper), and because under
+    ``OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS=1`` the reclassified command is no
+    longer refused at all: the arbitrary opt-in would grant an interpreter the
+    shell opt-in was deliberately withheld from. A two-token ``bash -c``
+    carries no payload, so this is a gate-decision defect rather than a live
+    exploit -- but the decision is the thing the gate exists to make.
+    """
+    import subprocess
+
+    def _explode(*args, **kwargs):
+        raise AssertionError(f"subprocess.run should not be reached; got {args!r}")
+
+    monkeypatch.setattr(subprocess, "run", _explode)
+    # The arbitrary-form opt-in is ON and the shell opt-in is OFF: the exact
+    # configuration where a misclassification stops being just a wrong message.
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
+    _write_persona(tmp_path, "u", {"name": "u", "credentials": {"token_cmd": "bash -c"}})
+
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential) as excinfo:
+        fresh_personas.resolve_credential(p, "token")
+
+    msg = str(excinfo.value)
+    assert "arbitrary shell execution" in msg
+    assert "OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS" in msg
+    assert "allowlist" not in msg
+
+
+def test_shell_form_refusal_names_the_interpreter_not_the_flag(tmp_path, fresh_personas, monkeypatch):
+    """The refusal must quote ``argv[0]``, the interpreter, not ``argv[1]``.
+
+    Both indices exist on every shell-form argv, so an off-by-one prints
+    ``'-c'`` where the operator expects ``'/bin/bash'`` -- a message naming the
+    flag it already knows about instead of the binary it refused to run. The
+    original assertions only looked for the env-var name, which both spellings
+    contain.
+    """
+    import subprocess
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("subprocess.run should not be reached")
+
+    monkeypatch.setattr(subprocess, "run", _explode)
+    _write_persona(tmp_path, "u", {"name": "u", "credentials": {"token_cmd": "/bin/zsh -c 'echo hi'"}})
+
+    p = fresh_personas.load_persona("u")
+    with pytest.raises(fresh_personas.MissingCredential) as excinfo:
+        fresh_personas.resolve_credential(p, "token")
+
+    msg = str(excinfo.value)
+    assert "/bin/zsh" in msg
+    assert "'-c' with -c" not in msg
+
+
+def test_shell_opt_in_warning_identifies_the_persona_and_field(tmp_path, fresh_personas, monkeypatch, caplog):
+    """Opting in downgrades a refusal to a warning, so the warning IS the record.
+
+    ``_enforce_credential_cmd_policy``'s docstring says both opt-in paths log
+    "so the trust boundary stays audit-able". Nothing checked that. Every
+    existing assertion matches the event NAME only, and the event name is the
+    one part of the line that says nothing about which persona ran what --
+    drop ``persona=``, ``field=`` or ``interpreter=`` and the audit line
+    survives every test while becoming useless to the person reading it after
+    the fact.
+    """
+    import logging
+    import subprocess
+
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", "1")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(subprocess, "run", _spy_run_factory(captured))
+    _write_persona(tmp_path, "dante", {"name": "dante", "credentials": {"token_cmd": "/bin/bash -c 'echo hi'"}})
+
+    p = fresh_personas.load_persona("dante")
+    with caplog.at_level(logging.WARNING):
+        assert fresh_personas.resolve_credential(p, "token") == "ok"
+
+    line = next(r.getMessage() for r in caplog.records if "credential_cmd_executes_shell_pipeline" in r.getMessage())
+    assert "persona=dante" in line
+    assert "field=token" in line
+    assert "interpreter=/bin/bash" in line
+
+
+def test_arbitrary_opt_in_warning_identifies_the_persona_and_field(tmp_path, fresh_personas, monkeypatch, caplog):
+    """The same contract on the other opt-in path, which has its own log call.
+
+    Two call sites means two chances to lose the identifying fields, and a
+    test written against one proves nothing about the other. This one also
+    pins the event name itself: replacing it with ``None`` left an unnamed
+    warning that no log query could ever select.
+    """
+    import logging
+    import subprocess
+
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", "1")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(subprocess, "run", _spy_run_factory(captured))
+    _write_persona(tmp_path, "ziggy", {"name": "ziggy", "credentials": {"api_key_cmd": "/tmp/helper.sh"}})
+
+    p = fresh_personas.load_persona("ziggy")
+    with caplog.at_level(logging.WARNING):
+        assert fresh_personas.resolve_credential(p, "api_key") == "ok"
+
+    line = next(r.getMessage() for r in caplog.records if "credential_cmd_executes_arbitrary_binary" in r.getMessage())
+    assert "persona=ziggy" in line
+    assert "field=api_key" in line
