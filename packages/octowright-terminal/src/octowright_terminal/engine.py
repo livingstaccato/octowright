@@ -85,7 +85,7 @@ class TerminalEngine:
         connector_type: str,
         connector_config: dict[str, Any],
         recorder: Recorder,
-        on_stopped: Callable[[], None] | None = None,
+        on_stopped: Callable[[TerminalEngine, str], None] | None = None,
     ) -> None:
         ensure_connector_registered(connector_type)
         cfg = dict(connector_config)
@@ -101,11 +101,15 @@ class TerminalEngine:
         self._poll_task: asyncio.Task[None] | None = None
         self._stop_evt = asyncio.Event()
         self._stop_recorded = False
+        self._stop_reason: str | None = None
         self._poll_error: BaseException | None = None
-        # Sync, fire-once notification that this terminal has ended, however it
-        # ended. The pool supplies it so it can drop the registry entry; the
-        # engine deliberately holds no pool reference, mirroring how core wires
-        # `_evict` into a session rather than handing the session a pool.
+        # Sync, fire-once notification that this terminal has ended, carrying
+        # HOW it ended so the pool can tell a deliberate close from a connector
+        # that died -- without the reason every ordinary close looked like an
+        # eviction. The engine hands itself to the callback rather than letting
+        # the callback close over it: the pool needs the engine's identity to
+        # reject a stale notification, and capturing it in the closure would
+        # make the callback that lives on this engine point back at it.
         self._on_stopped = on_stopped
 
     async def start(self) -> None:
@@ -213,6 +217,7 @@ class TerminalEngine:
     def _record_stop(self, reason: str) -> None:
         if not self._stop_recorded:
             self._stop_recorded = True
+            self._stop_reason = reason
             try:
                 self._recorder.record("terminal_stop", reason=reason)
             except Exception as exc:
@@ -230,7 +235,7 @@ class TerminalEngine:
             _TERMINAL_CLOSED.add(1, attributes={"connector_type": self._connector_type})
             if self._on_stopped is not None:
                 try:
-                    self._on_stopped()
+                    self._on_stopped(self, reason)
                 except Exception as exc:
                     # Same reasoning as the recorder guard above: this runs from
                     # an asyncio done-callback, where an escaping exception is
@@ -253,6 +258,18 @@ class TerminalEngine:
         """
         return self._stop_recorded
 
+    @property
+    def stop_reason(self) -> str | None:
+        """How this terminal ended (``eof`` / ``error`` / ``closed``), or None.
+
+        Recorded alongside ``stopped`` because the launch-race path above has no
+        callback to carry it: it discovers the death by polling ``stopped``
+        after the fact, and a boolean cannot say whether the connector reached
+        EOF or died throwing. It reported every such launch as ``eof``, which is
+        precisely backwards -- the ``error`` case is the one worth diagnosing.
+        """
+        return self._stop_reason
+
     async def stop(self) -> None:
         with span(
             "octowright.terminal.close",
@@ -262,7 +279,16 @@ class TerminalEngine:
             self._stop_evt.set()
             if self._poll_task is not None:
                 self._poll_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
+                # `Exception` as well as CancelledError. A poll task that died
+                # of its own accord re-raises that exception when awaited here,
+                # and it is old news by then: `_on_poll_done` has already logged
+                # `terminal.poll_loop.died`, recorded an `error` stop, and kept
+                # it in `_poll_error`. Letting it out a second time aborted the
+                # REST of this teardown -- the connector was never stopped, and
+                # the caller got an exception describing something already
+                # reported. Observed as an evicted terminal whose recording
+                # handle stayed open.
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await self._poll_task
                 self._poll_task = None
             with contextlib.suppress(Exception):

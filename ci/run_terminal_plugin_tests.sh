@@ -45,6 +45,19 @@ PY
 # it from this suite alone would fail on a number that means nothing here.
 uv run --active pytest -q packages/octowright-terminal/tests --no-cov
 
+# "Unconfigured" below has to mean "no plugins.yaml anywhere", not "whatever this
+# machine happens to have". These are SUBPROCESSES, so they read ambient env and
+# resolve the real per-user config dir -- and a developer with `plugins: [terminal]`
+# in ~/.config/octowright/plugins.yaml (the documented way to enable the plugin)
+# makes the unconfigured daemon register all 7 terminal_* tools and red-lines this
+# job on their machine while CI, which has no such file, stays green. Point the
+# config dir at an empty tree for these four calls only. XDG_CONFIG_HOME and
+# APPDATA are the two vars config_paths.user_config_dir reads.
+isolated_config="$(mktemp -d)"
+trap 'rm -rf "$isolated_config"' EXIT
+export XDG_CONFIG_HOME="$isolated_config"
+export APPDATA="$isolated_config"
+
 # End-to-end proof that the entry point reaches the real daemon tool surface, not
 # just importlib.metadata: enabling the plugin by name must add exactly the seven
 # terminal_* tools, and leaving it disabled must add none. Asserted as a DELTA

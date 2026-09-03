@@ -8,6 +8,11 @@ shared plugin-registration fixture the MCP-tool tests need.
 
 Concerns, handled here so individual test files stay clean:
 
+* **User-config isolation** — this suite is not under ``tests/``, so it inherits
+  none of the core suite's conftest and used to resolve plugin enablement (and
+  every other user-config path) out of the developer's real
+  ``~/.config/octowright``. Fixed at module scope rather than in a hook, for
+  reasons that only make sense next to the code; see the comment block below.
 * **Marker** — every test in this directory gets the registered ``terminal``
   marker (see the root ``pyproject.toml``), so ``-m terminal`` selects the suite
   and ``-m 'not terminal'`` excludes it.
@@ -43,13 +48,65 @@ Concerns, handled here so individual test files stay clean:
 
 from __future__ import annotations
 
+import atexit
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
-from octowright.plugins.registry import PluginRegistry
-from octowright.plugins.session_launch import PluginContext
-from octowright.server import plugin_state
+# --- user-config isolation, before any octowright import ---------------------
+#
+# Duplicated from the core suite's ``tests/conftest.py``, which does the same
+# thing and carries the full reasoning. Nothing was factored out because there
+# is no seam that would not be a third file neither suite owns: the two are
+# different distributions run by different commands (``pytest tests/`` against
+# ``ci/run_terminal_plugin_tests.sh``), and ``tests/conftest.py`` governs
+# ``tests/`` only -- it is not an ancestor of this directory, so this suite
+# inherited none of it and read the developer's real config instead.
+#
+# The PLACEMENT differs from core's, and that difference is the load-bearing
+# part. Core does this in ``pytest_configure``; this file cannot. pytest imports
+# an argument directory's conftest BEFORE calling ``pytest_configure``
+# (measured), and ``from octowright.server import plugin_state`` below pulls in
+# ``octowright.server._state``, which resolves
+# ``plugin_discovery.enabled_names()`` into a process-wide singleton at ITS
+# import time. By the time the hook fired, the answer would already be fixed --
+# read out of the developer's real ``~/.config/octowright/plugins.yaml``.
+# Verified on a machine with the terminal plugin enabled (a documented,
+# supported setup): importing ``octowright_terminal.tools`` there resolves
+# ``_enabled_plugins == ['terminal']``, so this suite behaved differently than
+# it does anywhere else, in the one direction hardest to notice -- enabled is
+# what these tests want, so it passed for the wrong reason.
+#
+# Reach is the whole user-config tree, not just plugins.yaml: XDG_CONFIG_HOME
+# (APPDATA on Windows) also relocates PROFILES_DIR, SCENARIOS_DIR, GOLDENS_DIR,
+# MACROS_DIR, UPLOAD_STAGING_DIR and ADVISOR_STATE_PATH. Profiles hold live
+# session cookies, so pointing them at a throwaway dir is the point, not a
+# side effect.
+os.environ.pop("OCTOWRIGHT_PLUGINS", None)
+_TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="octowright-terminal-test-config-")
+os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
+os.environ["APPDATA"] = _TEST_CONFIG_HOME
+
+# Cleanup is ``atexit`` rather than ``pytest_unconfigure`` for the same reason
+# the setup is at module scope: the directory exists from the moment this file
+# is imported, which is BEFORE pytest guarantees any hook of ours will run. An
+# import error in the lines just below aborts the session with no
+# ``pytest_unconfigure`` at all -- observed while writing this, leaving exactly
+# the orphan the cleanup exists to prevent. ``atexit`` still fires on that path.
+#
+# What neither mechanism can cover is pytest-timeout's ``thread`` method, which
+# ends a wedged run with ``os._exit(1)`` (see "Test-run bounds" in CLAUDE.md):
+# no atexit handler, no hook. So a wedged run still orphans its tree, and this
+# only bounds the ordinary case. ``ignore_errors`` because a failed cleanup must
+# never be how an otherwise-green run reports red.
+atexit.register(shutil.rmtree, _TEST_CONFIG_HOME, ignore_errors=True)
+
+from octowright.plugins.registry import PluginRegistry  # noqa: E402
+from octowright.plugins.session_launch import PluginContext  # noqa: E402
+from octowright.server import plugin_state  # noqa: E402
 
 _HERE = Path(__file__).parent
 

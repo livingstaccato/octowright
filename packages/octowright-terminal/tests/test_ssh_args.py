@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from octowright_terminal import tools
 
@@ -89,6 +90,45 @@ async def test_ssh_launch_without_known_hosts_returns_clean_error() -> None:
     assert "known_hosts" in result["error"]
 
 
+# Wall-clock budget for the poll loops in the live test below -- deliberately a
+# DEADLINE and not the `for _ in range(50)` this replaced, because an iteration
+# count is not a budget here. `SshSessionConnector.poll_messages` does
+# `asyncio.wait_for(stdout.read(4096), timeout=0.1)`, so what one turn costs
+# depends on what the server is saying: measured against this exact connector,
+# a quiet stream costs 152.0ms/iteration (the 0.1s read timeout plus the sleep
+# below) while a saturated one costs 50.4ms (the sleep alone, 50 turns in
+# 2.52s). `range(50)` was therefore a budget that silently swung between 7.6s
+# and 2.5s with the traffic -- and it is the low end that a loaded CI runner
+# collides with, surfacing as `assert "server-ready" in ""`.
+#
+# The work the budget must cover is small and was measured over 15 runs on an
+# unloaded macOS host: the ed25519 handshake + auth + PTY spawn in `start()`
+# takes 12.6-18.8ms, and each loop below then resolves in 1-2 iterations
+# (0.1-51.9ms). 30s is ~575x that worst case, and both loops together still sit
+# far inside the suite's 300s per-test timeout. A healthy pass does not pay it:
+# the loop returns on the first match.
+_POLL_BUDGET_S = 30.0
+_POLL_INTERVAL_S = 0.05
+
+
+async def _read_until(connector: Any, sentinel: str, text: str) -> str:
+    """Accumulate ``term`` output onto *text* until *sentinel* appears or the budget expires.
+
+    Returns whatever was accumulated either way; the caller asserts on it, so a
+    timeout fails with the partial transcript rather than a bare timeout error.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _POLL_BUDGET_S
+    while loop.time() < deadline:
+        for msg in await connector.poll_messages():
+            if msg["type"] == "term":
+                text += msg["data"]
+        if sentinel in text:
+            break
+        await asyncio.sleep(_POLL_INTERVAL_S)
+    return text
+
+
 async def test_ssh_key_path_authenticates_against_a_real_server(tmp_path: Path) -> None:
     """The construction guard above proves ``client_key`` survives the connector's
     gates; it does not prove asyncssh actually accepts a scalar string as a key
@@ -140,24 +180,11 @@ async def test_ssh_key_path_authenticates_against_a_real_server(tmp_path: Path) 
         connector = SshSessionConnector("sess-live", "ssh", cfg)
         await connector.start()
         try:
-            text = ""
-            for _ in range(50):
-                for msg in await connector.poll_messages():
-                    if msg["type"] == "term":
-                        text += msg["data"]
-                if "server-ready" in text:
-                    break
-                await asyncio.sleep(0.05)
+            text = await _read_until(connector, "server-ready", "")
             assert "server-ready" in text, text
 
             await connector.handle_input("ping\n")
-            for _ in range(50):
-                for msg in await connector.poll_messages():
-                    if msg["type"] == "term":
-                        text += msg["data"]
-                if "echo:ping" in text:
-                    break
-                await asyncio.sleep(0.05)
+            text = await _read_until(connector, "echo:ping", text)
             assert "echo:ping" in text, text
         finally:
             await connector.stop()
