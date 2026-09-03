@@ -93,6 +93,47 @@ def test_an_entry_naming_a_deleted_file_fails(monkeypatch: pytest.MonkeyPatch) -
     assert guard.main() == 1
 
 
+def _pytest_ini() -> dict:
+    import tomllib
+
+    with (ROOT / "pyproject.toml").open("rb") as fh:
+        return tomllib.load(fh)["tool"]["pytest"]["ini_options"]
+
+
+def test_the_mutants_workdir_is_never_collected() -> None:
+    """A leftover ``mutants/`` must not break an ordinary run from the repo root.
+
+    mutmut copies the whole project — ``conftest.py`` included — into
+    ``mutants/`` and leaves it behind. pytest then walks it as just another
+    directory, and a bare ``pytest`` at the root dies during collection with
+    two errors, not one skipped test: ``ImportPathMismatchError`` on the
+    duplicated ``tests.conftest``, and, under ``-p no:randomly``, ``option
+    names {'--randomly-seed'} already added`` when both copies of the root
+    conftest register the stand-in. So running ``make mutmut`` once made bare
+    ``pytest`` unusable until someone deleted the directory by hand — and it
+    defeated the very stand-in that was added so ``-p no:randomly`` would work.
+
+    ``make test`` passes ``tests/`` explicitly and so never noticed.
+
+    Verified behaviorally before this was pinned: with the directory present,
+    ``pytest --collect-only`` exits ``Interrupted: 2 errors during collection``
+    and ``--ignore=mutants`` collects cleanly.
+    """
+    assert "mutants" in _pytest_ini()["norecursedirs"]
+
+
+def test_overriding_norecursedirs_keeps_pytest_s_own_defaults() -> None:
+    """``norecursedirs`` REPLACES the built-in list rather than extending it.
+
+    Setting it to ``["mutants"]`` alone would start collecting ``build/``,
+    ``dist/``, ``node_modules/`` and every dotted directory — a much larger
+    problem than the one being fixed, and one that would show up as mystery
+    collection errors rather than as an obviously wrong setting.
+    """
+    configured = set(_pytest_ini()["norecursedirs"])
+    assert {"*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}"} <= configured
+
+
 def test_slow_suites_are_excluded_by_marker_not_by_name() -> None:
     """Marker-based exclusion is what keeps the rule correct as suites are added.
 
