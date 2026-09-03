@@ -11,7 +11,7 @@ name = "octowright-terminal"
 # Deliberately its own version line, not core's. This is a separate
 # distribution with its own maturity, and locking the two would force a
 # plugin release on every core release even when nothing here changed.
-version = "0.1.0"
+version = "0.1.1"
 description = "Terminal session kind for octowright (PTY, SSH, telnet), as a session-kind plugin."
 readme = "README.md"
 requires-python = ">=3.11"

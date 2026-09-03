@@ -40,6 +40,22 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.19.4": [
+        "A terminal whose connector dies is now actually cleaned up, not just "
+        "forgotten. Eviction dropped the session from the registry without "
+        "closing it -- and that registry holds the only reference -- so a "
+        "dropped SSH connection or an exited shell leaked its transport or PTY "
+        "child and its recording handle, and shutdown could no longer reach the "
+        "session to tidy up. It stopped appearing in the dashboard while "
+        "quietly keeping everything it held.",
+        "SSH key auth works. Terminal launches emitted `client_key_path` where "
+        "the connector expects `client_key`, so keys were silently ignored and "
+        "the connection fell through to whatever else was available.",
+        "A terminal that died badly no longer answers like one that never "
+        "existed. Every terminal_* call failed at pool lookup with 'no terminal "
+        "session <id>' for a session you just watched work; the error now names "
+        "the connector and how it ended.",
+    ],
     "0.19.3": [
         "An unpaired dashboard now tells you how to get in. The corner badge's "
         "dashboard and recording links carry no pairing code -- they cannot, "
