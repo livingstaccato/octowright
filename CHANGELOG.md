@@ -2412,9 +2412,38 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.19.2]: https://github.com/livingstaccato/octowright/compare/v0.19.1...v0.19.2
+[0.19.1]: https://github.com/livingstaccato/octowright/compare/v0.19.0...v0.19.1
+[0.19.0]: https://github.com/livingstaccato/octowright/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/livingstaccato/octowright/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/livingstaccato/octowright/compare/v0.16.4...v0.17.0
+[0.16.4]: https://github.com/livingstaccato/octowright/compare/v0.16.3...v0.16.4
+[0.16.3]: https://github.com/livingstaccato/octowright/compare/v0.16.2...v0.16.3
+[0.16.2]: https://github.com/livingstaccato/octowright/compare/v0.16.1...v0.16.2
+[0.16.1]: https://github.com/livingstaccato/octowright/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/livingstaccato/octowright/compare/v0.15.1...v0.16.0
+[0.15.1]: https://github.com/livingstaccato/octowright/compare/v0.15.0...v0.15.1
+[0.15.0]: https://github.com/livingstaccato/octowright/compare/v0.14.4...v0.15.0
+[0.14.4]: https://github.com/livingstaccato/octowright/compare/v0.14.3...v0.14.4
+[0.14.3]: https://github.com/livingstaccato/octowright/compare/v0.14.2...v0.14.3
+[0.14.2]: https://github.com/livingstaccato/octowright/compare/v0.14.1...v0.14.2
+[0.14.1]: https://github.com/livingstaccato/octowright/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/livingstaccato/octowright/compare/v0.13.10...v0.14.0
+[0.13.10]: https://github.com/livingstaccato/octowright/compare/v0.13.9...v0.13.10
+[0.13.9]: https://github.com/livingstaccato/octowright/compare/v0.13.8...v0.13.9
+[0.13.8]: https://github.com/livingstaccato/octowright/compare/v0.13.7...v0.13.8
+[0.13.7]: https://github.com/livingstaccato/octowright/compare/v0.13.4...v0.13.7
+[0.13.4]: https://github.com/livingstaccato/octowright/compare/v0.13.3...v0.13.4
+[0.13.3]: https://github.com/livingstaccato/octowright/compare/v0.13.2...v0.13.3
+[0.13.2]: https://github.com/livingstaccato/octowright/compare/v0.13.1...v0.13.2
+[0.13.1]: https://github.com/livingstaccato/octowright/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/livingstaccato/octowright/compare/v0.12.1...v0.13.0
+[0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
+[0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
+[0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
 [0.19.4]: https://github.com/livingstaccato/octowright/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/livingstaccato/octowright/compare/v0.19.2...v0.19.3
-[0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...main
+[0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/livingstaccato/octowright/compare/v0.10.0...v0.10.1
 [0.9.1]: https://github.com/livingstaccato/octowright/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/livingstaccato/octowright/compare/v0.8.0...v0.9.0

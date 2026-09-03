@@ -34,8 +34,12 @@ import time
 from pathlib import Path
 from typing import IO, Any
 
+from provide.telemetry import get_logger
+
 import octowright.singleton as _sn
 from octowright.config_paths import user_state_dir
+
+log = get_logger(__name__)
 
 # Daemon stderr goes here so we have something to investigate when the daemon
 # misbehaves. Rotated by file size on each spawn (truncated above 1 MB) to
@@ -295,7 +299,29 @@ def _spawn_detached(args: list[str]) -> int:
                 # forbids in a user-action path.
                 if getattr(exc, "winerror", None) != _ERROR_ACCESS_DENIED or index == len(candidates) - 1:
                     raise
+                # Not a silent swallow: this IS the "the job forbids breakaway"
+                # answer, and it decides whether the daemon survives a CI step
+                # teardown. Dropping it left the two outcomes indistinguishable
+                # from the pid alone.
+                log.warning(
+                    "daemon.detach_candidate_refused",
+                    attempt=index + 1,
+                    attempts_available=len(candidates),
+                    winerror=_ERROR_ACCESS_DENIED,
+                    hint="job forbids CREATE_BREAKAWAY_FROM_JOB; retrying without it, "
+                    "so the daemon will not outlive a job teardown",
+                )
                 continue
+            # Which rung won is the open question AGENTS.md records as
+            # unverified: a green Windows leg proves something worked, not
+            # which. Recorded here so the daemon log answers it.
+            log.info(
+                "daemon.spawn_detached",
+                pid=proc.pid,
+                attempt=index + 1,
+                attempts_available=len(candidates),
+                platform=sys.platform,
+            )
             return proc.pid
     raise AssertionError("unreachable: the last candidate either returns or raises")
 

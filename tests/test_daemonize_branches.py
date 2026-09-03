@@ -364,3 +364,89 @@ class TestWaitForDaemon:
         result = await _daemon.wait_for_daemon(timeout=1.0, poll_seconds=0.01)
         assert result is info
         assert attempts["n"] >= 2
+
+
+# ---------------------------------------------------------------------------
+# The Windows detach ladder reports which rung it landed on.
+#
+# AGENTS.md states plainly that two things about this ladder are unverified:
+# which candidate wins on a real Windows runner, and whether the daemon
+# outlives a job teardown. The second needs a runner. The first was
+# unanswerable for a different reason -- nothing recorded it. A successful
+# spawn returned a pid and said nothing about how it got one, so a green
+# Windows leg proved only that SOMETHING worked.
+# ---------------------------------------------------------------------------
+
+
+class _FakeLogHandle:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def _ladder(monkeypatch, candidates, popen):
+    monkeypatch.setattr(_daemon, "_detach_candidates", lambda: candidates)
+    monkeypatch.setattr(_daemon, "_open_daemon_log", lambda: _FakeLogHandle())
+    monkeypatch.setattr(_daemon.subprocess, "Popen", popen)
+
+
+def test_a_successful_spawn_records_which_candidate_won(monkeypatch, caplog) -> None:
+    """The pid alone cannot distinguish "breakaway worked" from "fell back"."""
+    import logging
+
+    _ladder(
+        monkeypatch,
+        [{"creationflags": 1, "_label": "breakaway"}, {"creationflags": 2, "_label": "plain"}],
+        MagicMock(return_value=SimpleNamespace(pid=4242)),
+    )
+
+    with caplog.at_level(logging.INFO):
+        assert _daemon._spawn_detached(["octowright", "serve"]) == 4242
+
+    line = next(r.getMessage() for r in caplog.records if "daemon.spawn_detached" in r.getMessage())
+    assert "attempt=1" in line
+    assert "attempts_available=2" in line
+
+
+def test_a_breakaway_refusal_is_logged_before_the_fallback_is_tried(monkeypatch, caplog) -> None:
+    """The retry was a bare ``continue`` -- the exact silent swallow the
+    comment three lines above it invokes the repo's policy to forbid.
+
+    On a job without ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` this is the whole
+    story: ``CreateProcess`` refuses, the ladder drops the flag, and the
+    daemon starts without job breakaway -- meaning it will still die with the
+    CI step. That is a materially different outcome from a first-rung success
+    and nothing said which had happened.
+    """
+    import logging
+
+    denied = OSError("Access is denied")
+    denied.winerror = _daemon._ERROR_ACCESS_DENIED  # type: ignore[attr-defined]
+    popen = MagicMock(side_effect=[denied, SimpleNamespace(pid=99)])
+    _ladder(monkeypatch, [{"creationflags": 1}, {"creationflags": 2}], popen)
+
+    with caplog.at_level(logging.WARNING):
+        assert _daemon._spawn_detached(["octowright", "serve"]) == 99
+
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "daemon.detach_candidate_refused" in text
+    assert "attempt=1" in text
+    assert popen.call_count == 2
+
+
+def test_a_non_breakaway_oserror_still_raises_from_the_first_attempt(monkeypatch) -> None:
+    """Pins the behaviour the ladder's comment exists to protect.
+
+    A missing entrypoint or EMFILE must not be retried identically and then
+    reported from the second attempt, discarding the real cause.
+    """
+    boom = OSError("No such file or directory")
+    boom.winerror = 2  # type: ignore[attr-defined]
+    popen = MagicMock(side_effect=boom)
+    _ladder(monkeypatch, [{"creationflags": 1}, {"creationflags": 2}], popen)
+
+    with pytest.raises(OSError, match="No such file"):
+        _daemon._spawn_detached(["octowright", "serve"])
+    assert popen.call_count == 1
