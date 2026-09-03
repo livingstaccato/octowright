@@ -52,7 +52,16 @@ uv run --active pytest -q packages/octowright-terminal/tests --no-cov
 # makes the unconfigured daemon register all 7 terminal_* tools and red-lines this
 # job on their machine while CI, which has no such file, stays green. Point the
 # config dir at an empty tree for these four calls only. XDG_CONFIG_HOME and
-# APPDATA are the two vars config_paths.user_config_dir reads.
+# APPDATA are the two vars config_paths.user_config_dir reads -- it branches on
+# platform.system() first, so exactly one of them is live per platform and the
+# other is inert rather than redundant.
+#
+# APPDATA is therefore dead weight in CI, where this job is ubuntu-only, and
+# load-bearing for a Windows developer running `make test-terminal` under Git
+# Bash -- the case it is here for. Windows CI coverage of the same isolation is
+# NOT provided by this script: it comes from
+# tests/test_tool_inventory_docs.py::test_the_live_surface_is_measured_without_ambient_plugins,
+# which does the equivalent redirect in Python and does run on the Windows legs.
 isolated_config="$(mktemp -d)"
 trap 'rm -rf "$isolated_config"' EXIT
 export XDG_CONFIG_HOME="$isolated_config"
