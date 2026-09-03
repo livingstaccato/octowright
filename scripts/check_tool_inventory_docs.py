@@ -80,6 +80,14 @@ _PROSE_TOTAL_RE = re.compile(r"(?P<total>\d+) tools on a core install")
 # forward would falsify the record, so the changelog and the plan archive are
 # scanned past rather than corrected.
 _HISTORY = ("CHANGELOG.md", "docs/superpowers/")
+# Directory names that never hold canonical documentation, matched as path
+# SEGMENTS at any depth rather than as prefixes. Prefix matching skipped
+# `CHANGELOG.md` at the root and then scanned the identical file one directory
+# down: a git worktree under `.claude/worktrees/` is a second copy of this
+# repository, so `make lint` started failing with "says 129 tools" against a
+# historical changelog in a checkout nobody was editing. Any dot-prefixed
+# directory is skipped for the same reason (`.venv`, `.git`, `.claude`).
+_SKIPPED_DIRS = frozenset({"mutants", "node_modules"})
 DIAGRAM = ROOT / "docs" / "architecture" / "mcp-tool-surface.puml"
 _DIAGRAM_TITLE_RE = re.compile(r"^title .*\((?P<total>\d+) tools total", re.MULTILINE)
 # `package "core (24)" as P_CORE` / `package "all-only (29)" as P_ALL`
@@ -114,12 +122,25 @@ def core_surface() -> dict:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
+def _is_skipped_doc_path(rel: str) -> bool:
+    """True for a repo-relative path the total scan must not read.
+
+    Two rules, both segment-based: the historical records (which state what was
+    true when written), and directories that are copies, caches or vendored
+    trees rather than sources.
+    """
+    if rel.startswith(_HISTORY):
+        return True
+    parts = rel.split("/")
+    return any(part.startswith(".") or part in _SKIPPED_DIRS for part in parts[:-1])
+
+
 def docs_claiming_a_total() -> list[Path]:
     """Every non-historical markdown file asserting a core-install tool count."""
     found = []
     for path in ROOT.rglob("*.md"):
         rel = path.relative_to(ROOT).as_posix()
-        if rel.startswith(_HISTORY) or "mutants/" in rel or "node_modules/" in rel or rel.startswith(".venv"):
+        if _is_skipped_doc_path(rel):
             continue
         if _PROSE_TOTAL_RE.search(path.read_text(encoding="utf-8")):
             found.append(path)

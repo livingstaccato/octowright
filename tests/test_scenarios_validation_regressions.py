@@ -187,3 +187,48 @@ def test_mock_route_still_refuses_an_unknown_key() -> None:
     """The accept-side tests must not be satisfiable by dropping the check."""
     with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\] unknown keys: \['nope'\]"):
         load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "nope": 1}), "ok")
+
+
+def test_every_optional_mock_route_field_round_trips() -> None:
+    """All four optional fields must reach the normalized route, under their own keys.
+
+    ``_copy_optional_mock_route_fields`` is four independent ``if "x" in route``
+    copies, and the suite had assertions for the *validators* it calls but none
+    for the copying itself. Every one of those keys appears twice -- once read
+    from ``route``, once written to ``normalized`` -- so a mangled spelling on
+    either side drops the field silently: the scenario still loads, the route
+    still mocks, and it answers with the default instead of the 404 or the
+    Content-Type the author wrote. Nothing raises, so nothing failed.
+
+    Asserted together rather than one test per field because the defect is a
+    per-field typo: a single populated route proves all four paths at once and
+    a missing fifth field added later shows up here as an omission.
+    """
+    route = {
+        "pattern": "**/api/orders",
+        "status": 404,
+        "body": '{"detail":"gone"}',
+        "content_type": "application/problem+json",
+        "headers": {"X-Trace": "abc123"},
+    }
+
+    scenario = load_yaml_scenario(_scenario_with_route(route), "ok")
+
+    assert scenario.fixtures["mock_routes"][0] == route
+
+
+def test_an_omitted_optional_mock_route_field_stays_absent() -> None:
+    """The companion: absent must mean absent, not present-and-defaulted.
+
+    Without this, dropping the ``if "status" in route`` guard entirely would
+    pass the round-trip test above -- the key is present there. A route that
+    sets no status must not acquire one, because ``mock_route`` distinguishes
+    "leave the response alone" from "force a status", and a defaulted value
+    silently converts a passthrough into an override.
+    """
+    scenario = load_yaml_scenario(_scenario_with_route({"pattern": "**/api"}), "ok")
+
+    normalized = scenario.fixtures["mock_routes"][0]
+    assert normalized == {"pattern": "**/api"}
+    for field in ("status", "body", "content_type", "headers"):
+        assert field not in normalized
