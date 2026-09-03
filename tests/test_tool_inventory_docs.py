@@ -149,3 +149,37 @@ def test_a_stale_readme_total_is_reported(guard) -> None:
     mangled = readme.replace("every core-install tool registers. | 131 |", "every core-install tool registers. | 129 |")
     problems = guard.problems(text, mangled)
     assert any("README" in p and "129" in p for p in problems), problems
+
+
+def test_a_nested_worktree_is_not_scanned(guard) -> None:
+    """A git worktree under ``.claude/worktrees/`` is a second copy of this repo.
+
+    Every exclusion here was originally a prefix match on the repo-relative
+    path, so ``CHANGELOG.md`` and ``docs/superpowers/`` were skipped at the
+    root and scanned again one directory down. The moment an agent worktree
+    existed, `make lint` failed with
+    ``.claude/worktrees/agent-.../CHANGELOG.md: says 129 tools`` -- a real
+    historical record, in a checkout nobody was editing, reported as drift.
+
+    Skipping by path SEGMENT rather than prefix is what makes that structural:
+    a dot-prefixed directory (``.claude``, ``.venv``, ``.git``) is never a
+    source of canonical documentation, wherever it sits in the tree.
+    """
+    scanned = {p.relative_to(ROOT).as_posix() for p in guard.docs_claiming_a_total()}
+    assert not any(part.startswith(".") for name in scanned for part in name.split("/")), scanned
+    assert not any("/CHANGELOG.md" in name for name in scanned), scanned
+
+
+def test_the_scan_skips_dot_directories_at_any_depth(guard) -> None:
+    """Unit-level companion, so the rule holds with no worktree on disk.
+
+    The test above only proves anything while a worktree happens to exist.
+    """
+    assert guard._is_skipped_doc_path("CHANGELOG.md")
+    assert guard._is_skipped_doc_path("docs/superpowers/plans/x.md")
+    assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/CHANGELOG.md")
+    assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/README.md")
+    assert guard._is_skipped_doc_path("mutants/README.md")
+    assert guard._is_skipped_doc_path("packages/octowright-frontend/node_modules/x/README.md")
+    assert not guard._is_skipped_doc_path("README.md")
+    assert not guard._is_skipped_doc_path("docs/getting-started.md")
