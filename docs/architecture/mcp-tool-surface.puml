@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by capability profile (126 tools total — slim with --profile=core,...)
+title MCP tool inventory by capability profile (131 tools total — slim with --profile=core,...)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -52,7 +52,7 @@ package "Row 2 — profile-scoped domain bundles" as ROW2 #ffffff {
     rectangle "aria-tree snapshot baselines + diff:\ngolden_save / list / delete\ngolden_assert / verify_loop" as R_GOLD
   }
   package "terminals (7)" as P_TERM #eef2ff {
-    rectangle "optional terminal sessions:\nterminal_launch / send_input / snapshot\nterminal_read / wait_for / close / list\n(registers only with octowright[terminal])" as R_TERM
+    rectangle "optional terminal sessions:\nterminal_launch / send_input / snapshot\nterminal_read / wait_for / close / list\n(pip install octowright-terminal, then\nOCTOWRIGHT_PLUGINS=terminal)" as R_TERM
   }
 }
 
@@ -60,8 +60,8 @@ package "Row 3 — always available regardless of profile" as ROW3 #ffffff {
   package "always-on meta + Advisor (7)" as P_META #f5f5f4 {
     rectangle "registers under every profile:\noctowright_status / storage_report\noctowright_dashboard_url / check_takeover\noctowright_advisor_status\noctowright_advisor_set_preference\noctowright_advisor_record_macro_observation" as R_META
   }
-  package "all-only (27)" as P_ALL #f0fdf4 {
-    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy),\nrequest headers (browser_set_extra_http_headers /\ninject_headers / uninject_headers),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\ninteraction extras (hover / drag /\nselect_option / set_input_files /\ncapture_and_close),\nmacro artifact extras (macro_artifact_status /\nverify / critical_points_get / set),\nrecordings_cleanup, run_test_suite" as R_ALL
+  package "all-only (29)" as P_ALL #f0fdf4 {
+    rectangle "registers only when no --profile filter is active:\nframes/tabs/popups (browser_switch_frame /\nreset_frame / list_frames /\npage_list / page_switch / page_close),\nnetwork + dialogs (browser_mock_route /\nunmock_route / set_dialog_policy),\nrequest headers (browser_set_extra_http_headers /\ninject_headers / uninject_headers),\ntrace (browser_open_trace),\nroster (browser_spawn_roster /\nbrowser_open_url / navigate_back),\ninteraction extras (hover / drag / a11y_dragdrop /\nselect_option / set_input_files /\ncapture_and_close),\nmacro artifact extras (macro_artifact_status /\nverify / delete / critical_points_get / set),\nrecordings_cleanup, run_test_suite" as R_ALL
   }
 }
 

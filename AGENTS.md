@@ -17,6 +17,8 @@ make test                 # pytest — DOES launch real browsers where engines a
                           # (18 modules are marked live_browser and nothing deselects it);
                           # add -m "not live_browser and not memory_isolated" to skip them
 make lint                 # ruff/format/mypy/ty/bandit/codespell/SPDX/LOC/vulture/xenon/secrets
+                          # + the doc guards (agent-docs sync, telemetry, tool inventory,
+                          # mutmut selection) — see docs/ci-quality.md for the table
 make format               # ruff format + ruff --fix
 make typecheck            # mypy only
 make ci                   # lint + test
@@ -85,10 +87,27 @@ re-run" reports a NEW victim every time and reads as an inter-test leak that is
 not there. Pinning makes a run reproducible by default; shuffling is one flag
 away when it is the point: `--randomly-seed=last` to replay the previous run,
 an explicit integer to replay a specific one, or `--randomly-dont-reorganize`
-for source order. Not `-p no:randomly` — unloading the plugin also unregisters
-the `--randomly-seed` option that `addopts` passes, so pytest exits 4 with
-"unrecognized arguments"; use the plugin's own flag, which leaves the option
-parseable. Bump the constant to re-roll for everyone.
+for source order. Prefer those over `-p no:randomly`, which used to exit 4 with
+"unrecognized arguments" — unloading the plugin also unregisters the
+`--randomly-seed` option `addopts` still passes. The root `conftest.py` now
+registers an inert stand-in for that option **when the plugin is absent**, so
+the flag parses; it exists because mutmut 3.x hardcodes `-p no:randomly` with no
+way to configure it off, not as an endorsement of typing it by hand. The
+plugin's own flags leave its seeding machinery intact and stay the right answer
+for a human. Bump the constant to re-roll for everyone.
+
+**`norecursedirs` names `mutants`.** mutmut copies the whole project —
+`conftest.py` included — into `mutants/` and leaves it behind, and pytest then
+walks it as an ordinary directory. A bare `pytest` at the repo root consequently
+died in *collection*, with `ImportPathMismatchError` on the duplicated
+`tests.conftest` and, under `-p no:randomly`, "option names
+`{'--randomly-seed'}` already added" from the two copies of the root conftest —
+so running `make mutmut` once made a bare `pytest` unusable until someone
+deleted the directory by hand, and it defeated the stand-in above. `make test`
+passes `tests/` explicitly and never noticed. The setting **replaces** pytest's
+built-in list rather than extending it, so the defaults are restated alongside
+`mutants`; dropping one would quietly start collecting `build/`, `dist/` or
+`node_modules/`.
 
 **`.pytest-current-test` (git-ignored).** `tests/conftest.py` writes
 `<phase> <nodeid>` there at the start of every setup/call/teardown. pytest-
@@ -455,9 +474,9 @@ TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octo
 
 Terminal sessions (PTY shell, SSH, telnet) are a **session-kind plugin**, not part of core: `packages/octowright-terminal` (the `octowright-terminal` distribution), reaching core only through the `octowright.session_kinds` entry point — see `OCTOWRIGHT_PLUGINS` above. Core keeps no terminal implementation: no `terminal/` package, no `provide.uterm` import, no hardcoded scenario branch, and no per-action table naming a plugin kind. A terminal recording written before core's launch transaction existed opens with the plugin's own `terminal_start` row rather than the generic `session_start`, and core classifies it the same way it classifies everything else — from the recording's filename, which carries the kind directly and cannot contain the hyphen the name is split on (`plugins.identity.KIND_RE`). The `terminal_*` tools, the `terminals` capability profile, the scenario-participant kind, and the dashboard's xterm-based renderer are all supplied by the plugin once it is enabled.
 
-**Installing it.** `provide-uterm` and its sibling packages were published to PyPI on 2026-08-26, so the plugin resolves its dependencies normally and a source checkout does not need the `../provide-uterm` repo beside it, and carries no `[tool.uv.sources]` path overrides. The plugin distribution is **on PyPI** as of core 0.19.2 (2026-08-31), its first upload — `uv pip install octowright-terminal` resolves 0.1.0, imports, and registers its `octowright.session_kinds` entry point (verified in a clean venv). `release.yml` builds it into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so every later release carries it. Installing from this repo (`packages/octowright-terminal`) still works and is what a source checkout does. Versions move **independently** of core's (0.1.0 against core's 0.19.2), because locking them would force a plugin release on every core release even when nothing in it changed; the consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's deliberately do not — a re-upload of core means the release is wrong, not routine. The plugin needs a core carrying `octowright.plugins`, and **0.17.0 is the first release that does** — verified in the published wheel. That floor is now declared (`octowright>=0.17.0`), so an older core fails at resolve time with a readable error rather than at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`. There the plugin lives in the `terminal` dependency group, deliberately its own rather than part of `dev`, so core installs (and every CI job but one) stay uterm-free; `make install` (`uv sync --all-groups`) or `uv sync --group terminal` brings it in, and `OCTOWRIGHT_PLUGINS=terminal` enables it. A plain `uv sync` does not merely skip the group — a sync is exact, so it **uninstalls** the plugin and its uterm tree from a checkout that had them; `make test-terminal` then refuses to run (same availability guard as CI) rather than passing over zero tests. Installing the distribution only makes the plugin *discoverable* — enabling it stays a separate, deliberate act, so a transitive dependency cannot extend a browser-driving daemon on its own.
+**Installing it.** `provide-uterm` and its sibling packages were published to PyPI on 2026-08-26, so the plugin resolves its dependencies normally and a source checkout does not need the `../provide-uterm` repo beside it, and carries no `[tool.uv.sources]` path overrides. The plugin distribution is **on PyPI** as of core 0.19.2 (2026-08-31), its first upload — `uv pip install octowright-terminal` resolves, imports, and registers its `octowright.session_kinds` entry point (verified in a clean venv). `release.yml` builds it into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so every later release carries it. Installing from this repo (`packages/octowright-terminal`) still works and is what a source checkout does. Versions move **independently** of core's (0.1.1 against core's 0.19.4 when this was written — read the two `pyproject.toml` files for the current pairing), because locking them would force a plugin release on every core release even when nothing in it changed; the consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's deliberately do not — a re-upload of core means the release is wrong, not routine. The plugin needs a core carrying `octowright.plugins`, and **0.17.0 is the first release that does** — verified in the published wheel. That floor is now declared (`octowright>=0.17.0`), so an older core fails at resolve time with a readable error rather than at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`. There the plugin lives in the `terminal` dependency group, deliberately its own rather than part of `dev`, so core installs (and every CI job but one) stay uterm-free; `make install` (`uv sync --all-groups`) or `uv sync --group terminal` brings it in, and `OCTOWRIGHT_PLUGINS=terminal` enables it. A plain `uv sync` does not merely skip the group — a sync is exact, so it **uninstalls** the plugin and its uterm tree from a checkout that had them; `make test-terminal` then refuses to run (same availability guard as CI) rather than passing over zero tests. Installing the distribution only makes the plugin *discoverable* — enabling it stays a separate, deliberate act, so a transitive dependency cannot extend a browser-driving daemon on its own.
 
-Connector arguments (PTY/SSH/telnet), the scenario-participant `options:` shape, dashboard rendering, input redaction, and the plugin's own telemetry are documented in `packages/octowright-terminal/README.md`.
+Connector arguments (PTY/SSH/telnet), the scenario-participant `options:` shape, dashboard rendering, input redaction, what happens after a connector dies (the eviction path: identity check, teardown, the bounded ledger that lets a lookup say *why* the session is gone, and the dashboard invalidation), and the plugin's own telemetry are documented in `packages/octowright-terminal/README.md`.
 
 ### Accessibility-snapshot credential scrubbing
 

@@ -70,6 +70,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the flag needs. The root conftest registers an inert stand-in only when the
   real plugin is absent. A second cause followed — `scripts/` is not copied into
   mutmut's `mutants/` workdir, so a LOC-guard test's import aborted the run.
+- A leftover `mutants/` workdir no longer breaks a bare `pytest` at the repo
+  root. mutmut copies the project — `conftest.py` included — into `mutants/` and
+  leaves it there, so collection died with `ImportPathMismatchError` on the
+  duplicated `tests.conftest` and, under `-p no:randomly`, on the two copies of
+  the root conftest both registering the `--randomly-seed` stand-in above. One
+  `make mutmut` therefore made bare `pytest` unusable until the directory was
+  deleted by hand. `norecursedirs` now names `mutants` (and restates pytest's
+  own defaults, which the setting replaces rather than extends); `make test`
+  passes `tests/` explicitly and had never noticed.
+- **The documented MCP tool inventory is now checked against the registry.**
+  `docs/architecture/mcp-tool-inventory.md` had lost `browser_a11y_dragdrop` and
+  `macro_artifact_delete` from its all-only list, so it claimed 27 where 29 are
+  registered, and README's capability-profile table advertised the full surface
+  as **129** two lines under a sentence saying 131. `docs/getting-started.md`
+  was further behind still, at **126**, and `mcp-tool-surface.puml` — which
+  ships as a committed SVG, so a wrong number is rendered into an image —
+  carried both a 126 title and an `all-only (27)` box. Every count in all four
+  files is typed by hand and nothing could have caught any of it. `make lint`
+  now runs
+  `scripts/check_tool_inventory_docs.py`, which measures a core install in a
+  child process with its config dirs redirected — an empty `OCTOWRIGHT_PLUGINS`
+  falls through to the operator's `plugins.yaml`, so an in-process count reads
+  138 on a maintainer's machine and 131 in CI.
+- Docs caught up with the code: the `-p no:randomly` note still said the flag
+  exits 4, which the stand-in fixed; the terminal plugin README documents what
+  happens after a connector dies (identity check, teardown, ledger, dashboard
+  invalidation); and `CHANGELOG.md` regained the `[0.19.4]` compare link the
+  version bump left out.
 - Two test waits no longer rest on unmeasured durations: the uvicorn probe polls
   `Server.started` against a deadline instead of sleeping 0.5s, and the
   leader-branch tests stub `reap_orphan_browsers_at_boot` rather than widening
@@ -2384,6 +2412,7 @@ the full record.
 Initial PyPI / TestPyPI publication. See `git log v0.3.0` for the commit
 history that led to the first published release.
 
+[0.19.4]: https://github.com/livingstaccato/octowright/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/livingstaccato/octowright/compare/v0.19.2...v0.19.3
 [0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...main
 [0.10.1]: https://github.com/livingstaccato/octowright/compare/v0.10.0...v0.10.1
