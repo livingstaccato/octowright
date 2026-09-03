@@ -6,17 +6,41 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from octowright_terminal import pool as pool_module
+from octowright_terminal.engine import TerminalEngine
 from octowright_terminal.errors import ProtectedTerminalCloseError
 from octowright_terminal.pool import TerminalPool
 
 from octowright.plugins.session_launch import PluginContext
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="PTY is POSIX-only")
+
+#: A binary that exits immediately, resolved through PATH because its location
+#: is not portable (/bin/true on Linux, /usr/bin/true on macOS).
+TRUE_BIN = shutil.which("true") or "/usr/bin/true"
+
+
+async def _wait_until(predicate: Callable[[], bool], *, timeout: float = 10.0) -> None:
+    """Poll ``predicate`` against a wall-clock deadline.
+
+    A deadline rather than a fixed iteration count: what each iteration costs
+    depends on the connector's own internal read timeout, so `range(N)` encodes
+    a budget nobody measured and turns a slow CI runner into a bare
+    ``assert ... is None`` failure.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
 
 
 @pytest.fixture
@@ -123,28 +147,64 @@ async def test_dead_connector_is_evicted_from_the_registry(ctx) -> None:
     """
     pool = TerminalPool(ctx)
     try:
-        # /bin/true exits immediately, so the poll loop sees a disconnected
+        # `true` exits immediately, so the poll loop sees a disconnected
         # connector and records an "eof" stop without any help from the test.
-        result = await pool.launch(kind="pty", connector_config={"command": "/bin/true"}, label="dies")
+        # Resolved through PATH rather than hardcoded: this was /bin/true, which
+        # does not exist on macOS (it is /usr/bin/true), and uterm's
+        # validate_command checks only shape -- never existence -- so the fork
+        # succeeded, the execve failed inside the child, and the test passed by
+        # exercising an exec failure instead of the clean-exit path it names.
+        result = await pool.launch(kind="pty", connector_config={"command": TRUE_BIN}, label="dies")
         iid = result["instance_id"]
-
-        for _ in range(100):
-            if pool.maybe_get(iid) is None:
-                break
-            await asyncio.sleep(0.05)
+        session = pool.get(iid)
+        await _wait_until(lambda: pool.maybe_get(iid) is None)
 
         assert pool.maybe_get(iid) is None, "dead terminal still resolvable"
         assert [s["instance_id"] for s in pool.list_sessions()] == []
         assert list(pool.iter_sessions()) == []
+
+        # Against the real recorder, not a mock: eviction drops the only
+        # reference to the session, so if it does not also close it nothing
+        # ever will. `_fh` is private, but it is the resource -- asserting on a
+        # public proxy would leave the actual handle untested.
+        await pool.drain_evictions()
+        assert session.recorder._fh.closed, "evicted session leaked its recording handle"
     finally:
         await pool.close_all(force=True)
 
 
-async def test_eviction_is_identity_checked_and_idempotent(ctx) -> None:
-    """A late callback must not evict a live session that reused the id.
+async def test_eviction_closes_the_session_it_drops(ctx) -> None:
+    """Eviction must TEAR DOWN, not just forget.
 
-    ``pop(instance_id)`` alone would; the seam compares identity first. Also
-    covers the launch-race path calling ``_evict_stopped`` a second time.
+    Dropping the registry entry removes the only reference to the session --
+    core keeps no parallel table -- so an eviction that does not also close it
+    leaks whatever the connector holds (an SSH transport, a PTY master fd and
+    an unreaped child) plus the recorder's file handle, and ``close_all`` at
+    shutdown can no longer reach it to clean up. That is strictly worse than
+    the stale listing eviction was added to fix.
+    """
+    pool = TerminalPool(ctx)
+    engine = SimpleNamespace()
+    session = SimpleNamespace(connector_type="pty", engine=engine, close=AsyncMock())
+    pool._sessions["gone"] = session  # type: ignore[assignment]
+
+    pool._evict_stopped("gone", engine, "eof")
+
+    assert "gone" not in pool._sessions
+    # Teardown is scheduled rather than inline: `_evict_stopped` runs from a
+    # sync asyncio done-callback and cannot await. Draining the pool's own task
+    # set keeps this deterministic instead of sleeping for a guessed interval.
+    await pool.drain_evictions()
+    session.close.assert_awaited_once()
+
+
+async def test_eviction_identity_check_spares_a_live_session_that_reused_the_id(ctx) -> None:
+    """A late callback for a dead terminal must not evict its id's new owner.
+
+    This is the scenario the seam claims to defend, and it needs two DIFFERENT
+    sessions under one id to exercise: re-reading the same dict key and
+    comparing the result to itself can never fail, so the callback has to carry
+    the identity of the engine it belongs to.
     """
     pool = TerminalPool(ctx)
     try:
@@ -152,16 +212,184 @@ async def test_eviction_is_identity_checked_and_idempotent(ctx) -> None:
         iid = result["instance_id"]
         live = pool.get(iid)
 
-        # Impersonate a stale callback for a DIFFERENT session that once held
-        # this id: identity differs, so the live entry must survive.
-        pool._sessions[iid] = live
-        stale = SimpleNamespace(connector_type="pty")
-        pool._sessions["ghost"] = stale
-        pool._evict_stopped("ghost")
-        assert "ghost" not in pool._sessions
-        pool._evict_stopped("ghost")  # idempotent: second call is a no-op
-        assert pool.maybe_get(iid) is live
+        # A stale callback from the terminal that held this id BEFORE `live`.
+        dead_engine = SimpleNamespace()
+        pool._evict_stopped(iid, dead_engine, "eof")
 
-        pool._evict_stopped("never-existed")  # unknown id is a no-op
+        assert pool.maybe_get(iid) is live, "stale callback evicted the live session"
+        await pool.drain_evictions()
+        assert pool.maybe_get(iid) is live, "stale callback tore down the live session"
+
+        # Idempotent: the real owner's callback may fire twice (the launch-race
+        # re-check and the poll loop both call it), and an unknown id is a no-op.
+        pool._evict_stopped(iid, live.engine, "eof")
+        pool._evict_stopped(iid, live.engine, "eof")
+        pool._evict_stopped("never-existed", dead_engine, "eof")
+        await pool.drain_evictions()
+    finally:
+        await pool.close_all(force=True)
+
+
+async def test_deliberate_close_is_not_reported_as_an_eviction(ctx, caplog) -> None:
+    """`terminal.evicted_on_stop` must mean "this died", not "this was closed".
+
+    `pool.close` awaits `session.close()` BEFORE popping the registry entry, so
+    the callback fires while the session is still registered and every ordinary
+    close reached the eviction path. An operator grepping for dropped SSH
+    connections got one hit per deliberate close and no way to tell them apart,
+    and the session would have been torn down twice.
+    """
+    pool = TerminalPool(ctx)
+    engine = SimpleNamespace()
+    session = SimpleNamespace(connector_type="pty", engine=engine, close=AsyncMock())
+    pool._sessions["bye"] = session  # type: ignore[assignment]
+
+    with caplog.at_level("INFO"):
+        pool._evict_stopped("bye", engine, "closed")
+    await pool.drain_evictions()
+
+    session.close.assert_not_awaited()
+    assert "evicted_on_stop" not in caplog.text
+    # Left registered on purpose: `pool.close` pops it after its own teardown.
+    assert "bye" in pool._sessions
+
+
+async def test_eviction_invalidates_the_dashboard(ctx, monkeypatch) -> None:
+    """The dashboard is the stated motivation, so tell it the session is gone.
+
+    `terminal_launch` and `terminal_close` both publish a `sessions`
+    invalidation; without one here an open dashboard keeps rendering a dead
+    terminal until its next `/api/sessions` poll.
+    """
+    published: list[str] = []
+    monkeypatch.setattr(pool_module, "publish_dashboard_invalidation_nowait", published.append)
+
+    pool = TerminalPool(ctx)
+    engine = SimpleNamespace()
+    pool._sessions["gone"] = SimpleNamespace(connector_type="pty", engine=engine, close=AsyncMock())  # type: ignore[assignment]
+
+    pool._evict_stopped("gone", engine, "eof")
+    await pool.drain_evictions()
+
+    assert published == ["sessions"]
+
+
+async def test_poll_loop_death_evicts_and_tears_down_without_deadlock(ctx) -> None:
+    """The `error` stop arrives from a different call site than `eof`.
+
+    An EOF stop is recorded from INSIDE `_poll_loop`; an unexpected exception is
+    recorded from `_on_poll_done`, an asyncio done-callback. Teardown then calls
+    `engine.stop()`, which awaits `_poll_task` -- the very task whose completion
+    triggered this. Scheduling teardown instead of running it inline is what
+    keeps that from awaiting itself, and this exercises the path rather than
+    reasoning about it.
+    """
+    pool = TerminalPool(ctx)
+    try:
+        iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+        session = pool.get(iid)
+
+        async def explode() -> list[object]:
+            raise RuntimeError("connector blew up")
+
+        session.engine._connector.poll_messages = explode
+
+        await _wait_until(lambda: pool.maybe_get(iid) is None)
+        assert pool.maybe_get(iid) is None, "a poll-loop death must evict"
+
+        await asyncio.wait_for(pool.drain_evictions(), timeout=10.0)
+        assert session.recorder._fh.closed, "error-path eviction leaked its recording handle"
+
+        with pytest.raises(KeyError) as exc_info:
+            pool.get(iid)
+        assert "error" in str(exc_info.value)
+    finally:
+        await pool.close_all(force=True)
+
+
+async def test_close_racing_an_eviction_is_safe(ctx) -> None:
+    """`pool.close` and an eviction teardown can both close one session.
+
+    `close` awaits `session.close()` before popping, so a connector dying at
+    that moment schedules a teardown for a session `close` is already tearing
+    down. Both must be able to run: `engine.stop()` clears `_poll_task`,
+    suppresses a second `connector.stop()`, and `_record_stop` is fire-once,
+    while `Recorder.close` checks `_fh.closed` -- so the second pass is a
+    no-op rather than an error surfacing to the caller.
+    """
+    pool = TerminalPool(ctx)
+    iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+    session = pool.get(iid)
+
+    # Two closes of the same live session, concurrently, as the race would.
+    results = await asyncio.gather(
+        pool.close(iid, force=True),
+        pool._teardown_evicted(session),
+        return_exceptions=True,
+    )
+    assert not any(isinstance(r, BaseException) for r in results), results
+    assert pool.maybe_get(iid) is None
+    assert session.recorder._fh.closed
+
+    # And a third, sequential, close still does not raise.
+    await pool._teardown_evicted(session)
+    await pool.close_all(force=True)
+
+
+async def test_launch_race_eviction_reports_the_real_stop_reason(ctx, monkeypatch) -> None:
+    """The launch-race path must not invent a reason.
+
+    A connector can die inside `start()`, before the session is registered, so
+    `launch` re-checks `engine.stopped` and evicts itself. That path had no way
+    to learn HOW the terminal died -- the engine recorded only a boolean -- so
+    it passed a hardcoded "eof". A launch that died with an `error` was then
+    logged and reported to the caller as a clean end-of-file, which is exactly
+    backwards: the error case is the one worth diagnosing.
+    """
+    real_start = TerminalEngine.start
+
+    async def start_then_die(self) -> None:
+        await real_start(self)
+        # What `_on_poll_done` does for an unexpected poll-loop death, but
+        # landing before `launch` has registered the session.
+        self._record_stop("error")
+
+    monkeypatch.setattr(TerminalEngine, "start", start_then_die)
+
+    pool = TerminalPool(ctx)
+    try:
+        iid = (await pool.launch(kind="pty", connector_config={"command": "/bin/cat"}))["instance_id"]
+        await pool.drain_evictions()
+
+        assert pool.maybe_get(iid) is None, "a terminal that died during start must not stay registered"
+        with pytest.raises(KeyError) as exc_info:
+            pool.get(iid)
+        assert "error" in str(exc_info.value)
+        assert "eof" not in str(exc_info.value)
+    finally:
+        await pool.close_all(force=True)
+
+
+async def test_lookup_after_eviction_says_the_connector_died(ctx) -> None:
+    """An evicted id must not answer like an id that never existed.
+
+    Once the session is gone every `terminal_*` tool fails at pool lookup, so
+    the lookup error is the only place left to say WHY -- otherwise the agent
+    is told "no terminal session 'abc'" for a terminal it just watched work,
+    and `send_input`'s "input was NOT delivered" guard is unreachable.
+    """
+    pool = TerminalPool(ctx)
+    try:
+        iid = (await pool.launch(kind="pty", connector_config={"command": TRUE_BIN}))["instance_id"]
+        await _wait_until(lambda: pool.maybe_get(iid) is None)
+        await pool.drain_evictions()
+
+        with pytest.raises(KeyError) as exc_info:
+            pool.get(iid)
+        assert "eof" in str(exc_info.value)
+
+        with pytest.raises(KeyError) as unknown_info:
+            pool.get("never-existed")
+        assert "eof" not in str(unknown_info.value)
     finally:
         await pool.close_all(force=True)
