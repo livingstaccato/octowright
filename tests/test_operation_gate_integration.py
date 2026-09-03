@@ -138,10 +138,19 @@ def test_core_page_mixin_stays_below_loc_ceiling() -> None:
     one fired on an ordinary two-line feature addition while the file sat
     hundreds of lines under the real limit.
     """
-    from scripts.check_max_loc import MAX_LOC
+    # mutmut copies the project into a `mutants/` workdir and does not copy
+    # `scripts/`, so this import is an unconditional collection error there --
+    # and with `-x` in mutmut's own pytest args, it aborted the whole stats run
+    # before a single mutant executed. Skipping is right rather than vendoring
+    # the constant: under `mutants/` this would be measuring a mutated copy of
+    # the tree, which is not what the ceiling is about.
+    check_max_loc = pytest.importorskip(
+        "scripts.check_max_loc",
+        reason="scripts/ is not copied into mutmut's mutants/ workdir",
+    )
 
     with Path("src/octowright/session/core_page_mixin.py").open() as handle:
-        assert sum(1 for _ in handle) <= MAX_LOC
+        assert sum(1 for _ in handle) <= check_max_loc.MAX_LOC
 
 
 def test_core_expect_mixin_module_exists_and_is_importable() -> None:
