@@ -155,6 +155,7 @@ class ExpectJsAction(MacroActionBase):
     action: Literal["expect_js"]
     expression: str
     equals: NotRequired[object]
+    timeout_ms: NotRequired[int | None]
 
 
 class MockRouteAction(MacroActionBase):

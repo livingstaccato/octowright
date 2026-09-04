@@ -417,6 +417,20 @@ async def test_browser_expect_js_truncates_large_result(_patch_pool: MagicMock) 
 
 
 @pytest.mark.anyio
+async def test_browser_expect_js_passes_timeout_to_the_session(
+    _patch_pool: MagicMock,
+) -> None:
+    s = _session()
+    s.expect_js = AsyncMock(return_value=True)
+    _patch_pool.get.return_value = s
+
+    out = await _inspect.browser_expect_js("i", "window.ready", timeout_ms=125_000)
+
+    assert out["ok"] is True
+    s.expect_js.assert_awaited_once_with("window.ready", None, timeout_ms=125_000)
+
+
+@pytest.mark.anyio
 async def test_browser_expect_js_full_mode_preserves_result(_patch_pool: MagicMock) -> None:
     s = _session()
     value = {"items": ["x" * 20]}

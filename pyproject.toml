@@ -389,6 +389,7 @@ source_paths = [
 pytest_add_cli_args_test_selection = [
     "tests/artifacts_paths/test_run_id_containment.py",
     "tests/field_diagnostics/test_macro_failure_console.py",
+    "tests/macro_lint/test_credential_thresholds.py",
     "tests/macro_lint/test_cli_export_coverage.py",
     "tests/macro_lint/test_cli_export_execution.py",
     "tests/macro_lint/test_cli_export_semantic.py",
@@ -408,6 +409,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_a11y_dragdrop_macro.py",
     "tests/test_aria_playback.py",
     "tests/test_artifacts_digest.py",
+    "tests/test_artifacts_evidence.py",
+    "tests/test_artifacts_models.py",
     "tests/test_artifacts_paths.py",
     "tests/test_artifacts_redaction.py",
     "tests/test_artifacts_reports.py",

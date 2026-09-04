@@ -136,6 +136,7 @@ async def browser_expect_selector(
     description=(
         "Assert a JavaScript expression evaluates to a truthy value (or equals `equals` "
         "if supplied). The expression runs in the page, like browser_evaluate. "
+        "Pass timeout_ms to override the default 30-second evaluation bound. "
         "The stringified result is capped by default to bound token cost; pass "
         "max_chars=N for a custom cap or full=True to disable truncation."
     ),
@@ -144,11 +145,12 @@ async def browser_expect_js(
     instance_id: str,
     expression: str,
     equals: Any = None,
+    timeout_ms: int | None = None,
     max_chars: int | None = None,
     full: bool = False,
 ) -> BrowserExpectJsResult:
     async with browser_operation(pool, instance_id, "browser_expect_js") as session:
-        result = await session.expect_js(expression, equals)
+        result = await session.expect_js(expression, equals, timeout_ms=timeout_ms)
         bounded = _bounded_rendered_value(result, field="result", max_chars=max_chars, full=full)
         out: BrowserExpectJsResult = {"ok": True}
         out["result"] = bounded["result"]

@@ -110,9 +110,20 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_selector", selector=selector, present=present)
 
     @gated_operation("browser_expect_js")
-    async def expect_js(self, expression: str, equals: Any = None) -> Any:
-        """Evaluate *expression* in the page and assert it is truthy (or equals *equals*)."""
-        result = await bounded(self._target().evaluate(expression), operation="browser_expect_js")
+    async def expect_js(
+        self,
+        expression: str,
+        equals: Any = None,
+        *,
+        timeout_ms: int | None = None,
+    ) -> Any:
+        """Evaluate *expression* and assert it, bounded by ``timeout_ms`` when set."""
+        timeout = None if timeout_ms is None else timeout_ms / 1000
+        result = await bounded(
+            self._target().evaluate(expression),
+            operation="browser_expect_js",
+            timeout=timeout,
+        )
         if equals is not None:
             if result != equals:
                 raise RuntimeError(

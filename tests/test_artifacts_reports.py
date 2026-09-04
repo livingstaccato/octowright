@@ -11,7 +11,7 @@ from typing import Any
 
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.artifacts.models import new_manifest, new_run_result
-from octowright.artifacts.reports import write_artifact_manifest, write_run_bundle
+from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 
 
 def test_evidence_builder_creates_stable_ids(tmp_path: Path) -> None:
@@ -265,3 +265,106 @@ def test_write_run_bundle_uses_atomic_write_text(tmp_path: Path, monkeypatch: An
 
     assert [path.name for path, _, _ in calls] == ["result.json", "evidence.json", "summary.md"]
     assert {encoding for _, _, encoding in calls} == {"utf-8"}
+
+
+# ─── summary rendering: the fallbacks nothing exercised ──────────────────────
+#
+# Every branch below is a fallback -- the path taken when a field is absent,
+# empty, or the wrong type. The suite only ever rendered fully-populated
+# records, so each fallback was free to invert without a test noticing.
+
+
+def _run(**overrides: Any) -> dict[str, Any]:
+    base = new_run_result(
+        run_id="run_0001",
+        status="ok",
+        instance_id="inst-1",
+        macro="login",
+        args_used={},
+        executed=3,
+        skipped=1,
+        error=None,
+        recording_path=None,
+    )
+    base.update(overrides)
+    return base
+
+
+def test_a_blank_stored_summary_is_rebuilt_rather_than_rendered_empty(tmp_path: Path) -> None:
+    """``isinstance(stored, str) and stored`` -- the emptiness half is load-bearing.
+
+    Every artifact written before ``summary`` was persisted lacks the key, and
+    a bundle can also carry it as ``""``. Relaxing the ``and`` to an ``or``
+    returns that empty string instead of rebuilding, so re-verifying an
+    existing run replaces the one sentence saying what it did with a blank --
+    on the code path whose entire purpose is to add information.
+    """
+    refresh_run_summary(run_dir=tmp_path, result=_run(summary=""), evidence=[], verification={})
+
+    body = (tmp_path / "summary.md").read_text()
+
+    assert "Ran macro login: status=ok, executed=3, skipped=1." in body
+
+
+def test_a_stored_summary_is_preferred_over_the_rebuilt_one(tmp_path: Path) -> None:
+    """The other side: a real stored summary must survive the refresh."""
+    refresh_run_summary(
+        run_dir=tmp_path, result=_run(summary="Checked out as Tanuki Tim."), evidence=[], verification={}
+    )
+
+    assert "Checked out as Tanuki Tim." in (tmp_path / "summary.md").read_text()
+
+
+def test_a_log_excerpt_without_a_string_preview_does_not_break_the_bundle(tmp_path: Path) -> None:
+    """The ``isinstance`` half of the redaction guard is what keeps this from raising.
+
+    ``redact_preview`` runs a regex over its argument. Relax the ``and`` to an
+    ``or`` and a ``log_excerpt`` whose ``preview`` is absent hands ``None`` to
+    it -- a ``TypeError`` raised while writing the report for a run that has
+    already finished, losing the bundle rather than the field.
+    """
+    evidence = [{"id": "ev_001", "type": "log_excerpt", "path": "/tmp/x.log", "offset": 0}]
+
+    refresh_run_summary(run_dir=tmp_path, result=_run(), evidence=evidence, verification={})
+
+    assert "- `ev_001` `log_excerpt`" in (tmp_path / "summary.md").read_text()
+
+
+def test_the_no_evidence_notice_appears_only_when_there_is_none(tmp_path: Path) -> None:
+    """``if not evidence`` -- inverted, the report says the opposite of the truth.
+
+    Both directions are asserted because either alone passes under the
+    inversion for the case it does not cover: a report that claims nothing was
+    captured while listing records, or one that lists nothing and does not say
+    why.
+    """
+    refresh_run_summary(run_dir=tmp_path, result=_run(), evidence=[], verification={})
+    assert "No evidence records captured." in (tmp_path / "summary.md").read_text()
+
+    builder = EvidenceBuilder()
+    builder.screenshot(path=tmp_path / "a.png", label="before")
+    refresh_run_summary(run_dir=tmp_path, result=_run(), evidence=builder.records, verification={})
+    assert "No evidence records captured." not in (tmp_path / "summary.md").read_text()
+
+
+def test_an_evidence_label_falls_back_through_description_to_type(tmp_path: Path) -> None:
+    """``label or description or type`` -- each rung has to be reachable.
+
+    The chain exists because the three record kinds carry different naming
+    fields: ``screenshot`` has ``label``, ``artifact`` has ``description``, and
+    a record with neither still has to render as something. Re-associating the
+    ``or``s into an ``and`` collapses a rung, and the line renders with an
+    empty label -- a bullet in the report pointing at nothing.
+    """
+    evidence = [
+        {"id": "ev_001", "type": "screenshot", "label": "before"},
+        {"id": "ev_002", "type": "artifact", "description": "the exported script"},
+        {"id": "ev_003", "type": "log_excerpt"},
+    ]
+
+    refresh_run_summary(run_dir=tmp_path, result=_run(), evidence=evidence, verification={})
+    body = (tmp_path / "summary.md").read_text()
+
+    assert "- `ev_001` `screenshot`: before" in body
+    assert "- `ev_002` `artifact`: the exported script" in body
+    assert "- `ev_003` `log_excerpt`: log_excerpt" in body
