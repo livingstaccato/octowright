@@ -490,3 +490,71 @@ def test_macro_lint_tool_wrapper_missing_macro(monkeypatch: pytest.MonkeyPatch, 
 
     with pytest.raises(FileNotFoundError):
         server_macros_mod.macro_lint(name="does-not-exist")
+
+
+# ---------------------------------------------------------------------------
+# Accept side: the alternatives an "or" offers, and the emptiness an "or []" hides
+#
+# Every check above asserts that a BAD macro is reported. None asserted that a
+# good one is not, and a rejection test cannot tell "this alternative is
+# accepted" from "this alternative was never considered" -- so mutation testing
+# left both `or`s in the drag check and both in `if_selector` alive. A linter
+# that rejects valid input is worse than one that misses invalid input: it
+# blocks the dashboard save outright.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source_key", "target_key"),
+    [
+        ("source", "target"),
+        ("source_selector", "target_selector"),
+        ("source", "target_selector"),
+        ("source_selector", "target"),
+    ],
+)
+def test_drag_accepts_either_spelling_of_each_endpoint(source_key: str, target_key: str) -> None:
+    """``source`` OR ``source_selector`` -- either alone is a complete endpoint.
+
+    Both spellings exist because ``browser_drag`` accepts both, and the check
+    is an ``or`` precisely so a macro need not carry the pair. Tightening it to
+    an ``and`` demands both and reports every valid drag as missing a field.
+    All four combinations are covered because the two endpoints are separate
+    checks and a single combination leaves one of them unproven.
+    """
+    issues = lint_macro(_macro([{"action": "drag", source_key: "#a", target_key: "#b"}]))
+
+    assert _codes(issues) == []
+
+
+def test_if_selector_with_an_empty_selector_is_still_reported() -> None:
+    """``"selector" not in action or not action.get("selector")`` -- the emptiness half.
+
+    A present-but-empty ``selector`` is what a dashboard editor produces when
+    the field is cleared, and it is exactly as broken as an absent one: the
+    branch condition can never be evaluated. Only the second half of the ``or``
+    catches it, so joining the two with ``and`` lets it through to replay.
+    """
+    issues = lint_macro(_macro([{"action": "if_selector", "selector": "", "then": [{"action": "click"}]}]))
+
+    assert "if_selector_missing_selector" in _codes(issues)
+
+
+def test_if_selector_with_only_an_else_branch_is_not_reported_as_empty() -> None:
+    """``action.get("else") or []`` supplies a default, it does not discard the value.
+
+    An ``if_selector`` that acts only when the selector is ABSENT is a real
+    macro shape -- dismiss-the-banner-if-present inverted. Turning that ``or``
+    into an ``and`` yields ``[]`` for a populated branch, so the emptiness
+    check sees two empty branches and warns about a macro that has one.
+    """
+    issues = lint_macro(_macro([{"action": "if_selector", "selector": "#x", "else": [{"action": "click"}]}]))
+
+    assert "if_selector_empty_branches" not in _codes(issues)
+
+
+def test_if_selector_with_only_a_then_branch_is_not_reported_as_empty() -> None:
+    """The mirror case, so neither branch's default can be broken alone."""
+    issues = lint_macro(_macro([{"action": "if_selector", "selector": "#x", "then": [{"action": "click"}]}]))
+
+    assert "if_selector_empty_branches" not in _codes(issues)

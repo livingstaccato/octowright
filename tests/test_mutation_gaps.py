@@ -164,3 +164,77 @@ def test_list_personas_reports_the_persona_directory_path(tmp_path: Path, monkey
     assert entries[0]["path"] == str(created)
     assert Path(entries[0]["path"]).is_dir()
     assert entries[0]["display_name"] == "Ziggy Zebra"
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-03 batch: cap boundaries and `or` fallbacks
+#
+# Five more of the same kind, from the run that first reported a real mutation
+# score (80%). Each is a comparison or an `or` whose two sides were never
+# distinguished by any input the suite supplies.
+# ---------------------------------------------------------------------------
+
+
+def test_a_console_message_exactly_at_the_cap_is_returned_unchanged() -> None:
+    """``len(text) <= CAP``, not ``<``.
+
+    The value is returned by identity when it fits, so the off-by-one does not
+    merely mis-measure -- it appends ``…[truncated]`` to a message that was
+    complete, on the macro-failure path where that text is the diagnostic an
+    agent reads to explain why a run died.
+    """
+    from octowright.macros.execution import MACRO_FAILURE_CONSOLE_TEXT_CHARS, _truncate_console_message
+
+    exactly = {"level": "error", "text": "x" * MACRO_FAILURE_CONSOLE_TEXT_CHARS}
+    assert _truncate_console_message(exactly) is exactly
+
+    over = {"level": "error", "text": "x" * (MACRO_FAILURE_CONSOLE_TEXT_CHARS + 1)}
+    assert _truncate_console_message(over)["text"].endswith("…[truncated]")
+
+
+def test_a_forty_character_value_is_not_truncated_in_an_action_description() -> None:
+    """``len(s) > 40`` -- a value that fits exactly must keep its last character.
+
+    ``s[:39] + "…"`` is one character shorter than the input, so at the
+    boundary the ellipsis replaces real content and the description claims
+    there is more when there is not.
+    """
+    from octowright.macros.descriptions import describe_action
+
+    exactly_forty = "a" * 40
+    assert describe_action({"action": "fill", "value": exactly_forty}).endswith(exactly_forty)
+    assert "…" not in describe_action({"action": "fill", "value": exactly_forty})
+    assert describe_action({"action": "fill", "value": "a" * 41}).endswith("…")
+
+
+def test_a_usable_parameter_name_becomes_the_identifier_rather_than_the_fallback() -> None:
+    """``... or "arg"`` supplies a fallback; it must not replace a usable name.
+
+    Under the ``and`` mutation every parameter in an exported script is named
+    ``arg`` -- so a two-parameter macro exports two identically-named
+    arguments -- and a name that cleans to nothing raises ``IndexError`` on
+    ``cleaned[0]`` instead of falling back.
+    """
+    from octowright.artifacts.script_export import _identifier
+
+    assert _identifier("email") == "email"
+    assert _identifier("user email") == "user_email"
+    assert _identifier("!!!") == "arg"
+
+
+def test_a_cli_flag_is_derived_from_the_parameter_name_not_the_identifier() -> None:
+    """``re.sub(...) or ident.replace("_", "-")`` -- the fallback is for unusable names only.
+
+    The two differ whenever ``_identifier`` had to repair the name: a
+    parameter called ``2fa code`` yields the flag ``--2fa-code`` from the
+    original and ``--arg-2fa-code`` from the identifier, because a leading
+    digit is illegal in a Python identifier but perfectly legal in a flag.
+    Taking the identifier's spelling silently renames the exported script's
+    CLI away from what the macro author wrote.
+    """
+    from octowright.artifacts.script_export import _parser_line
+
+    line = _parser_line(("2fa code", "arg_2fa_code"), None)
+
+    assert "'--2fa-code'" in line
+    assert "dest='arg_2fa_code'" in line

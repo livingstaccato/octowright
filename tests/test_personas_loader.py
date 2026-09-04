@@ -283,3 +283,59 @@ def test_create_persona_empty_display_name_omits_field(tmp_path, fresh_personas)
     pdir = fresh_personas.create_persona("cosmo", display_name="")
     doc = yaml.safe_load((pdir / "profile.yaml").read_text())
     assert "display_name" not in doc
+
+
+# ---------------------------------------------------------------------------
+# Optional-field guards: the difference between "absent", "null", and "wrong"
+#
+# `_validate_default_macros` and the `app` check both open with a guard that
+# means "this field is optional -- skip it". Every existing test supplies a
+# well-formed value or omits the field entirely, so the guards themselves were
+# never exercised, and mutation testing left all four alive. Each one fails in
+# both directions when inverted: a valid persona stops loading, or an invalid
+# one loads unchecked.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["default_macros", "app"])
+def test_an_explicitly_null_optional_field_loads(tmp_path, fresh_personas, field):
+    """``field: null`` is how YAML spells "declared, not set", and must be accepted.
+
+    A round-trip through a YAML editor turns an emptied key into ``null``
+    rather than removing it. Inverting either guard makes that a hard load
+    failure -- the persona disappears from ``persona list``, and every macro
+    launched as it stops working, on a file the operator only opened.
+    """
+    _write_persona(tmp_path, "u", {"name": "u", field: None})
+
+    persona = fresh_personas.load_persona("u")
+
+    assert persona.name == "u"
+
+
+@pytest.mark.parametrize("bad", [["ok", 5], "not-a-list", 7])
+def test_a_malformed_default_macros_is_still_refused(tmp_path, fresh_personas, bad):
+    """The other direction: skipping the guard must not skip the validation.
+
+    Inverting it to ``if "default_macros" in doc`` returns before any type
+    check runs, so a non-list -- or a list with a non-string in it -- is
+    accepted and only fails later, when something tries to run ``5`` as a
+    macro name.
+    """
+    _write_persona(tmp_path, "u", {"name": "u", "default_macros": bad})
+
+    with pytest.raises(ValueError, match=r"default_macros"):
+        fresh_personas.load_persona("u")
+
+
+def test_a_non_mapping_app_field_is_refused(tmp_path, fresh_personas):
+    """``doc["app"] is not None`` guards the type check, it does not replace it.
+
+    Flip it to ``is None`` and the two clauses become contradictory -- ``None``
+    is never a ``dict``, so the only value that can raise is ``null``, and
+    every genuinely wrong type passes. ``app`` is read as a mapping downstream.
+    """
+    _write_persona(tmp_path, "u", {"name": "u", "app": "not-a-mapping"})
+
+    with pytest.raises(ValueError, match=r"'app' must be a mapping"):
+        fresh_personas.load_persona("u")
