@@ -318,3 +318,41 @@ def test_an_unknown_check_type_is_named_as_such() -> None:
     status, message, _matched = _evaluate_check_inner("no_such_check", {}, {}, [])
     assert status == "failed"
     assert message == "unknown_check_type"
+
+
+def test_evidence_exists_is_dispatched() -> None:
+    """Ensure evidence_exists routes to _eval_evidence_exists via _evaluate_check_inner."""
+    status, _msg, _matched = _evaluate_check_inner("evidence_exists", {"id": "ev_001"}, {}, [_evidence(id="ev_001")])
+    assert status == "passed"
+
+
+def test_assertion_passed_is_dispatched() -> None:
+    """Ensure assertion_passed routes to _eval_assertion_passed via _evaluate_check_inner."""
+    status, _msg, _matched = _evaluate_check_inner(
+        "assertion_passed", {"id": "ev_001"}, {}, [_evidence(id="ev_001", type="assertion", status="passed")]
+    )
+    assert status == "passed"
+
+
+def test_evaluate_check_logs_warning_on_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """A failed check must emit a structured warning log."""
+    import logging
+
+    from octowright.artifacts.verification import _evaluate_check
+
+    caplog.set_level(logging.WARNING)
+    _evaluate_check("macro_run", "my_macro", "cp1", {"type": "result_status", "status": "ok"}, {"status": "failed"}, [])
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "WARNING"
+    assert caplog.records[0].message == "octowright.artifact.verify.check_failed"
+
+
+def test_evaluate_check_does_not_log_warning_on_pass(caplog: pytest.LogCaptureFixture) -> None:
+    """A passed check must not emit the failure warning."""
+    import logging
+
+    from octowright.artifacts.verification import _evaluate_check
+
+    caplog.set_level(logging.WARNING)
+    _evaluate_check("macro_run", "my_macro", "cp1", {"type": "result_status", "status": "ok"}, {"status": "ok"}, [])
+    assert len(caplog.records) == 0
