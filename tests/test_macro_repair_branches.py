@@ -513,6 +513,22 @@ class TestRepairApply:
             repair_apply("demo", -1, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
         assert writer.calls == []
 
+    def test_the_index_one_past_the_end_is_out_of_range(self) -> None:
+        """``0 <= action_index < len(actions)`` is half-open, as indexing requires.
+
+        The two tests above use 5 and -1 against a one-action macro, so both
+        miss by more than one and neither distinguishes ``<`` from ``<=``.
+        Relaxing it admits exactly this index, which then raises ``IndexError``
+        deeper in the function -- after the range guard the docstring promises
+        happens "before any write", and with an error naming an internal
+        failure instead of pointing at ``macro_repair_preview``.
+        """
+        writer = _Writer()
+        macro = _macro(actions=[{"action": "click", "selector": "#x", "label": "L"}])
+        with pytest.raises(ValueError, match="out of range"):
+            repair_apply("demo", 1, load_macro=lambda _: macro, write_macro=writer, semantic_keys=SEMANTIC_KEYS)
+        assert writer.calls == []
+
     def test_action_without_semantic_locator_raises_and_does_not_write(self) -> None:
         """A bare selector with no stored role/label/text/test_id is not auto-repairable."""
         writer = _Writer()

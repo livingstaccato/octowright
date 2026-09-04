@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.session import core_expect_mixin
 from octowright.session.core import BrowserSession
 
 # ---------------------------------------------------------------------------
@@ -235,3 +236,27 @@ async def test_check_js_falsy_none_equals_raises(mock_session: BrowserSession) -
     mock_session.page.evaluate.return_value = 0
     with pytest.raises(RuntimeError, match="not truthy"):
         await mock_session.expect_js("0")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("timeout_ms", "expected_seconds"),
+    [(None, None), (125_000, 125.0), (0, 0.0)],
+)
+async def test_expect_js_threads_its_timeout_to_the_unbounded_call_guard(
+    monkeypatch: pytest.MonkeyPatch,
+    mock_session: BrowserSession,
+    timeout_ms: int | None,
+    expected_seconds: float | None,
+) -> None:
+    seen: list[tuple[str, float | None]] = []
+
+    async def bounded(awaitable, *, operation: str, timeout: float | None = None):
+        seen.append((operation, timeout))
+        return await awaitable
+
+    monkeypatch.setattr(core_expect_mixin, "bounded", bounded)
+    mock_session.page.evaluate.return_value = True
+
+    assert await mock_session.expect_js("true", timeout_ms=timeout_ms) is True
+    assert seen == [("browser_expect_js", expected_seconds)]

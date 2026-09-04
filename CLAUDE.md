@@ -109,6 +109,35 @@ built-in list rather than extending it, so the defaults are restated alongside
 `mutants`; dropping one would quietly start collecting `build/`, `dist/` or
 `node_modules/`.
 
+**Read the score from `export-cicd-stats`, never from `mutmut results`.**
+`mutmut results` prints only the mutants that still need attention — survived,
+`no tests`, `timeout` — and **omits every killed one**, so its line count is the
+size of the backlog and not the population. Reading it as the population turns
+an 80% score into a reported 2.8%, which is what happened on 2026-09-03 and sent
+a triage after a harness problem that did not exist. The second half of the same
+mistake is parsing the status column by last word: `no tests` ends in "tests"
+and reads as a kill. `uv run mutmut export-cicd-stats` writes
+`mutants/mutmut-cicd-stats.json` with `killed`/`survived`/`no_tests`/`timeout`/
+`total` as integers, and that file is the only honest denominator.
+
+Two things are worth knowing before acting on a survivor list. **Count is the
+wrong ranking** — a big module dominates it while scoring fine (`macros.artifacts`
+led with 190 survivors at 85%, while `artifacts.evidence` sat at 21%), so rank by
+rate. And **most survivors are not logic**: on that run 81% were string-literal or
+`None` substitutions — dict keys, log event names, error wording — leaving 77
+genuine logic mutations. A handful of whole-record equality assertions kills the
+string bulk in batches (three of them took `artifacts.evidence` from 21% to
+100%); the logic ones are worth reading individually.
+
+**Verify a kill by applying the mutant, not by trusting a green test.** A test
+written against correct code passes whether or not it would notice the code
+becoming wrong. `mutmut show <mutant>` prints the diff; apply it to `src/`, watch
+the new test fail, revert. Note that `mutmut show` reports a mutant's CURRENT
+status, so a mutant absent from `results` is already dead — check before writing
+a test for it. Some survivors are equivalent and cannot be killed at all:
+`run_sequence`'s `zip(..., strict=True)` is one, since the list it zips against
+is built with `range(len(names))` and can never differ in length.
+
 **`.pytest-current-test` (git-ignored).** `tests/conftest.py` writes
 `<phase> <nodeid>` there at the start of every setup/call/teardown. pytest-
 timeout's dump titles each section with a THREAD name and the process exits
