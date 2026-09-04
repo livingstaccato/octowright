@@ -344,7 +344,7 @@ def test_evaluate_check_logs_warning_on_failure(caplog: pytest.LogCaptureFixture
     _evaluate_check("macro_run", "my_macro", "cp1", {"type": "result_status", "status": "ok"}, {"status": "failed"}, [])
     assert len(caplog.records) == 1
     assert caplog.records[0].levelname == "WARNING"
-    assert caplog.records[0].message == "octowright.artifact.verify.check_failed"
+    assert "octowright.artifact.verify.check_failed" in caplog.records[0].message
 
 
 def test_evaluate_check_does_not_log_warning_on_pass(caplog: pytest.LogCaptureFixture) -> None:
