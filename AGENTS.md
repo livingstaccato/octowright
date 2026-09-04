@@ -131,8 +131,25 @@ string bulk in batches (three of them took `artifacts.evidence` from 21% to
 
 **Verify a kill by applying the mutant, not by trusting a green test.** A test
 written against correct code passes whether or not it would notice the code
-becoming wrong. `mutmut show <mutant>` prints the diff; apply it to `src/`, watch
-the new test fail, revert. Note that `mutmut show` reports a mutant's CURRENT
+becoming wrong. `mutmut show <mutant>` prints the diff, and **`mutmut apply
+<mutant>` writes that one mutation into `src/`** — so the whole loop is four
+steps and needs no tooling of its own:
+
+```bash
+uv run mutmut apply <mutant>       # break src/ in exactly one place
+uv run pytest <test> -q --no-cov   # the new test MUST fail here
+git checkout -- src/               # put src/ back
+```
+
+Read the verdict from **pytest's exit code, not its output**. Grepping stdout
+for `FAILED` silently never matches — the output is ANSI-coloured, so the token
+is not at the start of the line and `^FAILED` finds nothing. That inverts every
+verdict at once and reports a dead mutant as a survivor, which reads as a much
+more alarming result than it is. `mutmut apply` is easy to miss in
+`mutmut --help`; a whole-function-swap script was once written to do what it
+already does.
+
+Note that `mutmut show` reports a mutant's CURRENT
 status, so a mutant absent from `results` is already dead — check before writing
 a test for it. Some survivors are equivalent and cannot be killed at all:
 `run_sequence`'s `zip(..., strict=True)` is one, since the list it zips against
