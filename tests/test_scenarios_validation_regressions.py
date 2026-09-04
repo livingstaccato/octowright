@@ -232,3 +232,96 @@ def test_an_omitted_optional_mock_route_field_stays_absent() -> None:
     assert normalized == {"pattern": "**/api"}
     for field in ("status", "body", "content_type", "headers"):
         assert field not in normalized
+
+
+# ─── mock-route TYPE validation ──────────────────────────────────────────────
+#
+# The range boundaries above are pinned; the type gates in front of them were
+# not. `_validate_mock_route_content_type` and `_validate_mock_route_headers`
+# had no covering test at all -- mutmut reported every mutant in both as "no
+# tests" rather than "survived" -- and the status/body type checks were only
+# ever exercised with values that also failed the range or `isinstance` test
+# they sit beside, so which clause refused was never asserted.
+
+
+def test_a_non_integer_status_is_refused_as_a_value_error() -> None:
+    """The ``not isinstance(value, int)`` clause has to short-circuit the range test.
+
+    ``"200"`` is a plausible YAML slip (quoted by accident). If the type clause
+    stops guarding, ``100 <= "200" <= 599`` raises ``TypeError`` instead --
+    which escapes ``load_yaml_scenario``'s contract of raising ``ValueError``
+    with a message naming the field, and reaches the caller as an unhandled
+    crash with no scenario name in it.
+    """
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.status.*100.*599"):
+        load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "status": "200"}), "ok")
+
+
+def test_a_null_body_is_accepted_and_a_non_string_body_is_refused() -> None:
+    """``body`` is ``str | None``, and both halves need pinning.
+
+    Asserted as a pair because the check is one ``is not None`` away from
+    meaning its own opposite: flip it and ``body: null`` -- the documented way
+    to mock an empty response -- starts raising, while ``body: 5`` sails
+    through and reaches Playwright as a non-string.
+    """
+    accepted = load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "body": None}), "ok")
+    assert accepted.fixtures["mock_routes"][0]["body"] is None
+
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.body.*string or null"):
+        load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "body": 5}), "ok")
+
+
+@pytest.mark.parametrize("bad", [None, "", 5, ["text/html"]])
+def test_content_type_must_be_a_non_empty_string(bad: object) -> None:
+    """First coverage of ``_validate_mock_route_content_type``.
+
+    Both halves of ``not isinstance(value, str) or not value`` matter: the
+    empty string is the one a mutation can drop without any wrong-type test
+    noticing, and an empty Content-Type is worse than an absent one -- it
+    overrides the default with a header the browser cannot parse.
+    """
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.content_type.*non-empty string"):
+        load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "content_type": bad}), "ok")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param("X-Trace: abc", id="string-not-mapping"),
+        pytest.param(["X-Trace"], id="list-not-mapping"),
+        pytest.param({"X-Trace": 1}, id="non-string-value"),
+        pytest.param({1: "abc"}, id="non-string-key"),
+    ],
+)
+def test_headers_must_be_a_mapping_of_strings(bad: object) -> None:
+    """First coverage of ``_validate_mock_route_headers``.
+
+    The key and value checks are separate ``isinstance`` calls inside one
+    ``all(...)``, so each needs its own case: a suite that only ever passes a
+    bad *value* leaves the key check free to be deleted. A non-string header
+    key reaches Playwright's ``fulfill`` and fails there instead, far from the
+    scenario file that wrote it.
+    """
+    with pytest.raises(ValueError, match=r"fixtures\.mock_routes\[0\]\.headers.*mapping of strings"):
+        load_yaml_scenario(_scenario_with_route({"pattern": "**/api", "headers": bad}), "ok")
+
+
+def test_a_mapping_of_strings_is_not_an_acceptable_startup_macros_value() -> None:
+    """``startup_macros`` must be a *list*, and the list check carries that alone.
+
+    A mapping satisfies ``all(isinstance(macro, str) for macro in value)`` --
+    iterating a dict yields its keys -- so the ``not isinstance(value, list)``
+    clause is the only thing refusing it. Weaken the ``or`` chain that joins
+    them and a mapping is accepted, then iterated as macro names downstream,
+    silently running the keys and discarding the values.
+    """
+    content = yaml.safe_dump(
+        {
+            "name": "bad",
+            "participants": [{"persona": "a", "kind": "webkit", "startup_macros": {"login": "ignored"}}],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"participants\[0\].*startup_macros.*list of strings"):
+        load_yaml_scenario(content, "bad")

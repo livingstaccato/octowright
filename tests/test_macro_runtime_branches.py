@@ -329,6 +329,17 @@ class TestWaitForDefaults:
         s.wait_for.assert_awaited_once_with(selector="#x", text="Ready", timeout_ms=5000)
 
 
+class TestExpectJsTimeout:
+    @pytest.mark.anyio
+    async def test_expect_js_preserves_explicit_timeout_ms(self) -> None:
+        s = _full_session()
+        await _dispatch_via_simple(
+            s,
+            {"action": "expect_js", "expression": "window.ready", "timeout_ms": 125_000},
+        )
+        s.expect_js.assert_awaited_once_with(expression="window.ready", timeout_ms=125_000)
+
+
 # --------------------------------------------------------------------------
 # Screenshot path handling
 # --------------------------------------------------------------------------
