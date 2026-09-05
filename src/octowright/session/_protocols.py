@@ -60,6 +60,7 @@ class SessionLike(Protocol):
     _websocket_fh: Any
     _websocket_frames_since_flush: int
     _websocket_last_flush_ts: float
+    _websocket_seq: int
     context: BrowserContext
     browser: Browser | None
     _video: Video | None

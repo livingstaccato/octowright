@@ -188,3 +188,58 @@ def test_tail_log_replays_completed_multibyte_line_from_saved_cursor(tmp_path):
     events2, cursor2, _ = tail_log(path, cursor)
     assert events2 == [{"action": "type", "text": "snow ☃"}]
     assert cursor2 == path.stat().st_size
+
+
+def test_capped_paging_reaches_every_event(stub_pool):
+    """`cursor` must name the first event NOT returned.
+
+    It named the end of the whole read window instead, so a caller following
+    the tool's own `next_actions` — which hand back exactly this cursor when
+    `truncated` — skipped every event the cap had left behind. Two at a time
+    through five events returned 0-1 and then nothing.
+    """
+    events = [{"action": "click", "n": n} for n in range(5)]
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    seen = []
+    cursor = 0
+    for _ in range(10):
+        result = _inspect.browser_tail_recording(instance_id="abc", since=cursor, max_events=2)
+        seen.extend(result["events"])
+        cursor = result["cursor"]
+        if not result["truncated"]:
+            break
+
+    assert seen == events
+
+
+def test_a_capped_read_is_never_reported_complete(stub_pool):
+    """`complete` and `truncated` were both True on the same response.
+
+    They cannot both hold: `complete` says the cursor reached the end of the
+    file, and `truncated` says events were left behind for the next call.
+    """
+    events = [{"action": "click", "n": n} for n in range(5)]
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0, max_events=2)
+
+    assert result["truncated"] is True
+    assert result["complete"] is False
+
+
+def test_a_zero_cap_still_advances_the_cursor(stub_pool):
+    """`max_events=0` must not become a non-advancing loop.
+
+    Returning no events while reporting `truncated` and handing back the
+    SAME cursor tells a caller following `next_actions` to ask again forever.
+    A bound of zero is meaningless, so it is floored at one -- the same rule
+    the websocket byte budget uses to guarantee a page always makes progress.
+    """
+    events = [{"action": "click", "n": n} for n in range(3)]
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0, max_events=0)
+
+    assert result["returned_event_count"] >= 1
+    assert result["cursor"] > 0

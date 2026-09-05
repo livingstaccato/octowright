@@ -34,6 +34,13 @@ _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", 
 #: sockets are evicted before open ones, so "what is connected right now"
 #: survives a churny page.
 WEBSOCKET_REGISTRY_MAX = 64
+#: Chars of a frame preview written to the MAIN session JSONL. The sidecar
+#: keeps a long one (that is the file the read tools serve from); this file has
+#: no ceiling on by default and is read by ``browser_tail_recording``, the
+#: dashboard event stream and ``capture_create(kind="recording")``, none of
+#: which asked about websockets. It was ``""`` for every frame until payload
+#: capture was fixed, so nothing had ever measured what a real one costs there.
+WEBSOCKET_RECORD_PREVIEW_CHARS = 128
 
 
 def _websocket_max_bytes() -> int:
@@ -155,8 +162,7 @@ class SessionIOMixin(SessionLike):
         last_flush = self._websocket_last_flush_ts
         if frames >= WEBSOCKET_CACHE_FLUSH_FRAMES or (now - last_flush) >= WEBSOCKET_CACHE_FLUSH_SECONDS:
             fh.flush()
-            self._websocket_frames_since_flush = 0
-            self._websocket_last_flush_ts = now
+            self._mark_websocket_flushed(now)
         else:
             self._websocket_frames_since_flush = frames
 
@@ -341,20 +347,21 @@ class SessionIOMixin(SessionLike):
         page.on("console", _on_console)
         _wire_listeners(cast("BrowserSession", self), page)
 
-    def _register_websocket(self, socket_id: Any, url: Any) -> None:
+    def _register_websocket(self, socket_id: Any, url: Any, binding_id: Any = None) -> None:
         """Record a newly opened socket, evicting a closed one if at capacity.
 
         Keys by ``str(socket_id)`` HERE rather than coercing the caller's
-        variable: that id is also written to the JSONL recording, where it
-        has always been whatever Playwright gave us (an int, from ``id()``,
-        when the socket carries no ``.id``). Coercing it upstream silently
-        changed the recording format to buy a dict key.
+        variable, so one place decides the registry's key type and the caller
+        keeps whatever it was given.
         """
         socket_id = str(socket_id)
         if socket_id not in self._websockets and len(self._websockets) >= WEBSOCKET_REGISTRY_MAX:
             self._evict_one_websocket()
         self._websockets[socket_id] = {
             "id": socket_id,
+            # What the binding called it, when it says anything at all. Never
+            # the key -- see ``_next_websocket_id``.
+            "binding_id": binding_id,
             "url": url,
             "opened_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "closed_at": None,
@@ -363,6 +370,27 @@ class SessionIOMixin(SessionLike):
             "bytes": 0,
             "error": None,
         }
+
+    def _next_websocket_id(self) -> str:
+        """A key this session owns, never an object address and never a guess.
+
+        ``id(websocket)`` was the fallback, and CPython reissues an address
+        once the object is freed -- so a page opening a socket per retry could
+        hand a NEW socket the key of a finished one, overwriting its record
+        and merging two sockets' frames into one stream under a single
+        socket_id. A per-session counter cannot collide however churny the
+        page is.
+
+        A binding-supplied ``.id`` is deliberately NOT used as the key either.
+        Nothing guarantees such a value is unique within the session, and
+        ``_register_websocket`` overwrites on a repeat -- so believing a
+        binding that handed out a duplicate (or the literal ``ws-1``) would
+        reopen exactly the merging bug the counter closes. It is kept beside
+        the key as ``binding_id`` instead, where it can be correlated without
+        deciding identity.
+        """
+        self._websocket_seq += 1
+        return f"ws-{self._websocket_seq}"
 
     def _evict_one_websocket(self) -> None:
         """Drop the oldest CLOSED socket, else the oldest of any state.
@@ -402,7 +430,20 @@ class SessionIOMixin(SessionLike):
         except Exception as exc:
             log.debug("octowright.session.websocket_flush_failed", error=repr(exc))
         else:
-            self._websocket_frames_since_flush = 0
+            self._mark_websocket_flushed()
+
+    def _mark_websocket_flushed(self, now: float | None = None) -> None:
+        """Restart BOTH halves of the batching decision.
+
+        ``_append_websocket_cache`` flushes on frames-since OR seconds-since,
+        so a caller that reset only the counter left the next frame written
+        seeing a stale stamp, taking the time branch and flushing again
+        immediately -- one batch's worth of syscall batching undone by every
+        read. One method rather than the pair written out twice, since the
+        defect being repaired WAS a second copy resetting one field.
+        """
+        self._websocket_frames_since_flush = 0
+        self._websocket_last_flush_ts = time.monotonic() if now is None else now
 
     def get_websocket_messages(
         self,
@@ -422,6 +463,7 @@ class SessionIOMixin(SessionLike):
             direction=direction,
             include_payloads=include_payloads,
             limit=limit,
+            capture_truncated=self._websocket_truncated,
         )
 
     def get_websocket_summary(self) -> dict[str, Any]:
@@ -431,12 +473,8 @@ class SessionIOMixin(SessionLike):
     def _handle_websocket(self, websocket: Any) -> None:
         """Attach frame handlers to a Playwright websocket and record lifecycle events."""
         url = getattr(websocket, "url", None)
-        socket_id = getattr(websocket, "id", None)
-        if socket_id is None:
-            socket_id = id(websocket)
-
-        self._register_websocket(socket_id, url)
-        self.recorder.record("websocket_opened", id=socket_id, url=url)
+        socket_id = self._next_websocket_id()
+        binding_id = getattr(websocket, "id", None)
 
         def _binary_preview(payload: Any) -> str:
             if isinstance(payload, str) and _looks_like_binary_text(payload):
@@ -465,9 +503,6 @@ class SessionIOMixin(SessionLike):
                 return text[:max_chars] + "…"
             return text
 
-        if not hasattr(websocket, "on"):
-            return
-
         def _on_frame(direction: str) -> Any:
             def _handler(frame: Any) -> None:
                 # playwright-python emits the payload ITSELF -- a str, or bytes
@@ -491,7 +526,13 @@ class SessionIOMixin(SessionLike):
                     id=socket_id,
                     url=url,
                     is_binary=is_binary,
-                    payload_preview=_preview_payload(payload, is_binary=is_binary),
+                    # Short here, long in the sidecar: see
+                    # WEBSOCKET_RECORD_PREVIEW_CHARS. ``payload_size`` is the
+                    # frame's real length either way, so capping the text
+                    # costs nothing a reader of this file needed.
+                    payload_preview=_preview_payload(
+                        payload, is_binary=is_binary, max_chars=WEBSOCKET_RECORD_PREVIEW_CHARS
+                    ),
                     payload_size=(len(payload) if payload is not None and hasattr(payload, "__len__") else None),
                 )
                 cache_payload_size = None
@@ -525,13 +566,13 @@ class SessionIOMixin(SessionLike):
             return _handler
 
         def _on_close() -> None:
-            entry = self._websockets.get(str(socket_id))
+            entry = self._websockets.get(socket_id)
             if entry is not None:
                 entry["closed_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             self.recorder.record("websocket_closed", id=socket_id, url=url)
 
         def _on_error(error: Any) -> None:
-            entry = self._websockets.get(str(socket_id))
+            entry = self._websockets.get(socket_id)
             if entry is not None:
                 entry["error"] = str(error)
             self.recorder.record(
@@ -547,4 +588,14 @@ class SessionIOMixin(SessionLike):
             websocket.on("close", _on_close)
             websocket.on("socketerror", _on_error)
         except Exception:
+            # Also the "this object has no ``.on`` at all" case, which used to
+            # need its own guard above and reaches the identical outcome here.
             return
+
+        # Registered only once the listeners are attached. Registering first
+        # left a socket whose wiring failed in the table with no ``close``
+        # handler to ever set ``closed_at`` -- permanently "open", and since
+        # eviction prefers closed entries, evicted LAST, so a page that tripped
+        # this repeatedly pushed out live sockets instead.
+        self._register_websocket(socket_id, url, binding_id)
+        self.recorder.record("websocket_opened", id=socket_id, url=url)

@@ -12,9 +12,38 @@ from pathlib import Path
 from typing import Any
 
 from octowright.mcp_types import BrowserTailRecordingResult, BrowserToolAction
-from octowright.recorder import tail_log
+from octowright.recorder import parse_log_line, tail_log, tail_log_lines
 from octowright.server._state import mcp, pool
 from octowright.server.profiles import annotate_next_actions_for_profile
+
+
+def _capped_events(log_path: Path, since: int, cap: int) -> tuple[list[dict[str, Any]], int, int, int]:
+    """``(events, events_in_window, cursor, total_bytes)`` for a capped read.
+
+    ``cursor`` is the byte offset of the first event NOT returned, which is
+    the only value a caller can resume from without losing the ones the cap
+    left behind. Reading the parsed window and reporting its END cursor -- as
+    this did -- silently dropped them, and the tool's own ``next_actions``
+    hand that cursor straight back when ``truncated``, so the loss was
+    instructed rather than merely possible.
+
+    The whole window is still scanned, so ``events_in_window`` stays an exact
+    count rather than becoming "however many we happened to parse".
+    """
+    events: list[dict[str, Any]] = []
+    in_window = 0
+    stopped_at: int | None = None
+    lines, window_cursor, total_bytes = tail_log_lines(log_path, since)
+    for offset, raw in lines:
+        event = parse_log_line(raw)
+        if event is None:
+            continue
+        in_window += 1
+        if len(events) < cap:
+            events.append(event)
+        elif stopped_at is None:
+            stopped_at = offset
+    return events, in_window, window_cursor if stopped_at is None else stopped_at, total_bytes
 
 
 def _count_items(counter: Counter[str]) -> list[dict[str, Any]]:
@@ -32,7 +61,9 @@ def _count_items(counter: Counter[str]) -> list[dict[str, Any]]:
         "call to read only new events (cursor pattern). When the file ends mid-line, the "
         "cursor stops at the start of the partial fragment so it will be re-read once "
         "completed; `complete` is True iff cursor == total_bytes. Pass max_events=N to "
-        "bound raw event output, or response_mode='summary' for action counts and recent "
+        "bound raw event output — the cursor then points at the first event NOT returned, so "
+        "resuming from it loses nothing and `truncated` tells you to keep going. Or use "
+        "response_mode='summary' for action counts and recent "
         "sanitized events without dumping the raw JSONL rows. A summary describes the "
         "bytes scanned by that ONE call, not the whole file — check summary.partial "
         "and keep resuming from `cursor` until it is false before reporting totals."
@@ -86,25 +117,34 @@ def browser_tail_recording(
 
     next_actions = [{"tool": "browser_tail_recording", "args": {"instance_id": instance_id, "since": new_cursor}}]
 
-    returned_events = events
-    truncated = False
     if max_events is not None:
-        capped = max(0, int(max_events))
-        returned_events = events[:capped]
-        truncated = len(returned_events) < len(events)
+        # Floored at one, not zero. A zero cap returns nothing while the
+        # corrected cursor correctly refuses to advance past events it did not
+        # return -- so `truncated` stays true and `next_actions` hands back the
+        # same cursor, telling a caller to ask again forever. A bound of zero
+        # is meaningless; a page that always makes progress is the same rule
+        # the websocket byte budget uses.
+        capped_events, in_window, capped_cursor, total_bytes = _capped_events(log_path, prev, max(1, int(max_events)))
+        truncated = len(capped_events) < in_window
+        # ``complete`` follows the corrected cursor, so it can no longer be
+        # True on the same response as ``truncated`` -- a pair that cannot
+        # both hold, and did.
+        next_actions = [
+            {"tool": "browser_tail_recording", "args": {"instance_id": instance_id, "since": capped_cursor}}
+        ]
         return {
-            "events": returned_events,
-            "cursor": new_cursor,
+            "events": capped_events,
+            "cursor": capped_cursor,
             "total_bytes": total_bytes,
-            "complete": new_cursor >= total_bytes,
-            "event_count": len(events),
-            "returned_event_count": len(returned_events),
+            "complete": capped_cursor >= total_bytes,
+            "event_count": in_window,
+            "returned_event_count": len(capped_events),
             "truncated": truncated,
             "next_actions": next_actions if truncated else [],
         }
 
     return {
-        "events": returned_events,
+        "events": events,
         "cursor": new_cursor,
         "total_bytes": total_bytes,
         "complete": new_cursor >= total_bytes,

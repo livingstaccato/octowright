@@ -559,12 +559,92 @@ frame object does not silently go empty the same way.
 Frames are read from the sidecar rather than an in-memory ring: the sidecar is
 already the full-fidelity sink, and a parallel in-memory copy would double the
 footprint of a firehose page to serve a question nobody may ask. Reads go
-through `recorder.tail_log`, which already bounds one read by bytes, lands the
-cursor on a line boundary and steps over an oversized line instead of freezing
--- all of which a socket carrying multi-megabyte frames will exercise. A read
-flushes the batched write buffer first, or it would return everything except
-the most recent frames, which are the ones someone watching a live stream
-wants.
+through `recorder.tail_log_lines`, which already bounds one read by bytes,
+lands the cursor on a line boundary and steps over an oversized line instead of
+freezing -- all of which a socket carrying multi-megabyte frames will exercise.
+A read flushes the batched write buffer first, or it would return everything
+except the most recent frames, which are the ones someone watching a live
+stream wants -- and the flush now restarts the batching clock as well as the
+frame counter, since resetting only the counter made the next frame written see
+a stale stamp and flush again immediately, undoing a batch's worth of the
+syscall batching.
+
+**Lines rather than parsed events, because `next_cursor` has to name a row.**
+`tail_log` returns a window of parsed dicts and the offset of the window's END,
+which is the right answer only for a caller that consumed all of it. A capped
+read did not, so it handed back a cursor past every frame it had skipped: ten
+frames read three at a time returned 0-2 and then nothing, and at the real
+defaults (cap 100, 8 MiB window) a socket that emitted 5,000 frames returned
+100 and silently lost 4,900. `recorder.tail_log_lines` yields each line with
+its absolute offset, so the page can end at the first frame it did NOT return
+and resume exactly there -- the rule `core_network_mixin._page_requests`
+already states and the reason a *matching* row's offset is used rather than the
+row after the last one returned. It splits on `b"\n"` rather than
+`splitlines()`, whose extra separators would make the running offset disagree
+with the bytes on disk, and it splits a **chunk at a time**: a generator over a
+whole-blob split is only lazy in appearance, since the split runs in full on
+the first `next()` -- measured at 5.51ms and a second copy of an 8 MiB window
+for a caller that stops after 100 rows, against 0.126ms chunked, and within
+noise when the whole window is consumed. `tail_log` deliberately does **not**
+route through it: its three callers all discard the offsets, and pairing them
+costs a generator resume, a tuple and an addition per line (+7% on an 8 MiB
+window, +16% on a 1 MiB one), so it keeps one C-level split of the whole blob.
+What the two share is `_read_window` -- the byte bound, the line boundary and
+the oversized-line skip -- which is the part worth not duplicating.
+
+**`truncated` covers both ways a page can be short.** It reported only the row
+cap, so a caller following "keep paging while truncated" stopped holding a
+prefix whenever the byte window cut the file first -- the derivation
+`browser_tail_recording` already got right as `new_cursor >= total_bytes`.
+Separately, `capture_truncated` reports frames dropped at CAPTURE time by
+`OCTOWRIGHT_WEBSOCKET_MAX_BYTES`. The read path used to skip the recorder's
+`websocket_truncated` marker as a non-frame row, so the one record that frames
+were missing was invisible to the tool that exists to inspect them -- and
+unlike a short page it is unrecoverable, which is why it is a separate field
+rather than folded into `truncated`. The marker alone is not enough to report
+it, though: it is written ONCE, at the end of the sidecar, so a page whose
+window does not happen to contain it would answer `false` -- which is every
+page after the one that saw it, and every caller resuming from a later cursor.
+The **session** seeds the field from its own `_websocket_truncated` state, so
+the answer holds on every page; the marker still stands on its own for a reader
+working from the file alone.
+
+**A row cap does not bound size.** `limit=1000` with `include_payloads=True`
+against a socket carrying multi-megabyte frames put hundreds of MB on the MCP
+transport in one response, the lesson `MACRO_FAILURE_CONSOLE_TEXT_CHARS`
+records. A page now also ends at `WEBSOCKET_MESSAGES_MAX_RESPONSE_CHARS`
+(sized above the worst-case default read, so an ordinary call never meets it),
+and one frame's body is capped at `WEBSOCKET_PAYLOAD_MAX_CHARS` with
+`payload_truncated` set. The budget counts **every returned string** plus a
+per-row structural constant, not just the payload fields: `url` is chosen by
+the page, has no length cap and repeats on every row, so counting payloads
+alone let a socket with a very long URL return a thousand rows of megabytes
+with the counter still under the limit -- the same oversized response, reached
+through the one field nobody was watching. A base64 payload is cut on a 4-char boundary so the
+prefix still decodes -- cutting anywhere else hands back a string that raises
+on `b64decode`, which reads as a corrupt capture rather than as truncation. The
+budget deliberately still returns the FIRST frame even when it alone exceeds
+it, or a caller would page forever on a frame that can never fit.
+
+**Neither read tool takes the session operation gate.** One reads a file and
+the other reads a dict; no Playwright call is involved. Taking the per-session
+FIFO lease queued a poll behind whatever browser work was running -- the whole
+of a `macro_run_sequence`, up to the 300s queue timeout -- which is precisely
+the "follow a live stream" workflow they exist for. `browser_tail_recording`,
+the closest analogue and also a pure tail read, resolves its session the same
+way. `cursor` is clamped at both the tool and in `tail_log_lines`: it arrives
+as an LLM-supplied int, and a negative one reaches `fh.seek` and comes back as
+a bare `OSError: [Errno 22]`.
+
+**The recorded preview is short; the sidecar's is not.** Fixing the payload
+read gave that field content for the first time, and it is written to the MAIN
+session JSONL as well as the sidecar -- a file with no ceiling on by default
+(`OCTOWRIGHT_RECORDING_MAX_BYTES`) that `browser_tail_recording`, the dashboard
+event stream and `capture_create(kind="recording")` all read on behalf of
+callers who never asked about websockets. The main recording gets
+`WEBSOCKET_RECORD_PREVIEW_CHARS`; the sidecar keeps the long preview, since
+that is what the read tools serve from. `payload_size` is the frame's real
+length in both, so capping the text costs a reader nothing it needed.
 
 **Payloads are previews by default**, with `include_payloads=True` for the full
 body, mirroring `include_headers` on the HTTP pair and for the same reason: a
@@ -581,7 +661,33 @@ replaying the JSONL, so a one-line question required reading a log. The
 registry is bounded (`WEBSOCKET_REGISTRY_MAX`) because a page can open a socket
 per retry indefinitely; eviction takes **closed sockets first**, since evicting
 a live one to retain a finished one answers the question wrong, and the
-discarded count is reported so a shrinking total is explainable.
+discarded count is reported so a shrinking total is explainable. It returns
+**copies** of the registry entries: `list(registry.values())` copies the list
+and not the dicts inside it, which the frame handler keeps mutating -- the same
+defect, fixed the same way, as `_select_console_tail`.
+
+**The registry key is a session-issued id, never an object address.** With no
+`.id` on playwright-python's `WebSocket`, the fallback was `id(websocket)` --
+and CPython reissues an address once the object is freed, so a page opening a
+socket per retry could hand a NEW socket the key of a finished one, overwriting
+its record and merging two sockets' frames into one stream under a single
+`socket_id`. A per-session counter cannot collide however churny the page is. A
+binding-supplied `.id` is deliberately **not** used as the key either: nothing
+guarantees it is unique within the session and `_register_websocket`
+overwrites on a repeat, so believing a binding that handed out a duplicate (or
+the literal `ws-1`) would reopen the very merging bug the counter closes. It is
+kept beside the key as `binding_id`, where it can be correlated without
+deciding identity. `browser_websocket_messages`
+also stringifies `socket_id` to match the summary's `id`, which
+`_register_websocket` has always coerced -- returning the raw recorded value
+left a caller joining the two by dict key or `==` matching nothing.
+
+**A socket is registered only once its listeners attach.** Registering first
+left a socket whose wiring failed (or that had no `.on` at all) in the table
+with no `close` handler to ever set `closed_at` -- permanently "open", and
+since eviction prefers closed entries, evicted LAST, so a page that tripped
+this repeatedly pushed out genuinely live sockets: the exact outcome the
+eviction ordering exists to prevent.
 
 ### Accessibility-snapshot credential scrubbing
 

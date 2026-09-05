@@ -8,6 +8,14 @@
 The capture side has always existed (``session/core_io_mixin._handle_websocket``);
 these are the read-back pair it never had. See ``session/websocket_view`` for
 why frames come from the sidecar and why payloads are opt-in.
+
+**Neither tool takes the session operation gate.** One reads a file and the
+other reads a dict; no Playwright call is involved. Taking the per-session
+FIFO lease would queue a poll behind whatever browser work is running -- the
+whole of a ``macro_run_sequence``, up to the 300s queue timeout -- which is
+precisely the "follow a live stream" workflow these exist for.
+``browser_tail_recording``, the closest analogue and also a pure ``tail_log``
+read, resolves the session the same way.
 """
 
 from __future__ import annotations
@@ -15,7 +23,6 @@ from __future__ import annotations
 from typing import Any
 
 from octowright.server._state import mcp, pool
-from octowright.server.browser._operation import browser_operation
 from octowright.session.websocket_view import (
     WEBSOCKET_MESSAGES_DEFAULT_LIMIT,
     WEBSOCKET_MESSAGES_MAX_LIMIT,
@@ -35,10 +42,15 @@ from octowright.session.websocket_view import (
         "binary) — off by default because a busy socket emits thousands of frames and the "
         "previews are already length-capped. "
         f"At most {WEBSOCKET_MESSAGES_DEFAULT_LIMIT} frames are returned per call (raise or lower "
-        f"with `limit`, max {WEBSOCKET_MESSAGES_MAX_LIMIT}); when `truncated` is true, read the "
-        "next page by passing the returned next_cursor as `cursor`. Poll with the cursor to "
-        "follow a live stream. Narrow with socket_id (from browser_websocket_summary) or "
-        "direction. Call browser_websocket_summary first to see which sockets are open."
+        f"with `limit`, max {WEBSOCKET_MESSAGES_MAX_LIMIT}), and a page also ends early once its "
+        "frame content reaches a per-call size budget, so include_payloads on big frames returns "
+        "fewer of them rather than one enormous response. When `truncated` is true there is more "
+        "to read: pass the returned next_cursor as `cursor` (it points at the first frame NOT "
+        "returned). Poll with the cursor to follow a live stream. `capture_truncated` is different "
+        "and unrecoverable — it means OCTOWRIGHT_WEBSOCKET_MAX_BYTES dropped frames at capture "
+        "time, so no amount of paging will find them. Narrow with socket_id (from "
+        "browser_websocket_summary) or direction. Call browser_websocket_summary first to see "
+        "which sockets are open."
     ),
 )
 async def browser_websocket_messages(
@@ -51,14 +63,14 @@ async def browser_websocket_messages(
 ) -> dict[str, Any]:
     if direction is not None and direction not in ("sent", "received"):
         raise ValueError(f"direction must be 'sent' or 'received', got {direction!r}")
-    async with browser_operation(pool, instance_id, "browser_websocket_messages") as session:
-        return session.get_websocket_messages(
-            cursor=cursor,
-            socket_id=socket_id,
-            direction=direction,
-            include_payloads=include_payloads,
-            limit=limit,
-        )
+    session = pool.get(instance_id)
+    return session.get_websocket_messages(
+        cursor=cursor,
+        socket_id=socket_id,
+        direction=direction,
+        include_payloads=include_payloads,
+        limit=limit,
+    )
 
 
 @mcp.tool(
@@ -74,5 +86,4 @@ async def browser_websocket_messages(
     ),
 )
 async def browser_websocket_summary(instance_id: str) -> dict[str, Any]:
-    async with browser_operation(pool, instance_id, "browser_websocket_summary") as session:
-        return session.get_websocket_summary()
+    return pool.get(instance_id).get_websocket_summary()
