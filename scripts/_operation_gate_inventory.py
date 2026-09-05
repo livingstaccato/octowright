@@ -192,6 +192,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "copies browser response metadata into the bounded network cache",
     ),
+    "session/core_network_mixin.py:SessionNetworkMixin._maybe_capture_body": (
+        "event-critical",
+        "decides from browser-emitted response metadata whether to schedule a bounded body read",
+    ),
     "session/core_network_mixin.py:SessionNetworkMixin._handle_request_failed": (
         "event-critical",
         "copies browser failure metadata into the bounded network cache",
