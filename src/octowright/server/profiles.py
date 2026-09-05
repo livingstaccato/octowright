@@ -96,6 +96,8 @@ PROFILES: dict[str, list[str]] = {
         "browser_get_text_by",
         "browser_network_requests",
         "browser_network_summary",
+        "browser_websocket_messages",
+        "browser_websocket_summary",
         "browser_observe",
         "browser_relaunch_fluid",
         "browser_resize",

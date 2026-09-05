@@ -21,11 +21,19 @@ from provide.telemetry import get_logger
 
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
+from octowright.session import websocket_view
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
 _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
+
+
+#: Sockets kept in the live registry. A page that opens a socket per retry
+#: would otherwise grow it without limit for the life of the session. Closed
+#: sockets are evicted before open ones, so "what is connected right now"
+#: survives a churny page.
+WEBSOCKET_REGISTRY_MAX = 64
 
 
 def _websocket_max_bytes() -> int:
@@ -333,6 +341,93 @@ class SessionIOMixin(SessionLike):
         page.on("console", _on_console)
         _wire_listeners(cast("BrowserSession", self), page)
 
+    def _register_websocket(self, socket_id: Any, url: Any) -> None:
+        """Record a newly opened socket, evicting a closed one if at capacity.
+
+        Keys by ``str(socket_id)`` HERE rather than coercing the caller's
+        variable: that id is also written to the JSONL recording, where it
+        has always been whatever Playwright gave us (an int, from ``id()``,
+        when the socket carries no ``.id``). Coercing it upstream silently
+        changed the recording format to buy a dict key.
+        """
+        socket_id = str(socket_id)
+        if socket_id not in self._websockets and len(self._websockets) >= WEBSOCKET_REGISTRY_MAX:
+            self._evict_one_websocket()
+        self._websockets[socket_id] = {
+            "id": socket_id,
+            "url": url,
+            "opened_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "closed_at": None,
+            "framesent": 0,
+            "framereceived": 0,
+            "bytes": 0,
+            "error": None,
+        }
+
+    def _evict_one_websocket(self) -> None:
+        """Drop the oldest CLOSED socket, else the oldest of any state.
+
+        Preferring closed ones is the whole point of a bounded registry here:
+        the question this answers is "what is connected right now", and
+        evicting a live socket to retain a finished one would answer it wrong.
+        Insertion order is open order, so the first match is the oldest.
+        """
+        victim = next((key for key, entry in self._websockets.items() if entry["closed_at"]), None)
+        if victim is None:
+            victim = next(iter(self._websockets), None)
+        if victim is not None:
+            del self._websockets[victim]
+            self._websockets_dropped += 1
+
+    def _note_websocket_frame(self, socket_id: Any, direction: str, size: int | None) -> None:
+        entry = self._websockets.get(str(socket_id))
+        if entry is None:
+            return
+        entry[direction] = entry.get(direction, 0) + 1
+        entry["bytes"] = entry.get("bytes", 0) + (size or 0)
+
+    def _flush_websocket_cache(self) -> None:
+        """Push buffered frames to disk so a read sees them.
+
+        Writes are batched (see ``_append_websocket_cache``), so without this a
+        reader gets everything except the most recent frames -- which are the
+        ones someone watching a live stream actually wants. Best-effort: a
+        failed flush must not fail the read.
+        """
+        handle = getattr(self, "_websocket_fh", None)
+        if handle is None:
+            return
+        try:
+            handle.flush()
+        except Exception as exc:
+            log.debug("octowright.session.websocket_flush_failed", error=repr(exc))
+        else:
+            self._websocket_frames_since_flush = 0
+
+    def get_websocket_messages(
+        self,
+        *,
+        cursor: int = 0,
+        socket_id: str | None = None,
+        direction: str | None = None,
+        include_payloads: bool = False,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Frames this page's websockets carried. Flushes first, then reads."""
+        self._flush_websocket_cache()
+        return websocket_view.read_frames(
+            self.websocket_path,
+            cursor=cursor,
+            socket_id=socket_id,
+            direction=direction,
+            include_payloads=include_payloads,
+            limit=limit,
+        )
+
+    def get_websocket_summary(self) -> dict[str, Any]:
+        """Which sockets this page has opened, and which are still connected."""
+        return websocket_view.summarize_sockets(self._websockets, self._websockets_dropped)
+
     def _handle_websocket(self, websocket: Any) -> None:
         """Attach frame handlers to a Playwright websocket and record lifecycle events."""
         url = getattr(websocket, "url", None)
@@ -340,6 +435,7 @@ class SessionIOMixin(SessionLike):
         if socket_id is None:
             socket_id = id(websocket)
 
+        self._register_websocket(socket_id, url)
         self.recorder.record("websocket_opened", id=socket_id, url=url)
 
         def _binary_preview(payload: Any) -> str:
@@ -374,7 +470,17 @@ class SessionIOMixin(SessionLike):
 
         def _on_frame(direction: str) -> Any:
             def _handler(frame: Any) -> None:
-                payload = getattr(frame, "payload", None)
+                # playwright-python emits the payload ITSELF -- a str, or bytes
+                # for a binary opcode (``_network.WebSocket._on_frame_sent``
+                # calls ``emit(FrameSent, data)``). Only Node's API wraps it in
+                # a frame object carrying ``.payload``, which is where the
+                # original attribute read came from -- and since neither str
+                # nor bytes has that attribute, it resolved to None for EVERY
+                # frame. The sidecar, its byte ceiling and its batched flush
+                # were therefore all persisting rows with no content in them.
+                # Keep the attribute read as the fallback so a frame-object
+                # shape still works if the binding ever grows one.
+                payload = getattr(frame, "payload", frame)
                 is_binary = (
                     bool(getattr(frame, "is_binary", False))
                     or isinstance(payload, bytes | bytearray | memoryview)
@@ -403,6 +509,7 @@ class SessionIOMixin(SessionLike):
                             cache_payload_size = len(payload)
                 else:
                     cache_payload_size = len(payload) if payload is not None and hasattr(payload, "__len__") else None
+                self._note_websocket_frame(socket_id, direction, cache_payload_size)
                 try:
                     self._append_websocket_cache(
                         direction=direction,
@@ -418,9 +525,15 @@ class SessionIOMixin(SessionLike):
             return _handler
 
         def _on_close() -> None:
+            entry = self._websockets.get(str(socket_id))
+            if entry is not None:
+                entry["closed_at"] = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             self.recorder.record("websocket_closed", id=socket_id, url=url)
 
         def _on_error(error: Any) -> None:
+            entry = self._websockets.get(str(socket_id))
+            if entry is not None:
+                entry["error"] = str(error)
             self.recorder.record(
                 "websocket_error",
                 id=socket_id,
