@@ -354,3 +354,9 @@ def test_a_path_relative_url_without_a_leading_slash_is_kept() -> None:
 
     assert "orders/42" in summary
     assert "(invalid-url)" not in summary
+
+
+def test_a_colon_without_an_at_sign_does_not_disqualify_a_relative_url() -> None:
+    text = json.dumps({"action": "navigate", "url": "/some:path"})
+    result = digest_recording_text(text, max_chars=4000)
+    assert "first_url: /some:path" in result["summary"]

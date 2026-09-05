@@ -240,9 +240,6 @@ async def _dispatch_one(
             dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, **kw),
         )
 
-    if invocation_stack is None:
-        invocation_stack = []
-
     # Push status before dispatch so the pill reflects the action that's
     # actually running. macro_call is handled above (its child actions push
     # their own deeper status when they hit _dispatch_one).

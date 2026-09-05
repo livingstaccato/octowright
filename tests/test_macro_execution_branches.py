@@ -27,6 +27,7 @@ import pytest
 
 from octowright.macros import execution as _execution
 from octowright.macros.execution import (
+    _dispatch_one,
     _format_status,
     _push_status,
     _redact_action,
@@ -375,6 +376,18 @@ class TestRunMacroHappyPath:
         assert out["slowmo_ms"] == 42
 
     @pytest.mark.anyio
+    async def test_run_macro_reports_progress_with_action_name(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any]
+    ) -> None:
+        """ctx.report_progress is called with the action name as message."""
+        from unittest.mock import AsyncMock
+
+        ctx_mock = AsyncMock()
+        patched_runners["register"]("m", [{"action": "click", "selector": "#x"}])
+        await run_macro(fake_session, "m", ctx=ctx_mock)
+        ctx_mock.report_progress.assert_called_once_with(1, total=1, message="click")
+
+    @pytest.mark.anyio
     async def test_elapsed_s_rounded_to_3_places(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:
@@ -383,7 +396,7 @@ class TestRunMacroHappyPath:
         out = await run_macro(fake_session, "m")
         # Just check shape: float, non-negative, at most 3 decimal places.
         assert isinstance(out["elapsed_s"], float)
-        assert out["elapsed_s"] >= 0
+        assert 0 <= out["elapsed_s"] < 10.0
         # Fewer than ~4 decimal places after the dot.
         s = repr(out["elapsed_s"])
         if "." in s:
@@ -831,3 +844,34 @@ class TestRunSequenceShape:
             stop_on_failure=False,
         )
         assert out["steps"][0]["args_used"] == {"foo": "bar", "pwd": "<redacted>"}
+
+
+# ─── _dispatch_one ───────────────────────────────────────────────────────────
+
+
+class TestDispatchOneBranches:
+    @pytest.mark.anyio
+    async def test_dispatch_one_invocation_stack_none(self, fake_session: _FakeSession) -> None:
+        """If invocation_stack is None, it is initialized to [] and doesn't crash on append."""
+
+        # Dispatching an unknown action will raise ValueError ("Unknown action type: ...")
+        # BUT only after it successfully initializes invocation_stack to [] and calls _format_status.
+        # If invocation_stack was not initialized, it would raise TypeError inside _format_status
+        # because it expects a list.
+        # Unknown actions log a warning and return (0, 0), but they don't crash in _format_status.
+        executed, skipped = await _dispatch_one(fake_session, {"action": "made_up_action"}, invocation_stack=None)
+        assert executed == 0
+        assert skipped == 1
+
+    @pytest.mark.anyio
+    async def test_dispatch_one_slowmo_ms_sleeps(
+        self, fake_session: _FakeSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """slowmo_ms > 0 triggers asyncio.sleep before the action."""
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        sleep_mock = AsyncMock()
+        monkeypatch.setattr(asyncio, "sleep", sleep_mock)
+        await _dispatch_one(fake_session, {"action": "made_up_action"}, slowmo_ms=1)
+        sleep_mock.assert_called_once_with(1 / 1000)
