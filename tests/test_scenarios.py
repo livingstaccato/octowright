@@ -198,3 +198,12 @@ def test_resolve_launch_kwargs_no_persona(fresh_scenarios):
     assert kwargs["profile"] == "ghost"
     assert kwargs["url"] is None
     assert scenarios.resolve_startup_macros(p) == []
+
+
+def test_load_python_scenario_invalid_path(fresh_scenarios, monkeypatch):
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_PY_SCENARIOS", "1")
+    scenarios, scen_dir = fresh_scenarios
+    import pytest
+
+    with pytest.raises(RuntimeError, match="could not load Python scenario from"):
+        scenarios.load_python_scenario(scen_dir)

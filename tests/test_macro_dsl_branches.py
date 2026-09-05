@@ -475,3 +475,12 @@ class TestCompileMacroYamlIntegration:
         text = "name: x\nactions:\n  - action: if_selector\n    selector: '.x'\n    then:\n      - 99\n"
         with pytest.raises(ValueError, match=r"actions\[0\].then\[0\]: action must be an object"):
             compile_macro_yaml(text, strict=True)
+
+
+def test_compile_macro_yaml_strict_by_default() -> None:
+    import pytest
+
+    from octowright.macros.dsl import compile_macro_yaml
+
+    with pytest.raises(ValueError):
+        compile_macro_yaml("actions:\\n  - not_an_action")

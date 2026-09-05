@@ -450,7 +450,7 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
     def _from_persona(attr: str, default: Any = None) -> Any:
         if persona is None:
             return default
-        return getattr(persona, attr, None) or default
+        return getattr(persona, attr) or default
 
     return {
         "kind": p.kind,
