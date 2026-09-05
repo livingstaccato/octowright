@@ -419,7 +419,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 131 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 133 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -438,7 +438,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; `pip install octowright-terminal`, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every core-install tool registers. | 131 |
+| `all` (or unset) | Default — every core-install tool registers. | 133 |
 
 ```bash
 octowright serve --profile=core              # 31 tools — core + always-on

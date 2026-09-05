@@ -31,6 +31,8 @@ class SessionLike(Protocol):
     download_count: int
     page_count: int
     _bg_tasks: set[Any]
+    _websockets: dict[str, dict[str, Any]]
+    _websockets_dropped: int
     _dialog_policy: str
     _dialog_prompt_text: str | None
     _active_routes: dict[str, Any]
