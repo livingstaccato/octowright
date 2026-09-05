@@ -182,7 +182,9 @@ async def test_rekeyed_replacement_listener_evicts_its_current_instance_id(
     await wait_until(lambda: "old1" not in pool._closing_sessions)
 
     assert pool.maybe_get("old1") is None
-    assert pool._recently_evicted["old1"] is False
+    # Ledger widened from a crashed/not-crashed bool to a three-state reason
+    # so an unresponsive teardown can be told apart from a crash.
+    assert pool._recently_evicted["old1"] == "external"
     replacement._teardown_after_close_cutoff.assert_awaited_once()
     assert publish.call_args.args[0].instance_id == "old1"
 
