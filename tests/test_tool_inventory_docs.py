@@ -138,7 +138,7 @@ def test_the_diagram_carries_the_same_counts_and_is_checked(guard) -> None:
     stale = text.replace('package "core (24)"', 'package "core (22)"')
     assert any("core" in p and "22" in p for p in guard.diagram_problems(stale, guard.core_surface()))
 
-    stale_title = text.replace("(131 tools total", "(126 tools total")
+    stale_title = text.replace("(133 tools total", "(126 tools total")
     assert any("126" in p for p in guard.diagram_problems(stale_title, guard.core_surface()))
 
 
@@ -146,7 +146,7 @@ def test_a_stale_readme_total_is_reported(guard) -> None:
     """README's own total drifted while the sentence above it stayed right."""
     text = (ROOT / "docs" / "architecture" / "mcp-tool-inventory.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    mangled = readme.replace("every core-install tool registers. | 131 |", "every core-install tool registers. | 129 |")
+    mangled = readme.replace("every core-install tool registers. | 133 |", "every core-install tool registers. | 129 |")
     problems = guard.problems(text, mangled)
     assert any("README" in p and "129" in p for p in problems), problems
 

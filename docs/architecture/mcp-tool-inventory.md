@@ -7,13 +7,13 @@ SPDX-Comment: Part of octowright.
 
 **Authoritative source: `uv run octowright selftest`.** This file is still written by hand, but it is no longer trusted on its own: `scripts/check_tool_inventory_docs.py` runs under `make lint` and fails when any count or list here — or README.md's own total — disagrees with the live registry. It has to, because the disclaimer that used to sit in this spot ("may lag by one or two tools") turned out to be describing reality: the all-only section had lost `browser_a11y_dragdrop` and `macro_artifact_delete`, so it claimed 27 where the registry held 29, and README advertised the full surface as 129.
 
-The guard measures a **core** install in a child process with its config dirs redirected, because an empty `OCTOWRIGHT_PLUGINS` falls through to the operator's `plugins.yaml` — so an in-process count reads 138 on a machine that enables the terminal plugin and 131 in CI. The `terminals` row below is therefore checked against the totals arithmetic rather than against registration.
+The guard measures a **core** install in a child process with its config dirs redirected, because an empty `OCTOWRIGHT_PLUGINS` falls through to the operator's `plugins.yaml` — so an in-process count reads 140 on a machine that enables the terminal plugin and 133 in CI. The `terminals` row below is therefore checked against the totals arithmetic rather than against registration.
 
-Current totals: **95** profile-scoped + **7** always-on + **29** all-only = **131 total**.
+Current totals: **97** profile-scoped + **7** always-on + **29** all-only = **133 total**.
 
 With the `terminal` session-kind plugin enabled (`OCTOWRIGHT_PLUGINS=terminal` —
 on PyPI as of core 0.19.2, see `packages/octowright-terminal/README.md`), the
-`terminals` profile it declares adds 7 more tools for **138 total**.
+`terminals` profile it declares adds 7 more tools for **140 total**.
 
 ## Profiles
 
@@ -22,7 +22,7 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 | Profile | Tools | Purpose |
 |---|---:|---|
 | `core` | 24 | Minimum browser-driving surface plus compact DOM and HTTP-first discovery. |
-| `advanced` | 31 | Inspection, assertions, ARIA locators, summaries, viewport sync, capture cache, artifact manifest, export script, relaunch. |
+| `advanced` | 33 | Inspection, assertions, ARIA locators, summaries, viewport sync, capture cache, artifact manifest, export script, relaunch. |
 | `macros` | 15 | Record → save → repair → replay pipeline + artifact bundles. |
 | `scenarios` | 12 | Multi-browser orchestration. |
 | `personas` | 8 | Identity + on-disk profile management. |
@@ -37,9 +37,9 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 
 `browser_brief`, `browser_click`, `browser_close`, `browser_close_all`, `browser_set_protected`, `browser_fields`, `browser_fill`, `browser_find_field`, `browser_find_link`, `browser_launch`, `browser_links`, `browser_list`, `browser_navigate`, `browser_page_outline`, `browser_press_key`, `browser_quick_launch`, `browser_read_markdown`, `browser_screenshot`, `browser_suggest_for_url`, `browser_type`, `browser_wait_for`, `web_find_links`, `web_page_outline`, `web_site_links`
 
-### `advanced` (31)
+### `advanced` (33)
 
-`capture_cleanup`, `capture_create`, `capture_get`, `capture_lines`, `capture_list`, `capture_search`, `capture_summary`, `browser_artifact_manifest`, `browser_console_messages`, `browser_console_summary`, `browser_downloads`, `browser_downloads_summary`, `browser_each`, `browser_evaluate`, `browser_expect_js`, `browser_expect_selector`, `browser_expect_text`, `browser_expect_url`, `browser_export_script`, `browser_get_text_by`, `browser_network_requests`, `browser_network_summary`, `browser_observe`, `browser_relaunch_fluid`, `browser_resize`, `browser_recording_path`, `browser_snapshot`, `browser_tail_recording`, `browser_wait_for_download`, `browser_viewport_status`, `browser_viewport_sync`
+`capture_cleanup`, `capture_create`, `capture_get`, `capture_lines`, `capture_list`, `capture_search`, `capture_summary`, `browser_artifact_manifest`, `browser_console_messages`, `browser_console_summary`, `browser_downloads`, `browser_downloads_summary`, `browser_each`, `browser_evaluate`, `browser_expect_js`, `browser_expect_selector`, `browser_expect_text`, `browser_expect_url`, `browser_export_script`, `browser_get_text_by`, `browser_network_requests`, `browser_network_summary`, `browser_websocket_messages`, `browser_websocket_summary`, `browser_observe`, `browser_relaunch_fluid`, `browser_resize`, `browser_recording_path`, `browser_snapshot`, `browser_tail_recording`, `browser_wait_for_download`, `browser_viewport_status`, `browser_viewport_sync`
 
 ### `macros` (15)
 

@@ -97,6 +97,10 @@ from octowright.server.browser.views import (
     page_list,
     page_switch,
 )
+from octowright.server.browser.websockets import (
+    browser_websocket_messages,
+    browser_websocket_summary,
+)
 
 __all__ = [
     "browser_a11y_dragdrop",
@@ -160,6 +164,8 @@ __all__ = [
     "browser_viewport_sync",
     "browser_wait_for",
     "browser_wait_for_download",
+    "browser_websocket_messages",
+    "browser_websocket_summary",
     "page_close",
     "page_list",
     "page_switch",

@@ -191,6 +191,14 @@ class BrowserSession(
     #: ordinary rendering failure -- reporting the former as "ensure
     #: markitdown is installed" would be actively misleading.
     _last_markdown_capture_error: Exception | None = None
+    # Live registry of websockets this page has opened, keyed by socket id:
+    # {url, opened_at, closed_at, framesent, framereceived, bytes, error}.
+    # The recorder already writes open/close/frame EVENTS, but deriving "which
+    # sockets are open right now" from them means replaying the JSONL, so a
+    # caller asking a one-line question had to read a log. Bounded, because a
+    # long-lived page can open sockets indefinitely.
+    _websockets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    _websockets_dropped: int = 0
     websocket_path: Path | None = None
     # Lazy-opened append handle for high-frequency WS feeds; typed as Any
     # because Path.open("a", encoding="utf-8") returns TextIOWrapper while

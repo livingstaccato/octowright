@@ -69,6 +69,9 @@ def _make_subject(tmp_path: Path) -> SessionIOMixin:
     subj.page_count = 0
     subj.page = MagicMock()
     subj.recorder = MagicMock()
+    # BrowserSession's websocket registry; _handle_websocket writes it.
+    subj._websockets = {}
+    subj._websockets_dropped = 0
     subj.recorder.record = MagicMock()
     subj._bg_tasks = set()
     subj.log_path = log_path

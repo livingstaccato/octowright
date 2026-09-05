@@ -530,6 +530,59 @@ Terminal sessions (PTY shell, SSH, telnet) are a **session-kind plugin**, not pa
 
 Connector arguments (PTY/SSH/telnet), the scenario-participant `options:` shape, dashboard rendering, input redaction, what happens after a connector dies (the eviction path: identity check, teardown, the bounded ledger that lets a lookup say *why* the session is gone, and the dashboard invalidation), and the plugin's own telemetry are documented in `packages/octowright-terminal/README.md`.
 
+### Websocket observation
+
+Octowright has always *captured* websocket traffic -- `page.on("websocket")` is
+wired at launch and every frame lands in the per-session
+`.websocket.cache.jsonl` sidecar -- but nothing ever read it back, so a
+real-time app (an authenticated SPA pushing updates over a socket instead of
+polling) left its most interesting traffic on disk with no way to ask for it.
+The alternatives were both bad: poll HTTP and lose the real-time property, or
+lift the page's session token out of the browser and replay it externally,
+which httpOnly cookies defeat and which the network capture correctly will not
+hand over. `browser_websocket_messages` / `browser_websocket_summary` are the
+read-back pair, named to match the HTTP pair.
+
+**The capture was recording empty payloads, and had been from the start.**
+playwright-python emits the payload *itself* -- a `str`, or `bytes` for a
+binary opcode (`_network.WebSocket._on_frame_sent` calls
+`emit(FrameSent, data)`). Only **Node's** API wraps it in an object carrying
+`.payload`, and that is the shape the handler read. Since neither `str` nor
+`bytes` has that attribute, it resolved to `None` for **every frame**, so the
+sidecar, its `OCTOWRIGHT_WEBSOCKET_MAX_BYTES` ceiling and its batched flush
+were all faithfully persisting rows with no content in them. Nothing caught it
+because every existing test asserted on a row's *shape* rather than its
+payload -- which is why the live test added alongside asserts on the bytes.
+The attribute read is retained as a fallback so a binding that later grows a
+frame object does not silently go empty the same way.
+
+Frames are read from the sidecar rather than an in-memory ring: the sidecar is
+already the full-fidelity sink, and a parallel in-memory copy would double the
+footprint of a firehose page to serve a question nobody may ask. Reads go
+through `recorder.tail_log`, which already bounds one read by bytes, lands the
+cursor on a line boundary and steps over an oversized line instead of freezing
+-- all of which a socket carrying multi-megabyte frames will exercise. A read
+flushes the batched write buffer first, or it would return everything except
+the most recent frames, which are the ones someone watching a live stream
+wants.
+
+**Payloads are previews by default**, with `include_payloads=True` for the full
+body, mirroring `include_headers` on the HTTP pair and for the same reason: a
+busy socket emits thousands of frames. Text and binary stay separate keys
+(`payload_text` / `payload_b64`) so a caller decoding base64 never has to guess
+which it is holding. Honest scope on redaction: a frame is application data
+with no name to classify on, so unlike a header there is nothing to key a
+policy off -- previews are length-capped at capture time and full payloads are
+opt-in, which bounds volume rather than sensitivity.
+
+`browser_websocket_summary` answers "what is connected right now". The recorder
+already wrote open/close *events*, but deriving live sockets from them meant
+replaying the JSONL, so a one-line question required reading a log. The
+registry is bounded (`WEBSOCKET_REGISTRY_MAX`) because a page can open a socket
+per retry indefinitely; eviction takes **closed sockets first**, since evicting
+a live one to retain a finished one answers the question wrong, and the
+discarded count is reported so a shrinking total is explainable.
+
 ### Accessibility-snapshot credential scrubbing
 
 Playwright renders a text-ish control's **value** as its accessible name, and the accessibility tree has no notion of `type=password` — a filled password box comes back as `- textbox: hunter2`, byte-identical in shape to a username box. Verified against real Chromium. Every aria sink therefore emitted cleartext credentials: `browser_snapshot`, `browser_brief` (in the **core** profile), `capture_create`, `golden_save` (which persists them to disk indefinitely), `browser_capture_and_close`, the dashboard session detail, and `_resolve_semantic_metadata` — whose parsed `role` lands in the **JSONL recording** on every click, bypassing `OCTOWRIGHT_REDACT_INPUTS` in its default configuration.
@@ -561,7 +614,7 @@ Chain length is bounded by `MAX_REDIRECT_HOPS` (20, matching browsers) so a redi
 
 ### Capability Profiles
 
-The full MCP tool surface is 131 tools on a core install (138 with the `terminal` session-kind plugin enabled via `OCTOWRIGHT_PLUGINS=terminal`, which adds the 7 `terminal_*` tools). When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving plus compact DOM/HTTP discovery surface), `advanced` (inspection + cached captures + summaries + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`, and `terminals` (declared by the terminal plugin itself — a profile a plugin brings, not a core-defined one — and only present when that plugin is enabled). Unset / `all` keeps every tool (the default). The named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (a handful of less-common views, mutation helpers, trace/open-tab utilities, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas,terminals` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
+The full MCP tool surface is 133 tools on a core install (140 with the `terminal` session-kind plugin enabled via `OCTOWRIGHT_PLUGINS=terminal`, which adds the 7 `terminal_*` tools). When the LLM only needs a subset, set `OCTOWRIGHT_PROFILE` (or pass `--profile=...` to `octowright serve`) to one or more comma-separated profile names from `src/octowright/server/profiles.py`. Tools not listed in any active profile are skipped at `@mcp.tool` decoration time, so the LLM-visible schema shrinks accordingly. Profile names available today: `core` (minimal browser-driving plus compact DOM/HTTP discovery surface), `advanced` (inspection + cached captures + summaries + assertions + viewport controls + ARIA-locator interactions), `macros`, `scenarios`, `goldens` (accessibility-tree snapshot save/diff/verify), `personas`, and `terminals` (declared by the terminal plugin itself — a profile a plugin brings, not a core-defined one — and only present when that plugin is enabled). Unset / `all` keeps every tool (the default). The named profiles together cover the profile-scoped tools plus 7 always-on meta/Advisor tools — the remaining tools (a handful of less-common views, mutation helpers, trace/open-tab utilities, etc.) only register when no filter is set, so `--profile=core,advanced,macros,scenarios,goldens,personas,terminals` is **not** equivalent to no filter. Authoritative tool counts live in `src/octowright/server/profiles.py`.
 
 **Always-on meta and Advisor tools.** Seven diagnostic/guidance tools are exempt from the profile filter and register under any profile (or no profile): `octowright_status`, `octowright_storage_report`, `octowright_dashboard_url`, `octowright_check_takeover`, `octowright_advisor_status`, `octowright_advisor_set_preference`, and `octowright_advisor_record_macro_observation`. These give the LLM a way to inspect the active profile, inspect storage paths, find the dashboard URL, detect competing MCP plugins, and surface local Advisor guidance regardless of filter. The list is `ALWAYS_ON_TOOLS` in `src/octowright/server/profiles.py`.
 

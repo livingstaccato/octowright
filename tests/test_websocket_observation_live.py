@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-Comment: Part of octowright.
+#
+
+"""Websocket observation against a real browser and a real socket server.
+
+The unit tests drive the handler with a fake that emits payloads the way
+playwright-python documents. This pins the part no fake can: that the real
+binding emits what we think it emits. That distinction is the whole reason
+this feature shipped empty -- the payload was read as ``frame.payload``, which
+is Node's shape, and every existing test asserted on row structure rather than
+on content, so nothing caught it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+
+import pytest
+import websockets
+
+from octowright.browser_pool.pool import BrowserPool
+
+pytestmark = pytest.mark.live_browser
+
+_WS_PORT = 8894
+_HTTP_PORT = 8895
+
+_PAGE = f"""<html><body><script>
+const ws = new WebSocket("ws://127.0.0.1:{_WS_PORT}/ws");
+ws.onopen = () => {{ ws.send("hello-from-page"); }};
+</script></body></html>""".encode()
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(_PAGE)))
+        self.end_headers()
+        self.wfile.write(_PAGE)
+
+    def log_message(self, *_args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
+@pytest.fixture
+def http_server():  # type: ignore[no-untyped-def]
+    srv = ThreadingHTTPServer(("127.0.0.1", _HTTP_PORT), _Handler)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{_HTTP_PORT}/"
+    finally:
+        srv.shutdown()
+
+
+@pytest.mark.anyio
+async def test_frames_are_observable_through_the_session(http_server: str) -> None:
+    async def handler(conn: Any) -> None:
+        async for message in conn:
+            await conn.send(f"echo:{message}")
+
+    server = await websockets.serve(handler, "127.0.0.1", _WS_PORT)
+    pool = BrowserPool()
+    try:
+        info = await pool.launch(kind="chromium", url=http_server, headed=False)
+        session = pool.get(info["instance_id"])
+        # The page opens the socket on load; wait for the round trip rather
+        # than a fixed sleep.
+        for _ in range(50):
+            if session.get_websocket_summary()["open_count"]:
+                messages = session.get_websocket_messages()["messages"]
+                if any(m["direction"] == "received" for m in messages):
+                    break
+            await asyncio.sleep(0.1)
+
+        summary = session.get_websocket_summary()
+        assert summary["open_count"] == 1
+        assert summary["open"][0]["url"].endswith("/ws")
+
+        messages = session.get_websocket_messages(include_payloads=True)["messages"]
+        sent = [m for m in messages if m["direction"] == "sent"]
+        received = [m for m in messages if m["direction"] == "received"]
+
+        # The payloads themselves -- the regression this feature shipped with.
+        assert sent[0]["payload_text"] == "hello-from-page"
+        assert received[0]["payload_text"] == "echo:hello-from-page"
+        assert sent[0]["size"] == len("hello-from-page")
+    finally:
+        await pool.close_all(force=True)
+        # Awaited, not just closed: an unawaited server is torn down at GC
+        # after the loop has gone, which surfaces as "Event loop is closed"
+        # and fails the run even though the test itself passed.
+        server.close()
+        await server.wait_closed()
