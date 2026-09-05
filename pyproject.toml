@@ -444,6 +444,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_dsl.py",
     "tests/test_macro_dsl_branches.py",
     "tests/test_macro_execution_branches.py",
+    "tests/test_macro_failure_network_context.py",
     "tests/test_macro_healing.py",
     "tests/test_macro_lint.py",
     "tests/test_macro_lint_branches.py",
