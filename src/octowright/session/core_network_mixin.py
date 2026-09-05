@@ -16,12 +16,27 @@ and to give network-capture concerns a single home.
 
 from __future__ import annotations
 
+import asyncio
+import os
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
+
+from provide.telemetry import get_logger
 
 from octowright.http_headers import redact_header_values
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
+
+log = get_logger(__name__)
+
+#: Bytes of a failed response body retained per row. The body exists to carry
+#: a refusal reason (``{"detail": "component_allocation_required"}``), which is
+#: short; the cap stops a 500 that returns a rendered HTML error page -- or a
+#: 50KB stack trace -- from riding the MCP transport. Override with
+#: OCTOWRIGHT_NETWORK_BODY_MAX_BYTES; a falsey token disables capture entirely.
+NETWORK_BODY_MAX_BYTES_DEFAULT = 2048
+_FALSEY = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 
 def _matches_url(url_filter: str) -> Callable[[dict[str, Any]], bool]:
@@ -57,6 +72,48 @@ def _recorded_headers(request: Any) -> dict[str, str]:
     except Exception:
         return {}
     return redact_header_values(raw, resolve_redaction_mode())
+
+
+def network_body_max_bytes() -> int:
+    """Per-body byte cap, or 0 when body capture is off.
+
+    Unparsable / negative falls back to the default rather than to disabled:
+    this is a diagnostic that is ON by default, and a typo must not silently
+    remove the one field that explains a failure. An explicit falsey token is
+    the way to turn it off.
+    """
+    raw = os.environ.get("OCTOWRIGHT_NETWORK_BODY_MAX_BYTES")
+    if raw is None:
+        return NETWORK_BODY_MAX_BYTES_DEFAULT
+    if raw.strip().lower() in _FALSEY:
+        return 0
+    try:
+        value = int(raw)
+    except ValueError:
+        return NETWORK_BODY_MAX_BYTES_DEFAULT
+    if value < 0:
+        return NETWORK_BODY_MAX_BYTES_DEFAULT
+    return value
+
+
+def _same_origin(candidate: str, page_url: str) -> bool:
+    """Whether *candidate* shares an origin with the page.
+
+    A third party's response body is not the caller's to collect, so only the
+    application under test is read. Compared against the session's own ``url``
+    string rather than a live ``page.url`` read: this runs in an event handler,
+    where a Playwright property read is exactly what the operation-gate
+    architecture forbids -- the same reason ``_notify_call_timeout`` uses the
+    plain field. It can lag a navigation the tools did not drive, which costs
+    a body we could have kept, never one we should not have.
+    """
+    if not page_url:
+        return False
+    try:
+        left, right = urlsplit(candidate), urlsplit(page_url)
+    except ValueError:
+        return False
+    return bool(left.scheme) and (left.scheme, left.netloc) == (right.scheme, right.netloc)
 
 
 def _project_request(row: dict[str, Any], include_headers: bool) -> dict[str, Any]:
@@ -102,16 +159,66 @@ def _page_requests(
 class SessionNetworkMixin(SessionLike):
     def _handle_response(self, response: Any) -> None:
         request = response.request
-        self._append_network_request(
-            {
-                "url": request.url,
-                "method": request.method,
-                "resource_type": request.resource_type,
-                "status": response.status,
-                "status_text": response.status_text,
-                "headers": _recorded_headers(request),
-            }
-        )
+        row: dict[str, Any] = {
+            "url": request.url,
+            "method": request.method,
+            "resource_type": request.resource_type,
+            "status": response.status,
+            "status_text": response.status_text,
+            "headers": _recorded_headers(request),
+        }
+        self._append_network_request(row)
+        self._maybe_capture_body(response, row)
+
+    def _maybe_capture_body(self, response: Any, row: dict[str, Any]) -> None:
+        """Schedule a body read for a failed same-origin response.
+
+        Without the body, a failing request is recoverable only as its status
+        code -- and a 409 from one endpoint can have many distinct causes, so
+        the code alone is not actionable. The refusal reason is already on the
+        wire and is usually the entire diagnosis.
+
+        Read EAGERLY, in a task, because it cannot be read later: measured
+        against Chromium, a body requested after the page has navigated away
+        fails with ``Protocol error (Network.getResponseBody): No resource
+        with given identifier``. A lazy read at tool-call time would therefore
+        return nothing precisely when someone is investigating a failure.
+
+        Scoped to non-2xx so an ordinary page costs nothing -- successful
+        bodies are large, numerous and rarely interesting -- and to same-origin
+        so a third party's response is not collected. The row is mutated in
+        place once the read lands; it is the same dict already in the deque.
+        """
+        cap = network_body_max_bytes()
+        if cap <= 0 or 200 <= response.status < 300:
+            return
+        if not _same_origin(request_url := row["url"], self.url or ""):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop (a sync test harness driving the handler directly);
+            # metadata is already recorded, the body is simply not fetched.
+            return
+        task = loop.create_task(self._read_response_body(response, row, cap, request_url))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _read_response_body(self, response: Any, row: dict[str, Any], cap: int, url: str) -> None:
+        """Best-effort: a body that cannot be read leaves the row as it was.
+
+        Never raises. This runs detached from any caller, so an exception here
+        would surface as an unretrievable task error rather than reaching
+        anyone who could act on it -- and a missing body must degrade to
+        today's behaviour, not to a broken response record.
+        """
+        try:
+            body = await response.body()
+        except Exception as exc:
+            log.debug("octowright.session.response_body_unavailable", url=url, error=repr(exc))
+            return
+        row["body_truncated"] = len(body) > cap
+        row["body"] = body[:cap].decode("utf-8", errors="replace")
 
     def _handle_request_failed(self, request: Any) -> None:
         self._append_network_request(
