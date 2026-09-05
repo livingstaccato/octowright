@@ -98,3 +98,11 @@ def test_redact_value_for_key_matches_partial_and_exact_keys() -> None:
     assert redact_value_for_key("sshPrivateKey", "abc") == REDACTED_VALUE
     assert redact_value_for_key("pwd", "abc") == REDACTED_VALUE
     assert redact_value_for_key("display_name", "Octo") == "Octo"
+
+
+def test_redact_mapping_handles_values_key() -> None:
+    from octowright.artifacts.redaction import redact_mapping
+
+    input_data = {"name": "password", "values": "secret_token"}
+    redacted = redact_mapping(input_data)
+    assert redacted["values"] == "<redacted>"

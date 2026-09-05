@@ -479,3 +479,39 @@ async def test_run_macro_artifact_records_failure(monkeypatch: pytest.MonkeyPatc
 
     manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
     assert manifest["latest_run"] == {"run_id": "run_0001", "path": result["paths"]["run_dir"]}
+
+
+async def test_run_macro_artifact_handles_missing_log_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage)
+    session = FakeSession(tmp_path)
+    del session.log_path  # simulate absence
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "me@example.com", "password": "secret"},  # pragma: allowlist secret
+        capture=False,
+    )
+
+    assert result["ok"] is True
+    run_dir = Path(result["paths"]["run_dir"])
+    import json
+
+    result_data = json.loads((run_dir / "result.json").read_text())
+    assert result_data["recording_path"] is None
+
+
+async def test_capture_screenshot_handles_missing_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from octowright.artifacts.evidence import EvidenceBuilder
+    from octowright.macros.artifacts import _capture_screenshot
+
+    session = FakeSession(tmp_path)
+    del session.page
+
+    await _capture_screenshot(session=session, run_dir=tmp_path, evidence=EvidenceBuilder(), label="test", enabled=True)

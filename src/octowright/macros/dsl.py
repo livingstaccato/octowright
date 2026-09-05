@@ -220,13 +220,10 @@ def _compile_action(action: Any, path: str, *, strict: bool) -> dict[str, Any] |
         return None
 
     action_obj = dict(action)
-    if "action" not in action_obj:
-        action_obj = _normalize_shorthand(action_obj, path, strict=strict)
+    action_obj = _normalize_shorthand(action_obj, path, strict=strict)
 
     if not isinstance(action_obj.get("action"), str):
         _error(f"{path}: missing or invalid 'action' field", strict=strict)
-        if strict:
-            raise ValueError(f"{path}: missing or invalid 'action' field")
         return action_obj
 
     kind = action_obj["action"]

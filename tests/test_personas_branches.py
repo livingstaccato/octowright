@@ -518,3 +518,12 @@ def test_validate_credentials_accepts_an_explicit_null(fresh_personas):
     """`credentials: null` is the documented way to declare none, and must not raise."""
     fresh_personas._validate_credentials({"credentials": None})
     fresh_personas._validate_credentials({})
+
+
+def test_validate_persona_yaml_doc_validates_name_type() -> None:
+    import pytest
+
+    from octowright.personas import _validate_persona_yaml_doc
+
+    with pytest.raises(ValueError, match="must be a string, got int"):
+        _validate_persona_yaml_doc({"name": 123})
