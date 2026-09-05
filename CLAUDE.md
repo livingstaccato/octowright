@@ -580,6 +580,54 @@ arg > `OCTOWRIGHT_PROTECT_BROWSERS=1` (all) > `OCTOWRIGHT_PROTECT_HEADED`
 (throwaway intent). Internal relaunch/handoff/teardown close with `force=True`
 and are unaffected.
 
+### Typing into a canvas: `key_mode="keys"`
+
+`browser_type` sends Playwright's `page.type()`, which dispatches `keydown`
+carrying the right `key`/`text` payload but **never holds the Shift modifier
+down**. A DOM `<input>` reads that payload, which is why this is invisible on
+ordinary forms and why it survived this long. A canvas-based app — a KVM/BMC
+console (AMI H5Viewer), a canvas terminal, anything drawing its own text
+instead of using a real input — reads `code` + `shiftKey` and converts that to
+HID scancodes. It never sees the payload, so Shift is silently dropped and
+every shifted character lands as its unshifted twin. Measured against a real
+H5Viewer on 2026-08-19: `echo TYPE=Ab*:` arrived as `echo type=ab8;` —
+`T`→`t`, `A`→`a`, `*`→`8`, `:`→`;`, with no error and no warning. On a BMC
+console that is dangerous rather than merely wrong: a path silently losing its
+`*` changes the command's scope.
+
+`key_mode="keys"` presses physical keys with Shift genuinely held
+(`_type_as_keystrokes`), so `shiftKey` is actually set. Three things about it
+are load-bearing:
+
+- **It is opt-in, not the default, and not auto-detected.** A character's
+  physical key is a property of the *keyboard layout*, not of the character —
+  `*` is Shift+Digit8 on US QWERTY and elsewhere on AZERTY — and nothing on
+  the wire says which layout the target believes it has. `session/keyboard_layout`
+  is therefore US QWERTY, the same assumption Playwright's own `code`
+  generation makes. Defaulting to it would trade a silent failure on canvas
+  targets for a silent failure on non-US ones. Sniffing for a `<canvas>`
+  element was considered and rejected for the same reason it would read as a
+  guarantee: a target rendering its own text need not be a canvas (a `div`
+  with a keydown handler behaves identically), so the detection would be
+  right often enough to be trusted and wrong often enough to hurt. The tool
+  description names the failure mode instead, which is what the LLM actually
+  reads.
+- **Keystrokes go through `session.page.keyboard`, element lookup through
+  `session._target()`.** `Frame` has no `.keyboard` — only `Page` does — so a
+  frame-scoped selector still resolves in its own frame while the keys go to
+  the page. `browser_a11y_dragdrop` splits the two the same way.
+- **Shift is released in a `finally`.** A latched modifier corrupts every
+  later keystroke on that page, including another tool's, so a raising press
+  must not leave it down.
+
+A character with no key on the layout (accented, emoji, any non-ASCII) falls
+back to Playwright's own text insertion: it has no scancode to send, and a
+guessed key would be worse than the payload. `key_mode` is recorded **only
+when set**, so an ordinary `type` row stays byte-identical to every
+pre-existing recording, and replay reproduces keystroke mode rather than
+silently corrupting input the recorded run got right. The macro linter derives
+its allowed fields from the method signature, so it needed no change.
+
 ### Keyboard (WAI-ARIA) drag-and-drop
 
 `browser_drag` drives Playwright's `drag_and_drop`, a synthetic mouse sequence. It cannot operate a widget that implements only the **keyboard** WAI-ARIA APG pattern — grab with a key, move with keys, drop with a key — which is what accessible drag-and-drop widgets usually implement. `browser_a11y_dragdrop` is that counterpart.
