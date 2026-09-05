@@ -15,7 +15,7 @@ the session's own deque.
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from octowright.macros.execution import MACRO_FAILURE_NETWORK_TAIL, _failed_requests_tail
 
@@ -69,3 +69,40 @@ class TestFailedRequestsTail:
         session = _session([])
         _failed_requests_tail(session)
         assert session.get_network_requests.call_args.kwargs == {"limit": None}
+
+
+class TestPayloadPlacement:
+    """`failed_requests` is a sibling of `bundle`, not a key inside it.
+
+    `bundle` is what `diagnostic_bundle()` returned. Folding another
+    producer's data into it makes that claim false for every reader, and it
+    broke a whole-record assertion that had every right to hold.
+    """
+
+    def test_bundle_is_left_exactly_as_diagnostic_bundle_returned_it(self) -> None:
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        import pytest
+
+        from octowright.macros import execution
+
+        session = MagicMock()
+        session.diagnostic_bundle = AsyncMock(return_value={"hint": "yo"})
+        session.get_network_requests = MagicMock(return_value={"requests": [{"url": "/conflict", "status": 409}]})
+
+        async def _boom(*_args: Any, **_kwargs: Any) -> tuple[int, int]:
+            raise ValueError("boom")
+
+        with (
+            patch.object(execution, "_dispatch_one", _boom),
+            patch.object(execution, "load_macro", return_value={"actions": [{"action": "click"}]}),
+            patch.object(execution, "_push_status", AsyncMock()),
+            patch.object(execution, "_suggest_fix", AsyncMock(return_value=None)),
+            pytest.raises(RuntimeError) as exc_info,
+        ):
+            asyncio.run(execution.run_macro(session, "m"))
+
+        payload = exc_info.value.args[0]
+        assert payload["bundle"] == {"hint": "yo"}
+        assert payload["failed_requests"] == [{"url": "/conflict", "status": 409}]

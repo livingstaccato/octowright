@@ -425,13 +425,6 @@ async def _run_macro_impl(
                 bundle = _truncate_bundle_console(
                     await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
                 )
-                # The console tail and final URL were already here; the failing
-                # requests were not, so a payload could report "timed out
-                # waiting for #foo" while the 409 that explains it sat unread.
-                # Carries the response body for a failed same-origin request
-                # (see session/core_network_mixin), which is usually the whole
-                # diagnosis -- a status code alone is not actionable.
-                bundle["failed_requests"] = _failed_requests_tail(session)
                 # The action dict reaches the MCP client AND the structured
                 # log line below. ``substitute()`` has already resolved
                 # ``{{password}}``-style placeholders into the action, so
@@ -455,6 +448,20 @@ async def _run_macro_impl(
                     "failed_action": redacted_action,
                     "original": repr(exc),
                     "bundle": bundle,
+                    # The console tail and final URL were already in `bundle`;
+                    # the failing requests were not, so a payload could report
+                    # "timed out waiting for #foo" while the 409 that explains
+                    # it sat unread. Carries the response body for a failed
+                    # same-origin request (see session/core_network_mixin),
+                    # which is usually the whole diagnosis -- a status code
+                    # alone is not actionable.
+                    #
+                    # A sibling of `bundle` rather than a key inside it:
+                    # `bundle` is what diagnostic_bundle() returned, and
+                    # folding another producer's data into it makes that claim
+                    # false for every reader (a whole-record assertion caught
+                    # exactly this).
+                    "failed_requests": _failed_requests_tail(session),
                 }
                 if fix_suggestion:
                     payload["healing_suggestion"] = fix_suggestion
