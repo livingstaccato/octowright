@@ -580,6 +580,54 @@ arg > `OCTOWRIGHT_PROTECT_BROWSERS=1` (all) > `OCTOWRIGHT_PROTECT_HEADED`
 (throwaway intent). Internal relaunch/handoff/teardown close with `force=True`
 and are unaffected.
 
+### Typing into a canvas: `key_mode="keys"`
+
+`browser_type` sends Playwright's `page.type()`, which dispatches `keydown`
+carrying the right `key`/`text` payload but **never holds the Shift modifier
+down**. A DOM `<input>` reads that payload, which is why this is invisible on
+ordinary forms and why it survived this long. A canvas-based app — a KVM/BMC
+console (AMI H5Viewer), a canvas terminal, anything drawing its own text
+instead of using a real input — reads `code` + `shiftKey` and converts that to
+HID scancodes. It never sees the payload, so Shift is silently dropped and
+every shifted character lands as its unshifted twin. Measured against a real
+H5Viewer on 2026-08-19: `echo TYPE=Ab*:` arrived as `echo type=ab8;` —
+`T`→`t`, `A`→`a`, `*`→`8`, `:`→`;`, with no error and no warning. On a BMC
+console that is dangerous rather than merely wrong: a path silently losing its
+`*` changes the command's scope.
+
+`key_mode="keys"` presses physical keys with Shift genuinely held
+(`_type_as_keystrokes`), so `shiftKey` is actually set. Three things about it
+are load-bearing:
+
+- **It is opt-in, not the default, and not auto-detected.** A character's
+  physical key is a property of the *keyboard layout*, not of the character —
+  `*` is Shift+Digit8 on US QWERTY and elsewhere on AZERTY — and nothing on
+  the wire says which layout the target believes it has. `session/keyboard_layout`
+  is therefore US QWERTY, the same assumption Playwright's own `code`
+  generation makes. Defaulting to it would trade a silent failure on canvas
+  targets for a silent failure on non-US ones. Sniffing for a `<canvas>`
+  element was considered and rejected for the same reason it would read as a
+  guarantee: a target rendering its own text need not be a canvas (a `div`
+  with a keydown handler behaves identically), so the detection would be
+  right often enough to be trusted and wrong often enough to hurt. The tool
+  description names the failure mode instead, which is what the LLM actually
+  reads.
+- **Keystrokes go through `session.page.keyboard`, element lookup through
+  `session._target()`.** `Frame` has no `.keyboard` — only `Page` does — so a
+  frame-scoped selector still resolves in its own frame while the keys go to
+  the page. `browser_a11y_dragdrop` splits the two the same way.
+- **Shift is released in a `finally`.** A latched modifier corrupts every
+  later keystroke on that page, including another tool's, so a raising press
+  must not leave it down.
+
+A character with no key on the layout (accented, emoji, any non-ASCII) falls
+back to Playwright's own text insertion: it has no scancode to send, and a
+guessed key would be worse than the payload. `key_mode` is recorded **only
+when set**, so an ordinary `type` row stays byte-identical to every
+pre-existing recording, and replay reproduces keystroke mode rather than
+silently corrupting input the recorded run got right. The macro linter derives
+its allowed fields from the method signature, so it needed no change.
+
 ### Keyboard (WAI-ARIA) drag-and-drop
 
 `browser_drag` drives Playwright's `drag_and_drop`, a synthetic mouse sequence. It cannot operate a widget that implements only the **keyboard** WAI-ARIA APG pattern — grab with a key, move with keys, drop with a key — which is what accessible drag-and-drop widgets usually implement. `browser_a11y_dragdrop` is that counterpart.
@@ -837,6 +885,8 @@ A third `CrashScope` (`browser_pool/events.py`) exists alongside `renderer`/`pro
 **The rule** (`SessionOperationGate.operation()`, `session/operation/gate/core.py`): the INNERMOST gated operation that sees a `SessionCallTimeoutError` escape it — reachable via the exception's explicit `__cause__` chain (`_call_timeout_cause`, bounded to a few hops against a pathological chain), not just the top-level type — publishes exactly once, and marks that `SessionCallTimeoutError` instance (`_mark_call_timeout_published`) so any ancestor frame the exception continues propagating through (still escaping, or reachable via its own `__cause__` walk) finds the mark and stays silent. That holds regardless of what an outer caller does with the exception afterward — re-raise it, wrap it again, or swallow it inside its own lease — because the publish already happened at the point of first escape, before the outer caller ever got a chance to touch it. This is deliberately NOT "the root lease publishes": an earlier version of this fix gated on `_LeaseToken.is_root` (root-only), reasoned from call-graph shape that every caller "goes through `run_macro`/`run_sequence`" and would therefore see it — which review round 3 proved false by driving `macros/artifacts.py`'s `run_macro_artifact` and `run_sequence(stop_on_failure=False)`: both catch the wrapped timeout inside their OWN root lease and never re-raise it, so nothing ever escaped a root frame for a root-only check to see, and neither published anything. The innermost-lease rule needs no per-caller enumeration and no update when a new caller is added, because it does not depend on knowing what any particular caller does with the exception. `BrowserSession.__post_init__` wires the gate's `on_call_timeout` hook to `BrowserSession._notify_call_timeout`, which publishes `SessionCrashedEvent(scope="unresponsive", recovering=False)` and counts `octowright_unresponsive_target_total{kind}`, using THIS frame's own operation name — for a nested wedge, the specific action that stalled, not an outer umbrella name.
 
 **Deliberately does not auto-recover**: renderer-crash recovery replaces the dead page, which is right for an actual crash and wrong here — the target may still be executing, and force-replacing it can thrash a browser that is only slow. Surface + notify; let the caller (agent or operator) decide whether to wait, retry, or relaunch with `browser_launch`. The counter and the notification are not enough on their own to keep this scope visible on the PULL surface in the common configuration: a push notification is best-effort (a direct HTTP-MCP client gets no push at all — SDK limitation), and an OTel counter is a noop unless `PROVIDE_METRICS_ENABLED` is set (off by default). So `_notify_call_timeout` also records an `incidents.CATEGORY_UNRESPONSIVE_TARGET` incident (`instance_id`, `kind`, `url`, `operation` — the gated operation name that timed out — and a timestamp; deliberately no exception message, since the operation name is the diagnostic signal and a message could carry a URL/path), surfaced at `octowright_status()["crash"]["unresponsive_recent"]`. That is a key SEPARATE from `"recent"` (the renderer-crash records), not folded into it: `"recent"` runs through `crash_reports.enrich`, which correlates macOS `.ips` SIGSEGV signatures written a beat after a real crash, and an unresponsive target never crashed — it just stopped replying — so it has no crash report to correlate and folding the two would invite a lookup that can never hit.
+
+**A lookup that fails after an unresponsive target says so.** The hook above deliberately neither sets `_crashed` nor tears the session down, so an unresponsive target usually stays live and the next call simply works. But when that browser is *later* evicted for any reason (an external close, a dead driver), `lifecycle._record_recently_evicted` used to store a crashed/not-crashed **bool** — and since the unresponsive path never sets `_crashed`, the lookup fell into the generic `ended unexpectedly (closed or crashed externally) — relaunch it with browser_launch` branch. That is the wrong advice in this exact case: the browser process is usually still running, so relaunching discards a live session and its profile state to fix something that only needed a smaller batch, and it says nothing about downloads the timed-out call may already have landed. The ledger is now three states (`crashed` / `unresponsive` / `external`), read from a `_unresponsive_operation` marker the hook sets, and `pool._missing_session_message` has a third branch naming the recovery path (`browser_list` before relaunching, `browser_downloads`, retry smaller) instead of `browser_launch`. A crash **wins** over unresponsiveness when both are set: a target that went quiet and then actually died is a crash, and `relaunch` is right for it. The marker deliberately lives on the session rather than being read back out of `incidents` — that ring is 25 entries **shared across all categories**, and its own docstring notes a repeatedly-unresponsive target evicts its own history, which is fine for the `octowright_status` surface it was built for and unreliable as a correctness input. The `SessionCallTimeoutError` raised while the session is still live already carried the right advice and keeps it, now also naming the smaller-batch retry and the `browser_downloads` check.
 
 The MCP server `instructions` string (`server/_state.py`) summarizes this taxonomy so the LLM knows the signals exist; refused launches surface in-band as actionable tool errors (cap / memory floor), not notifications.
 

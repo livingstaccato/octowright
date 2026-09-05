@@ -96,7 +96,9 @@ class BrowserPool:
         # (_accept_external_close_nowait), insertion-ordered + capped. Maps id -> crashed?
         # (True when a page.on("crash") was seen) so get() can say "crashed" vs a
         # generic "ended unexpectedly", instead of a bare "no such id".
-        self._recently_evicted: dict[str, bool] = {}
+        # instance_id -> "crashed" | "unresponsive" | "external"; written by
+        # lifecycle._record_recently_evicted, read by _missing_session_message.
+        self._recently_evicted: dict[str, str] = {}
         # Monotonic counter for window-tile slot assignment. Reading
         # len(_sessions) at launch time would race when N launches run in
         # parallel — they'd all see the same count and grab the same slot.
@@ -271,11 +273,24 @@ class BrowserPool:
         return self._sessions[instance_id]
 
     def _missing_session_message(self, instance_id: str) -> str:
-        if instance_id in self._recently_evicted:
-            if self._recently_evicted[instance_id]:
-                return (
-                    f"browser instance_id={instance_id!r} crashed (its process died) — relaunch it with browser_launch"
-                )
+        state = self._recently_evicted.get(instance_id)
+        if state == "crashed":
+            return f"browser instance_id={instance_id!r} crashed (its process died) — relaunch it with browser_launch"
+        if state == "unresponsive":
+            # Deliberately does NOT say "relaunch". An unresponsive target is
+            # not a dead one -- the browser process is usually still running,
+            # and relaunching discards a live session (and its profile state)
+            # to fix something that only needed a smaller batch. Downloads the
+            # timed-out call already triggered can still have landed, which is
+            # not recoverable knowledge from a bare "no such instance".
+            return (
+                f"browser instance_id={instance_id!r} was torn down after its target stopped "
+                "answering (an unresponsive target, not a crash) — the browser itself is often "
+                "still alive, so check browser_list before relaunching, check browser_downloads "
+                "if the call may have started one, and retry with a smaller batch rather than "
+                "one long call"
+            )
+        if state is not None:
             return (
                 f"browser instance_id={instance_id!r} ended unexpectedly (closed or crashed "
                 f"externally) — relaunch it with browser_launch"

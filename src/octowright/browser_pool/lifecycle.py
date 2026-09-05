@@ -363,7 +363,22 @@ def _closing_entry_for(pool: BrowserPool, instance_id: str, session: BrowserSess
 
 
 def _record_recently_evicted(pool: BrowserPool, instance_id: str, session: BrowserSession) -> None:
-    pool._recently_evicted[instance_id] = bool(getattr(session, "_crashed", False))
+    """Remember WHY this id went away, so a later lookup can say so.
+
+    Three states rather than the original crashed/not-crashed bool, because
+    "the target stopped answering" needs different advice from "the browser
+    died": the browser is usually still alive after an unresponsive teardown,
+    so telling the caller to relaunch sends them the wrong way. A crash wins
+    over unresponsiveness when both are set -- a target that went quiet and
+    then actually died is a crash, and that is the more specific answer.
+    """
+    if getattr(session, "_crashed", False):
+        state = "crashed"
+    elif getattr(session, "_unresponsive_operation", None):
+        state = "unresponsive"
+    else:
+        state = "external"
+    pool._recently_evicted[instance_id] = state
     if len(pool._recently_evicted) > pool._RECENTLY_EVICTED_CAP:
         del pool._recently_evicted[next(iter(pool._recently_evicted))]
 

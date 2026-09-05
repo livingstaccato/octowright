@@ -209,6 +209,13 @@ class BrowserSession(
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     _last_mcp_navigation: str | None = None
+    # Set by _notify_call_timeout when a Playwright call ran past its budget.
+    # Deliberately NOT _crashed: the target may still be executing, and the
+    # eviction ledger has to be able to tell the two apart (browser_pool/
+    # lifecycle._record_recently_evicted). Holds the gated operation name that
+    # stalled, which is the diagnostic signal; never an exception message,
+    # which could carry a URL or a path.
+    _unresponsive_operation: str | None = field(default=None, repr=False)
     _on_page_close: Callable[..., None] | None = field(default=None, repr=False)
     _on_page_crash: Callable[..., None] | None = field(default=None, repr=False)
     _make_framenavigated_handler: Callable[[Any], Any] | None = field(default=None, repr=False)
@@ -322,6 +329,13 @@ class BrowserSession(
         # address-bar navigation the user made outside octowright's tools,
         # same as every other best-effort incident/status field.
         url = self.url
+
+        # Remembered on the session so that if this browser is LATER evicted
+        # (an external close, a dead driver), the eviction ledger can say the
+        # lookup failed after an unresponsive target rather than falling into
+        # the generic "ended unexpectedly ... relaunch it" branch -- which is
+        # the wrong advice here, since the browser is usually still alive.
+        self._unresponsive_operation = operation_name
 
         _UNRESPONSIVE.add(1, attributes={"kind": self.kind})
         log.warning(

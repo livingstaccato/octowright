@@ -96,6 +96,9 @@ async def bounded(awaitable: Awaitable[T], *, operation: str, timeout: float | N
         raise SessionCallTimeoutError(
             f"{operation} did not answer within {budget}s -- the browser target is "
             "unresponsive. It may still be executing (this is not a crash, and Octowright "
-            "does not auto-recover it) -- retry or wait if the work may still finish; "
-            "relaunch this session if it stays unresponsive. Other sessions are unaffected."
+            "does not auto-recover it) -- retry or wait if the work may still finish. "
+            "Prefer retrying in smaller batches over one long call, and check "
+            "browser_downloads if this call may have started a download: one triggered "
+            "before the budget ran out can still have landed. Relaunch this session only "
+            "if it stays unresponsive. Other sessions are unaffected."
         ) from exc

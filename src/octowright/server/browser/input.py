@@ -152,6 +152,13 @@ async def browser_click(
         "inputs, app-level keystroke handlers). For ordinary form fields prefer "
         "browser_fill — it's much faster because it sets the value in one shot. "
         "Don't use this to press a single non-text key like Enter or Escape — use browser_press_key. "
+        "key_mode='keys' presses PHYSICAL keys with Shift genuinely held, which you MUST use for a "
+        "canvas-based target — a KVM/BMC console (e.g. AMI H5Viewer), a canvas terminal, anything "
+        "drawing its own text instead of using a real DOM input. Those read code+shiftKey rather than "
+        "the key/text payload the default mode sends, so Shift is silently dropped and every shifted "
+        "character arrives as its unshifted twin (TYPE=Ab*: becomes type=ab8;) with no error. "
+        "key_mode='keys' assumes a US QWERTY layout and is slower (one round trip per character), so "
+        "leave it off for ordinary DOM inputs, which the default mode types correctly. "
         "Pass response_mode='outline' to get a compact browser_page_outline in the same call."
     ),
 )
@@ -161,9 +168,10 @@ async def browser_type(
     text: str,
     delay_ms: int | None = None,
     response_mode: str | None = None,
+    key_mode: str | None = None,
 ) -> dict[str, Any]:
     async with browser_operation(pool, instance_id, "browser_type") as session:
-        await session.type_text(selector, text, delay_ms)
+        await session.type_text(selector, text, delay_ms, key_mode=key_mode)
         return await _with_outline(instance_id, {"ok": True}, response_mode)
 
 

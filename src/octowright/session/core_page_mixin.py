@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +28,7 @@ from octowright.session.aria_redaction import (
 from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
+from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
 from octowright.session.timeouts import bounded
@@ -429,12 +431,75 @@ class SessionPageMixin(SessionLike):
             return REDACTED_INPUT_PLACEHOLDER
         return value
 
+    # Re-enters the SAME "browser_type" lease its only caller (type_text)
+    # already holds -- the gate grants re-entry by owning-task identity, and
+    # this runs inline in that task rather than in one it spawned.
     @gated_operation("browser_type")
-    async def type_text(self, selector: str, text: str, delay_ms: int | None) -> None:
+    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None) -> None:
+        """Type *text* by pressing physical keys, holding Shift for real.
+
+        Playwright's ``type()`` never holds the modifier down, so a target that
+        reads ``code`` + ``shiftKey`` rather than the ``key``/``text`` payload
+        -- a canvas KVM console, a canvas terminal -- silently receives every
+        shifted character as its unshifted twin. See
+        ``session/keyboard_layout`` for the measured failure and the US-QWERTY
+        limitation this inherits.
+
+        Keystrokes go through ``self.page.keyboard`` because **Frame has no
+        ``.keyboard``** -- only Page does -- while the element lookup stays on
+        ``self._target()`` so a frame-scoped selector still resolves in its own
+        frame. ``a11y_dragdrop`` splits the two the same way for the same
+        reason.
+
+        A character the layout has no physical key for (accented, emoji, any
+        non-ASCII) falls back to Playwright's own text insertion: it has no
+        scancode to send, so a guessed key would be worse than the payload.
+        """
+        await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        keyboard = self.page.keyboard
+        for char in text:
+            stroke = keystroke_for(char)
+            if stroke is None:
+                log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
+                await keyboard.type(char)
+            else:
+                code, shift_held = stroke
+                if shift_held:
+                    await keyboard.down("Shift")
+                    try:
+                        await keyboard.press(code)
+                    finally:
+                        # Release even if the press raises, or the modifier
+                        # stays latched and every later keystroke on this page
+                        # -- including another tool's -- arrives shifted.
+                        await keyboard.up("Shift")
+                else:
+                    await keyboard.press(code)
+            if delay_ms:
+                await asyncio.sleep(delay_ms / 1000)
+
+    @gated_operation("browser_type")
+    async def type_text(self, selector: str, text: str, delay_ms: int | None, *, key_mode: str | None = None) -> None:
+        """Type *text* into *selector* one keystroke at a time.
+
+        ``key_mode="keys"`` presses physical keys with Shift genuinely held,
+        for a target that reads ``code``/``shiftKey`` instead of the event's
+        ``key``/``text`` payload. Default (``None``/``"text"``) keeps
+        Playwright's ``type()``, which is correct for every DOM input and
+        carries no keyboard-layout assumption.
+        """
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_text = await self._redacted_or_original(selector, text)
-        await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **meta)
+        if key_mode == "keys":
+            await self._type_as_keystrokes(selector, text, delay_ms)
+        elif key_mode in (None, "text"):
+            await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        else:
+            raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
+        # Only stamped when it was actually asked for, so an ordinary type row
+        # stays byte-identical to what every pre-existing recording holds.
+        extra = {"key_mode": key_mode} if key_mode else {}
+        self.recorder.record("type", selector=selector, text=recorded_text, delay_ms=delay_ms, **extra, **meta)
 
     @gated_operation("browser_fill")
     async def fill(self, selector: str, value: str, *, timeout_ms: int | None = None) -> None:
