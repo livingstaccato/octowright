@@ -68,9 +68,10 @@ code, .mono { font-family: var(--mono); }
   z-index: 100;
 }
 
+/* Otto is 1178x927: sized by height so the width setting cannot stretch him. */
 .topbar__logo {
   display: block;
-  width: 28px;
+  width: auto;
   height: 28px;
   flex-shrink: 0;
 }
