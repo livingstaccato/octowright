@@ -108,9 +108,16 @@ def test_the_path_is_named_exactly_once(tmp_path: Path) -> None:
     with pytest.raises(InvalidRequestError) as excinfo:
         reject_unsafe_path(outside, tmp_path, label="screenshot path")
 
+    # Compared against the RENDERED form. The message interpolates the path
+    # with `!r`, which escapes backslashes, so on Windows the message holds
+    # `'C:\\Users\\...'` while `str(outside)` is the single-backslash raw
+    # string and the count is 0. Counting the repr is exact on both platforms
+    # and still catches a doubled path, which would render it twice.
+    shown = f"{str(outside)!r}"
+
     message = str(excinfo.value)
-    assert message.count(str(outside)) == 1, message
-    assert message.startswith(f"screenshot path {str(outside)!r} resolves outside "), message
+    assert message.count(shown) == 1, message
+    assert message.startswith(f"screenshot path {shown} resolves outside "), message
 
 
 def test_a_contained_path_is_returned_resolved(tmp_path: Path) -> None:
