@@ -124,6 +124,7 @@ class TestReadFrames:
             "next_cursor": 0,
             "returned": 0,
             "truncated": False,
+            "more_on_disk": False,
             "total_bytes": 0,
             "capture_truncated": False,
             "capture_limit_bytes": None,
@@ -314,3 +315,58 @@ class TestResponseBudgetCoversEveryReturnedString:
         result = read_frames(_sidecar(tmp_path, rows), limit=200)
         assert result["returned"] < 200
         assert result["truncated"] is True
+
+
+class TestPagingAlwaysMakesProgress:
+    """`truncated` has to mean "page again and you will get more".
+
+    ``_read_window`` deliberately holds the cursor on an unterminated trailing
+    line -- the writer is mid-frame and those bytes are not safe to parse yet.
+    Deriving `truncated` from `next_cursor < total_bytes` alone therefore
+    reported "more to read" while handing back the SAME cursor, so a caller
+    following the tool description polled forever with nothing to show for it.
+    """
+
+    def test_a_partial_trailing_line_terminates_the_page_loop(self, tmp_path: Path) -> None:
+        """The first call cannot know the remaining bytes are half a line.
+
+        It reports `truncated` because it genuinely advanced and bytes remain,
+        which costs one more call -- and THAT call is the one that must not
+        ask again. `more_on_disk` stays true throughout, so a caller watching
+        a live stream can still tell the writer is mid-frame.
+        """
+        path = tmp_path / "s.websocket.jsonl"
+        path.write_bytes(json.dumps(_frame("sent", "a")).encode() + b"\n" + b'{"action": "websocket_fr')
+
+        calls = 0
+        cursor = 0
+        result = read_frames(path, cursor=cursor)
+        while result["truncated"] and calls < 10:
+            calls += 1
+            cursor = result["next_cursor"]
+            result = read_frames(path, cursor=cursor)
+
+        assert calls == 1
+        assert result["more_on_disk"] is True
+
+    def test_a_second_call_on_a_held_cursor_does_not_loop(self, tmp_path: Path) -> None:
+        path = tmp_path / "s.websocket.jsonl"
+        path.write_bytes(json.dumps(_frame("sent", "a")).encode() + b"\n" + b'{"action": "websocket_fr')
+        first = read_frames(path)
+        second = read_frames(path, cursor=first["next_cursor"])
+        assert second["next_cursor"] == first["next_cursor"]
+        assert second["truncated"] is False
+
+    def test_a_cut_window_still_asks_to_be_paged(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The cursor DID advance here, so paging makes progress."""
+        monkeypatch.setenv("OCTOWRIGHT_TAIL_MAX_BYTES", "300")
+        path = _sidecar(tmp_path, [_frame("sent", str(i)) for i in range(10)])
+        assert read_frames(path, limit=100)["truncated"] is True
+
+
+class TestCaptureTruncationReportsItsLimit:
+    def test_a_seeded_truncation_carries_the_limit(self, tmp_path: Path) -> None:
+        """Seeding only half the pair left the "how much was dropped" field null."""
+        path = _sidecar(tmp_path, [_frame("sent", "a")])
+        result = read_frames(path, capture_truncated=True, capture_limit_bytes=4096)
+        assert (result["capture_truncated"], result["capture_limit_bytes"]) == (True, 4096)

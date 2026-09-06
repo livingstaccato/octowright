@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import base64
+import contextlib
 import importlib
 import json
 import os
@@ -464,6 +465,11 @@ class SessionIOMixin(SessionLike):
             include_payloads=include_payloads,
             limit=limit,
             capture_truncated=self._websocket_truncated,
+            # Seeded as a PAIR. Reporting that frames were dropped while the
+            # field saying how many bytes were allowed stays null tells half
+            # a story on every page except the one whose window happens to
+            # hold the marker.
+            capture_limit_bytes=_websocket_max_bytes() if self._websocket_truncated else None,
         )
 
     def get_websocket_summary(self) -> dict[str, Any]:
@@ -582,14 +588,32 @@ class SessionIOMixin(SessionLike):
                 error=str(error),
             )
 
+        # Attached all-or-nothing. A later ``.on`` raising after the frame
+        # handlers are live -- an older binding with no ``socketerror``, a
+        # proxying wrapper -- would otherwise leave those handlers streaming
+        # rows for a socket that never reaches the registry: frames whose
+        # ``socket_id`` no summary can explain, and counts silently dropped by
+        # ``_note_websocket_frame``.
+        attached: list[tuple[str, Any]] = []
         try:
-            websocket.on("framesent", _on_frame("framesent"))
-            websocket.on("framereceived", _on_frame("framereceived"))
-            websocket.on("close", _on_close)
-            websocket.on("socketerror", _on_error)
-        except Exception:
+            for event, handler in (
+                ("framesent", _on_frame("framesent")),
+                ("framereceived", _on_frame("framereceived")),
+                ("close", _on_close),
+                ("socketerror", _on_error),
+            ):
+                websocket.on(event, handler)
+                attached.append((event, handler))
+        except Exception as exc:
             # Also the "this object has no ``.on`` at all" case, which used to
             # need its own guard above and reaches the identical outcome here.
+            # Logged rather than swallowed: after the registration reorder the
+            # consequence is a socket missing from ``browser_websocket_summary``
+            # with nothing anywhere to say why.
+            log.debug("octowright.session.websocket_wiring_failed", url=str(url), error=repr(exc))
+            for event, handler in attached:
+                with contextlib.suppress(Exception):
+                    websocket.remove_listener(event, handler)
             return
 
         # Registered only once the listeners are attached. Registering first

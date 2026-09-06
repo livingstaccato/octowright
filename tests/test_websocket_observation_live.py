@@ -77,7 +77,12 @@ def serve_page():  # type: ignore[no-untyped-def]
         yield start
     finally:
         for srv in started:
+            # ``shutdown`` only stops the serve_forever loop; without
+            # ``server_close`` the listening socket and ThreadingHTTPServer's
+            # non-daemon request threads survive to process exit, so each
+            # ``start`` would leak one fd for the rest of the session.
             srv.shutdown()
+            srv.server_close()
 
 
 @pytest.mark.anyio

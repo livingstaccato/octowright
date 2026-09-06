@@ -28,7 +28,15 @@ def _capped_events(log_path: Path, since: int, cap: int) -> tuple[list[dict[str,
     instructed rather than merely possible.
 
     The whole window is still scanned, so ``events_in_window`` stays an exact
-    count rather than becoming "however many we happened to parse".
+    count rather than becoming "however many we happened to parse". That
+    deliberately forgoes the laziness ``tail_log_lines`` exists for: stopping
+    at ``cap + 1`` would be cheaper on a large recording, but ``event_count``
+    is a published field meaning "events in this window", and quietly
+    redefining it as "events we bothered to count" is a worse trade than the
+    parse. Note it also means this path has no response-BYTE budget, unlike
+    the websocket reader -- a recording holding enormous rows can still return
+    a large response here. Bounding that is a change to this tool's contract
+    rather than a fix to this one, and is not attempted.
     """
     events: list[dict[str, Any]] = []
     in_window = 0
@@ -80,6 +88,14 @@ def browser_tail_recording(
     log_path = Path(session.log_path)
     prev = since or 0
 
+    if max_events is not None:
+        return _capped_result(instance_id, log_path, prev, max_events)
+
+    # Read ONLY on the paths that use it: the capped path re-reads and
+    # re-parses the same window through ``_capped_events``, and doing both
+    # opened the file twice and held two complete lists of parsed rows in the
+    # process that owns every live browser -- measured at 346ms for five
+    # events out of a 4.6 MB recording.
     events, new_cursor, total_bytes = tail_log(log_path, prev)
     next_actions: list[BrowserToolAction] = []
     if response_mode == "summary":
@@ -115,39 +131,42 @@ def browser_tail_recording(
             "next_actions": annotate_next_actions_for_profile(next_actions),
         }
 
-    next_actions = [{"tool": "browser_tail_recording", "args": {"instance_id": instance_id, "since": new_cursor}}]
-
-    if max_events is not None:
-        # Floored at one, not zero. A zero cap returns nothing while the
-        # corrected cursor correctly refuses to advance past events it did not
-        # return -- so `truncated` stays true and `next_actions` hands back the
-        # same cursor, telling a caller to ask again forever. A bound of zero
-        # is meaningless; a page that always makes progress is the same rule
-        # the websocket byte budget uses.
-        capped_events, in_window, capped_cursor, total_bytes = _capped_events(log_path, prev, max(1, int(max_events)))
-        truncated = len(capped_events) < in_window
-        # ``complete`` follows the corrected cursor, so it can no longer be
-        # True on the same response as ``truncated`` -- a pair that cannot
-        # both hold, and did.
-        next_actions = [
-            {"tool": "browser_tail_recording", "args": {"instance_id": instance_id, "since": capped_cursor}}
-        ]
-        return {
-            "events": capped_events,
-            "cursor": capped_cursor,
-            "total_bytes": total_bytes,
-            "complete": capped_cursor >= total_bytes,
-            "event_count": in_window,
-            "returned_event_count": len(capped_events),
-            "truncated": truncated,
-            "next_actions": next_actions if truncated else [],
-        }
-
     return {
         "events": events,
         "cursor": new_cursor,
         "total_bytes": total_bytes,
         "complete": new_cursor >= total_bytes,
+    }
+
+
+def _capped_result(instance_id: str, log_path: Path, prev: int, max_events: int) -> BrowserTailRecordingResult:
+    """The ``max_events`` branch: bounded rows, and a cursor that resumes on one."""
+    # Floored at one, not zero. A zero cap returns nothing while the corrected
+    # cursor correctly refuses to advance past events it did not return -- so
+    # `truncated` stays true and `next_actions` hands back the same cursor,
+    # telling a caller to ask again forever. A bound of zero is meaningless; a
+    # page that always makes progress is the rule the websocket byte budget
+    # uses for the same reason.
+    events, in_window, cursor, total_bytes = _capped_events(log_path, prev, max(1, int(max_events)))
+    # "Page again and you will get more." The row cap left events behind, or
+    # the byte window cut the file -- but the second only counts when the
+    # cursor actually moved, since ``_read_window`` holds it on an unterminated
+    # trailing line and a caller following `next_actions` would loop on it.
+    truncated = len(events) < in_window or (cursor > prev and cursor < total_bytes)
+    next_actions: list[BrowserToolAction] = [
+        {"tool": "browser_tail_recording", "args": {"instance_id": instance_id, "since": cursor}}
+    ]
+    return {
+        "events": events,
+        "cursor": cursor,
+        "total_bytes": total_bytes,
+        # Follows the corrected cursor, so it can no longer be True on the
+        # same response as ``truncated`` -- a pair that cannot both hold, and did.
+        "complete": cursor >= total_bytes,
+        "event_count": in_window,
+        "returned_event_count": len(events),
+        "truncated": truncated,
+        "next_actions": next_actions if truncated else [],
     }
 
 

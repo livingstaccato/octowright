@@ -592,10 +592,19 @@ window, +16% on a 1 MiB one), so it keeps one C-level split of the whole blob.
 What the two share is `_read_window` -- the byte bound, the line boundary and
 the oversized-line skip -- which is the part worth not duplicating.
 
-**`truncated` covers both ways a page can be short.** It reported only the row
-cap, so a caller following "keep paging while truncated" stopped holding a
-prefix whenever the byte window cut the file first -- the derivation
-`browser_tail_recording` already got right as `new_cursor >= total_bytes`.
+**`truncated` means "page again and you will get more", and both ways a page
+can be short qualify.** It reported only the row cap, so a caller following
+"keep paging while truncated" stopped holding a prefix whenever the byte window
+cut the file first. But the naive repair -- `next_cursor < total_bytes` -- is
+the same mistake mirrored: `_read_window` deliberately HOLDS the cursor on an
+unterminated trailing line, because the writer is mid-frame and those bytes
+cannot be parsed yet, so a socket that is merely mid-write reports "more to
+read" against a cursor that cannot move, and an agent told to page on it polls
+forever. The flag therefore also requires that this call actually advanced the
+cursor, and the raw fact is published separately as `more_on_disk` for a caller
+watching a live stream. `browser_tail_recording` carries the identical pair of
+fixes under `max_events` -- it had the row-cap-only bug too, and would have
+grown the loop from the same repair.
 Separately, `capture_truncated` reports frames dropped at CAPTURE time by
 `OCTOWRIGHT_WEBSOCKET_MAX_BYTES`. The read path used to skip the recorder's
 `websocket_truncated` marker as a non-frame row, so the one record that frames
@@ -632,9 +641,13 @@ FIFO lease queued a poll behind whatever browser work was running -- the whole
 of a `macro_run_sequence`, up to the 300s queue timeout -- which is precisely
 the "follow a live stream" workflow they exist for. `browser_tail_recording`,
 the closest analogue and also a pure tail read, resolves its session the same
-way. `cursor` is clamped at both the tool and in `tail_log_lines`: it arrives
-as an LLM-supplied int, and a negative one reaches `fh.seek` and comes back as
-a bare `OSError: [Errno 22]`.
+way. `cursor` arrives as an LLM-supplied int, and a negative one reaches
+`fh.seek` and comes back as a bare `OSError: [Errno 22]`. It is clamped in
+`tail_log_lines`, which guards that syscall for every caller, and again in
+`read_frames`, which compares against it to decide whether a page advanced.
+The MCP tools deliberately do **not** clamp a third time: three statements of
+one rule, each with its own justifying comment, is how the next reader ends up
+adding a fourth.
 
 **The recorded preview is short; the sidecar's is not.** Fixing the payload
 read gave that field content for the first time, and it is written to the MAIN

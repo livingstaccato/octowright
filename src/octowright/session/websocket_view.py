@@ -208,6 +208,7 @@ def read_frames(
     include_payloads: bool = False,
     limit: int | None = None,
     capture_truncated: bool = False,
+    capture_limit_bytes: int | None = None,
 ) -> dict[str, Any]:
     """A cursor-paginated page of frames from the sidecar.
 
@@ -225,12 +226,16 @@ def read_frames(
     next call resumes on it -- naming the end of the read window instead is
     what silently dropped every frame between the cap and the window's end.
     """
+    # Clamped here as well as in ``tail_log_lines`` (which guards the actual
+    # ``seek``) because the progress check below compares against it: an
+    # unclamped negative would make every call look like it advanced.
+    cursor = max(0, cursor)
     # A session whose page never opened a socket has no sidecar, which is the
     # common case rather than an error: it reads as an empty window, so it
     # takes the same path out and there is one result shape to maintain.
     if websocket_path is None:
         lines: Iterator[tuple[int, bytes]] = iter(())
-        window_cursor, total_bytes = max(0, cursor), 0
+        window_cursor, total_bytes = cursor, 0
     else:
         lines, window_cursor, total_bytes = tail_log_lines(websocket_path, cursor)
 
@@ -242,19 +247,28 @@ def read_frames(
     # reader working from the file alone.
     collected = _Page(resolve_message_limit(limit), include_payloads)
     collected.capture_truncated = capture_truncated
+    collected.capture_limit_bytes = capture_limit_bytes
     collected.collect(lines, socket_id, direction)
     next_cursor = window_cursor if collected.stopped_at is None else collected.stopped_at
+    # ``_read_window`` deliberately HOLDS the cursor on an unterminated
+    # trailing line: the writer is mid-frame and those bytes are not safe to
+    # parse yet. So "more bytes exist" and "paging again will get you some"
+    # are different questions, and answering the second with the first told a
+    # caller to poll forever against a cursor that could not move.
+    advanced = next_cursor > cursor
 
     return {
         "messages": collected.messages,
         "next_cursor": next_cursor,
         "returned": len(collected.messages),
-        # Covers both ways a page can be short of the file's end: a bound
-        # stopped it (the cursor is then inside the window, so strictly less
-        # than the total), or the read window itself cut the file. Reporting
-        # only the first is what let a caller told to keep paging stop holding
-        # a prefix.
-        "truncated": next_cursor < total_bytes,
+        # "Page again and you will get more." Both ways a page can be short
+        # qualify -- a bound stopped it, or the read window cut the file --
+        # but only when this call actually moved the cursor, or the answer is
+        # an instruction to loop.
+        "truncated": collected.stopped_at is not None or (advanced and next_cursor < total_bytes),
+        # The raw fact, for a caller watching a live stream who wants to know
+        # the writer is mid-line rather than finished.
+        "more_on_disk": next_cursor < total_bytes,
         "total_bytes": total_bytes,
         # Frames dropped at CAPTURE time, which no cursor can recover. Read
         # off the marker rather than inferred, and reported rather than
