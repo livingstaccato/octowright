@@ -37,7 +37,17 @@ docs/images/
 
 - `brand/octowright-banner.png` — branded mark (with wordmark). 128/256/512
   variants resize from this.
-- `otto/otto.svg` — vector mascot. The avatar PNG ladder and the favicon
+- `otto/otto.svg` — vector mascot, **square master**. It carries a square
+  `viewBox` tightened to the artwork, and that squareness is load-bearing rather
+  than cosmetic: `generate_image_assets.sh` rasterizes it with
+  `rsvg-convert -w S -h S`, which stretches rather than pads, and an avatar or
+  favicon wants to be square regardless. The UI copies of Otto
+  (`src/octowright/http/otto.svg`, `packages/octowright-frontend/static/`,
+  `demo/playground/static/`) deliberately differ: they carry a **wide** viewBox
+  cropped to the artwork's real bounds, because a lockup beside a wordmark has
+  no reason to reserve the 26% of vertical dead space a square canvas implies.
+  Every consumer of those sizes Otto by height with the width left to follow.
+  The avatar PNG ladder and the favicon
   PNGs all derive from this.
 - `favicon/social-og-image.png` and `favicon/favicon.ico` are tracked but
   intentionally hand-curated — they are NOT outputs of the regeneration

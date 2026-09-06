@@ -99,7 +99,8 @@ _HTML_TMPL = """\
     }}
     .card {{ text-align: center; }}
     .otto {{
-      width: 192px; height: 192px;
+      /* Otto is 1178x927: size by height, or the width setting stretches him. */
+      width: auto; height: 192px;
       margin: 0 auto 1.25rem;
       display: block;
     }}
@@ -132,7 +133,7 @@ _HTML_TMPL = """\
 </head>
 <body>
   <div class="card">
-    <img src="/otto.svg" alt="Otto" class="otto" width="192" height="192">
+    <img src="/otto.svg" alt="Otto" class="otto" width="244" height="192">
     <div class="wordmark">octo<strong>wright</strong></div>
     <div class="meta">
       <div>

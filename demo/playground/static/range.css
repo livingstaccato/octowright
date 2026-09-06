@@ -24,11 +24,12 @@
   letter-spacing: 0;
 }
 
+/* Otto is 1178x927: sized by height. object-fit:cover is gone with the square
+   box -- there is no longer any overflow to crop, and cover would cut tentacles. */
 .brand-lockup img {
-  width: 54px;
+  width: auto;
   height: 54px;
   border-radius: 8px;
-  object-fit: cover;
 }
 
 .rail-title {
