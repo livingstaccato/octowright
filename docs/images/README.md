@@ -47,6 +47,16 @@ docs/images/
   cropped to the artwork's real bounds, because a lockup beside a wordmark has
   no reason to reserve the 26% of vertical dead space a square canvas implies.
   Every consumer of those sizes Otto by height with the width left to follow.
+  `otto/otto-mark.svg` is Otto drawn for SMALL sizes, generated from the UI copy
+  by `scripts/make_otto_mark.py`: the full artwork carries suckers, sparkles and
+  blush that stop being detail and become noise below roughly 64px, and its
+  near-black line art reads as a blot rather than a line. The mark keeps the 32
+  structural paths, recolours the single line-art path to a dark teal, and
+  rounds coordinates to one decimal (74 KB against 126 KB). Every surface that
+  draws Otto small uses it -- site and dashboard headers, the playground
+  lockups, favicons -- while the /new-tab hero and the playground hero keep the
+  full drawing. This is ordinary optical sizing: they are different artwork, not
+  the same artwork at two scales.
   The avatar PNG ladder and the favicon
   PNGs all derive from this.
 - `favicon/social-og-image.png` and `favicon/favicon.ico` are tracked but

@@ -75,6 +75,11 @@ for size in 64 128 256 512; do
   echo "wrote ${out}"
 done
 
+# --- Small-size mark --------------------------------------------------------
+# Otto drawn for small sizes: the full artwork's suckers, sparkles and blush stop
+# being detail and become noise below ~64px. See scripts/make_otto_mark.py.
+python3 "${ROOT_DIR}/scripts/make_otto_mark.py"
+
 # --- Favicon derivatives ----------------------------------------------------
 mkdir -p "${FAVICON_DIR}"
 resize_from "${OTTO_SRC_SVG}" 192 "${FAVICON_DIR}/favicon-icon-192.png"

@@ -24,8 +24,9 @@
   letter-spacing: 0;
 }
 
-/* Otto is 1178x927: sized by height. object-fit:cover is gone with the square
-   box -- there is no longer any overflow to crop, and cover would cut tentacles. */
+/* otto-mark.svg at this size, not otto.svg. 1178x927, so sized by height;
+   object-fit:cover is gone with the square box -- there is no overflow left to
+   crop, and cover would cut tentacles. */
 .brand-lockup img {
   width: auto;
   height: 54px;
