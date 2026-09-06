@@ -1,0 +1,18 @@
+[
+  {
+    "title": "The live preview follows the tab you switch to",
+    "body": "The dashboard's live preview now follows the tab you switch to. It used to keep streaming whichever page was active when you opened it, and the tab it left kept encoding frames forever."
+  },
+  {
+    "title": "A live preview no longer freezes silently",
+    "body": "A live preview no longer freezes silently. If the stream can't be re-attached — the page it was casting crashed and couldn't be replaced, or the session closed while you were watching — the socket now closes and the panel drops to screenshot polling instead of showing a frame that never updates."
+  },
+  {
+    "title": "A background-tab crash stops breaking your preview",
+    "body": "A crash in a background tab stops breaking the preview of the tab you're actually watching."
+  },
+  {
+    "title": "Screenshot fallback backs off when the server is slow",
+    "body": "Screenshot fallback keeps one request in flight and backs off when the server is slow, so a sluggish screenshot endpoint no longer aborts every frame while still doing all the work."
+  }
+]

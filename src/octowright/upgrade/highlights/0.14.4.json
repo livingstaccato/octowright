@@ -1,0 +1,14 @@
+[
+  {
+    "title": "text_exact and label_exact join role_exact",
+    "body": "click_by/fill_by/get_text_by gained text_exact and label_exact flags mirroring role_exact — matching stayed substring-by-default the whole time, this just adds an opt-in for exact instead of leaving you to hand-craft a selector."
+  },
+  {
+    "title": "macro_lint catches an impossible field before replay",
+    "body": "macro_lint now catches a field a macro action can't actually accept before you replay it, instead of a live TypeError days later."
+  },
+  {
+    "title": "restart --help says what the sweep actually kills",
+    "body": "restart --help says plainly what the browser sweep actually kills (every Playwright browser on the machine, protected or not), and macro_lint stopped warning on ordinary navigate URLs."
+  }
+]

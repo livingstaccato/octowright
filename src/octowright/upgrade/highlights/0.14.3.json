@@ -1,0 +1,10 @@
+[
+  {
+    "title": "A security review closed seven findings",
+    "body": "A full security review closed out seven findings across the codebase: exported macro scripts can no longer be turned into executable code via a crafted recorded field, launching a custom browser executable now requires an explicit opt-in, macro repair/lint/healing stopped echoing literal credentials back at you, the takeover config write and the viewport-pill control binding are hardened against symlink-swap and unauthenticated-page-script attacks respectively, and file-upload targeting no longer defaults to the daemon's own working directory."
+  },
+  {
+    "title": "The rate limiter stops lumping every client together",
+    "body": "The leader's new-session rate limiter no longer lumps every headerless MCP client into one shared bucket — a noisy direct client that skips the follower handshake can no longer 429 an unrelated client's legitimate new session."
+  }
+]

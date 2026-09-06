@@ -1,0 +1,6 @@
+[
+  {
+    "title": "Split-brain daemons closed in both directions",
+    "body": "Split-brain daemons are closed in both directions. A dying leader no longer leaves two daemons racing on different ports — the election lock is now held until the replacement is confirmed up, so followers adopt the new leader instead of forking a rival. And `octowright restart` now recovers from an existing split-brain by reclaiming the canonical port from the rival leader (found by its listening socket, not by guessing from its command line)."
+  }
+]

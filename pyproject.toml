@@ -115,6 +115,11 @@ artifacts = [
     "src/octowright/skills/**/*.json",
     "src/octowright/skills/**/*.md",
     "src/octowright/browser_pool/_assets/*.js",
+    # Curated per-version release highlights, read at import by
+    # upgrade/core.py. Without these the post-upgrade "what's new" banner is
+    # empty in every packaged install -- the .py-only default selection would
+    # drop them silently.
+    "src/octowright/upgrade/highlights/*.json",
     # Built SPA assets served by http/frontend.py. Without these the wheel
     # ships a dashboard server with no UI to serve. Regenerate from
     # packages/octowright-frontend/ via ``npm run build``.

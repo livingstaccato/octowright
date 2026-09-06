@@ -1,0 +1,10 @@
+[
+  {
+    "title": "Octowright runs on the MCP 2.0 Python SDK",
+    "body": "Octowright now runs on the MCP 2.0 Python SDK. Installs had started breaking outright — the SDK's 2.0 release removed the module octowright imported, and the dependency had no upper bound, so a fresh install pulled a version the daemon could not start on. If you pin `mcp` yourself, you now need 2.0 or newer."
+  },
+  {
+    "title": "The long-call keepalive survived the SDK upgrade",
+    "body": "The keepalive that stops long tool calls from looking like a dropped connection survived the upgrade — MCP 2.0 changed how request metadata reaches a tool, in a way that would have switched the keepalive (and duplicate-call protection) off silently rather than loudly."
+  }
+]

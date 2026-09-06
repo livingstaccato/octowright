@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Browsers can carry custom HTTP headers, at three scopes",
+    "body": "Browsers can carry custom HTTP headers now, at three scopes. browser_launch(extra_http_headers=...) covers every request the browser makes including popups and subresources; browser_set_extra_http_headers covers one page and can change mid-run, for a token you only get after logging in; browser_inject_headers covers just the URLs matching a pattern. All three replay in macros and export to a script."
+  },
+  {
+    "title": "A failed console.assert counts as an error",
+    "body": "A failed console.assert now counts as an error. Every engine reports it under its own 'assert' level, and the classifier only knew 'error' -- so the one line naming a broken invariant was neither counted nor included in the console tail a macro failure ships."
+  },
+  {
+    "title": "The dashboard's console Warn filter works again",
+    "body": "The dashboard's console Warn filter works again. It matched the raw level against 'warn' while every engine emits 'warning', so choosing Warn showed an empty list."
+  },
+  {
+    "title": "octowright_status tells you which followers are stale",
+    "body": "octowright_status() now tells you which followers are running old code. A follower survives a daemon restart by design, so restarting the daemon never deploys follower-side fixes -- and nothing reported the skew, since a follower identified itself by pid alone. The bridge summary now carries leader_version, follower_versions and stale_follower_count."
+  }
+]

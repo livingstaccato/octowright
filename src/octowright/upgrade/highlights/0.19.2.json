@@ -1,0 +1,14 @@
+[
+  {
+    "title": "doctor checks your followers",
+    "body": "octowright doctor now checks your FOLLOWERS. A follower is a subprocess its MCP client owns and it survives a leader restart by design, so upgrading octowright and restarting the daemon updates the leader and nothing else -- every connected client keeps running whatever it spawned until that client reconnects. Found live with followers two releases behind a current leader, driving browsers, while doctor reported all-PASS. It compares against the RUNNING daemon's version and warns rather than fails, because the fix is per client, not per machine."
+  },
+  {
+    "title": "Dead followers stop counting as stale",
+    "body": "Dead followers are no longer counted as stale. octowright_status reported 8 followers 'running older code'; the two investigated were both already-exited processes, so acting on the count meant chasing ghosts. Exited followers are now filtered out and reported separately as dead_follower_count."
+  },
+  {
+    "title": "One HTTP client instead of two",
+    "body": "One HTTP client instead of two. httpx 0.x and httpx2 both shipped, and both log the same request line under different logger names -- which put `doctor --json` one import away from emitting output no parser could read. Everything is on httpx2 now, including the SSRF DNS-pinning transport, whose pin was re-verified end to end rather than assumed from a green test run."
+  }
+]

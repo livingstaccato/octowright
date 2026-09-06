@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Self-healing macros",
+    "body": "Self-healing macros: macro_repair_apply rewrites a brittle CSS selector into its semantic click_by/fill_by (from the role/label/text captured at record time) and saves it in place — no hand-editing JSON."
+  },
+  {
+    "title": "Snapshots follow you into iframes",
+    "body": "Snapshots follow you into iframes: after browser_switch_frame, browser_snapshot and browser_brief show the frame you're in, not the parent page (capture / golden / read_markdown too)."
+  },
+  {
+    "title": "Disconnect-aware",
+    "body": "Disconnect-aware: if octowright's MCP server drops, you're told to reconnect it in your client instead of silently opening a browser it can't drive, inspect, or record."
+  },
+  {
+    "title": "This what's-new notice itself",
+    "body": "This 'what's new' notice itself — shown once on the first run after an update, and in octowright_status."
+  }
+]
