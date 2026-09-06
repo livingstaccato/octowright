@@ -11,6 +11,9 @@ from pathlib import Path
 
 from octowright import upgrade
 
+#: A headline, not a paragraph. The longest backfilled title is 61 chars.
+MAX_TITLE_CHARS = 80
+
 # ─── compute_upgrade ─────────────────────────────────────────────────────────
 
 
@@ -88,9 +91,13 @@ def test_banner_includes_version_and_highlights() -> None:
     banner = upgrade.render_banner(notice)
     assert "0.7.0" in banner
     assert "0.6.1" in banner  # shows where you came from
-    # every highlight line shows up in the rendered banner
-    for line in notice["highlights"]:
-        assert line in banner
+    # every highlight TITLE shows up in the rendered banner. Bodies deliberately
+    # do not: they open with the sentence the title condenses, so rendering both
+    # stutters, and five paragraphs is not a banner. octowright_status still
+    # hands the agent the full entry.
+    for entry in notice["highlights"]:
+        assert entry["title"] in banner
+        assert entry["body"] not in banner
 
 
 def test_install_banner_welcomes_without_previous_version() -> None:
@@ -154,9 +161,47 @@ def test_current_version_has_curated_highlights() -> None:
 
     assert VERSION in upgrade.HIGHLIGHTS, (
         f"upgrade.HIGHLIGHTS has no entry for the current version {VERSION!r}; "
-        "add a curated highlights list when bumping VERSION (src/octowright/upgrade.py)."
+        "add src/octowright/upgrade/highlights/<version>.json when bumping VERSION."
     )
     assert upgrade.HIGHLIGHTS[VERSION], f"highlights for {VERSION!r} must be non-empty"
+
+
+def test_every_highlight_has_a_usable_title_and_body() -> None:
+    """Titles feed a blog headline, so an untitled entry is a headless post.
+
+    Checked across ALL versions, not just the current one: the release guard
+    above only ever sees the newest entry, so a backfilled version that lost
+    its title would go unnoticed until someone rendered the archive. The title
+    must also not simply BE the body -- the failure mode when a release is cut
+    in a hurry is pasting the paragraph into both fields, which passes a
+    non-empty check and defeats the point.
+    """
+    for version, entries in upgrade.HIGHLIGHTS.items():
+        assert entries, f"{version} has no entries"
+        for i, entry in enumerate(entries):
+            where = f"{version}[{i}]"
+            assert set(entry) == {"title", "body"}, f"{where}: unexpected keys {sorted(entry)}"
+            title, body = entry["title"].strip(), entry["body"].strip()
+            assert title, f"{where}: empty title"
+            assert body, f"{where}: empty body"
+            assert len(title) <= MAX_TITLE_CHARS, f"{where}: title is {len(title)} chars, a paragraph not a headline"
+            assert title != body, f"{where}: title is the whole body"
+
+
+def test_highlight_files_are_one_per_version() -> None:
+    """The loaded dict must match the files on disk, newest first.
+
+    Pins both halves of the layout: a version whose file was never written is
+    absent from the dict, and the ordering is by parsed version rather than by
+    filename -- a lexical sort puts "0.10.0" before "0.7.0" and would quietly
+    break the release guard that reads the first key.
+    """
+    on_disk = {p.stem for p in upgrade.HIGHLIGHTS_DIR.glob("*.json")}
+    assert on_disk == set(upgrade.HIGHLIGHTS)
+
+    ordered = list(upgrade.HIGHLIGHTS)
+    by_version = sorted(ordered, key=lambda v: tuple(int(p) for p in v.split(".")), reverse=True)
+    assert ordered == by_version
 
 
 def test_release_highlights_are_newest_and_synchronized() -> None:

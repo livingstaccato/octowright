@@ -1,0 +1,6 @@
+[
+  {
+    "title": "Recorded mock_route replay matches what was recorded",
+    "body": "Fixes recorded mock_route/unmock_route replay: the recorder and replayer disagreed on the route pattern's field name, so any macro or recording using route mocking failed on replay with a TypeError. Recorded route mocks now replay correctly."
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "title": "The leader defends itself against a session storm",
+    "body": "The leader now defends itself against a follower reconnect/session storm — the failure that could balloon the shared daemon to many GB of RAM and starve real tool calls until every connected client looked broken. A follower churning MCP sessions is now rate-limited (429) and the session table is capped, so one misbehaving or outdated client can't take everyone else down. On by default, tunable via OCTOWRIGHT_MCP_MAX_SESSIONS / OCTOWRIGHT_MCP_NEW_SESSION_MAX. Deploys with a single daemon restart."
+  }
+]

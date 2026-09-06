@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Terminals, alongside browsers",
+    "body": "Terminals, alongside browsers: the optional octowright[terminal] extra adds in-process PTY / SSH / telnet sessions that record to the same JSONL and show up in the dashboard with a live, read-only xterm.js screen — new terminal_* tools and scenario participants."
+  },
+  {
+    "title": "Browsers self-heal",
+    "body": "Browsers self-heal: a crashed renderer is replaced in place (not a broken reload) and a dead shared Playwright driver rebuilds itself instead of bricking the pool. Crashes, driver deaths, and lost sessions now surface as MCP notifications + incident records, with a health verdict in octowright_status."
+  },
+  {
+    "title": "Hardened by default",
+    "body": "Hardened by default, configurable where it changes behavior: the loopback /mcp transport requires a capability token, recordings are written 0600, navigation can block SSRF to internal/cloud-metadata hosts, downloads are contained, and credentials are scrubbed from traces and selector-less sinks. See the OCTOWRIGHT_* knobs in the docs."
+  },
+  {
+    "title": "Runs on Windows now",
+    "body": "Runs on Windows now: a real Win32 RSS reader for the memory governor + telemetry, cross-platform paths, and security bumps for cryptography / starlette / python-multipart / msgpack / pydantic-settings."
+  }
+]

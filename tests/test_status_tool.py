@@ -331,7 +331,7 @@ def test_status_surfaces_upgrade_notice_when_set() -> None:
         "kind": "upgrade",
         "previous_version": "0.6.1",
         "current_version": "0.7.0",
-        "highlights": ["Offline /new-tab landing page"],
+        "highlights": [{"title": "Offline /new-tab landing page", "body": "Launches open instantly."}],
     }
     _state.set_upgrade_notice(notice)
     try:

@@ -1,0 +1,14 @@
+[
+  {
+    "title": "No false 'disconnected' on slow tool calls",
+    "body": "No more false 'Octowright disconnected' on slow tool calls: the leader now heartbeats progress for every in-flight call, so a slow-but-alive browser action keeps its bridge deadline alive instead of timing out — a genuinely wedged leader still fails fast."
+  },
+  {
+    "title": "Proactive notifications reach the default daemon setup",
+    "body": "Proactive notifications reach you in the default daemon setup: crash / recovery / driver-death / session-closed now stream to stdio clients (Codex, Claude Code) over the leader's new /api/mcp-events channel, not just in inline mode."
+  },
+  {
+    "title": "The bridge no longer storms or splits",
+    "body": "The bridge no longer storms or splits: a leader that instantly ends a session is backed off instead of hot-looped into a transport storm, and a respawn can't spin up a second competing daemon beside a healthy one."
+  }
+]

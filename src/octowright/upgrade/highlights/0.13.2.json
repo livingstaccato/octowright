@@ -1,0 +1,6 @@
+[
+  {
+    "title": "Release tooling only -- no behavior changed",
+    "body": "Release-tooling fix only — no octowright behavior changed. The PyPI/TestPyPI publish workflow now matches the trusted-publisher setup on both registries, so releases actually reach PyPI again."
+  }
+]

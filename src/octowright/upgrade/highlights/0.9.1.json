@@ -1,0 +1,14 @@
+[
+  {
+    "title": "No more mid-session disconnects",
+    "body": "No more mid-session disconnects: the idle watchdog is now OFF by default, so the daemon stays up across client blips instead of auto-exiting and tearing down your browsers. Opt back into auto-quit with OCTOWRIGHT_IDLE_GRACE on CI/shared hosts."
+  },
+  {
+    "title": "Reconnects are seamless",
+    "body": "Reconnects are seamless: a detached daemon reliably stays alive after a client disconnects (no more fragile inline-mode fallback), and --keep-alive now actually reaches the daemon it's meant to govern."
+  },
+  {
+    "title": "No more orphaned serve processes",
+    "body": "No more orphaned `octowright serve` processes: a follower hard-exits when its MCP client closes stdin, instead of lingering and reconnecting forever."
+  }
+]

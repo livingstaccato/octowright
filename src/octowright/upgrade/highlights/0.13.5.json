@@ -1,0 +1,6 @@
+[
+  {
+    "title": "The reaper stops killing Chromium's crash handlers",
+    "body": "Fixes the orphan-browser reaper silently killing Chromium's crash handlers every housekeeping cycle: chrome_crashpad_handler lives inside the browser bundle and detaches to ppid 1, so the reaper matched it as an orphaned browser and SIGKILLed both handlers of every live browser once a minute — which freed nothing and disabled crash reporting for perfectly healthy sessions. Crash-reporter helpers are now spared. Also refreshes all locked dependencies, clearing three mcp security advisories (mcp 1.27.1 -> 1.28.1) with no octowright behavior change."
+  }
+]

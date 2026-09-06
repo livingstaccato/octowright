@@ -1,0 +1,6 @@
+[
+  {
+    "title": "octowright restart works again",
+    "body": "octowright restart works again. 0.19.0 made it hold the leader-election lock across kill -> spawn -> confirm, but it spawned the daemon without --daemon-mode, so the child ran leader election and blocked on the lock its own parent was holding. Restart waited out its whole health budget, printed 'daemon did not become healthy' and exited 1, and the daemon then started about ten seconds later. Every restart on 0.19.0 reported failure while actually working, slowly -- upgrade if you are on it."
+  }
+]
