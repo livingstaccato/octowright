@@ -408,6 +408,13 @@ def octowright_status() -> dict[str, Any]:
             # non-zero, climbing value means the driver (and thus every browser at
             # once) is unstable — the deepest mass-failure signal.
             "driver_restarts": pool.driver_restart_count(),
+            # Launches an input guard refused, in aggregate: {total, by_guard,
+            # last_at}. Separate from engine_health because a refused request
+            # never reached an engine (issue #214) -- a climbing total with a
+            # healthy engine_health means a CLIENT is sending bad requests, not
+            # that this machine is broken. by_guard names the module that
+            # refused; the offending url/path is deliberately never kept.
+            "refusals": pool.refusals(),
             # Recent driver-restart records (ts, reason, restart_count) for postmortem.
             "driver_restart_recent": _incidents.recent(category=_incidents.CATEGORY_DRIVER_RESTART, limit=5),
             # Sessions lost when the shared driver died (H4a): each {instance_id,

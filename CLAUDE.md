@@ -883,6 +883,33 @@ in a test is documentation, not enforcement.
 `ValueError`. That is the whole of the enforcement: a guard added in some
 *other* module is a maintenance requirement the scan cannot see.
 
+**Refusals get their own aggregate, because removing the false signal removed
+the only signal.** `octowright_status()["pool"]["refusals"]` reports `{total,
+by_guard, last_at}`. Without it, a client regression spamming invalid requests
+shows a perfectly healthy daemon on an ordinary deployment: `engine_health` is
+now (correctly) silent, and `octowright_launch_refused_total` is a noop unless
+`PROVIDE_METRICS_ENABLED` is set, which is off by default. A climbing `total`
+beside a healthy `engine_health` says *a client is sending bad requests*, which
+is a different remedy from *this machine is broken*.
+
+Deliberately **not** an `incidents` category. That ring is 25 entries shared
+across every category, and its own docstring notes a repeatedly-firing category
+evicts the others — a refusal flood is the highest-frequency event the daemon
+can see, so recording each one would push out the renderer-crash and driver
+records the ring exists for. Aggregates need no eviction policy.
+
+`by_guard` names the **module that raised**, read from the traceback rather
+than tagged by each guard, so a guard added later is attributed without
+touching it — the enforcement problem the `InvalidRequestError` classification
+already hit once. The key is code, never caller data, and is capped
+(`refusals.GUARD_KEY_CAP`) as the same belt-and-braces the `kind` clamp
+applies, since this dict is never evicted and is echoed into every
+`octowright_status()`. The offending url/path is **never kept**: it is the
+caller-supplied string `engine_health` and `launch_span` both already refuse to
+retain or export, and keeping it here would undo both. Unlike `engine_health`,
+the block is always present — `total: 0` is a complete answer, where "this kind
+was never launched" is not.
+
 Relatedly, `reject_unsafe_path` appends the offending path to its message, so a
 `label=` that interpolates the same path printed it twice — the live rejection
 read `screenshot path '/tmp/x.png' '/tmp/x.png' resolves outside '…/sessions'`,
