@@ -17,7 +17,7 @@ REQUIRED_PACKAGE_FILES = {
     # Curated release highlights. One file per version, read at import; the
     # current release's file is the one the post-upgrade banner renders, so a
     # packaging change that dropped them would ship a silent, empty notice.
-    "octowright/upgrade/highlights/0.20.0.json",
+    "octowright/upgrade/highlights/0.21.0.json",
     # Built SPA — the wheel and sdist must include the dashboard the HTTP app
     # serves at "/", or packaged installs ship a server with no UI.
     "octowright/server/frontend/index.html",
