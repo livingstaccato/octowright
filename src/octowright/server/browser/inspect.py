@@ -128,7 +128,7 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> Brows
     async with browser_operation(pool, instance_id, "browser_screenshot") as session:
         target = Path(path) if path else session.log_path.with_suffix(".png")
         # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
-        target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot path {str(target)!r}")
+        target = reject_unsafe_path(target, RECORDINGS_DIR, label="screenshot path")
         out = await session.screenshot(target)
         return {"path": str(out)}
 
@@ -269,7 +269,7 @@ def browser_export_script(
     suffix = ".py" if format == "python" else ".ts"
     target = Path(out_path) if out_path else session.log_path.with_suffix(suffix)
     # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"export_script out_path {str(target)!r}")
+    target = reject_unsafe_path(target, RECORDINGS_DIR, label="export_script out_path")
     result = _export_script(session.log_path, target, fmt=format)
     return {"path": str(result)}
 

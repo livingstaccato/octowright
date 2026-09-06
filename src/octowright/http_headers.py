@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from octowright.request_errors import InvalidRequestError
 from octowright.url_patterns import validate_url_pattern
 
 # Bounds on a caller-supplied header map. It rides EVERY request the browser
@@ -59,13 +60,13 @@ def validate_one_header(name: Any, value: Any) -> None:
     another, so one "value" can append a header the caller never wrote.
     """
     if not isinstance(name, str) or not _HEADER_NAME_RE.match(name):
-        raise ValueError(f"invalid HTTP header name: {name!r}")
+        raise InvalidRequestError(f"invalid HTTP header name: {name!r}")
     if not isinstance(value, str):
-        raise ValueError(f"header {name!r} must have a string value, got {type(value).__name__}")
+        raise InvalidRequestError(f"header {name!r} must have a string value, got {type(value).__name__}")
     if len(value) > MAX_EXTRA_HTTP_HEADER_VALUE_CHARS:
-        raise ValueError(f"header {name!r} exceeds {MAX_EXTRA_HTTP_HEADER_VALUE_CHARS} chars")
+        raise InvalidRequestError(f"header {name!r} exceeds {MAX_EXTRA_HTTP_HEADER_VALUE_CHARS} chars")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise ValueError(f"header {name!r} value contains a control character (header injection)")
+        raise InvalidRequestError(f"header {name!r} value contains a control character (header injection)")
 
 
 def validate_extra_http_headers(headers: Any) -> None:
@@ -73,9 +74,9 @@ def validate_extra_http_headers(headers: Any) -> None:
     if headers is None:
         return
     if not isinstance(headers, dict):
-        raise ValueError("extra_http_headers must be a mapping of header name to value")
+        raise InvalidRequestError("extra_http_headers must be a mapping of header name to value")
     if len(headers) > MAX_EXTRA_HTTP_HEADERS:
-        raise ValueError(f"extra_http_headers accepts at most {MAX_EXTRA_HTTP_HEADERS}, got {len(headers)}")
+        raise InvalidRequestError(f"extra_http_headers accepts at most {MAX_EXTRA_HTTP_HEADERS}, got {len(headers)}")
     for name, value in headers.items():
         validate_one_header(name, value)
 
@@ -123,20 +124,24 @@ def validate_extra_http_header_urls(url_patterns: Any) -> None:
     if url_patterns is None:
         return
     if isinstance(url_patterns, str) or not isinstance(url_patterns, list | tuple):
-        raise ValueError("extra_http_headers_urls must be a list of URL glob patterns")
+        raise InvalidRequestError("extra_http_headers_urls must be a list of URL glob patterns")
     if not url_patterns:
-        raise ValueError("extra_http_headers_urls must be non-empty -- omit it entirely for context-level headers")
+        raise InvalidRequestError(
+            "extra_http_headers_urls must be non-empty -- omit it entirely for context-level headers"
+        )
     if len(url_patterns) > MAX_EXTRA_HTTP_HEADER_URLS:
-        raise ValueError(
+        raise InvalidRequestError(
             f"extra_http_headers_urls accepts at most {MAX_EXTRA_HTTP_HEADER_URLS}, got {len(url_patterns)}"
         )
     for pattern in url_patterns:
         if not isinstance(pattern, str):
-            raise ValueError(f"extra_http_headers_urls entries must be string patterns, got {type(pattern).__name__}")
+            raise InvalidRequestError(
+                f"extra_http_headers_urls entries must be string patterns, got {type(pattern).__name__}"
+            )
         if not pattern.strip():
-            raise ValueError("extra_http_headers_urls entries must not be empty")
+            raise InvalidRequestError("extra_http_headers_urls entries must not be empty")
         if len(pattern) > MAX_EXTRA_HTTP_HEADER_URL_CHARS:
-            raise ValueError(f"URL pattern exceeds {MAX_EXTRA_HTTP_HEADER_URL_CHARS} chars")
+            raise InvalidRequestError(f"URL pattern exceeds {MAX_EXTRA_HTTP_HEADER_URL_CHARS} chars")
         # A length cap alone does not bound the MATCH cost: the measured
         # attack is eighteen characters. These globs become context routes
         # exactly like `inject_headers`, so they need the same wildcard bound.

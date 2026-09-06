@@ -838,7 +838,50 @@ Every `BrowserSession` owns one `SessionOperationGate` (`src/octowright/session/
 
 ### Per-engine launch health
 
-`BrowserPool` tracks the last launch outcome for each engine kind (`chromium`/`firefox`/`webkit`) and surfaces it at `octowright_status()["pool"]["engine_health"]`, e.g. `{"chromium": {"outcome": "ok", "at": "2026-08-29T12:00:00.000Z"}, "webkit": {"outcome": "error", "at": "...", "error": "TimeoutError"}}`. A fourth key, `unknown`, can appear: `kind` reaches `BrowserPool.launch` straight from the caller and is validated only deeper, so a launch that fails validation is recorded under `unknown` rather than under the raw string. That keeps both this block and the `kind` metric label bounded to four values instead of growing one permanent entry — and one permanent metrics time series — per distinct string a caller passes. It is not a fourth engine. This exists because a real incident's diagnosis spent about an hour of a 12.6-hour wedge establishing one fact — "WebKit is broken on this machine, Chromium is fine" — even though the pool already saw every launch and every failure per engine; it just never said so. Each kind is tracked independently (`BrowserPool._record_engine_health`, called from `BrowserPool.launch` after `_launch_with_driver_retry` resolves), so one engine failing does not touch another's last-known state. A kind never launched is **absent** from the block rather than reported healthy — "no data" and "fine" are different answers, and conflating them is what made the original diagnosis slow. On failure, `error` carries the exception's **class name only, never its message** — a launch failure message can carry a filesystem path or a profile name, while the class name is the diagnostic signal and carries nothing sensitive (the same reasoning `octowright_browser_launch_failed_total` uses for its `error` label).
+`BrowserPool` tracks the last launch outcome for each engine kind (`chromium`/`firefox`/`webkit`) and surfaces it at `octowright_status()["pool"]["engine_health"]`, e.g. `{"chromium": {"outcome": "ok", "at": "2026-08-29T12:00:00.000Z"}, "webkit": {"outcome": "error", "at": "...", "error": "TimeoutError"}}`. A fourth key, `unknown`, keeps both this block and the `kind` metric label bounded to four values instead of growing one permanent entry — and one permanent metrics time series — per distinct string a caller passes, since `kind` reaches `BrowserPool.launch` straight from the caller. It is not a fourth engine, and in practice it stays empty: an unsupported `kind` is now rejected as an `InvalidRequestError` (below) and recorded nowhere, so the clamp is the bound rather than the reporting path. This exists because a real incident's diagnosis spent about an hour of a 12.6-hour wedge establishing one fact — "WebKit is broken on this machine, Chromium is fine" — even though the pool already saw every launch and every failure per engine; it just never said so. Each kind is tracked independently (`BrowserPool._record_engine_health`, called from `BrowserPool.launch` after `_launch_with_driver_retry` resolves), so one engine failing does not touch another's last-known state. A kind never launched is **absent** from the block rather than reported healthy — "no data" and "fine" are different answers, and conflating them is what made the original diagnosis slow. On failure, `error` carries the exception's **class name only, never its message** — a launch failure message can carry a filesystem path or a profile name, while the class name is the diagnostic signal and carries nothing sensitive (the same reasoning `octowright_browser_launch_failed_total` uses for its `error` label).
+
+**A caller's mistake is not an engine fault.** Everything `launch` wraps answers
+one question — "is this engine working on this machine" — and a request that
+never reached an engine cannot answer it. Recorded anyway,
+`browser_launch(url="file:///etc/passwd")` left this block reporting `chromium:
+{"outcome": "error", "error": "ValueError"}`; since only the class name is kept,
+that is byte-identical to a genuinely broken engine. It was read as one, retried
+on firefox for the identical signal, and cost about an hour — inverting the
+block's entire purpose (issue #214).
+
+The input guards therefore raise **`octowright.request_errors
+.InvalidRequestError`**, and `launch` re-raises it without recording, as does
+`_metrics.launch_span` for `octowright_browser_launch_failed_total{kind, error}`
+— the same lie in metrics form, told to whoever alerts on per-engine launch
+failures. The exception is still recorded on the *span*: a trace is a record of
+what happened to one request, where a refusal belongs, rather than a per-engine
+health signal a refusal can only corrupt.
+
+**Classified by type, not by position, because position does not work here.**
+The obvious repair is to hoist the checks above the recording window; it was
+tried first and closes exactly the guards that happen to be hoistable — the
+target URL and `LaunchOptions.validate`. Two are structurally *inside* the
+launch pipeline and cannot be lifted out of it: `har_path` containment needs the
+session's log path and the pool's recordings root, and `base_url` validation
+needs the persona lifecycle lock held. Both are MCP-surface fields an LLM sets,
+and `base_url` needs no caller mistake at all — a saved persona's `default_url`
+lands there, so under `OCTOWRIGHT_SSRF_POLICY=block-private` one persona
+pointing at an internal host would report its engine broken on every launch. A
+guard raising the type is classified correctly wherever it runs, and a guard
+added deeper tomorrow inherits that. `InvalidRequestError` subclasses
+`ValueError`, so every existing `except ValueError` still catches it and the
+conversion needed no call-site audit.
+
+Relatedly, `reject_unsafe_path` appends the offending path to its message, so a
+`label=` that interpolates the same path printed it twice — the live rejection
+read `screenshot path '/tmp/x.png' '/tmp/x.png' resolves outside '…/sessions'`,
+from four of twenty call sites. The dedupe is in the helper rather than in four
+labels because `label` is forwarded verbatim through wrappers
+(`artifacts.paths.ArtifactStore._contained`), so where a label is built and
+where it is rendered are different modules and a call-site scan cannot see the
+forwarded case. `label` names the ARGUMENT (`"har_path"`); a label naming a
+*distinct* input (`macro name 'x'`, where the name is not the resolved path) is
+useful and unaffected.
 
 ### Octowright Advisor
 
@@ -1020,7 +1063,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 |------------|------|--------|-------------|
 | `octowright_browser_launched_total` | counter | `kind` | Browsers launched (recorded after registration). |
 | `octowright_browser_closed_total` | counter | `kind` | Browser sessions closed cleanly via `session.close()`. |
-| `octowright_browser_launch_failed_total` | counter | `kind`, `error` | Failed launches. `error` is the exception class name. |
+| `octowright_browser_launch_failed_total` | counter | `kind`, `error` | Launches an engine attempted and failed. `error` is the exception class name. Machinery only — a request an input guard refused (`InvalidRequestError`) is counted by `octowright_launch_refused_total` instead, so this counter stays a per-engine health signal. |
 | `octowright_browser_evicted_total` | counter | `kind` | Browsers removed from the pool by an external close signal (not `pool.close`). |
 | `octowright_macro_run_total` | counter | `macro`, `status` | Macro runs (`status` is `ok`/`failed`). |
 | `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. |
@@ -1033,7 +1076,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_unresponsive_target_total` | counter | `kind` | Targets that stopped answering a Playwright call within its budget (`SessionCallTimeoutError`, `CrashScope="unresponsive"`) — not a `page.on("crash")` event, so kept separate from `octowright_browser_crashed_total`. |
 | `octowright_driver_restart_total` | counter | — | Shared Playwright driver deaths rebuilt mid-run (the SPOF signal). |
 | `octowright_driver_lost_total` | counter | `outcome`, `kind` | Sessions lost when the shared driver died (`outcome` = `surfaced`/`relaunched`). |
-| `octowright_launch_refused_total` | counter | `reason` | User-facing launches refused (`reason` = `cap`/`memory`). |
+| `octowright_launch_refused_total` | counter | `reason` | Launches refused (`reason` = `cap`/`memory`/`invalid_request`). `cap`/`memory` are capacity pressure; `invalid_request` means the input guards are rejecting what callers send — a client-side regression, not a machine problem. |
 | `octowright_orphan_reaped_total` | counter | `scope` | Orphaned (dead-driver) browser processes killed by the reaper. |
 | `octowright_follower_session_reaped_total` | counter | — | Leader MCP sessions terminated by the housekeeping pid-liveness reaper (job 3) because their follower's OS process was found dead. Process-lifetime running total also readable in-process via `octowright_status()["bridge"]["follower_sessions_reaped"]`. |
 | `octowright_mcp_new_session_throttled_total` | counter | — | Session-creating `/mcp` requests rejected with `429` by the leader-side per-source new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`). A high value means a follower is storming — reconnecting/creating sessions far faster than legit use. |

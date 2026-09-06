@@ -16,20 +16,27 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from octowright._tracing import counter, histogram, record_exception, span
+from octowright.request_errors import InvalidRequestError
 
 LAUNCHED = counter(
     "octowright_browser_launched_total",
     description="Browsers launched",
 )
+# Machinery-only: a launch an engine was actually asked to perform and did not.
+# A request refused by an input guard is counted by LAUNCH_REFUSED instead --
+# see launch_span.
 LAUNCH_FAILED = counter(
     "octowright_browser_launch_failed_total",
-    description="Failed browser launches",
+    description="Browser launches an engine attempted and failed",
 )
-# Refused user-facing launches by reason (noop unless telemetry is on). A rising
-# rate means the pool is hitting its cap or the memory floor — capacity pressure.
+# Refused launches by reason (noop unless telemetry is on). `cap`/`memory` mean
+# the pool is under capacity pressure; `invalid_request` means callers are
+# sending requests the input guards reject, which is a client-side regression
+# rather than a machine problem. Kept separate from LAUNCH_FAILED for that
+# reason, and bounded to those three values.
 LAUNCH_REFUSED = counter(
     "octowright_launch_refused_total",
-    description="User-facing launches refused (reason=cap|memory)",
+    description="Launches refused (reason=cap|memory|invalid_request)",
 )
 LAUNCH_DURATION = histogram(
     "octowright_browser_launch_duration_seconds",
@@ -40,11 +47,30 @@ LAUNCH_DURATION = histogram(
 
 @asynccontextmanager
 async def launch_span(kind_hint: str) -> AsyncIterator[Any]:
-    """Wrap pool.launch() with span + LAUNCH_FAILED counter on exception."""
+    """Wrap pool.launch() with span + LAUNCH_FAILED counter on exception.
+
+    An ``InvalidRequestError`` is MOVED to ``LAUNCH_REFUSED``, not dropped, for
+    the reason ``BrowserPool.launch`` keeps it out of engine health: it is a
+    rejection of the caller's own request, so counting it as
+    ``{kind="chromium", error="ValueError"}`` tells an operator alerting on
+    per-engine launch failures that Chromium is failing when nothing ever asked
+    it to launch. Silence would be the same mistake mirrored: a client
+    regression spamming invalid URLs, headers or paths fails every launch from
+    the caller's side while a machinery-only counter stays flat, so a
+    success-rate dashboard reports healthy traffic through a rejection flood.
+    ``reason="invalid_request"`` keeps that visible on a bounded label.
+
+    The exception is still recorded on the SPAN -- a trace is a record of what
+    happened to one request, where a refusal belongs, rather than a per-engine
+    health signal that a refusal can only corrupt.
+    """
     with span("octowright.browser.launch", kind=kind_hint) as sp:
         try:
             yield sp
         except BaseException as exc:
             record_exception(sp, exc)
-            LAUNCH_FAILED.add(1, attributes={"kind": kind_hint, "error": type(exc).__name__})
+            if isinstance(exc, InvalidRequestError):
+                LAUNCH_REFUSED.add(1, attributes={"reason": "invalid_request"})
+            else:
+                LAUNCH_FAILED.add(1, attributes={"kind": kind_hint, "error": type(exc).__name__})
             raise

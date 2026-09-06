@@ -21,6 +21,8 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from octowright.request_errors import InvalidRequestError
+
 
 def safe_under(candidate: Path, root: Path) -> bool:
     """Return True iff ``candidate`` resolves to a path inside ``root``.
@@ -37,12 +39,38 @@ def safe_under(candidate: Path, root: Path) -> bool:
 
 
 def reject_unsafe_path(candidate: Path, root: Path, *, label: str) -> Path:
-    """Resolve ``candidate`` and raise ``ValueError`` unless it lives under
-    ``root``. Returns the resolved candidate on success so callers can keep
-    using the canonicalised path."""
-    if not safe_under(candidate, root):
-        raise ValueError(f"{label} {str(candidate)!r} resolves outside {str(root)!r}")
-    return candidate.resolve()
+    """Resolve ``candidate`` and raise ``InvalidRequestError`` unless it lives
+    under ``root``. Returns the resolved candidate on success so callers can
+    keep using the canonicalised path.
+
+    ``InvalidRequestError`` is a ``ValueError`` subclass, so every existing
+    ``except ValueError`` still catches it; it exists so a sink describing a
+    *component's* health can tell "the caller asked for something disallowed"
+    apart from "the component broke". See ``octowright.request_errors``.
+
+    ``label`` names the ARGUMENT (``"har_path"``), because the message already
+    prints the path. A label that also interpolates it printed it twice --
+    ``screenshot path '/tmp/x.png' '/tmp/x.png' resolves outside '.../sessions'``
+    was the live rejection, from four of twenty call sites. Deduping here
+    rather than fixing four spellings covers the ones a scan cannot see: the
+    label is forwarded verbatim through wrappers (``artifacts.paths
+    .ArtifactStore._contained``), so where it is built and where it is
+    rendered are different modules. A label naming a DISTINCT input
+    (``macro name 'x'``, where the name is not the resolved path) is useful
+    and unaffected.
+
+    The match is on the exact rendered token (``" '<path>'"``), not on a bare
+    substring. ``shown in label`` looks equivalent and silently eats the path
+    it was meant to keep: for candidate ``x`` and label ``macro name
+    'xylophone'`` the substring is present, so the message would name the
+    unrelated label and omit the actual path entirely -- most likely on the
+    short relative candidates where the path matters most.
+    """
+    if safe_under(candidate, root):
+        return candidate.resolve()
+    shown = f"{str(candidate)!r}"
+    prefix = label if f" {shown}" in label else f"{label} {shown}"
+    raise InvalidRequestError(f"{prefix} resolves outside {str(root)!r}")
 
 
 def _make_temp_sibling(path: Path) -> Path:
