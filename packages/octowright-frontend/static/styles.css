@@ -68,7 +68,8 @@ code, .mono { font-family: var(--mono); }
   z-index: 100;
 }
 
-/* Otto is 1178x927: sized by height so the width setting cannot stretch him. */
+/* otto-mark.svg, not otto.svg: below ~64px the full drawing's suckers and
+   sparkles are noise. 1178x927, so sized by height with the width following. */
 .topbar__logo {
   display: block;
   width: auto;
