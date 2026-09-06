@@ -1,0 +1,10 @@
+[
+  {
+    "title": "Release notes have headlines now",
+    "body": "The what's-new banner used to print five ~500-character paragraphs into your daemon log. Every curated highlight now carries a short title alongside its body, so the banner is five scannable lines and the full text still reaches the agent through octowright_status. All 118 entries back to 0.7.0 were backfilled, so the archive reads the same way as this release does."
+  },
+  {
+    "title": "Highlights are data, one file per version",
+    "body": "They moved out of a Python dict literal into src/octowright/upgrade/highlights/<version>.json, read at import. Cutting a release now ADDS a file instead of editing the top of a shared one, so two release branches cannot conflict over it. If you consume octowright_status()[\"upgrade\"][\"highlights\"] programmatically, note it changed from a list of strings to a list of {title, body} -- join entry[\"body\"] where you used to join the string."
+  }
+]
