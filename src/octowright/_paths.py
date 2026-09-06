@@ -21,6 +21,8 @@ import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from octowright.request_errors import InvalidRequestError
+
 
 def safe_under(candidate: Path, root: Path) -> bool:
     """Return True iff ``candidate`` resolves to a path inside ``root``.
@@ -37,11 +39,30 @@ def safe_under(candidate: Path, root: Path) -> bool:
 
 
 def reject_unsafe_path(candidate: Path, root: Path, *, label: str) -> Path:
-    """Resolve ``candidate`` and raise ``ValueError`` unless it lives under
-    ``root``. Returns the resolved candidate on success so callers can keep
-    using the canonicalised path."""
+    """Resolve ``candidate`` and raise ``InvalidRequestError`` unless it lives
+    under ``root``. Returns the resolved candidate on success so callers can
+    keep using the canonicalised path.
+
+    ``InvalidRequestError`` is a ``ValueError`` subclass, so every existing
+    ``except ValueError`` still catches it; it exists so a sink describing a
+    *component's* health can tell "the caller asked for something disallowed"
+    apart from "the component broke". See ``octowright.request_errors``.
+
+    ``label`` names the ARGUMENT (``"har_path"``) and nothing else, because
+    the message already prints the path. Four of twenty call sites had drifted
+    into interpolating it as well, so the live rejection read ``screenshot path
+    '/tmp/x.png' '/tmp/x.png' resolves outside '.../sessions'``. Enforced at
+    the call sites by ``tests/test_path_guard_message.py`` rather than deduped
+    here: a dedupe has to decide whether an occurrence in the label IS the
+    rendered path, and the cheap spelling gets that wrong in the direction
+    that loses information -- for candidate ``x`` and label ``macro name
+    'xylophone'`` a substring test matches and drops the path entirely. A
+    label naming a DISTINCT input (``macro name 'x'``, where the name is not
+    the resolved path) is useful, common in the forwarded-label call sites,
+    and left alone.
+    """
     if not safe_under(candidate, root):
-        raise ValueError(f"{label} {str(candidate)!r} resolves outside {str(root)!r}")
+        raise InvalidRequestError(f"{label} {str(candidate)!r} resolves outside {str(root)!r}")
     return candidate.resolve()
 
 
