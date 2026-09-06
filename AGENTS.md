@@ -605,6 +605,22 @@ cursor, and the raw fact is published separately as `more_on_disk` for a caller
 watching a live stream. `browser_tail_recording` carries the identical pair of
 fixes under `max_events` -- it had the row-cap-only bug too, and would have
 grown the loop from the same repair.
+
+**`browser_tail_recording` is bounded by response SIZE as well, and with no
+`max_events` at all.** `tail_log` bounds the *read* at
+`OCTOWRIGHT_TAIL_MAX_BYTES`, which is a memory bound on the leader rather than
+a bound on what crosses the MCP transport -- so a recording of fat rows (a
+console line carrying a stringified API response) returned the whole window in
+one response, and the row cap that would have helped is opt-in, so a caller who
+never passed one got no bound at all. `TAIL_RECORDING_MAX_RESPONSE_BYTES`
+applies on both raw paths, measured against the raw JSONL line rather than a
+re-serialization of the parsed event (within a byte or two, and free). It needs
+no new field to report itself: `cursor` already names the first event not
+returned and `complete` already means "you have reached the end", so a caller
+that was paging correctly is unaffected and one that read a whole window in a
+single call now gets it in several. As with the websocket budget, the first
+event is returned even when it alone exceeds the limit, or the caller pages
+forever on a row that can never fit.
 Separately, `capture_truncated` reports frames dropped at CAPTURE time by
 `OCTOWRIGHT_WEBSOCKET_MAX_BYTES`. The read path used to skip the recorder's
 `websocket_truncated` marker as a non-frame row, so the one record that frames

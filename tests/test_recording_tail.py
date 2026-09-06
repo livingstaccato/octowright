@@ -281,3 +281,62 @@ def test_a_partial_trailing_line_terminates_the_page_loop(stub_pool):
 
     assert calls <= 1
     assert result["next_actions"] == []
+
+
+def _fat_events(count: int, chars: int) -> list[dict]:
+    return [{"action": "console", "n": n, "text": "x" * chars} for n in range(count)]
+
+
+def test_an_uncapped_read_is_bounded_by_response_size(stub_pool):
+    """The uncapped path returned every event in the window, unbounded.
+
+    `tail_log` bounds the READ at 8 MiB, which is a memory bound on the leader,
+    not a bound on what crosses the MCP transport -- a recording of fat rows
+    (a stringified API response in a console line) put the whole window in one
+    response. The row cap was opt-in and did not help a caller who never passed
+    one.
+    """
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in _fat_events(200, 5_000)))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0)
+
+    assert len(result["events"]) < 200
+    assert result["complete"] is False
+    assert result["cursor"] < result["total_bytes"]
+
+
+def test_an_uncapped_read_still_reaches_every_event_by_paging(stub_pool):
+    """Bounding it must not lose any -- `cursor` names the first one left."""
+    events = _fat_events(200, 5_000)
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in events))
+
+    seen: list[dict] = []
+    cursor = 0
+    for _ in range(60):
+        result = _inspect.browser_tail_recording(instance_id="abc", since=cursor)
+        seen.extend(result["events"])
+        cursor = result["cursor"]
+        if result["complete"]:
+            break
+
+    assert [e["n"] for e in seen] == [e["n"] for e in events]
+
+
+def test_the_size_budget_can_end_a_page_before_the_row_cap(stub_pool):
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in _fat_events(200, 5_000)))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0, max_events=200)
+
+    assert result["returned_event_count"] < 200
+    assert result["truncated"] is True
+    assert result["next_actions"]
+
+
+def test_one_event_larger_than_the_whole_budget_is_still_returned(stub_pool):
+    """Or the caller pages forever on a row that can never fit."""
+    stub_pool.write_text("".join(json.dumps(e) + "\n" for e in _fat_events(3, 400_000)))
+
+    result = _inspect.browser_tail_recording(instance_id="abc", since=0)
+
+    assert len(result["events"]) == 1
+    assert result["cursor"] > 0
