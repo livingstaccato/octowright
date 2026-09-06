@@ -27,6 +27,10 @@ from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "octowright"
 
+#: See tests/test_path_guard_message.py -- ``read_text()`` uses the locale
+#: codec (cp1252 on the Windows runners) and this tree's sources are UTF-8.
+SOURCE_ENCODING = "utf-8"
+
 #: Launch-reachable input checks, as ``(path, function or None)``. ``None``
 #: means the whole module: every ``ValueError``-shaped raise in it is, by
 #: construction, a rejection of caller input.
@@ -84,7 +88,7 @@ def test_no_launch_guard_raises_a_bare_value_error() -> None:
     for relative, function in GUARD_TARGETS:
         path = SRC / relative
         assert path.is_file(), f"{relative} moved -- update GUARD_TARGETS or this scan silently covers nothing"
-        scope = _scope(ast.parse(path.read_text(), filename=str(path)), function)
+        scope = _scope(ast.parse(path.read_text(encoding=SOURCE_ENCODING), filename=str(path)), function)
         assert scope is not None, (
             f"{relative}::{function} not found -- a renamed guard must be re-pointed here, "
             "or the scan silently stops covering it"
@@ -110,7 +114,7 @@ def test_the_function_scope_excludes_the_rest_of_its_module() -> None:
     and the obvious repair would be to drop the entry -- losing coverage of
     the one guard issue #214 came from.
     """
-    module = ast.parse((SRC / "session/core_page_mixin.py").read_text())
+    module = ast.parse((SRC / "session/core_page_mixin.py").read_text(encoding=SOURCE_ENCODING))
     assert _raises_bare_value_error(module), "module has unrelated ValueError raises; premise of this test"
 
     scope = _scope(module, "_reject_unsafe_url")

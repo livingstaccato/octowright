@@ -361,13 +361,19 @@ def test_every_launch_input_guard_raises_invalid_request(tmp_path: Path) -> None
         _reject_unsafe_url("file:///etc/passwd")
     with pytest.raises(InvalidRequestError):
         LaunchOptions(kind="not-an-engine").validate()
+    # Derived from tmp_path, not a POSIX literal: on Windows a rooted path with
+    # no drive (`/etc/evil.har`) is NOT absolute, so build_recording_kwargs
+    # would sandbox it under the root and never reject it -- the test would
+    # fail for a path-spelling reason rather than a classification one.
+    outside_har = tmp_path.parent / "escape.har"
+
     with pytest.raises(InvalidRequestError):
-        reject_unsafe_path(Path("/etc/evil.har"), tmp_path, label="har_path")
+        reject_unsafe_path(outside_har, tmp_path, label="har_path")
     with pytest.raises(InvalidRequestError):
         base_url_kwargs(None, "file:///etc/passwd")
     with pytest.raises(InvalidRequestError):
         build_recording_kwargs(
-            LaunchOptions(kind="chromium", har=True, har_path="/etc/evil.har"),
+            LaunchOptions(kind="chromium", har=True, har_path=str(outside_har)),
             headless=True,
             explicit_size=False,
             log_path=tmp_path / "s.jsonl",

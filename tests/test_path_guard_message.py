@@ -37,6 +37,12 @@ from octowright.request_errors import InvalidRequestError
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "octowright"
 
+#: Source is read as UTF-8 explicitly. ``read_text()`` uses the LOCALE codec,
+#: which is cp1252 on the Windows runners, and this tree's sources carry UTF-8
+#: em-dashes -- so the bare call fails the scan with a ``UnicodeDecodeError``
+#: that says nothing about labels. Observed on both Windows legs of CI.
+SOURCE_ENCODING = "utf-8"
+
 
 def _normalize(node: ast.expr) -> str:
     """Unparse ``node``, seeing through a ``str(...)`` wrapper.
@@ -72,7 +78,7 @@ def _offenders(tree: ast.AST) -> list[tuple[int, str]]:
 def test_no_label_restates_the_candidate_path() -> None:
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        for lineno, label in _offenders(ast.parse(path.read_text(), filename=str(path))):
+        for lineno, label in _offenders(ast.parse(path.read_text(encoding=SOURCE_ENCODING), filename=str(path))):
             offenders.append(f"{path.relative_to(SRC.parent.parent)}:{lineno}: label={label}")
 
     assert not offenders, (
@@ -94,12 +100,17 @@ def test_the_scan_would_catch_the_bug_it_was_written_for() -> None:
 
 
 def test_the_path_is_named_exactly_once(tmp_path: Path) -> None:
+    # Derived from tmp_path rather than written as a POSIX literal: on Windows
+    # `str(Path("/tmp/x.png"))` is `\tmp\x.png`, so a literal assertion fails
+    # for a spelling reason that has nothing to do with what is under test.
+    outside = tmp_path.parent / "escape-x.png"
+
     with pytest.raises(InvalidRequestError) as excinfo:
-        reject_unsafe_path(Path("/tmp/x.png"), tmp_path, label="screenshot path")
+        reject_unsafe_path(outside, tmp_path, label="screenshot path")
 
     message = str(excinfo.value)
-    assert message.count("/tmp/x.png") == 1, message
-    assert message.startswith("screenshot path '/tmp/x.png' resolves outside "), message
+    assert message.count(str(outside)) == 1, message
+    assert message.startswith(f"screenshot path {str(outside)!r} resolves outside "), message
 
 
 def test_a_contained_path_is_returned_resolved(tmp_path: Path) -> None:
