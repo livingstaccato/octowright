@@ -355,7 +355,11 @@ async def test_wait_recording_capture_export_and_expects(
     _patch_pool.get.return_value = s
     _patch_pool.close = AsyncMock(return_value={"closed": True})
     monkeypatch.setattr(_inspect, "_export_script", MagicMock(return_value=Path("/tmp/out.py")))
-    monkeypatch.setattr(_inspect_recording, "tail_log", MagicMock(return_value=([{"a": 1}], 10, 10)))
+    # The raw path reads lines-with-offsets now, so it can stop ON a row when
+    # a bound ends the page rather than reporting the window's end.
+    monkeypatch.setattr(
+        _inspect_recording, "tail_log_lines", MagicMock(return_value=(iter([(0, b'{"a": 1}')]), 10, 10))
+    )
 
     waited = await _inspect.browser_wait_for("i", selector="#a", timeout_ms=1)
     rec_path = _inspect.browser_recording_path("i")
