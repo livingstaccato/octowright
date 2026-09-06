@@ -230,34 +230,39 @@ async def test_an_unsupported_kind_is_clamped_before_it_reaches_any_label(
     unbounded metric label is worse than an unbounded dict -- it creates a
     permanent time series per distinct string, fleet-wide.
 
-    Asserted on the value ``launch`` HANDS to those sinks, because that is
-    what the clamp protects and it is the only part still reachable with a
-    bogus kind: ``launch_span`` opens before ``LaunchOptions.validate`` runs,
-    so the span is stamped whether or not the request survives validation. A
-    bogus kind reaching the engine-health dict is covered separately by
+    The SPAN attribute is the one still reachable with a bogus kind, and it is
+    what this asserts, through the real unpatched path: ``launch_span`` opens
+    inside ``_launch_with_driver_retry``, BEFORE ``LaunchOptions.validate``
+    runs in ``_launch_impl``, so the span is stamped whether or not the request
+    survives validation. Stubbing ``_launch_with_driver_retry`` would stub away
+    ``launch_span`` itself and assert only what was handed to the stub -- so a
+    change stamping ``raw_kind`` instead of ``kind_hint`` would still pass.
+    Intercepting ``span`` catches that. No browser is launched: validation
+    rejects the kind before any driver work.
+
+    A bogus kind reaching the engine-health dict is covered separately by
     ``test_a_refused_request_is_never_recorded_as_an_engine_fault``, which
     asserts the stronger thing -- that it is not recorded under any key.
-
-    Stubs ``_launch_with_driver_retry`` and raises a genuine engine failure
-    from it, so the recorded entry is one the clamp had to bound rather than
-    one validation would have suppressed.
     """
+    from octowright.browser_pool import _metrics
+
+    stamped: list[str] = []
+    real_span = _metrics.span
+
+    def _recording_span(name: str, **attrs: Any) -> Any:
+        stamped.append(attrs.get("kind", "<unset>"))
+        return real_span(name, **attrs)
+
+    monkeypatch.setattr(_metrics, "span", _recording_span)
     pool = BrowserPool()
-    handed: list[str] = []
-
-    async def _retry(_options: dict[str, Any], kind_hint: str) -> dict[str, Any]:
-        handed.append(kind_hint)
-        raise RuntimeError("BrowserType.launch: engine is genuinely broken")
-
-    monkeypatch.setattr(pool, "_launch_with_driver_retry", _retry)
 
     for bogus in ("../../etc/passwd", "chrome", "Chromium", "x" * 80):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(InvalidRequestError):
             await pool.launch(kind=bogus)
         assert bogus not in pool.engine_health()
 
-    assert set(handed) == {"unknown"}
-    assert set(pool.engine_health()) == {"unknown"}
+    assert set(stamped) == {"unknown"}
+    assert pool.engine_health() == {}
 
 
 @pytest.mark.parametrize(
@@ -305,7 +310,9 @@ async def test_launch_classifies_a_refusal_by_type_not_by_depth(monkeypatch: pyt
     started, which is why they cannot be driven here without a real browser.
     Stubbing the raise at ``_launch_impl`` asserts the property that actually
     matters: wherever an ``InvalidRequestError`` comes from, ``launch`` does
-    not record it, and a guard added deeper tomorrow inherits that.
+    not record it. Whether a future guard actually *raises* that type is a
+    separate claim, enforced by
+    ``tests/test_launch_guard_classification.py`` rather than assumed here.
     """
     pool = BrowserPool()
 
@@ -326,11 +333,15 @@ async def test_launch_classifies_a_refusal_by_type_not_by_depth(monkeypatch: pyt
     monkeypatch.setattr(pool, "_launch_impl", _break)
     with pytest.raises(RuntimeError):
         await pool.launch(kind="chromium")
-    assert pool.engine_health()["chromium"] == {
-        "outcome": "error",
-        "at": pool.engine_health()["chromium"]["at"],
-        "error": "RuntimeError",
-    }
+    entry = pool.engine_health()["chromium"]
+    # `at` is asserted by FORMAT, not fed back from the value under test:
+    # `"at": entry["at"]` compares the field to itself, so an empty string or a
+    # wrong-timezone stamp would pass a whole-record equality that looks strict.
+    recorded_at = entry.pop("at")
+    assert entry == {"outcome": "error", "error": "RuntimeError"}
+    parsed = datetime.fromisoformat(recorded_at.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None
+    assert (datetime.now(UTC) - parsed).total_seconds() < 30
 
 
 def test_every_launch_input_guard_raises_invalid_request(tmp_path: Path) -> None:
@@ -433,6 +444,11 @@ async def test_a_refused_request_is_not_counted_as_a_launch_failure(monkeypatch:
         def add(self, amount: int, attributes: dict[str, Any] | None = None) -> None:
             refused.append({"amount": amount, "attributes": attributes})
 
+    # Patched on `_metrics` because `launch_span` resolves both through the
+    # module. `limits.py` does `from ... import LAUNCH_REFUSED`, binding the
+    # object at import, so a test asserting the `cap`/`memory` reasons must
+    # patch `limits.LAUNCH_REFUSED` instead -- patching here would watch the
+    # original counter increment and pass vacuously.
     monkeypatch.setattr(_metrics, "LAUNCH_FAILED", _Counter())
     monkeypatch.setattr(_metrics, "LAUNCH_REFUSED", _RefusedCounter())
 

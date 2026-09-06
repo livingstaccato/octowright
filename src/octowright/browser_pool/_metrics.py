@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
-from octowright._tracing import counter, histogram, record_exception, span
+from octowright._tracing import counter, histogram, record_exception, set_attrs, span
 from octowright.request_errors import InvalidRequestError
 
 LAUNCHED = counter(
@@ -55,22 +55,41 @@ async def launch_span(kind_hint: str) -> AsyncIterator[Any]:
     ``{kind="chromium", error="ValueError"}`` tells an operator alerting on
     per-engine launch failures that Chromium is failing when nothing ever asked
     it to launch. Silence would be the same mistake mirrored: a client
-    regression spamming invalid URLs, headers or paths fails every launch from
-    the caller's side while a machinery-only counter stays flat, so a
-    success-rate dashboard reports healthy traffic through a rejection flood.
+    regression spamming invalid URLs or paths fails every launch from the
+    caller's side while a machinery-only counter stays flat, so a success-rate
+    dashboard reports healthy traffic through a rejection flood.
     ``reason="invalid_request"`` keeps that visible on a bounded label.
 
-    The exception is still recorded on the SPAN -- a trace is a record of what
-    happened to one request, where a refusal belongs, rather than a per-engine
-    health signal that a refusal can only corrupt.
+    Scope, precisely: this counts refusals raised INSIDE ``pool.launch``.
+    Header and header-URL-pattern validation also runs in
+    ``LaunchOptions.to_pool_kwargs``, which ``server/browser/lifecycle`` calls
+    to BUILD the launch arguments -- before ``pool.launch`` is entered -- so a
+    malformed ``extra_http_headers`` is refused earlier and is not counted
+    here. That is a gap in the counter, not in the classification: the caller
+    still gets the ``InvalidRequestError``, and nothing records it as an engine
+    fault either.
+
+    A refusal is marked on the SPAN by CLASS NAME, via attributes, rather than
+    through ``record_exception``. Two reasons, and the first is the sharper
+    one: ``record_exception`` sets the span status description to
+    ``str(exc)[:200]``, which is EXPORTED to the OTLP backend -- and a refusal
+    message is precisely the one that reliably carries a caller-supplied path,
+    URL or profile name (``har_path '/Users/…/private/creds.har' resolves
+    outside …``). ``_record_engine_health`` and ``LAUNCH_FAILED`` both keep the
+    class name and never the message for exactly that reason; sending the full
+    string off-box here would apply that rule in reverse. Second, it would mark
+    the span ERROR, so trace-based launch error-rate alerting inherits the
+    misattribution the counter split just removed. A genuine engine failure
+    still goes through ``record_exception`` unchanged.
     """
     with span("octowright.browser.launch", kind=kind_hint) as sp:
         try:
             yield sp
         except BaseException as exc:
-            record_exception(sp, exc)
             if isinstance(exc, InvalidRequestError):
+                set_attrs(sp, refused="invalid_request", refusal_error=type(exc).__name__)
                 LAUNCH_REFUSED.add(1, attributes={"reason": "invalid_request"})
             else:
+                record_exception(sp, exc)
                 LAUNCH_FAILED.add(1, attributes={"kind": kind_hint, "error": type(exc).__name__})
             raise

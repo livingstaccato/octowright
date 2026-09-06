@@ -165,10 +165,16 @@ def _canonicalize_for_guard(url: str) -> str:
 
 
 def _reject_unsafe_url(url: str) -> None:
-    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes, or the
-    active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every navigation entry
-    point (navigate / open_url / launch) and macro replay routes through here, so
-    one call covers them all."""
+    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
+    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
+    navigation entry point (navigate / open_url / launch) and macro replay
+    routes through here, so one call covers them all.
+
+    The type is load-bearing, not decoration: ``BrowserPool.launch``
+    classifies by ``isinstance``, so a sibling check added here as a plain
+    ``raise ValueError(...)`` would be filed as an engine fault and recreate
+    issue #214. ``tests/test_launch_guard_classification.py`` scans this
+    function by name for that."""
     if not isinstance(url, str) or not url:
         raise InvalidRequestError("navigate url must be a non-empty string")
     stripped = _canonicalize_for_guard(url)

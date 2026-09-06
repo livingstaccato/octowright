@@ -48,29 +48,22 @@ def reject_unsafe_path(candidate: Path, root: Path, *, label: str) -> Path:
     *component's* health can tell "the caller asked for something disallowed"
     apart from "the component broke". See ``octowright.request_errors``.
 
-    ``label`` names the ARGUMENT (``"har_path"``), because the message already
-    prints the path. A label that also interpolates it printed it twice --
-    ``screenshot path '/tmp/x.png' '/tmp/x.png' resolves outside '.../sessions'``
-    was the live rejection, from four of twenty call sites. Deduping here
-    rather than fixing four spellings covers the ones a scan cannot see: the
-    label is forwarded verbatim through wrappers (``artifacts.paths
-    .ArtifactStore._contained``), so where it is built and where it is
-    rendered are different modules. A label naming a DISTINCT input
-    (``macro name 'x'``, where the name is not the resolved path) is useful
-    and unaffected.
-
-    The match is on the exact rendered token (``" '<path>'"``), not on a bare
-    substring. ``shown in label`` looks equivalent and silently eats the path
-    it was meant to keep: for candidate ``x`` and label ``macro name
-    'xylophone'`` the substring is present, so the message would name the
-    unrelated label and omit the actual path entirely -- most likely on the
-    short relative candidates where the path matters most.
+    ``label`` names the ARGUMENT (``"har_path"``) and nothing else, because
+    the message already prints the path. Four of twenty call sites had drifted
+    into interpolating it as well, so the live rejection read ``screenshot path
+    '/tmp/x.png' '/tmp/x.png' resolves outside '.../sessions'``. Enforced at
+    the call sites by ``tests/test_path_guard_message.py`` rather than deduped
+    here: a dedupe has to decide whether an occurrence in the label IS the
+    rendered path, and the cheap spelling gets that wrong in the direction
+    that loses information -- for candidate ``x`` and label ``macro name
+    'xylophone'`` a substring test matches and drops the path entirely. A
+    label naming a DISTINCT input (``macro name 'x'``, where the name is not
+    the resolved path) is useful, common in the forwarded-label call sites,
+    and left alone.
     """
-    if safe_under(candidate, root):
-        return candidate.resolve()
-    shown = f"{str(candidate)!r}"
-    prefix = label if f" {shown}" in label else f"{label} {shown}"
-    raise InvalidRequestError(f"{prefix} resolves outside {str(root)!r}")
+    if not safe_under(candidate, root):
+        raise InvalidRequestError(f"{label} {str(candidate)!r} resolves outside {str(root)!r}")
+    return candidate.resolve()
 
 
 def _make_temp_sibling(path: Path) -> Path:

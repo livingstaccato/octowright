@@ -838,7 +838,7 @@ Every `BrowserSession` owns one `SessionOperationGate` (`src/octowright/session/
 
 ### Per-engine launch health
 
-`BrowserPool` tracks the last launch outcome for each engine kind (`chromium`/`firefox`/`webkit`) and surfaces it at `octowright_status()["pool"]["engine_health"]`, e.g. `{"chromium": {"outcome": "ok", "at": "2026-08-29T12:00:00.000Z"}, "webkit": {"outcome": "error", "at": "...", "error": "TimeoutError"}}`. A fourth key, `unknown`, keeps both this block and the `kind` metric label bounded to four values instead of growing one permanent entry — and one permanent metrics time series — per distinct string a caller passes, since `kind` reaches `BrowserPool.launch` straight from the caller. It is not a fourth engine, and in practice it stays empty: an unsupported `kind` is now rejected as an `InvalidRequestError` (below) and recorded nowhere, so the clamp is the bound rather than the reporting path. This exists because a real incident's diagnosis spent about an hour of a 12.6-hour wedge establishing one fact — "WebKit is broken on this machine, Chromium is fine" — even though the pool already saw every launch and every failure per engine; it just never said so. Each kind is tracked independently (`BrowserPool._record_engine_health`, called from `BrowserPool.launch` after `_launch_with_driver_retry` resolves), so one engine failing does not touch another's last-known state. A kind never launched is **absent** from the block rather than reported healthy — "no data" and "fine" are different answers, and conflating them is what made the original diagnosis slow. On failure, `error` carries the exception's **class name only, never its message** — a launch failure message can carry a filesystem path or a profile name, while the class name is the diagnostic signal and carries nothing sensitive (the same reasoning `octowright_browser_launch_failed_total` uses for its `error` label).
+`BrowserPool` tracks the last launch outcome for each engine kind (`chromium`/`firefox`/`webkit`) and surfaces it at `octowright_status()["pool"]["engine_health"]`, e.g. `{"chromium": {"outcome": "ok", "at": "2026-08-29T12:00:00.000Z"}, "webkit": {"outcome": "error", "at": "...", "error": "TimeoutError"}}`. A fourth key, `unknown`, keeps both this block and the `kind` metric label bounded to four values instead of growing one permanent entry — and one permanent metrics time series — per distinct string a caller passes, since `kind` reaches `BrowserPool.launch` straight from the caller. It is not a fourth engine. Two clamps apply it and only one is still live: `launch`'s runs before `LaunchOptions.validate` does, so it bounds the `octowright.browser.launch` span attribute and the `kind` metric label for a request that is about to be refused (pinned end-to-end by `tests/test_engine_health.py::test_an_unsupported_kind_is_clamped_before_it_reaches_any_label`, which intercepts the span rather than the caller). The re-clamp inside `_record_engine_health` is now unreachable through `launch` — an unsupported `kind` is rejected as an `InvalidRequestError` (below) and recorded nowhere — and is retained only so a future direct caller of that method cannot put an arbitrary string into a never-evicted dict echoed into every `octowright_status()`. This exists because a real incident's diagnosis spent about an hour of a 12.6-hour wedge establishing one fact — "WebKit is broken on this machine, Chromium is fine" — even though the pool already saw every launch and every failure per engine; it just never said so. Each kind is tracked independently (`BrowserPool._record_engine_health`, called from `BrowserPool.launch` after `_launch_with_driver_retry` resolves), so one engine failing does not touch another's last-known state. A kind never launched is **absent** from the block rather than reported healthy — "no data" and "fine" are different answers, and conflating them is what made the original diagnosis slow. On failure, `error` carries the exception's **class name only, never its message** — a launch failure message can carry a filesystem path or a profile name, while the class name is the diagnostic signal and carries nothing sensitive (the same reasoning `octowright_browser_launch_failed_total` uses for its `error` label).
 
 **A caller's mistake is not an engine fault.** Everything `launch` wraps answers
 one question — "is this engine working on this machine" — and a request that
@@ -867,10 +867,21 @@ needs the persona lifecycle lock held. Both are MCP-surface fields an LLM sets,
 and `base_url` needs no caller mistake at all — a saved persona's `default_url`
 lands there, so under `OCTOWRIGHT_SSRF_POLICY=block-private` one persona
 pointing at an internal host would report its engine broken on every launch. A
-guard raising the type is classified correctly wherever it runs, and a guard
-added deeper tomorrow inherits that. `InvalidRequestError` subclasses
-`ValueError`, so every existing `except ValueError` still catches it and the
-conversion needed no call-site audit.
+guard raising the type is classified correctly wherever it runs.
+`InvalidRequestError` subclasses `ValueError`, so every existing `except
+ValueError` still catches it and the conversion needed no call-site audit.
+
+**Honest scope: nothing about the classification is inherited.** Both sinks
+test `isinstance(exc, InvalidRequestError)`, so a new check written with the
+formerly conventional `raise ValueError(...)` would be filed as machinery
+failure and silently recreate this bug — and a hand-maintained list of guards
+in a test is documentation, not enforcement.
+`tests/test_launch_guard_classification.py` AST-scans the eight modules whose
+`ValueError`-shaped raises are launch-reachable input checks (`_paths`, `ssrf`,
+`url_patterns`, `http_headers`, and `browser_pool/`'s `options`,
+`launch_helpers`, `launch_execution`, `launch_pipeline`) and fails on a bare
+`ValueError`. That is the whole of the enforcement: a guard added in some
+*other* module is a maintenance requirement the scan cannot see.
 
 Relatedly, `reject_unsafe_path` appends the offending path to its message, so a
 `label=` that interpolates the same path printed it twice — the live rejection
@@ -1076,7 +1087,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_unresponsive_target_total` | counter | `kind` | Targets that stopped answering a Playwright call within its budget (`SessionCallTimeoutError`, `CrashScope="unresponsive"`) — not a `page.on("crash")` event, so kept separate from `octowright_browser_crashed_total`. |
 | `octowright_driver_restart_total` | counter | — | Shared Playwright driver deaths rebuilt mid-run (the SPOF signal). |
 | `octowright_driver_lost_total` | counter | `outcome`, `kind` | Sessions lost when the shared driver died (`outcome` = `surfaced`/`relaunched`). |
-| `octowright_launch_refused_total` | counter | `reason` | Launches refused (`reason` = `cap`/`memory`/`invalid_request`). `cap`/`memory` are capacity pressure; `invalid_request` means the input guards are rejecting what callers send — a client-side regression, not a machine problem. |
+| `octowright_launch_refused_total` | counter | `reason` | Launches refused (`reason` = `cap`/`memory`/`invalid_request`). `cap`/`memory` are capacity pressure. `invalid_request` means an input guard rejected the request — either what a caller sent, or stored configuration a policy now refuses (a saved persona's `default_url` under `OCTOWRIGHT_SSRF_POLICY=block-private` raises it with no caller mistake at all). Either way it is not a machine fault, which is why it is not on `octowright_browser_launch_failed_total`. |
 | `octowright_orphan_reaped_total` | counter | `scope` | Orphaned (dead-driver) browser processes killed by the reaper. |
 | `octowright_follower_session_reaped_total` | counter | — | Leader MCP sessions terminated by the housekeeping pid-liveness reaper (job 3) because their follower's OS process was found dead. Process-lifetime running total also readable in-process via `octowright_status()["bridge"]["follower_sessions_reaped"]`. |
 | `octowright_mcp_new_session_throttled_total` | counter | — | Session-creating `/mcp` requests rejected with `429` by the leader-side per-source new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`). A high value means a follower is storming — reconnecting/creating sessions far faster than legit use. |
