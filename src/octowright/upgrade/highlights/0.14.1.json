@@ -1,0 +1,10 @@
+[
+  {
+    "title": "A persistent profile survives a bad browser death",
+    "body": "A persistent profile no longer breaks when its browser dies badly or when a cache/temp cleanup runs. Chromium leaves an in-use marker pointing at a process that is gone, and every later launch of that persona failed with 'profile is already in use' until the files were deleted by hand — taking its saved logins out of service. Octowright now clears that marker itself, and only when the process that left it is confirmed dead."
+  },
+  {
+    "title": "Switching tabs records the tab you switched to",
+    "body": "Switching tabs records the tab you switched to. A concurrent switch could make an earlier one report the wrong page's URL, which then landed in the recording and followed through to replay and export."
+  }
+]

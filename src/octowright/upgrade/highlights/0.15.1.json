@@ -1,0 +1,10 @@
+[
+  {
+    "title": "A stale session stops haunting octowright_status",
+    "body": "A stale session that outlived its daemon no longer haunts octowright_status forever. The cleanup only asked whether the recorded pid was still alive, and the OS recycles pids — one entry here was kept for four weeks because its dead daemon's pid had become a shell. It now checks that the process is actually an octowright daemon."
+  },
+  {
+    "title": "A tail summary says when it covers only part of the file",
+    "body": "A tail recording summary says when it only covers part of the file. 0.15.0 bounded the read so a huge recording could not be pulled into the daemon whole, which quietly made event_count describe one window rather than the recording — so it read as a total when it was not."
+  }
+]

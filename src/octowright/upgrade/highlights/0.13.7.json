@@ -1,0 +1,10 @@
+[
+  {
+    "title": "A daemon restart stops disconnecting every client",
+    "body": "A daemon restart no longer disconnects every MCP client at once. Followers retry an unresponsive leader for a recovery window that was 15s — shorter than a real restart (20-30s+) — so on every restart they all gave up and exited simultaneously, breaking octowright across all clients. The window is now 180s, so followers wait out a normal restart and reconnect to the new leader transparently (tunable via OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS)."
+  },
+  {
+    "title": "Each BrowserPool can have its own recordings root",
+    "body": "Embedders can now give each BrowserPool its own recordings root: BrowserPool(recordings_dir=...) routes a pool's per-launch artefacts (log, video, HAR, downloads) to a distinct directory, so several pools in one process no longer collide on one recordings tree."
+  }
+]

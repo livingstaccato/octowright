@@ -1,0 +1,6 @@
+[
+  {
+    "title": "Headed browsers protect themselves",
+    "body": "Headed browsers protect themselves: a browser launched headed (so you can watch it) now refuses a reflex browser_close by default — an agent needs force=True to close it. Headless/CI browsers are unaffected. Opt out with OCTOWRIGHT_PROTECT_HEADED=0."
+  }
+]

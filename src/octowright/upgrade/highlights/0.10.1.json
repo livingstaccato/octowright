@@ -1,0 +1,10 @@
+[
+  {
+    "title": "Survives a client compaction freeze",
+    "body": "Survives a compaction freeze: when your MCP client (Codex/Claude) pauses to compact and freezes Octowright's follower, the bridge no longer times out and dies on resume — it detects the suspension, keeps in-flight calls alive, and re-handshakes the leader cleanly instead of stranding on a half-initialized session. No more 'Octowright timed out' after a compaction."
+  },
+  {
+    "title": "Terminal connectors enumerate in canonical order",
+    "body": "Terminal connectors now enumerate in the canonical ssh, telnet, pty order; the terminal_launch kind arg and behavior are unchanged."
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "title": "The real cause behind 'Octowright disconnected'",
+    "body": "Fixes the real cause behind repeated 'Octowright disconnected' reports: the leader process leaking memory over multi-day uptime (seen as high as 18.8GB RSS). A new housekeeping reaper terminates leader-side sessions the instant a follower's OS process is confirmed dead — not by guessing from idle time, so it can never drop a client that's just being quiet — plus automatic cleanup of orphaned bridge-state tmp files."
+  }
+]

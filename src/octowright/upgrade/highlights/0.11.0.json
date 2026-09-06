@@ -1,0 +1,14 @@
+[
+  {
+    "title": "Cheaper browsing loops",
+    "body": "Cheaper browsing loops: new compact browser and HTTP-first discovery tools help agents find links, fields, and page outlines before paying for full snapshots or raw dumps."
+  },
+  {
+    "title": "Bounded summaries by default",
+    "body": "Bounded summaries by default: console, network, downloads, captures, and text reads now surface concise next actions so agents can drill in only when needed."
+  },
+  {
+    "title": "Live preview is more resilient",
+    "body": "Live preview is more resilient: the dashboard falls back from screencast streaming to snapshot polling when a browser cannot provide live frames."
+  }
+]

@@ -1,0 +1,6 @@
+[
+  {
+    "title": "No more silent mid-conversation disconnects",
+    "body": "No more silent mid-conversation disconnects: the idle-session reaper added in 0.12.1 is now OFF by default (it was killing live, wanted sessions during completely normal pauses) — opt in with OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS on a shared/CI host that wants bounded memory."
+  }
+]

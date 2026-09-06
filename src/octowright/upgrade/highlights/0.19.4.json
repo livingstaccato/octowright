@@ -1,0 +1,14 @@
+[
+  {
+    "title": "A dead terminal is torn down, not just forgotten",
+    "body": "A terminal whose connector dies is now actually cleaned up, not just forgotten. Eviction dropped the session from the registry without closing it -- and that registry holds the only reference -- so a dropped SSH connection or an exited shell leaked its transport or PTY child and its recording handle, and shutdown could no longer reach the session to tidy up. It stopped appearing in the dashboard while quietly keeping everything it held."
+  },
+  {
+    "title": "SSH key auth works",
+    "body": "SSH key auth works. Terminal launches emitted `client_key_path` where the connector expects `client_key`, so keys were silently ignored and the connection fell through to whatever else was available."
+  },
+  {
+    "title": "A terminal that died badly says so at lookup",
+    "body": "A terminal that died badly no longer answers like one that never existed. Every terminal_* call failed at pool lookup with 'no terminal session <id>' for a session you just watched work; the error now names the connector and how it ended."
+  }
+]

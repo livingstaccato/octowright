@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Launches open instantly on a local /new-tab page",
+    "body": "Launches open instantly on a local /new-tab page (Otto + a live status strip) instead of hitting the network — works fully offline."
+  },
+  {
+    "title": "Cmd+T lands on /new-tab in every engine",
+    "body": "Cmd+T (Ctrl+T) lands on /new-tab across Chromium, Firefox, and WebKit."
+  },
+  {
+    "title": "No-argument launches auto-name and persist a profile",
+    "body": "No-argument launches auto-name the browser and persist a profile from your git repo / username / .octowright config — no more random instance IDs."
+  },
+  {
+    "title": "browser_each fans one action across every browser",
+    "body": "browser_each fans one action (navigate/resize/evaluate/wait_for/screenshot) across every browser at once."
+  },
+  {
+    "title": "The dashboard moved to port 6286",
+    "body": "Dashboard moved to port 6286 ('OCTO'); octowright restart now rebinds in ~2s."
+  },
+  {
+    "title": "browser_click and browser_fill take ARIA locators",
+    "body": "browser_click / browser_fill take ARIA locators (role/label/text/test_id) directly — the separate _by tools are gone."
+  }
+]

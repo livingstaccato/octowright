@@ -1,0 +1,6 @@
+[
+  {
+    "title": "Leader memory stays bounded",
+    "body": "Leader memory stays bounded: abandoned MCP sessions (left behind by a reconnect storm) are now reaped instead of piling up forever — a leak that could grow the daemon to gigabytes of RAM with zero live browsers. Tune or disable with OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS (default 300s)."
+  }
+]
