@@ -27,25 +27,27 @@ from octowright.browser_pool.pool import BrowserPool
 
 pytestmark = pytest.mark.live_browser
 
-_WS_PORT = 8894
-_HTTP_PORT = 8895
 
-_PAGE = f"""<html><body><script>
-const ws = new WebSocket("ws://127.0.0.1:{_WS_PORT}/ws");
+def _page_for(ws_port: int) -> bytes:
+    return f"""<html><body><script>
+const ws = new WebSocket("ws://127.0.0.1:{ws_port}/ws");
 ws.onopen = () => {{ ws.send("hello-from-page"); }};
 </script></body></html>""".encode()
 
 
-class _Handler(BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html")
-        self.send_header("Content-Length", str(len(_PAGE)))
-        self.end_headers()
-        self.wfile.write(_PAGE)
+def _handler_for(page: bytes) -> type[BaseHTTPRequestHandler]:
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(page)))
+            self.end_headers()
+            self.wfile.write(page)
 
-    def log_message(self, *_args: Any) -> None:
-        pass
+        def log_message(self, *_args: Any) -> None:
+            pass
+
+    return _Handler
 
 
 @pytest.fixture
@@ -54,25 +56,46 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture
-def http_server():  # type: ignore[no-untyped-def]
-    srv = ThreadingHTTPServer(("127.0.0.1", _HTTP_PORT), _Handler)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+def serve_page():  # type: ignore[no-untyped-def]
+    """Serve one page on an EPHEMERAL port, like every other live server test.
+
+    Fixed ports (this file shipped with 8894/8895) turn any local service, a
+    leftover process, or a second concurrent run into ``Address already in
+    use`` -- a failure that says nothing about the code under test. The socket
+    port has to be discovered before the page can be written, since the page
+    hardcodes it, so the page is built here rather than at import time.
+    """
+    started: list[ThreadingHTTPServer] = []
+
+    def start(page: bytes) -> str:
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler_for(page))
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        started.append(srv)
+        return f"http://127.0.0.1:{srv.server_address[1]}/"
+
     try:
-        yield f"http://127.0.0.1:{_HTTP_PORT}/"
+        yield start
     finally:
-        srv.shutdown()
+        for srv in started:
+            # ``shutdown`` only stops the serve_forever loop; without
+            # ``server_close`` the listening socket and ThreadingHTTPServer's
+            # non-daemon request threads survive to process exit, so each
+            # ``start`` would leak one fd for the rest of the session.
+            srv.shutdown()
+            srv.server_close()
 
 
 @pytest.mark.anyio
-async def test_frames_are_observable_through_the_session(http_server: str) -> None:
+async def test_frames_are_observable_through_the_session(serve_page: Any) -> None:
     async def handler(conn: Any) -> None:
         async for message in conn:
             await conn.send(f"echo:{message}")
 
-    server = await websockets.serve(handler, "127.0.0.1", _WS_PORT)
+    server = await websockets.serve(handler, "127.0.0.1", 0)
+    page_url = serve_page(_page_for(server.sockets[0].getsockname()[1]))
     pool = BrowserPool()
     try:
-        info = await pool.launch(kind="chromium", url=http_server, headed=False)
+        info = await pool.launch(kind="chromium", url=page_url, headed=False)
         session = pool.get(info["instance_id"])
         # The page opens the socket on load; wait for the round trip rather
         # than a fixed sleep.
