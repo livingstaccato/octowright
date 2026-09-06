@@ -40,6 +40,39 @@ UPGRADE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_UPGRADE_STATE", str(user_co
 # Curated highlights keyed by version. Add a new entry at release time — keep
 # each line short and benefit-first ("why it's cool"), not a raw changelog dump.
 HIGHLIGHTS: dict[str, list[str]] = {
+    "0.20.0": [
+        "WebSocket traffic can finally be read back. Every frame a page sent or "
+        "received has always been captured to a sidecar, and nothing could ask "
+        "for it -- so a real-time app left its most interesting traffic on disk. "
+        "`browser_websocket_messages` and `browser_websocket_summary` are the "
+        "read pair. The capture was also recording EMPTY payloads and had been "
+        "from the start: playwright-python hands the handler the payload itself, "
+        "where only Node's API wraps it in an object, so every frame persisted "
+        "with no content in it.",
+        "A failed request now says why it failed. Recorded rows carried url, "
+        "method and status and no body, so a 409 was recoverable only as its "
+        "status code -- and the refusal reason already on the wire "
+        '(`{"detail": "component_allocation_required"}`) is usually the '
+        "whole diagnosis. Failed same-origin bodies are kept and attached to "
+        "macro failures.",
+        "Typing into a canvas keeps its shifted characters. `page.type()` "
+        "dispatches the right key payload but never holds Shift down, which a "
+        "DOM input reads and a canvas app does not -- so on a BMC console "
+        "`echo TYPE=Ab*:` arrived as `echo type=ab8;`, silently. Pass "
+        '`key_mode="keys"` to press physical keys with Shift genuinely held.',
+        "`engine_health` stops calling your engine broken when YOU sent a bad "
+        'request. A `file://` url left chromium reporting `{"outcome": '
+        '"error", "error": "ValueError"}` -- byte-identical to a '
+        "genuinely broken engine, because only the class name is kept. It was "
+        "read as one and cost about an hour. Refused requests are now classified "
+        "by type and counted separately, at "
+        '`octowright_status()["pool"]["refusals"]`.',
+        "A hostile route pattern can no longer stall every browser at once. A "
+        "URL glob compiles to a regex inside the shared Node driver, and five "
+        "wildcards against a 129-character URL measured 18 seconds -- from an "
+        "eighteen-character pattern, in a driver every session shares. Patterns "
+        "are now bounded before they are forwarded.",
+    ],
     "0.19.4": [
         "A terminal whose connector dies is now actually cleaned up, not just "
         "forgotten. Eviction dropped the session from the registry without "

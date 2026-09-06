@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2026-09-06
+
+### Added
+- **WebSocket traffic can be read back.** Every frame a page sends or receives
+  has always been captured to a per-session sidecar, and nothing ever read it,
+  so a real-time app pushing updates over a socket left its most interesting
+  traffic on disk. `browser_websocket_messages` and `browser_websocket_summary`
+  are the read pair. Payloads are previews by default with `include_payloads`
+  for the full body, mirroring `include_headers` on the HTTP pair; a page is
+  bounded by rows AND by response size, and `truncated` means "page again and
+  you will get more" rather than "bytes remain" — the two differ while the
+  writer is mid-frame, and paging on the latter spins forever.
+- **`octowright_status()["pool"]["refusals"]`** reports `{total, by_guard,
+  last_at}` for launches an input guard refused. A climbing total beside a
+  healthy `engine_health` means a client is sending bad requests, which is a
+  different remedy from a broken machine. `by_guard` names the module that
+  raised, read from the traceback so no guard has to tag itself; the offending
+  url or path is never kept.
+- **`browser_type(key_mode="keys")`** presses physical keys with Shift
+  genuinely held, for canvas-based targets that read `code` + `shiftKey`
+  instead of the key payload.
+
+### Fixed
+- **Failed requests now carry their reason.** A recorded network row held url,
+  method and status and no body, so a 409 was recoverable only as its status
+  code even though the refusal reason was already on the wire. Non-2xx,
+  same-origin response bodies are captured (`OCTOWRIGHT_NETWORK_BODY_MAX_BYTES`,
+  on by default at 2048) and attached to macro failures.
+- **Shifted characters are no longer silently dropped on canvas targets.**
+  `page.type()` dispatches the correct key payload but never holds Shift down.
+  A DOM input reads that payload; a canvas app reads `shiftKey` and sees
+  nothing — measured against a real BMC console, `echo TYPE=Ab*:` arrived as
+  `echo type=ab8;` with no error. See `key_mode` above.
+- **A refused request is no longer filed as an engine fault.**
+  `browser_launch(url="file:///etc/passwd")` left `engine_health` reporting
+  `chromium: {"outcome": "error", "error": "ValueError"}` — byte-identical to a
+  genuinely broken engine, since only the class name is kept. It was read as
+  one, retried on another engine for the identical signal, and cost about an
+  hour. Input guards now raise `InvalidRequestError` and are classified by type
+  rather than by position, which is what reaches the `har_path` and `base_url`
+  checks that live inside the launch pipeline and cannot be hoisted out of it.
+- **A hostile URL pattern can no longer stall every browser at once.** A route
+  glob compiles to a regex inside the shared Node driver, where five wildcards
+  against a 129-character URL measured 18 seconds — from an eighteen-character
+  pattern, in a driver every session shares, which none of the existing hang
+  machinery can see. Patterns are bounded before they are forwarded.
+- **WebSocket frames were captured empty, and had been from the start.**
+  playwright-python emits the payload itself; only Node's API wraps it in an
+  object carrying `.payload`, which is the shape the handler read, so every
+  recorded frame resolved to `None`. Every existing test asserted on row shape
+  rather than payload, which is why nothing caught it.
+- **`browser_tail_recording` is bounded by response size**, not only by rows.
+  `max_events` was opt-in, so a caller who never passed one got no bound at all
+  and a recording of fat rows returned the whole read window in one response.
+- **An unresponsive teardown says so at lookup.** A browser evicted after a
+  target stopped answering reported the generic "ended unexpectedly — relaunch
+  it", which is the wrong advice: the process is usually still running, so
+  relaunching discards a live session to fix something that needed a smaller
+  batch.
+- **Rejection messages name the offending path once.** Four call sites
+  interpolated the path into `label=` as well, so the live rejection read
+  `screenshot path '/tmp/x.png' '/tmp/x.png' resolves outside '.../sessions'`.
+
+### Changed
+- `octowright_browser_launch_failed_total` now counts only launches an engine
+  attempted and failed. A request an input guard refused is counted by
+  `octowright_launch_refused_total{reason="invalid_request"}` instead, and its
+  message is no longer exported on the launch span — a refusal message reliably
+  carries a caller-supplied filesystem path or profile name.
+
 ## [0.19.4] - 2026-09-03
 
 ### Fixed
@@ -2443,6 +2513,7 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
+[0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0
 [0.19.4]: https://github.com/livingstaccato/octowright/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/livingstaccato/octowright/compare/v0.19.2...v0.19.3
 [0.11.0]: https://github.com/livingstaccato/octowright/compare/v0.10.1...v0.11.0
