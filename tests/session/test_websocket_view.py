@@ -15,6 +15,8 @@ import pytest
 from octowright.session.websocket_view import (
     WEBSOCKET_MESSAGES_DEFAULT_LIMIT,
     WEBSOCKET_MESSAGES_MAX_LIMIT,
+    WEBSOCKET_MESSAGES_MAX_RESPONSE_CHARS,
+    WEBSOCKET_PAYLOAD_MAX_CHARS,
     read_frames,
     resolve_message_limit,
     summarize_sockets,
@@ -117,7 +119,16 @@ class TestReadFrames:
     def test_missing_sidecar_returns_empty_not_an_error(self, tmp_path: Path) -> None:
         """A session whose page never opened a socket is the common case."""
         result = read_frames(None)
-        assert result == {"messages": [], "next_cursor": 0, "returned": 0, "truncated": False, "total_bytes": 0}
+        assert result == {
+            "messages": [],
+            "next_cursor": 0,
+            "returned": 0,
+            "truncated": False,
+            "more_on_disk": False,
+            "total_bytes": 0,
+            "capture_truncated": False,
+            "capture_limit_bytes": None,
+        }
 
 
 class TestSummarize:
@@ -135,3 +146,227 @@ class TestSummarize:
 
     def test_dropped_is_reported_so_a_shrinking_count_is_explainable(self) -> None:
         assert summarize_sockets({}, dropped=7)["dropped"] == 7
+
+
+class TestPaging:
+    """The cursor has to name the first frame we did NOT return.
+
+    Shipped naming the end of the whole read window instead, so a capped read
+    handed back a cursor past every frame it had skipped: paging with it lost
+    frames 3-9 of ten, and at the real defaults (cap 100, 8 MiB window) lost
+    4,900 of five thousand. ``core_network_mixin._page_requests`` already
+    states the rule this restores.
+    """
+
+    @pytest.mark.parametrize(
+        ("tail_max_bytes", "limit"),
+        [
+            # The row cap ends each page ...
+            (None, 3),
+            # ... and the read window ends each page, which is the second way
+            # a page can be short and the one `truncated` used to miss.
+            ("300", 100),
+        ],
+    )
+    def test_paging_reaches_every_frame(self, tmp_path: Path, monkeypatch, tail_max_bytes, limit) -> None:  # type: ignore[no-untyped-def]
+        if tail_max_bytes is not None:
+            monkeypatch.setenv("OCTOWRIGHT_TAIL_MAX_BYTES", tail_max_bytes)
+        path = _sidecar(tmp_path, [_frame("sent", str(i)) for i in range(10)])
+        seen: list[str] = []
+        cursor = 0
+        for _ in range(40):
+            result = read_frames(path, cursor=cursor, limit=limit)
+            seen.extend(m["preview"] for m in result["messages"])
+            cursor = result["next_cursor"]
+            if not result["truncated"]:
+                break
+        assert seen == [str(i) for i in range(10)]
+
+    def test_the_cursor_points_at_the_first_unreturned_frame(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, [_frame("sent", str(i)) for i in range(10)])
+        first = read_frames(path, cursor=0, limit=3)
+        assert first["next_cursor"] < first["total_bytes"]
+        assert read_frames(path, cursor=first["next_cursor"], limit=1)["messages"][0]["preview"] == "3"
+
+    def test_a_cut_read_window_is_reported_as_truncated(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """``truncated`` said only "the row cap bit".
+
+        A caller told to page while it is true stops early holding a prefix
+        whenever the byte window cut the file first. ``browser_tail_recording``
+        derives the same thing correctly as ``new_cursor >= total_bytes``.
+        """
+        monkeypatch.setenv("OCTOWRIGHT_TAIL_MAX_BYTES", "300")
+        path = _sidecar(tmp_path, [_frame("sent", str(i)) for i in range(10)])
+        result = read_frames(path, limit=100)
+        assert result["returned"] < 10
+        assert result["truncated"] is True
+
+    def test_a_negative_cursor_is_clamped_not_an_oserror(self, tmp_path: Path) -> None:
+        """``cursor`` is an LLM-supplied int; ``fh.seek`` raises Errno 22 on it."""
+        path = _sidecar(tmp_path, [_frame("sent", "a")])
+        assert read_frames(path, cursor=-5)["returned"] == 1
+
+
+class TestCaptureTruncationIsVisible:
+    """The marker exists so inspection can see the cut, and inspection dropped it."""
+
+    def test_the_marker_is_surfaced_rather_than_only_skipped(self, tmp_path: Path) -> None:
+        path = _sidecar(
+            tmp_path,
+            [_frame("sent", "a"), {"action": "websocket_truncated", "limit_bytes": 64, "bytes_written": 65}],
+        )
+        result = read_frames(path)
+        assert [m["preview"] for m in result["messages"]] == ["a"]
+        assert result["capture_truncated"] is True
+        assert result["capture_limit_bytes"] == 64
+
+    def test_an_uncut_capture_says_so(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, [_frame("sent", "a")])
+        assert read_frames(path)["capture_truncated"] is False
+
+
+class TestResponseSize:
+    """A row budget does not bound bytes -- the lesson MACRO_FAILURE_CONSOLE_TEXT_CHARS records."""
+
+    def test_one_huge_payload_is_capped_and_flagged(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, [_frame("received", "x" * (WEBSOCKET_PAYLOAD_MAX_CHARS + 500))])
+        message = read_frames(path, include_payloads=True)["messages"][0]
+        assert len(message["payload_text"]) == WEBSOCKET_PAYLOAD_MAX_CHARS
+        assert message["payload_truncated"] is True
+
+    def test_many_payloads_stop_at_the_response_budget(self, tmp_path: Path) -> None:
+        chunk = "y" * 10_000
+        path = _sidecar(tmp_path, [_frame("received", chunk, str(i)) for i in range(200)])
+        result = read_frames(path, include_payloads=True, limit=200)
+        assert result["returned"] < 200
+        assert result["truncated"] is True
+        body = sum(len(m.get("payload_text", "")) for m in result["messages"])
+        assert body <= WEBSOCKET_MESSAGES_MAX_RESPONSE_CHARS
+
+    def test_the_budget_still_returns_at_least_one_frame(self, tmp_path: Path) -> None:
+        """A frame bigger than the whole budget must not page forever."""
+        path = _sidecar(tmp_path, [_frame("received", "z" * 200_000) for _ in range(3)])
+        result = read_frames(path, include_payloads=True, limit=200)
+        assert result["returned"] >= 1
+
+
+class TestSummaryIsolation:
+    def test_entries_are_copies_of_the_live_registry(self) -> None:
+        """``list(registry.values())`` copies the list, not the dicts in it.
+
+        The frame handler keeps mutating those same dicts, so a caller that
+        stashed a summary watched it change underneath -- the defect already
+        fixed once in ``_select_console_tail``.
+        """
+        registry = {"a": {"id": "a", "closed_at": None, "framesent": 1}}
+        summary = summarize_sockets(registry, dropped=0)
+        registry["a"]["framesent"] = 99
+        assert summary["open"][0]["framesent"] == 1
+
+
+class TestSocketIdType:
+    def test_socket_id_matches_the_summary_id_type(self, tmp_path: Path) -> None:
+        """The summary stringifies its ``id``; frames returned the raw value,
+        so a caller joining the two by dict key or ``==`` matched nothing."""
+        row = _frame("sent", "a")
+        row["id"] = 140_234_567
+        path = _sidecar(tmp_path, [row])
+        assert read_frames(path)["messages"][0]["socket_id"] == "140234567"
+
+
+class TestCaptureTruncationIsSessionWide:
+    """The marker is written ONCE, at the end of the sidecar.
+
+    Detecting it only when a page's own window happens to contain it made the
+    field page-local: a caller paging past it, or polling from the cursor it
+    returned, was told `capture_truncated: false` and would conclude the
+    capture was complete. The session knows the answer for its whole life, so
+    it seeds the read.
+    """
+
+    def test_a_seeded_truncation_is_reported_without_the_marker(self, tmp_path: Path) -> None:
+        path = _sidecar(tmp_path, [_frame("sent", "a")])
+        assert read_frames(path, capture_truncated=True)["capture_truncated"] is True
+
+    def test_the_marker_still_reports_it_when_unseeded(self, tmp_path: Path) -> None:
+        path = _sidecar(
+            tmp_path,
+            [_frame("sent", "a"), {"action": "websocket_truncated", "limit_bytes": 64, "bytes_written": 65}],
+        )
+        assert read_frames(path)["capture_truncated"] is True
+
+
+class TestResponseBudgetCoversEveryReturnedString:
+    """A frame costs more than its payload.
+
+    The budget counted preview and payloads only, so a page that opens a
+    socket with a very long URL -- which the PAGE chooses, and which is
+    repeated on every row -- could return a thousand rows of megabytes while
+    the counter stayed under the limit, recreating the oversized response the
+    budget exists to prevent.
+    """
+
+    def test_a_long_url_with_tiny_payloads_still_ends_the_page(self, tmp_path: Path) -> None:
+        rows = []
+        for i in range(200):
+            row = _frame("received", "x", str(i))
+            row["url"] = "ws://app.test/" + "u" * 20_000
+            rows.append(row)
+        result = read_frames(_sidecar(tmp_path, rows), limit=200)
+        assert result["returned"] < 200
+        assert result["truncated"] is True
+
+
+class TestPagingAlwaysMakesProgress:
+    """`truncated` has to mean "page again and you will get more".
+
+    ``_read_window`` deliberately holds the cursor on an unterminated trailing
+    line -- the writer is mid-frame and those bytes are not safe to parse yet.
+    Deriving `truncated` from `next_cursor < total_bytes` alone therefore
+    reported "more to read" while handing back the SAME cursor, so a caller
+    following the tool description polled forever with nothing to show for it.
+    """
+
+    def test_a_partial_trailing_line_terminates_the_page_loop(self, tmp_path: Path) -> None:
+        """The first call cannot know the remaining bytes are half a line.
+
+        It reports `truncated` because it genuinely advanced and bytes remain,
+        which costs one more call -- and THAT call is the one that must not
+        ask again. `more_on_disk` stays true throughout, so a caller watching
+        a live stream can still tell the writer is mid-frame.
+        """
+        path = tmp_path / "s.websocket.jsonl"
+        path.write_bytes(json.dumps(_frame("sent", "a")).encode() + b"\n" + b'{"action": "websocket_fr')
+
+        calls = 0
+        cursor = 0
+        result = read_frames(path, cursor=cursor)
+        while result["truncated"] and calls < 10:
+            calls += 1
+            cursor = result["next_cursor"]
+            result = read_frames(path, cursor=cursor)
+
+        assert calls == 1
+        assert result["more_on_disk"] is True
+
+    def test_a_second_call_on_a_held_cursor_does_not_loop(self, tmp_path: Path) -> None:
+        path = tmp_path / "s.websocket.jsonl"
+        path.write_bytes(json.dumps(_frame("sent", "a")).encode() + b"\n" + b'{"action": "websocket_fr')
+        first = read_frames(path)
+        second = read_frames(path, cursor=first["next_cursor"])
+        assert second["next_cursor"] == first["next_cursor"]
+        assert second["truncated"] is False
+
+    def test_a_cut_window_still_asks_to_be_paged(self, tmp_path: Path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """The cursor DID advance here, so paging makes progress."""
+        monkeypatch.setenv("OCTOWRIGHT_TAIL_MAX_BYTES", "300")
+        path = _sidecar(tmp_path, [_frame("sent", str(i)) for i in range(10)])
+        assert read_frames(path, limit=100)["truncated"] is True
+
+
+class TestCaptureTruncationReportsItsLimit:
+    def test_a_seeded_truncation_carries_the_limit(self, tmp_path: Path) -> None:
+        """Seeding only half the pair left the "how much was dropped" field null."""
+        path = _sidecar(tmp_path, [_frame("sent", "a")])
+        result = read_frames(path, capture_truncated=True, capture_limit_bytes=4096)
+        assert (result["capture_truncated"], result["capture_limit_bytes"]) == (True, 4096)

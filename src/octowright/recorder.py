@@ -9,6 +9,7 @@ import contextlib
 import json
 import os
 import re
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -281,36 +282,39 @@ def _cursor_past_unterminated_window(fh: Any, path: Path, cursor: int, data: byt
     return skip_to
 
 
-def _parse_events(blob: bytes) -> list[dict]:
-    """Parse whole JSONL lines, skipping any the recorder wrote malformed."""
-    events = []
-    for raw_bytes in blob.splitlines():
-        raw = raw_bytes.strip()
-        if not raw:
-            continue
-        try:
-            events.append(json.loads(raw.decode("utf-8")))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            continue
-    return events
+#: Bytes scanned per ``split()`` when walking a window line by line. Large
+#: enough that the C-level split still does the work, small enough that a
+#: caller stopping after one page has not paid for the whole window.
+_LINE_SCAN_CHUNK = 262_144
 
 
-def tail_log(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[list[dict], int, int]:
+def parse_log_line(raw_bytes: bytes) -> dict | None:
+    """One JSONL line, or ``None`` if the recorder wrote it malformed.
+
+    Exposed rather than kept private because a reader that pages on a byte
+    cursor has to parse lines one at a time -- it needs the offset of the line
+    it stopped at, which a whole-blob parse has already thrown away.
     """
-    Reads new JSONL events from a file since the given byte offset.
+    raw = raw_bytes.strip()
+    if not raw:
+        return None
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
 
-    At most ``max_bytes`` are read per call (``-1`` = use ``_tail_max_bytes()``,
-    ``None`` = unbounded); the cursor always lands on a line boundary, so a
-    caller that keeps passing the returned cursor back sees every event.
 
-    Returns:
-        tuple[events, new_cursor, total_bytes]
-        - events: list of parsed JSON objects
-        - new_cursor: updated byte offset for the next read
-        - total_bytes: total size of the file on disk
+def _read_window(path: Path, cursor: int, max_bytes: int | None) -> tuple[bytes, int, int, int]:
+    """One bounded read: ``(data, usable_end, new_cursor, total_bytes)``.
+
+    ``data[:usable_end]`` is the whole lines in the window; a trailing partial
+    line is left for the next call. Shared by ``tail_log`` and
+    ``tail_log_lines`` so the parts that are easy to get wrong -- the byte
+    bound, the line boundary, and stepping over a line bigger than the whole
+    window -- exist once. Assumes a non-negative cursor; both callers clamp.
     """
     if not path.exists():
-        return [], cursor, 0
+        return b"", 0, cursor, 0
 
     limit = _tail_max_bytes() if max_bytes == -1 else max_bytes
     total_bytes = path.stat().st_size
@@ -319,13 +323,91 @@ def tail_log(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[list[
         data = fh.read() if limit is None else fh.read(limit)
 
         if not data:
-            return [], cursor, total_bytes
+            return b"", 0, cursor, total_bytes
 
         last_newline = data.rfind(b"\n")
         if last_newline == -1:
-            return [], _cursor_past_unterminated_window(fh, path, cursor, data, limit), total_bytes
+            return b"", 0, _cursor_past_unterminated_window(fh, path, cursor, data, limit), total_bytes
 
-    return _parse_events(data[:last_newline]), cursor + last_newline + 1, total_bytes
+    return data, last_newline, cursor + last_newline + 1, total_bytes
+
+
+def _iter_offset_lines(data: bytes, end: int, start: int) -> Iterator[tuple[int, bytes]]:
+    """Each line with its ABSOLUTE offset in the file, a chunk at a time.
+
+    Split on ``b"\n"`` rather than ``splitlines()``, whose extra separators
+    (``\r``, ``\x0b``, ``\u2028`` and friends) would make the running offset
+    disagree with the bytes actually on disk -- and a cursor that is off by a
+    few bytes lands mid-line and loses a row.
+
+    Chunked rather than one ``split()`` of the whole window, because a
+    generator over a whole-blob split is only lazy in appearance: the split
+    runs in full on the first ``next()``. Measured on an 8.4 MiB window for a
+    caller that stops after 100 rows -- 5.51ms and a second copy of the window
+    against 0.126ms chunked -- and within noise when the whole window IS
+    consumed, so nothing pays for the laziness it does not use.
+    """
+    pos = 0
+    offset = start
+    carry = b""
+    while pos < end:
+        stop = min(pos + _LINE_SCAN_CHUNK, end)
+        lines = (carry + data[pos:stop]).split(b"\n")
+        pos = stop
+        # The last element is a line this chunk cut in half -- unless this was
+        # the final chunk, in which case it is the window's last whole line
+        # and is yielded after the loop.
+        carry = lines.pop()
+        for raw in lines:
+            yield offset, raw
+            offset += len(raw) + 1
+    if carry:
+        yield offset, carry
+
+
+def tail_log_lines(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[Iterator[tuple[int, bytes]], int, int]:
+    """``tail_log``'s window, as raw lines paired with their byte offsets.
+
+    Two things the parsed form cannot give a caller. A reader that stops early
+    -- because it filled a row cap or a byte budget -- must resume at the line
+    it stopped ON, and only an offset says where that is; resuming at the end
+    of the window instead silently drops everything between. And parsing is
+    lazy here, so a caller that wants 100 rows out of an 8 MiB window pays for
+    100, not for every line in it.
+
+    Returns ``(lines, new_cursor, total_bytes)``, where ``new_cursor`` is the
+    end of the window -- the right answer for a caller that consumed all of it.
+    """
+    cursor = max(0, cursor)
+    data, end, new_cursor, total_bytes = _read_window(path, cursor, max_bytes)
+    return _iter_offset_lines(data, end, cursor), new_cursor, total_bytes
+
+
+def tail_log(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[list[dict], int, int]:
+    """
+    Reads new JSONL events from a file since the given byte offset.
+
+    At most ``max_bytes`` are read per call (``-1`` = use ``_tail_max_bytes()``,
+    ``None`` = unbounded); the cursor always lands on a line boundary, so a
+    caller that keeps passing the returned cursor back sees every event. A
+    negative cursor is clamped to 0 rather than reaching ``seek()``, which
+    answers it with a bare ``OSError``.
+
+    Returns:
+        tuple[events, new_cursor, total_bytes]
+        - events: list of parsed JSON objects
+        - new_cursor: updated byte offset for the next read
+        - total_bytes: total size of the file on disk
+    """
+    # Deliberately NOT routed through ``tail_log_lines``: every caller here
+    # discards the offsets, and pairing them costs a generator resume, a tuple
+    # and an addition per line -- measured at +7% on an 8 MiB window and +16%
+    # on a 1 MiB one. One C-level split is the right shape when the whole blob
+    # is being parsed anyway. What is worth not duplicating is ``_read_window``.
+    cursor = max(0, cursor)
+    data, end, new_cursor, total_bytes = _read_window(path, cursor, max_bytes)
+    events = [event for event in map(parse_log_line, data[:end].split(b"\n")) if event is not None]
+    return events, new_cursor, total_bytes
 
 
 def new_log_path(base_dir: Path, instance_id: str, label: str | None, kind: str) -> Path:

@@ -210,6 +210,7 @@ class BrowserSession(
     # CACHE_FLUSH_FRAMES / SECONDS for the policy.
     _websocket_frames_since_flush: int = field(default=0, repr=False)
     _websocket_last_flush_ts: float = field(default=0.0, repr=False)
+    _websocket_seq: int = field(default=0, repr=False)
     # WS sidecar byte accounting for the OCTOWRIGHT_WEBSOCKET_MAX_BYTES ceiling
     # (off by default). Once _websocket_truncated flips, no more frames append.
     _websocket_bytes: int = field(default=0, repr=False)

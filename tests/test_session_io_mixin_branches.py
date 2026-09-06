@@ -72,6 +72,8 @@ def _make_subject(tmp_path: Path) -> SessionIOMixin:
     # BrowserSession's websocket registry; _handle_websocket writes it.
     subj._websockets = {}
     subj._websockets_dropped = 0
+    subj._websocket_seq = 0
+    subj._websocket_truncated = False
     subj.recorder.record = MagicMock()
     subj._bg_tasks = set()
     subj.log_path = log_path
@@ -678,8 +680,8 @@ class TestHandleWebsocket:
         names = [c.args[0] for c in subj.recorder.record.call_args_list]
         assert "websocket_opened" in names
 
-    def test_falls_back_to_id_when_attribute_missing(self, tmp_path: Path) -> None:
-        """If the websocket has no .id attribute, use python id() as fallback."""
+    def test_falls_back_to_a_session_id_when_attribute_missing(self, tmp_path: Path) -> None:
+        """No ``.id`` on the socket: the session issues one from its own counter."""
         subj = _make_subject(tmp_path)
         ws = SimpleNamespace(url="ws://x", on=lambda *a, **kw: None)
         # No `.id` → fallback path.
@@ -688,13 +690,19 @@ class TestHandleWebsocket:
         assert "websocket_opened" in names
 
     def test_skips_when_no_on_attribute(self, tmp_path: Path) -> None:
-        """If the websocket can't be subscribed to (no .on), the helper returns early."""
+        """A socket with no ``.on`` is not registered, and not recorded as opened.
+
+        It used to be recorded first and returned from second, which left a
+        socket in the registry that no ``close`` handler could ever finish --
+        permanently "open", and evicted last, since eviction prefers closed
+        entries. Nothing is subscribable here, so there is no socket to report.
+        """
         subj = _make_subject(tmp_path)
         ws = SimpleNamespace(url="ws://x", id="ws1")
-        # No `.on` attribute — early return after recording 'opened'.
         subj._handle_websocket(ws)
         names = [c.args[0] for c in subj.recorder.record.call_args_list]
-        assert names == ["websocket_opened"]
+        assert names == []
+        assert subj._websockets == {}
 
     def test_subscribes_to_four_event_types(self, tmp_path: Path) -> None:
         """websocket.on is called for framesent, framereceived, close, socketerror."""
