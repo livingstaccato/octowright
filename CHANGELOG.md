@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.21.0] - 2026-09-06
+
+### Changed
+- **BREAKING: `octowright_status()["upgrade"]["highlights"]` entries are now
+  `{title, body}`, not bare strings.** A consumer joining those strings wants
+  `entry["body"]`. The title is a short benefit-first headline; the body is the
+  paragraph that was previously the whole entry. One curated text now serves
+  three audiences with no second hand-synchronised copy: the daemon-log banner
+  renders **titles only** (rendering both stutters, since every body opens with
+  the sentence its title condenses — and five ~500-character paragraphs was
+  never a banner), `octowright_status` hands the agent the full entry, and a
+  blog can headline a post per entry. All 118 entries back to 0.7.0 are
+  backfilled, so the archive reads the same way as the current release.
+- **Curated highlights moved from a Python dict literal to one JSON file per
+  version** under `src/octowright/upgrade/highlights/`, read eagerly at import.
+  Forced rather than preferred: 118 titled entries project to ~1,160 lines
+  against the repository's 777-LOC ceiling, and no split of a single module
+  escapes that for long. Per-version files also mean cutting a release *adds* a
+  file instead of editing the top of a shared one, so two release branches
+  cannot conflict over it. `upgrade/` became a package whose `__init__.py` is
+  re-exports only, so `from octowright import upgrade` is unchanged. Ordering
+  is by parsed version rather than filename — a lexical sort puts `0.10.0`
+  before `0.7.0` and would silently break the guard that reads the newest key.
+
 ## [0.20.0] - 2026-09-06
 
 ### Added
@@ -2513,6 +2537,7 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
+[0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0
 [0.19.4]: https://github.com/livingstaccato/octowright/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/livingstaccato/octowright/compare/v0.19.2...v0.19.3
