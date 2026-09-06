@@ -28,6 +28,7 @@ from octowright.browser_pool.lifecycle import (
     shutdown_pool,
 )
 from octowright.browser_pool.options import GPU_DISABLE_ARGS, LaunchOptions, resolve_disable_gpu
+from octowright.browser_pool.refusals import RefusalTracker
 from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
@@ -84,6 +85,11 @@ class BrowserPool:
         # different answers, and the pool must not claim a kind is healthy
         # just because nothing has failed yet.
         self._engine_health: dict[str, dict[str, Any]] = {}
+        # Aggregate of launches an input guard refused. Deliberately NOT in
+        # engine_health (a refusal is not an engine fault) and NOT in the
+        # incidents ring (25 entries shared across every category -- the
+        # highest-frequency event would evict the crash records it exists for).
+        self._refusals = RefusalTracker()
         self._sessions: dict[str, BrowserSession] = {}
         self._sessions_lock = asyncio.Lock()
         # Sessions mid-teardown: inserted by ``reserve_close_browser``/
@@ -176,6 +182,12 @@ class BrowserPool:
         else:
             self._engine_health[kind] = {"outcome": "error", "at": at, "error": type(exc).__name__}
 
+    def refusals(self) -> dict[str, Any]:
+        """Aggregate of launches refused by an input guard (see
+        ``refusals.RefusalTracker``). Always present, including ``total: 0`` --
+        unlike ``engine_health()``, where absence means "never launched"."""
+        return self._refusals.snapshot()
+
     def engine_health(self) -> dict[str, dict[str, Any]]:
         """Per-kind snapshot of the last launch outcome (see
         ``_record_engine_health``). A kind never launched is absent from the
@@ -198,13 +210,21 @@ class BrowserPool:
         kind_hint = raw_kind if raw_kind in SUPPORTED_KINDS else "unknown"
         try:
             result = await self._launch_with_driver_retry(options, kind_hint)
-        except InvalidRequestError:
+        except InvalidRequestError as exc:
             # The caller's own request was refused -- no engine was asked to do
             # anything, so this says nothing about whether one works. Recording
             # it made a `file://` url report chromium as broken, in a block
             # whose whole purpose is the opposite claim (issue #214). The same
             # type also suppresses octowright_browser_launch_failed_total, in
             # _metrics.launch_span.
+            #
+            # Counted separately instead. Staying wholly silent is the same
+            # mistake mirrored: the metric that covers this is a noop unless
+            # PROVIDE_METRICS_ENABLED is set (off by default), so a client
+            # regression spamming invalid requests would otherwise show a
+            # healthy daemon and no evidence at all. Aggregates only, and never
+            # the offending value -- see refusals.py.
+            self._refusals.record(exc)
             raise
         except Exception as exc:
             self._record_engine_health(kind_hint, exc)
