@@ -35,6 +35,7 @@ from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
 from octowright.browser_pool.visuals import _tile_args_for_chromium
 from octowright.defaults import RECORDINGS_DIR, SUPPORTED_KINDS, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
+from octowright.request_errors import InvalidRequestError
 from octowright.session import BrowserSession
 from octowright.session.operation.gate import (
     SessionClosedError,
@@ -197,6 +198,14 @@ class BrowserPool:
         kind_hint = raw_kind if raw_kind in SUPPORTED_KINDS else "unknown"
         try:
             result = await self._launch_with_driver_retry(options, kind_hint)
+        except InvalidRequestError:
+            # The caller's own request was refused -- no engine was asked to do
+            # anything, so this says nothing about whether one works. Recording
+            # it made a `file://` url report chromium as broken, in a block
+            # whose whole purpose is the opposite claim (issue #214). The same
+            # type also suppresses octowright_browser_launch_failed_total, in
+            # _metrics.launch_span.
+            raise
         except Exception as exc:
             self._record_engine_health(kind_hint, exc)
             raise
@@ -229,6 +238,8 @@ class BrowserPool:
         target_url = launch_options.url or get_default_url()
         # Target validation is a pure preflight. In particular it must happen
         # before session tempdirs, Playwright, or recording files are allocated.
+        # It raises InvalidRequestError, so launch() records no engine health
+        # for it -- see _record_engine_health.
         from octowright.session.core_page_mixin import _reject_unsafe_url
 
         _reject_unsafe_url(target_url)

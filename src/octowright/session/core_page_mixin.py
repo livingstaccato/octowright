@@ -20,6 +20,7 @@ from octowright.defaults import (
     DEFAULT_NAV_TIMEOUT_MS,
     REDACTED_INPUT_PLACEHOLDER,
 )
+from octowright.request_errors import InvalidRequestError
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import (
     REDACTION_MODES,
@@ -164,12 +165,18 @@ def _canonicalize_for_guard(url: str) -> str:
 
 
 def _reject_unsafe_url(url: str) -> None:
-    """Raise ValueError if ``url`` is on the deny-list of unsafe schemes, or the
-    active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every navigation entry
-    point (navigate / open_url / launch) and macro replay routes through here, so
-    one call covers them all."""
+    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
+    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
+    navigation entry point (navigate / open_url / launch) and macro replay
+    routes through here, so one call covers them all.
+
+    The type is load-bearing, not decoration: ``BrowserPool.launch``
+    classifies by ``isinstance``, so a sibling check added here as a plain
+    ``raise ValueError(...)`` would be filed as an engine fault and recreate
+    issue #214. ``tests/test_launch_guard_classification.py`` scans this
+    function by name for that."""
     if not isinstance(url, str) or not url:
-        raise ValueError("navigate url must be a non-empty string")
+        raise InvalidRequestError("navigate url must be a non-empty string")
     stripped = _canonicalize_for_guard(url)
     # One leading slash is a path on the context's own base_url: same origin by
     # construction, so there is no scheme to deny and no new host to check. This
@@ -185,9 +192,11 @@ def _reject_unsafe_url(url: str) -> None:
         return
     scheme, sep, _rest = stripped.partition(":")
     if not sep:
-        raise ValueError(f"navigate url missing scheme: {url!r}")
+        raise InvalidRequestError(f"navigate url missing scheme: {url!r}")
     if scheme.lower() in _NAV_DENIED_SCHEMES:
-        raise ValueError(f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})")
+        raise InvalidRequestError(
+            f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})"
+        )
     ssrf.check_navigation_url(stripped)
 
 

@@ -144,7 +144,7 @@ def _build_har_kwargs(
     # Both branches (relative-sandboxed and absolute-supplied) must end up
     # under the root. Sandboxing only the relative path would let an
     # absolute LLM-supplied path pass straight through.
-    har_path = reject_unsafe_path(har_path, root, label=f"har_path {str(har_path)!r}")
+    har_path = reject_unsafe_path(har_path, root, label="har_path")
     har_path.parent.mkdir(parents=True, exist_ok=True)
     out: dict[str, Any] = {
         "record_har_path": str(har_path),

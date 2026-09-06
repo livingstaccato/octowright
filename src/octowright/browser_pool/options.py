@@ -14,6 +14,7 @@ from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
 from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
+from octowright.request_errors import InvalidRequestError
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
 #: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
@@ -277,17 +278,19 @@ class LaunchOptions:
 
     def validate(self) -> None:
         if self.kind not in SUPPORTED_KINDS:
-            raise ValueError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
+            raise InvalidRequestError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
         if self.badge_position not in _BADGE_POSITIONS:
-            raise ValueError(f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {self.badge_position!r}")
+            raise InvalidRequestError(
+                f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {self.badge_position!r}"
+            )
         if self.ephemeral and self.session:
-            raise ValueError("ephemeral and session are mutually exclusive")
+            raise InvalidRequestError("ephemeral and session are mutually exclusive")
         if self.profile and self.session:
-            raise ValueError("profile and session are mutually exclusive")
+            raise InvalidRequestError("profile and session are mutually exclusive")
         if self.har_mode not in {"full", "minimal"}:
-            raise ValueError("har_mode must be one of ['full', 'minimal']")
+            raise InvalidRequestError("har_mode must be one of ['full', 'minimal']")
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
-            raise ValueError("har_content must be one of ['omit', 'embed', 'attach']")
+            raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
         self._validate_headers()
 
@@ -304,14 +307,14 @@ class LaunchOptions:
 
     def _validate_browser_selection(self) -> None:
         if self.channel is not None and self.channel not in SUPPORTED_CHANNELS:
-            raise ValueError(f"channel must be one of {sorted(SUPPORTED_CHANNELS)}, got {self.channel!r}")
+            raise InvalidRequestError(f"channel must be one of {sorted(SUPPORTED_CHANNELS)}, got {self.channel!r}")
         if (self.executable_path is not None or self.launch_args is not None) and not _executable_path_allowed():
-            raise ValueError(
+            raise InvalidRequestError(
                 "executable_path/launch_args are disabled by default (arbitrary local "
                 f"process execution) -- set {ALLOW_EXECUTABLE_PATH_ENV}=1 to opt in"
             )
         if self.executable_path is not None and not Path(self.executable_path).expanduser().is_file():
-            raise ValueError(f"executable_path {self.executable_path!r} does not exist or is not a file")
+            raise InvalidRequestError(f"executable_path {self.executable_path!r} does not exist or is not a file")
 
     def promoted_profile(self) -> str | None:
         if self.profile is None and self.label is not None and not self.ephemeral and not self.session:

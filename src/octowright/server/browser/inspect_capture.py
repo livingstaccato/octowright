@@ -125,7 +125,7 @@ async def browser_capture_and_close(
     # Pure path parsing/containment -- no lease needed, so it runs before any
     # reservation and a rejected path never touches the browser.
     target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label=f"screenshot_path {str(target)!r}")
+    target = reject_unsafe_path(target, RECORDINGS_DIR, label="screenshot path")
 
     async def _prepare(prep_session: BrowserSession) -> dict[str, Any]:
         return await _capture_before_close(prep_session, instance_id=instance_id, target=target, snapshot=snapshot)

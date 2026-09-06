@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import re
 
+from octowright.request_errors import InvalidRequestError
+
 # Generous against real globs and far below the cliff. `**/api/**/users` uses
 # two; the measured cost at four is ~0.9s and at five ~18s, so the accepted
 # worst case stays under a second. Raising this re-opens a 20x-per-wildcard
@@ -70,10 +72,10 @@ def validate_url_pattern(pattern: str, *, field: str) -> None:
     YAML, and "url_pattern" would send a scenario author to the wrong place.
     """
     if len(pattern) > MAX_URL_PATTERN_CHARS:
-        raise ValueError(f"{field}: URL pattern exceeds {MAX_URL_PATTERN_CHARS} chars (got {len(pattern)})")
+        raise InvalidRequestError(f"{field}: URL pattern exceeds {MAX_URL_PATTERN_CHARS} chars (got {len(pattern)})")
     wildcards = len(_WILDCARD_RUN_RE.findall(pattern))
     if wildcards > MAX_URL_PATTERN_WILDCARDS:
-        raise ValueError(
+        raise InvalidRequestError(
             f"{field}: URL pattern uses {wildcards} wildcard groups, more than the "
             f"{MAX_URL_PATTERN_WILDCARDS} allowed. Playwright compiles each one into a "
             f"regex group whose match cost multiplies about 20x per wildcard, in the "

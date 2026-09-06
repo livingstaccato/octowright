@@ -38,6 +38,8 @@ import os
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
+from octowright.request_errors import InvalidRequestError
+
 # Tokens that mean "policy disabled". Empty/unset is the default → off.
 _OFF = frozenset({"", "off", "0", "false", "no", "never", "none", "disabled"})
 
@@ -244,4 +246,4 @@ def check_navigation_url(url: str) -> None:
         return
     host = normalize_host_for_policy(parts.hostname or "")
     if host and host not in _allowlist() and _host_is_blocked(host):
-        raise ValueError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
