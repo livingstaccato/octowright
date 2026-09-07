@@ -24,7 +24,12 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.launch_helpers import _record_launch_event
-from octowright.browser_pool.listeners import _wire_close_evictor, _wire_listeners, _wire_user_navigation_logger
+from octowright.browser_pool.listeners import (
+    _wire_close_evictor,
+    _wire_listeners,
+    _wire_user_navigation_logger,
+    adopt_untracked_pages,
+)
 from octowright.browser_pool.visuals import wire_init_scripts
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
@@ -316,6 +321,20 @@ async def _prepare_session_before_publication(
     # Firefox/WebKit have no extension hook, so they use the redirector.
     if kind != "chromium":
         context.on("page", _make_new_tab_redirector(new_session))
+    # A context can be handed back already holding pages -- Chromium session
+    # restore is the observed case -- and those fire no "page" event, so they
+    # would stay untracked and unwired. Deliberately AFTER the registrations
+    # above: a page created in the gap is then caught by one or the other.
+    adopted = adopt_untracked_pages(new_session, context)
+    if adopted:
+        log.warning(
+            "browser.adopted_untracked_pages",
+            instance_id=instance_id,
+            kind=kind,
+            adopted=adopted,
+            page_count=new_session.page_count,
+            hint="the context opened with pages octowright did not create (session restore?); they are now tracked",
+        )
 
     await wire_init_scripts(
         context,
