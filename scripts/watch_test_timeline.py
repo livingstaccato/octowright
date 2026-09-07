@@ -99,6 +99,23 @@ def follow(log_path: Path) -> int:
             time.sleep(POLL_SECONDS)
 
 
+def crash_reports_available() -> bool:
+    """Whether this machine has the crash-report format the tool can read.
+
+    Recording the timeline works anywhere -- it reads a file pytest writes. The
+    CORRELATION half is macOS-only: it parses ``.ips`` reports from
+    DiagnosticReports. On Windows the equivalent is a WER minidump under
+    ``%LOCALAPPDATA%\\CrashDumps`` in an entirely different format, and on Linux
+    it depends on the distro's core-dump handler; neither is implemented.
+
+    Stated rather than left to fail quietly, because a glob on a directory that
+    does not exist returns an EMPTY LIST rather than raising -- so without this
+    the tool would answer "no browser crash reports" on Windows, which reads as
+    "you have no crashes" instead of "this cannot see them".
+    """
+    return sys.platform == "darwin"
+
+
 def newest_crash_report() -> Path | None:
     """The most recently CRASHED browser report, or None.
 
@@ -216,6 +233,12 @@ def main() -> int:
         help="Correlate against the most recent browser crash report on this machine.",
     )
     opts = parser.parse_args()
+    if (opts.newest_crash or opts.correlate) and not crash_reports_available():
+        print(
+            f"crash correlation is macOS-only (reads .ips reports); this is {sys.platform}.\n"
+            "Recording the timeline still works -- run without --correlate."
+        )
+        return 1
     if opts.newest_crash:
         report = newest_crash_report()
         if report is None:
