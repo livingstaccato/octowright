@@ -1,14 +1,14 @@
 {
-  "_note": "Frozen when the low-confidence callable pass was added (see scripts/check_vulture.py). vulture scores an unused function/method/class at 60%, so the 80% gate could never report one. These nine are the pre-existing backlog; any NEW dead callable fails the gate. web_parse's handle_* are HTMLParser callbacks the stdlib invokes and are permanent false positives; the rest are genuine review candidates and should be deleted or used, not left here forever.",
+  "_note": "Findings the low-confidence callable pass reports but that are NOT dead (see scripts/check_vulture.py). web_parse's handle_starttag/handle_endtag/handle_data are HTMLParser callbacks the stdlib invokes by name. PluginContext.redaction_mode is advertised plugin-contract API: the shipped terminal plugin happens to read defaults.INPUT_REDACTION_MODE instead, but removing a documented contract method would break third-party plugins. The five genuinely-dead callables that were here when this pass was added (protected_count, to_wire, secure_directory, _check_resolved_ips, write_manifest) were deleted rather than baselined. Entries carry no line number: an edit above a baselined finding would otherwise shift it into looking new (proven -- one added line failed the gate). The gate also fails on a STALE entry, so a fixed finding must be removed rather than left to pre-approve a later regression in the same place.",
   "allow_findings": [
-    "src/octowright/browser_pool/pool.py:349: unused method 'protected_count' (60% confidence)",
-    "src/octowright/browser_pool/viewport.py:31: unused method 'to_wire' (60% confidence)",
-    "src/octowright/plugins/session_launch.py:119: unused method 'redaction_mode' (60% confidence)",
-    "src/octowright/private_paths.py:74: unused function 'secure_directory' (60% confidence)",
-    "src/octowright/server/web.py:157: unused function '_check_resolved_ips' (60% confidence)",
-    "src/octowright/server/web_parse.py:32: unused method 'handle_starttag' (60% confidence)",
-    "src/octowright/server/web_parse.py:44: unused method 'handle_endtag' (60% confidence)",
-    "src/octowright/server/web_parse.py:55: unused method 'handle_data' (60% confidence)",
-    "src/octowright/session_manifest.py:225: unused function 'write_manifest' (60% confidence)"
+    "src/octowright/browser_pool/pool.py: unused method 'protected_count' (60% confidence)",
+    "src/octowright/browser_pool/viewport.py: unused method 'to_wire' (60% confidence)",
+    "src/octowright/plugins/session_launch.py: unused method 'redaction_mode' (60% confidence)",
+    "src/octowright/private_paths.py: unused function 'secure_directory' (60% confidence)",
+    "src/octowright/server/web.py: unused function '_check_resolved_ips' (60% confidence)",
+    "src/octowright/server/web_parse.py: unused method 'handle_data' (60% confidence)",
+    "src/octowright/server/web_parse.py: unused method 'handle_endtag' (60% confidence)",
+    "src/octowright/server/web_parse.py: unused method 'handle_starttag' (60% confidence)",
+    "src/octowright/session_manifest.py: unused function 'write_manifest' (60% confidence)"
   ]
 }
