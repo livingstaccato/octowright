@@ -178,9 +178,19 @@ Measured on a real machine, 31 reports split 27 `EXC_BREAKPOINT` on
 `Chrome_ChildIOThread` (children aborting when `test_stability_chaos_live`
 kills the shared driver with `pool._pw.stop()`), 3 `EXC_BAD_ACCESS` on
 `CrRendererMain` (its CDP `Page.crash`), and **one** `EXC_BREAKPOINT` on
-`CrBrowserMain` — the real, still-unexplained headed abort. So the signal sits
+`CrBrowserMain` — the real headed abort. So the signal sits
 under 30:1 noise and `--newest-crash` hands you a manufactured crash after any
-suite run. A correlated row whose module carries a deliberate-crash mechanism
+suite run.
+
+That real abort is no longer wholly unexplained, though it is not yet fixed.
+`scripts/characterize_headed_crash.py` reproduced it on 2026-09-07 (26 reports
+byte-exact to the field signature, Chromium 151), and each report's own
+`procLaunch`/`captureTime` puts the browser's lifetime at **1.09–1.76s against
+a 1.34s launch/close cycle** — so it dies **at close**, not at launch. What
+remains open is what makes it happen at all: the same arm scored 26 crashes in
+134 launches and then 0 in 872 an hour later, so it is bursty and conditional
+on machine state. Read that script's docstring before spending time on it; it
+records which experiments have already come back empty. A correlated row whose module carries a deliberate-crash mechanism
 is therefore labelled, found by scanning that module rather than by listing
 test names so a chaos test added later is covered. Matching is by substring and
 cannot separate "uses the mechanism" from "mentions it" — the tool's own test
@@ -1061,7 +1071,7 @@ All defaults are in `src/octowright/defaults.py`. Key vars:
 - `OCTOWRIGHT_DEFAULT_URL` — override the URL opened on `browser_launch` with no `url` argument (default resolves from the bound port at runtime; always points at `/new-tab` on the local daemon)
 - `OCTOWRIGHT_DEFAULT_LABEL` — override the auto-detected default browser label (see `.octowright/config.yaml` for per-project configuration)
 - `OCTOWRIGHT_BADGE_OPACITY` — corner badge opacity (float 0.0–1.0, default 0.35). Lower = more translucent.
-- `OCTOWRIGHT_DISABLE_GPU` — launch **Chromium** with `--disable-gpu --disable-gpu-compositing`. **OFF by default.** An escape hatch for the recurring headed-Chromium crash characterised as a deterministic main-process CHECK abort reached through native macOS UI plus the Metal GPU path (Chrome 148 / macOS 26). **Honest scope: this is not a confirmed fix.** The crash's trigger is characterised; this mitigation has not been proven to prevent it. It exists so an operator whose browsers are crashing has something to try in one argument. Per-launch override with `browser_launch(disable_gpu=…)`, which outranks the env var in both directions. Deliberately a boolean over a fixed flag set rather than more `launch_args`: arbitrary argv is gated behind `OCTOWRIGHT_ALLOW_EXECUTABLE_PATH` (a code-execution opt-in), far too heavy a door to open just to turn the GPU off mid-incident, whereas a boolean grants no new power and needs no gate. Chromium-only — Firefox/WebKit would be handed argv they don't understand. Note it does **not** remove WebGL: Chromium falls back to SwiftShader software rendering (measured). Resolver: `browser_pool.options.resolve_disable_gpu`.
+- `OCTOWRIGHT_DISABLE_GPU` — launch **Chromium** with `--disable-gpu --disable-gpu-compositing`. **OFF by default.** An escape hatch for the recurring headed-Chromium crash characterised as a deterministic main-process CHECK abort reached through native macOS UI plus the Metal GPU path (Chrome 148 / macOS 26; the same signature is confirmed on Chromium 151, and the abort lands at browser **close** — see the crash-report note above). **Honest scope: this is not a confirmed fix.** The crash's trigger is characterised; this mitigation has not been proven to prevent it, and the reason is worth knowing before anyone assumes it was tested and failed: until 2026-09-07 nothing could reproduce the crash on demand, so there was never a baseline to A/B the knob against. It exists so an operator whose browsers are crashing has something to try in one argument. Per-launch override with `browser_launch(disable_gpu=…)`, which outranks the env var in both directions. Deliberately a boolean over a fixed flag set rather than more `launch_args`: arbitrary argv is gated behind `OCTOWRIGHT_ALLOW_EXECUTABLE_PATH` (a code-execution opt-in), far too heavy a door to open just to turn the GPU off mid-incident, whereas a boolean grants no new power and needs no gate. Chromium-only — Firefox/WebKit would be handed argv they don't understand. Note it does **not** remove WebGL: Chromium falls back to SwiftShader software rendering (measured). Resolver: `browser_pool.options.resolve_disable_gpu`.
 - `OCTOWRIGHT_HEADLESS` — force headless mode
 - `OCTOWRIGHT_DAEMON_READY_TIMEOUT` — seconds a spawned daemon gets to bind and answer HTTP before the caller gives up (**default 10**). Also settable per-invocation with `octowright serve --ready-timeout`, which exports this var so every `wait_for_daemon()` in the process (including the post-bridge respawn) shares one budget. It matters because exceeding it is not a hard failure: `cli/serve` falls back to running the leader **inline** (`inline_reason="daemon_spawn_failed"`), which is fragile — a cold container running `uv run octowright serve` routinely needs more than 10s and lands there by default. Unparsable / non-positive / non-finite values fall back to the default rather than hanging or never waiting; `--ready-timeout` **refuses** such a value with a `UsageError` instead, since the flag would otherwise be silently floored back to the default while the caller believed it took effect. Parser/const: `daemonize.daemon_ready_timeout` / `DAEMON_READY_TIMEOUT_SECONDS` (defaults.py is at its LOC ceiling).
 - `OCTOWRIGHT_IDLE_GRACE` — seconds the idle pool waits before the daemon auto-exits. **Unset/off by default**; a positive number opts in. Rationale + disable tokens: **Idle Watchdog**.
