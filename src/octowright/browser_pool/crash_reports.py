@@ -27,7 +27,9 @@ from typing import Any
 from octowright.browser_pool.incidents import CATEGORY_RENDERER_CRASH
 
 # Default macOS crash-report directory. Per-user; overridable for tests.
-_DEFAULT_REPORTS_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+# Public because the diagnostic scripts under scripts/ read the same
+# location, and two copies of an OS path is how they drift.
+DEFAULT_REPORTS_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
 
 # Filename substrings that mark a .ips as a managed-browser crash (case-insensitive).
 # Covers chrome-headless-shell, Chromium, Google Chrome for Testing, Firefox,
@@ -106,7 +108,7 @@ def find_crash_report(crash_ts: str, *, reports_dir: Path | None = None) -> dict
     correlation window, or ``None`` (non-macOS, no dir, bad ts, or no match)."""
     if not _is_macos():
         return None
-    directory = Path(reports_dir) if reports_dir is not None else _DEFAULT_REPORTS_DIR
+    directory = Path(reports_dir) if reports_dir is not None else DEFAULT_REPORTS_DIR
     if not directory.is_dir():
         return None
     crash_epoch = _parse_ts(crash_ts)
