@@ -10,8 +10,9 @@ Task: $ARGUMENTS
 
 ## Steps
 
-1. **Check existing macros.** Run `macro_list` — if a matching macro exists,
-   confirm with the user before overwriting.
+1. **Check existing macros.** Run `macro_list(contains="<keyword>")` — or
+   `macro_list(response_mode="families")` first if you do not know what exists.
+   If a matching macro exists, confirm with the user before overwriting.
 
 2. **Bootstrap.** Call `octowright_status`, inspect the `advisor` block.
 

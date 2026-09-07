@@ -498,6 +498,20 @@ Every page launched by the pool gets a faint translucent overlay at the bottom-c
 
 Pass `slowmo_ms=N` to `macro_run` / `macro_run_sequence` (or set `OCTOWRIGHT_MACRO_SLOWMO_MS`) to insert a per-action delay between status push and dispatch — useful for following execution by eye.
 
+### Listing a large macro corpus
+
+`macro_list` returned every saved macro with every description and no bound of any kind. Measured on a real machine: **402,942 characters — roughly 100k tokens — in a single call**, from 337 macros. It ships in the `macros` capability profile, so any agent that enables macros carried a tool able to consume its whole context in one call. This is the defect `browser_network_requests`, `browser_websocket_messages` and `browser_tail_recording` each already fixed, and the repair is deliberately the same shape: a default `limit` (50, max 500), a `cursor` naming the first row **not** returned, a response-size ceiling on top of the row cap (a row cap does not bound size), and a non-positive `limit` resolving to the default rather than to unbounded — an LLM must not be able to remove the cap by passing `0`.
+
+**Macros live in one flat directory.** `MACROS_DIR` (`~/.config/octowright/macros`, overridable process-wide by `OCTOWRIGHT_MACROS_DIR`) holds `<slug>.json` and nothing else — `storage.macro_path` is `MACROS_DIR / f"{slug(name)}.json"`, so there are no subdirectories and a naming prefix (`map-`, `grant-`, `admin-`) is the only grouping anyone has. `response_mode="families"` rolls those prefixes up and lists **no macros at all**: on the 337-macro corpus that is 4,059 characters against 402,942, which is the call an agent should make when it does not yet know what exists, before filtering with `prefix`/`contains`. The roll-up carries `actions` as well as `macros` because count is the wrong ranking on its own — one family held 39 macros and **10,666 of the 16,891 saved actions**.
+
+**What `summary` drops is measured, not guessed.** Across that corpus `description` is **85.5%** of the payload and `path` a further 6.8% (and the path is derivable from the reported `root` plus the name), while `parameters` is 1.9%. So descriptions are capped at `MACRO_LIST_SUMMARY_DESCRIPTION_CHARS` with `description_truncated` set, paths are omitted, and parameters stay — an agent that cannot see a macro's parameters cannot call it, which would make the compact mode useless and send every caller to `full`.
+
+**Ordering is `(updated_at desc, name asc)`, and the tiebreak is load-bearing.** `storage.list_macros` builds its list from `Path.glob`, whose order is filesystem-dependent, and sorts on `updated_at` alone; macros saved in the same second therefore hold an arbitrary relative order that can differ between two calls, and a cursor into a list that reorders under it silently skips some rows and repeats others.
+
+**Project-scoped macros are not available, and the project config is the wrong place for them.** `.octowright/config.yaml` reads exactly `label`, `persona` and `profile` (`defaults._read_project_config`), and it is found by walking up from **CWD — the daemon's CWD, not the caller's**. One daemon serves every client, so a CWD-derived macro root would make `macro_run("checkout")` resolve differently depending on where the daemon happened to be spawned: the same reason `OCTOWRIGHT_PLUGINS` is deliberately kept out of that file. Scoping macros per project needs an explicit namespace, not a new config key.
+
+The pure selection lives in `macros/listing.py` so it is testable without the MCP layer, matching how `macros/semantic.py` holds the helpers behind `macro_explain`. The HTTP dashboard route (`/api/macros`) still calls `storage.list_macros()` unbounded — it feeds a local browser UI that renders the whole table, not an LLM context.
+
 ### Silent-swallow policy
 
 Bandit's B110 (`try/except/pass`) and B112 (`try/except/continue`) are blanket-suppressed in `make lint`. Production code uses these patterns only in:

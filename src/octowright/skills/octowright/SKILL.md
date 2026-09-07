@@ -67,7 +67,7 @@ Match the call to the launch shape. Call `browser_suggest_for_url` for real-inte
 
 ### 4. Macro Management
 
-Check `macro_list` before manually implementing a common flow. Update macros via `macro_save` when selectors change. Nominate repeated workflows via the Advisor.
+Check `macro_list` before manually implementing a common flow (start with `response_mode="families"`, then filter by `prefix`/`contains`). Update macros via `macro_save` when selectors change. Nominate repeated workflows via the Advisor.
 
 **Full details:** `reference/macros-and-advisor.md`
 
