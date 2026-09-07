@@ -96,7 +96,7 @@ scenario is running.
 
 | Tool | Purpose |
 |---|---|
-| `scenario_list` | Enumerate every scenario spec on disk. |
+| `scenario_list` | List scenario specs on disk in bounded pages. Filter with `prefix`/`contains`; page with `limit`/`cursor`. Returns an envelope (`items`, `total`, `returned`, `truncated`, `next_cursor`), not a bare list. |
 | `scenario_plan` | Dry-run: show resolved per-participant `launch_kwargs` without launching. |
 | `scenario_start` | Launch all participants in parallel; apply fixtures; run startup macros. |
 | `scenario_status` | Snapshot a running scenario's participant state. |

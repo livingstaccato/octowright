@@ -109,6 +109,9 @@ POST /api/sessions
   }
   → 201 + SessionSummary (identical shape to GET /api/sessions live[] entries)
   → 400 if `kind` is missing/invalid or body is malformed JSON (valid Content-Type, unparsable bytes)
+  → 400 if the body carries a field that is not a launch option — an unreadable
+        field used to be discarded silently, so a caller could believe half its
+        body applied; the message names every offending key
   → 415 if Content-Type is not `application/json` (per RFC 7231)
   → 500 if `pool.launch()` raises an unexpected error
 
