@@ -928,12 +928,43 @@ what this repo already does with a flag the caller believes took effect (`serve
 --wait-ready` rejects `--no-singleton` rather than ignoring it), and the type is
 the one above precisely so a caller's mistake is not filed as an engine fault.
 
-The accepted set is **derived** from the dataclass fields rather than listed,
-minus `protected_reason`, which `resolve_protected` writes as an *output* — a
-caller supplying it would be describing a decision not yet made.
-`tests/test_launch_option_rejection.py` pins the derived set against the keys
-`from_mapping` actually reads, so an accept-list cannot drift into rejecting a
-new field or accepting one that goes nowhere.
+The accepted set (`CALLER_SETTABLE_FIELDS`) is **derived** from the dataclass
+fields rather than listed, minus `protected_reason`, which `resolve_protected`
+writes as an *output* — a caller supplying it would be describing a decision not
+yet made. It is a module constant rather than a method because `from_mapping`
+runs on every launch and the value never changes.
+
+**The rejection is also what lets the construction be derived.** With nothing
+unknown left, `from_mapping` is `cls(**options)`. It previously hand-wrote one
+`options.get("...")` per field — 28 of them, 11 restating a default the
+dataclass already declares — so a new field had to be added in two places, and
+a test scraped this function's own source to prove the two agreed. Deleting
+that list makes "accepted" and "read" the **same fact** rather than two facts
+kept in sync, and the drift guard has nothing left to guard. Behaviour-
+preserving: every one of those 11 explicit defaults was verified identical to
+the dataclass's before the list was removed.
+
+**`to_pool_kwargs` derives from the SAME set, and that is the point.** It
+hand-listed 27 keys and omitted `base_url` — a caller-settable field
+`from_mapping` reads and `launch_execution` consumes — so
+`LaunchOptions(base_url=...).to_pool_kwargs()` dropped it silently. That is the
+`headless` defect in the other direction, and a guard that only inspects
+*incoming* keys structurally cannot catch it: the loss happens on the way out.
+Both directions now derive from `CALLER_SETTABLE_FIELDS`, so a new field is
+transported and accepted without editing either list, and the round trip is
+pinned by **equality** (`from_mapping(o.to_pool_kwargs()) == o`) rather than by
+the weaker "the round trip is accepted", which is precisely what let `base_url`
+hide. `protected_reason` is the single exclusion on both sides, being an output
+of `resolve_protected`.
+
+`_MISLEADING_ALIASES` (one entry, `headless`) is a deliberate special case and
+not the hand-kept-table shape this file warns about elsewhere: a missing entry
+costs a plainer message and a stale one costs a needless hint, so it cannot
+drift into being *wrong*. It also carries what no derivation can produce —
+`difflib` maps `headless`→`headed` but cannot know the sense is inverted, which
+is the whole value of the message. If it is ever extended, ordinary near-miss
+typos (`viewport_width`) belong in a generic `difflib` pass; reserve the map for
+inverted or renamed semantics.
 
 Strictness was checked against every caller before adoption rather than after:
 the internal paths (`relaunch`, `roster`, `driver_relaunch`, `scenarios`, the

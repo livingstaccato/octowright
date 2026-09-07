@@ -29,7 +29,7 @@ _NOT_CALLER_SETTABLE: Final = frozenset({"protected_reason"})
 #: HEADED browser, because ``from_mapping`` reads each key by name and ignores
 #: the rest.
 _MISLEADING_ALIASES: Final = {
-    "headless": "headed (inverted -- headless=True is headed=False)",
+    "headless": " (did you mean headed? the sense is inverted -- headless=True is headed=False)",
 }
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
@@ -201,24 +201,13 @@ class LaunchOptions:
     disable_gpu: bool | None = None
 
     @classmethod
-    def caller_settable_fields(cls) -> frozenset[str]:
-        """Launch option names a caller may supply.
-
-        Derived from the dataclass rather than listed, so a new field cannot be
-        rejected by an accept-list nobody remembered to update.
-        ``tests/test_launch_option_rejection.py`` pins this against the keys
-        ``from_mapping`` actually reads, so the two cannot drift apart.
-        """
-        return frozenset(f.name for f in fields(cls)) - _NOT_CALLER_SETTABLE
-
-    @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
         """Refuse an option this class will not read.
 
-        ``from_mapping`` reads every key by name, so anything it does not
-        recognise was silently discarded -- and the caller went on believing the
-        option took effect. That is not hypothetical: ``pool.launch(headless=
-        True)`` launched a HEADED browser and cost a wasted investigation run.
+        Anything not recognised used to be silently discarded, and the caller
+        went on believing the option took effect. Not hypothetical:
+        ``pool.launch(headless=True)`` launched a HEADED browser and cost a
+        wasted investigation run.
 
         Raising is the repository's established answer to a flag the caller
         believes took effect (``serve --wait-ready`` refuses ``--no-singleton``
@@ -227,48 +216,26 @@ class LaunchOptions:
         ``BrowserPool._record_engine_health``. It subclasses ``ValueError``, so
         the HTTP route's existing handler turns this into a 400 naming the key.
         """
-        unknown = sorted(set(options) - cls.caller_settable_fields())
+        unknown = sorted(set(options) - CALLER_SETTABLE_FIELDS)
         if not unknown:
             return
-        described = [
-            f"{key!r} (did you mean {_MISLEADING_ALIASES[key]}?)" if key in _MISLEADING_ALIASES else repr(key)
-            for key in unknown
-        ]
+        described = [repr(key) + _MISLEADING_ALIASES.get(key, "") for key in unknown]
         raise InvalidRequestError(f"unknown launch option(s): {', '.join(described)}")
 
     @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
+        """Build from a flat kwarg mapping, refusing anything that is not a field.
+
+        The rejection above is what makes the splat safe, and together they make
+        "accepted" and "read" the SAME fact. This used to hand-write one
+        ``options.get("...")`` per field -- 28 of them, each restating a default
+        the dataclass already declares -- so a new field had to be added in two
+        places, and a test scraped this function's source to prove the two
+        agreed. Every one of those 11 explicit defaults was verified identical
+        to the dataclass's before the list was deleted.
+        """
         cls._reject_unknown_options(options)
-        launch_options = cls(
-            kind=options.get("kind", "chromium"),
-            url=options.get("url"),
-            headed=options.get("headed"),
-            label=options.get("label"),
-            viewport_w=options.get("viewport_w"),
-            viewport_h=options.get("viewport_h"),
-            profile=options.get("profile"),
-            base_url=options.get("base_url"),
-            stabilize=options.get("stabilize", False),
-            record_video=options.get("record_video", False),
-            trace=options.get("trace", False),
-            har=options.get("har", False),
-            har_path=options.get("har_path"),
-            har_mode=options.get("har_mode", "minimal"),
-            har_url_filter=options.get("har_url_filter"),
-            har_content=options.get("har_content"),
-            badge=options.get("badge", True),
-            badge_position=options.get("badge_position", _BADGE_POSITION_DEFAULT),
-            tile=options.get("tile", False),
-            ephemeral=options.get("ephemeral", False),
-            session=options.get("session", False),
-            protected=options.get("protected"),
-            channel=options.get("channel"),
-            executable_path=options.get("executable_path"),
-            launch_args=options.get("launch_args"),
-            extra_http_headers=options.get("extra_http_headers"),
-            extra_http_headers_urls=options.get("extra_http_headers_urls"),
-            disable_gpu=options.get("disable_gpu"),
-        )
+        launch_options = cls(**options)
         launch_options.validate()
         return launch_options
 
@@ -382,39 +349,23 @@ class LaunchOptions:
 
         This is the canonical shape every call site (``browser_launch``,
         ``browser_quick_launch``, HTTP ``session_launch``, JSONL relaunch)
-        funnels through, so adding a new field is a one-line edit here +
-        one new dataclass attribute above.
+        funnels through.
+
+        Derived from ``CALLER_SETTABLE_FIELDS`` -- the SAME set ``from_mapping``
+        accepts -- so the round trip is lossless by construction rather than by
+        two hand-kept lists agreeing. They did not agree: this dict named 27
+        keys and silently omitted ``base_url``, which ``from_mapping`` reads and
+        ``launch_execution`` consumes, so ``LaunchOptions(base_url=...)
+        .to_pool_kwargs()`` dropped it exactly the way ``pool.launch(headless=
+        True)`` dropped its option. Same defect, opposite direction, and a check
+        that only inspects INCOMING keys cannot see it.
+
+        ``protected_reason`` stays out because it is an output of
+        ``resolve_protected``, not an input -- the one exclusion, and it is the
+        same one the accept set makes.
         """
         self._validate_headers()
-        return {
-            "kind": self.kind,
-            "url": self.url,
-            "headed": self.headed,
-            "label": self.label,
-            "viewport_w": self.viewport_w,
-            "viewport_h": self.viewport_h,
-            "profile": self.profile,
-            "stabilize": self.stabilize,
-            "record_video": self.record_video,
-            "trace": self.trace,
-            "har": self.har,
-            "har_path": self.har_path,
-            "har_mode": self.har_mode,
-            "har_url_filter": self.har_url_filter,
-            "har_content": self.har_content,
-            "badge": self.badge,
-            "badge_position": self.badge_position,
-            "tile": self.tile,
-            "ephemeral": self.ephemeral,
-            "session": self.session,
-            "protected": self.protected,
-            "channel": self.channel,
-            "executable_path": self.executable_path,
-            "launch_args": self.launch_args,
-            "extra_http_headers": self.extra_http_headers,
-            "extra_http_headers_urls": self.extra_http_headers_urls,
-            "disable_gpu": self.disable_gpu,
-        }
+        return {name: getattr(self, name) for name in sorted(CALLER_SETTABLE_FIELDS)}
 
     def with_har_rotated(self) -> LaunchOptions:
         """Return a copy whose ``har_path`` won't clobber an existing recording.
@@ -431,3 +382,10 @@ class LaunchOptions:
 
         rotated = rotate_har_path(Path(self.har_path))
         return replace(self, har=True, har_path=str(rotated) if rotated else None)
+
+
+#: Launch option names a caller may supply. Derived from the dataclass rather
+#: than listed, so a new field cannot be rejected by an accept-list nobody
+#: remembered to update. A module constant rather than a method because
+#: ``from_mapping`` runs on every launch and this value never changes.
+CALLER_SETTABLE_FIELDS: Final = frozenset(f.name for f in fields(LaunchOptions)) - _NOT_CALLER_SETTABLE
