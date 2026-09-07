@@ -173,6 +173,7 @@ import asyncio
 import contextlib
 import json
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -376,7 +377,12 @@ async def _pool_cycle(args: list[str], count: int, state: dict[str, int], *, sig
     from octowright.browser_pool.pool import BrowserPool
 
     errors: list[str] = []
-    pool = BrowserPool(recordings_dir=Path(tempfile.mkdtemp(prefix="char-rec-")))
+    # Removed in the finally below. A cycle is ~1.3s and a long run is hours, so
+    # a leaked dir per cycle adds up fast: an early 25-minute run left 1,449 of
+    # them behind. They are small (13MB in total there), which is exactly why
+    # nothing would ever notice and why it has to be cleaned up here.
+    recordings = Path(tempfile.mkdtemp(prefix="char-rec-"))
+    pool = BrowserPool(recordings_dir=recordings)
     try:
         results = await asyncio.gather(
             *(
@@ -404,6 +410,8 @@ async def _pool_cycle(args: list[str], count: int, state: dict[str, int], *, sig
         else:
             with contextlib.suppress(Exception):
                 await pool.shutdown()
+        # After the driver is gone either way, so nothing is still writing.
+        shutil.rmtree(recordings, ignore_errors=True)
     return errors
 
 
