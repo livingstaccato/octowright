@@ -1,0 +1,22 @@
+[
+  {
+    "title": "macro_list no longer eats your whole context",
+    "body": "Measured on a real 337-macro corpus, one macro_list call returned 402,942 characters -- roughly 100k tokens -- and the tool ships in the macros capability profile, so any agent that enabled macros carried something able to consume its entire context in a single call. It now returns 50 rows by default (max 500) with a cursor naming the first row not returned, a response-size ceiling on top of the row cap, and prefix/contains filters. A new response_mode=\"families\" rolls the flat directory's naming prefixes up and lists no macros at all: 4,059 characters against 402,942, which is the call to make when you do not yet know what exists."
+  },
+  {
+    "title": "BREAKING: five list tools now return an envelope, not a bare list",
+    "body": "macro_list, golden_list, persona_list, profile_list and scenario_list each return {items, total, returned, truncated, next_cursor} and accept prefix/contains/limit/cursor. An AST scan after the macro_list fix found the same unbounded shape in the other four, so the rule now lives in one shared module rather than being copied five times and drifting. If you consume any of these, read the list off the items key. A non-positive limit resolves to the default rather than to unbounded -- an LLM must not be able to remove the cap by passing 0."
+  },
+  {
+    "title": "A crashed Chromium profile no longer hides your tabs",
+    "body": "Chromium records the previous run's outcome in the profile, and the flag is sticky: one dirty exit and every later launch of that persona opens behind \"Chrome didn't shut down correctly -- Restore pages?\". Octowright is a reliable source of dirty exits, and 2 of 27 profiles on a real machine were sitting marked crashed. The flag is now cleared before a persistent launch (OCTOWRIGHT_SUPPRESS_RESTORE_PROMPT=0 opts out). The same work closed a real gap: a restored context can hand back pages that fired no page event, so measured against Chromium with three seeded tabs it returned four pages and zero events -- tabs invisible to page_list, unreachable by page_switch, and unwired for dialogs and downloads inside a session octowright believed it fully owned. Those pages are now adopted."
+  },
+  {
+    "title": "The dead-code gate could not see dead code",
+    "body": "vulture ran at a confidence threshold that only ever reported unused imports and unreachable code, so an unused function or method -- 60% confidence, the thing the gate exists to catch -- passed silently. It was found because a dead helper in a brand-new module sailed through. The gate now runs a second pass at the right threshold, and deleting five genuinely dead callables it surfaced was the first thing it did. Both the vulture and xenon baselines also ratchet in both directions now: they were line-number sensitive, so adding one line to an unrelated file could invalidate an entry and let a real finding through."
+  },
+  {
+    "title": "A daemon on Windows now provably outlives the job that spawned it",
+    "body": "The Windows detachment ladder asks for CREATE_BREAKAWAY_FROM_JOB so a CI runner tearing down its job object does not take the daemon with the step. That behaviour had never actually been verified -- a green Windows leg proved something worked, not which rung. Both directions are now asserted on real Windows runners, amd64 and arm64: a daemon spawned into a job that permits breakaway survives the teardown, and one in a job that forbids it does not."
+  }
+]
