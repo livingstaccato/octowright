@@ -46,6 +46,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -63,6 +64,55 @@ from octowright.browser_pool.crash_reports import DEFAULT_REPORTS_DIR  # noqa: E
 from tests.breadcrumb import CURRENT_TEST_BREADCRUMB  # noqa: E402
 
 DEFAULT_LOG = ROOT / ".pytest-test-timeline.log"
+
+# Mechanisms a test uses to crash a browser ON PURPOSE. A crash correlated to
+# such a test is expected output rather than a defect, and saying so is the
+# difference between a five-second read and an afternoon.
+#
+# They are not a rounding error in the noise -- they ARE the noise. Measured on
+# the machine where this was written: of 31 crash reports, 27 were
+# EXC_BREAKPOINT on Chrome_ChildIOThread (a child aborting when
+# ``test_stability_chaos_live`` kills the shared driver out from under it) and
+# 3 were EXC_BAD_ACCESS on CrRendererMain (its CDP ``Page.crash``), leaving
+# exactly ONE report of the real headed CrBrowserMain abort. Anyone reaching for
+# ``--newest-crash`` after a suite run therefore gets a manufactured crash, and
+# the signal is buried 30:1.
+#
+# Derived by scanning the correlated module rather than listing test names, so a
+# chaos test added later is covered without editing this file -- the same reason
+# ``macros/runtime`` derives RECORDER_NOISE instead of mirroring it by hand.
+#
+# KNOWN LIMITATION, and it errs in the direction that matters: matching is by
+# substring, so a module that merely *mentions* a mechanism -- this script's own
+# tests, a docstring explaining the noise -- is flagged as if it caused a crash.
+# Telling "uses" from "mentions" needs an AST walk, and `Page.crash` is a string
+# literal even in real use (it is sent over CDP), so no cheap rule separates
+# them. This is a hint on a diagnostic line, not a verdict: read the note as
+# "check whether this was deliberate", never as proof that it was.
+_DELIBERATE_CRASH_MARKERS = ("Page.crash", "_pw.stop()")
+_DELIBERATE_NOTE = "  [crashes browsers on purpose]"
+
+
+@functools.cache
+def induces_deliberate_crashes(module_path: str) -> bool:
+    """Whether this test module crashes a browser deliberately."""
+    try:
+        text = (ROOT / module_path).read_text(encoding="utf-8")
+    except OSError:
+        # Not a readable path (a synthetic nodeid, a moved file). Saying "not
+        # deliberate" only costs a missing note; guessing the other way would
+        # dismiss a real crash as expected.
+        return False
+    return any(marker in text for marker in _DELIBERATE_CRASH_MARKERS)
+
+
+def annotate(nodeid: str) -> str:
+    """``nodeid`` plus a note when its module manufactures crashes."""
+    # A row is "<phase> <path>::<test>"; the module is what precedes the "::".
+    _, _, rest = nodeid.partition(" ")
+    module = (rest or nodeid).split("::", 1)[0]
+    return nodeid + (_DELIBERATE_NOTE if induces_deliberate_crashes(module) else "")
+
 
 # Browser processes whose crash reports are worth correlating. Matches the
 # spirit of crash_reports._BROWSER_TOKENS without importing a private name.
@@ -207,13 +257,13 @@ def correlate(log_path: Path, target: str) -> int:
         stamp, nodeid = before[-1]
         gap = (when - stamp).total_seconds()
         print(f"nothing within {CORRELATE_WINDOW_SECONDS:.0f}s; last test before the crash ({gap:.0f}s earlier):")
-        print(f"  {stamp:{_STAMP}}  {nodeid}")
+        print(f"  {stamp:{_STAMP}}  {annotate(nodeid)}")
         return 0
 
     for stamp, nodeid in hits:
         offset = (stamp - when).total_seconds()
         marker = "<-- crash" if offset >= 0 and stamp == min(t for t, _ in hits if t >= when) else ""
-        print(f"  {stamp:{_STAMP}}  {offset:+6.0f}s  {nodeid} {marker}")
+        print(f"  {stamp:{_STAMP}}  {offset:+6.0f}s  {annotate(nodeid)} {marker}")
     return 0
 
 
