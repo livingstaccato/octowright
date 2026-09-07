@@ -14,14 +14,24 @@ from octowright import engine_profiles as profile_mod
 from octowright import personas as persona_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import SUPPORTED_KINDS
+from octowright.listing import match_name, order_newest_first, paginate
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks, profile_names_match
 from octowright.server._state import log, mcp, pool
-from octowright.types import CredentialCheckReport, PersonaListEntry
+from octowright.types import CredentialCheckReport
 
 
 @mcp.tool(structured_output=False, description="List saved browser profiles. Pass kind to filter to one engine.")
-def profile_list(kind: str | None = None) -> list[dict[str, Any]]:
-    return profile_mod.list_profiles(kind)
+def profile_list(
+    kind: str | None = None,
+    prefix: str | None = None,
+    contains: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+) -> dict[str, Any]:
+    matching = order_newest_first(
+        match_name(profile_mod.list_profiles(kind), prefix=prefix, contains=contains), time_key="mtime"
+    )
+    return paginate(matching, limit=limit, cursor=cursor, build_row=dict)
 
 
 @mcp.tool(
@@ -57,8 +67,16 @@ async def profile_delete(kind: str, name: str) -> dict[str, Any]:
         "A persona is a named identity (e.g. 'dante') that owns engine-specific browser profiles."
     ),
 )
-def persona_list() -> list[PersonaListEntry]:
-    return persona_mod.list_personas()
+def persona_list(
+    prefix: str | None = None,
+    contains: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+) -> dict[str, Any]:
+    matching = order_newest_first(
+        match_name(persona_mod.list_personas(), prefix=prefix, contains=contains), time_key="mtime"
+    )
+    return paginate(matching, limit=limit, cursor=cursor, build_row=dict)
 
 
 @mcp.tool(

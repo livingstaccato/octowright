@@ -26,7 +26,9 @@ def _patch_deps(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
 def test_profile_list_forwards_kind(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["profile"].list_profiles.return_value = [{"kind": "webkit", "name": "a"}]
     out = _personas.profile_list("webkit")
-    assert out == [{"kind": "webkit", "name": "a"}]
+    # A bounded envelope now, not a bare list: every list-returning tool pages.
+    assert out["items"] == [{"kind": "webkit", "name": "a"}]
+    assert (out["total"], out["truncated"], out["next_cursor"]) == (1, False, None)
 
 
 def test_persona_get_maps_fields(_patch_deps: dict[str, MagicMock]) -> None:
@@ -134,7 +136,8 @@ async def test_persona_delete_waits_for_every_engine_profile_lock(_patch_deps: d
 async def test_persona_list_and_credentials_check(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["persona"].list_personas.return_value = [{"name": "cosmo"}]
     out = _personas.persona_list()
-    assert out == [{"name": "cosmo"}]
+    assert out["items"] == [{"name": "cosmo"}]
+    assert (out["total"], out["truncated"], out["next_cursor"]) == (1, False, None)
     p = MagicMock()
     _patch_deps["persona"].load_persona.return_value = p
     _patch_deps["persona"].check_credentials.return_value = {"ok": True}

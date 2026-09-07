@@ -133,7 +133,7 @@ async def test_golden_assert_and_list_delete(mock_pool, temp_goldens):
     ok = await golden_assert("inst-1", "to-delete")
     assert ok["ok"] is True
     listed = golden_list()
-    assert any(item["name"] == "to-delete" for item in listed)
+    assert any(item["name"] == "to-delete" for item in listed["items"])
     deleted = golden_delete("to-delete")
     assert deleted["deleted"] is True
 
