@@ -168,6 +168,12 @@ profile is involved.
 | `profile_list` / `profile_delete` | Lower-level: list (bounded, same envelope and filters as `persona_list`) or wipe per-engine profile dirs. |
 | `browser_suggest_for_url` | Pre-launch ranking: which saved persona owns this URL? |
 
+> **Paging note:** the cursor is an offset into a snapshot that is rebuilt and
+> re-sorted on every call, so a save or delete between two pages can shift rows
+> and silently skip or repeat one at the boundary. Re-page from zero when you
+> need an exact full enumeration.
+
+
 ## CLI
 
 ```bash

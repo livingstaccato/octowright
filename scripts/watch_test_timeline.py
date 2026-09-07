@@ -91,6 +91,9 @@ DEFAULT_LOG = ROOT / ".pytest-test-timeline.log"
 _DELIBERATE_CRASH_MARKERS = ("Page.crash", "_pw.stop()")
 _DELIBERATE_NOTE = "  [crashes browsers on purpose]"
 
+#: The phases `tests/conftest.py` writes ahead of the nodeid.
+_PHASES = ("setup", "call", "teardown")
+
 
 def induces_deliberate_crashes(module_path: str) -> bool:
     """Whether this test module crashes a browser deliberately."""
@@ -106,10 +109,13 @@ def induces_deliberate_crashes(module_path: str) -> bool:
 
 def annotate(nodeid: str) -> str:
     """``nodeid`` plus a note when its module manufactures crashes."""
-    # A row is "<phase> <path>::<test>". Split the nodeid off first, then take
-    # what follows the last space -- rpartition needs no branch for a row with
-    # no phase prefix, and tolerates a space inside a parametrize id.
-    module = nodeid.split("::", 1)[0].rpartition(" ")[2]
+    # A row is "<phase> <path>::<test>". Strip a KNOWN phase word rather than
+    # splitting on a space: rpartition took what followed the LAST space, which
+    # silently assumes no space in the path -- "call tests/my test.py::x"
+    # resolved to "test.py", the read failed, and the row went unannotated with
+    # no sign anything was wrong. A branch, but a correct one.
+    phase, _, rest = nodeid.partition(" ")
+    module = (rest if phase in _PHASES and rest else nodeid).split("::", 1)[0]
     return nodeid + (_DELIBERATE_NOTE if induces_deliberate_crashes(module) else "")
 
 
@@ -321,6 +327,11 @@ def main() -> int:
         ),
     )
     opts = parser.parse_args()
+    if opts.crash_thread and not opts.newest_crash:
+        # Accepting a flag that does nothing is the defect this release refuses
+        # in LaunchOptions; without this the tool fell through to the recorder
+        # and looked like it had hung.
+        parser.error("--crash-thread only applies to --newest-crash")
     if (opts.newest_crash or opts.correlate) and not crash_reports_available():
         print(
             f"crash correlation is macOS-only (reads .ips reports); this is {sys.platform}.\n"

@@ -106,6 +106,12 @@ scenario is running.
 | `scenario_tail` | Stream participant events to a single combined log. |
 | `scenario_stop` | Run teardown, close windows, return a summary. |
 
+> **Paging note:** the cursor is an offset into a snapshot that is rebuilt and
+> re-sorted on every call, so a save or delete between two pages can shift rows
+> and silently skip or repeat one at the boundary. Re-page from zero when you
+> need an exact full enumeration.
+
+
 ## CLI
 
 ```bash
