@@ -22,7 +22,7 @@ something drifted silently once:
 | `check_telemetry_docs.py` | an emitted metric or MCP notification is undocumented in `AGENTS.md`. |
 | `check_tool_inventory_docs.py` | a tool count or list in `docs/architecture/mcp-tool-inventory.md`, its PlantUML diagram, `README.md` or `docs/getting-started.md` disagrees with the live registry. |
 | `check_mutmut_selection.py` | a test that covers a mutated module is missing from the mutmut selection. |
-| `check_vulture.py` / `check_xenon.py` | dead code or cyclomatic complexity rises above the committed baseline. |
+| `check_vulture.py` / `check_xenon.py` | dead code or cyclomatic complexity rises above the committed baseline. `check_vulture.py` runs **two** passes: the original at 80% confidence over `src/` and `tests/`, plus one at 60% over the same paths that reports only `src/` findings and only unused functions/methods/classes. The second exists because vulture scores an unused callable at 60%, so the 80% gate structurally could never report one -- it saw unused imports (90%) and unreachable code (100%) and nothing else, and a dead module-level function was committed through a green gate. Scanning tests too (while reporting only `src/`) is what keeps a helper used solely by a test from being called dead: 38 findings src-only against 9 with tests included. Decorators that register a callable without naming it (Click commands, MCP tools, fixtures) are ignored, being false positives by construction. |
 
 `ty` is intentionally scoped to `src/octowright/http` in CI while broader-package baseline diagnostics
 outside changed modules are being worked down. Use this non-gating probe command to assess expansion:

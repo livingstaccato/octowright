@@ -1,3 +1,14 @@
 {
-  "allow_findings": []
+  "_note": "Frozen when the low-confidence callable pass was added (see scripts/check_vulture.py). vulture scores an unused function/method/class at 60%, so the 80% gate could never report one. These nine are the pre-existing backlog; any NEW dead callable fails the gate. web_parse's handle_* are HTMLParser callbacks the stdlib invokes and are permanent false positives; the rest are genuine review candidates and should be deleted or used, not left here forever.",
+  "allow_findings": [
+    "src/octowright/browser_pool/pool.py:349: unused method 'protected_count' (60% confidence)",
+    "src/octowright/browser_pool/viewport.py:31: unused method 'to_wire' (60% confidence)",
+    "src/octowright/plugins/session_launch.py:119: unused method 'redaction_mode' (60% confidence)",
+    "src/octowright/private_paths.py:74: unused function 'secure_directory' (60% confidence)",
+    "src/octowright/server/web.py:157: unused function '_check_resolved_ips' (60% confidence)",
+    "src/octowright/server/web_parse.py:32: unused method 'handle_starttag' (60% confidence)",
+    "src/octowright/server/web_parse.py:44: unused method 'handle_endtag' (60% confidence)",
+    "src/octowright/server/web_parse.py:55: unused method 'handle_data' (60% confidence)",
+    "src/octowright/session_manifest.py:225: unused function 'write_manifest' (60% confidence)"
+  ]
 }
