@@ -13,22 +13,19 @@ plus a smoke check of the script's stdout shape.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 import sys
 from pathlib import Path
+
+from tests._script_module import load_script_module
 
 _CI_DIR = Path(__file__).resolve().parent.parent / "ci"
 _SCRIPT_PATH = _CI_DIR / "build_test_matrix.py"
 
 
 def _load_module():  # type: ignore[no-untyped-def]
-    spec = importlib.util.spec_from_file_location("build_test_matrix", _SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script_module("ci/build_test_matrix.py")
 
 
 def test_build_matrix_all_returns_full_runner_list() -> None:

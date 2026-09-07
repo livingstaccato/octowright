@@ -5,19 +5,15 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
+from tests._script_module import load_script_module
+
 
 def _load_script() -> Any:
-    path = Path(__file__).resolve().parents[1] / "scripts" / "bridge_dead_leader_smoke.py"
-    spec = importlib.util.spec_from_file_location("bridge_dead_leader_smoke", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script_module("scripts/bridge_dead_leader_smoke.py")
 
 
 def test_smoke_env_isolates_octowright_paths(tmp_path: Path) -> None:
