@@ -101,6 +101,12 @@ Playwright 1.62.0 / Chromium 151.0.7922.34 / macOS 26::
     r2 pool-sigterm   176 cycles     0
     r2 pool           133 cycles     0
     r3 pool           171 cycles     0
+    r3 pool-sigterm   193 cycles     0
+    r4 pool-sigterm   185 cycles     0
+    r4 pool           165 cycles     0
+
+    pool          26 reports / 603 launches / 4 blocks -- 1 block saw any
+    pool-sigterm   0 reports / 732 launches / 4 blocks
 
 The 26 are byte-exact to the characterised field crash -- ``EXC_BREAKPOINT`` /
 ``SIGTRAP`` on ``CrBrowserMain``, through
@@ -109,10 +115,15 @@ The 26 are byte-exact to the characterised field crash -- ``EXC_BREAKPOINT`` /
 
 Two things follow, and the second is the useful one:
 
-* **Read 26-against-0 as a burst, not a rate.** The next two ``pool`` blocks,
-  same arm and same config, scored 0 over 304 cycles. That is precisely the
-  burstiness the Method note above describes, and precisely why the arms are
-  interleaved. A single block cannot attribute the crash to an arm.
+* **Read 26-against-0 as a burst, not a rate.** The other three ``pool``
+  blocks, same arm and same config, scored 0 over 469 cycles. That is precisely
+  the burstiness the Method note above describes, and precisely why the arms
+  are interleaved. A single block cannot attribute the crash to an arm -- and
+  the burst landed in the run's **first** block, so "the first headed browsers
+  after the machine has been idle of them" explains it as well as the arm does.
+  Alternating the block order per round does not control for that, because the
+  first block of the RUN is always the same arm; start the next run with
+  ``--launchers pool-sigterm,pool`` or discard a warm-up block.
 * **The abort lands at close.** Each report carries ``procLaunch`` and
   ``captureTime``: across all 26 the browser lived **1.09-1.76s, mean 1.31s**,
   against a measured cycle time of 1.34s. Every one died at the end of its
