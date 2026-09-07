@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Merged but not yet shipped. At the next version bump this heading becomes that
+version and a fresh empty `[Unreleased]` takes its place; the holding pen
+exists so post-release work has an honest home instead of being backdated into
+a section that is already tagged and on PyPI.
+
+### Internal
+- **The headed-Chromium browser-process abort is reproducible on demand**, for
+  the first time since it was first reported.
+  `scripts/characterize_headed_crash.py` gained a `pool-sigterm` launcher arm
+  (a real `BrowserPool` whose Playwright driver is SIGTERMed between cycles,
+  the way `tests/conftest.py`'s teardown does), and the run that was meant to
+  test that idea produced **26 `.ips` reports byte-exact to the field
+  signature** — `EXC_BREAKPOINT`/`SIGTRAP` on `CrBrowserMain` through the
+  CFRunLoop source0 callout into AppKit — on Chromium 151. Every prior attempt
+  (~2,150 raw launches, 912 interleaved GPU-A/B launches, 60 handoff cycles)
+  had come back empty.
+- **The abort lands at browser *close*, and that is measured rather than
+  inferred.** Each report carries `procLaunch` and `captureTime`: across all 26
+  the browser lived 1.09–1.76s against a 1.34s launch/close cycle, so every one
+  died at the end of its life while the cycle was closing it. The field crash
+  logged as "2.2s after launch" fits the same shape. This is the durable
+  finding; the arm that provoked it is not.
+- **Two honest negatives are recorded alongside it**, because the comfortable
+  readings are both wrong. The 26-against-0 split does *not* attribute the
+  crash to an arm — all 26 were a single burst in the run's first block, and
+  alternating block order per round cannot control for that. And the decisive
+  `raw` vs `pool` follow-up (0 reports over 1,262 and 872 launches
+  respectively) is **not** "no difference between the arms": the crash did not
+  occur at all, so there was nothing to compare. The same `pool` arm scored 26
+  in 134 launches and 0 in 872 an hour later, so the burst is conditional on
+  machine state, and the script's docstring now steers the next attempt toward
+  `watch_test_timeline.py --correlate --crash-thread CrBrowserMain` against a
+  real suite run rather than another blind A/B.
+- `characterize_headed_crash.py` no longer leaks a temp recordings directory
+  per cycle. It built a `BrowserPool` on a fresh `mkdtemp` and never removed
+  it, so a 25-minute run left **1,449 directories** behind — 13MB in total,
+  which is exactly why nothing ever noticed. Verified across 2,134 launches.
+- AGENTS.md's two now-stale crash claims are corrected: the real
+  `CrBrowserMain` report is no longer described as "still-unexplained" (it is
+  still unfixed, but the close-time behaviour is measured), and
+  `OCTOWRIGHT_DISABLE_GPU`'s "not a confirmed fix" scope now says *why* it was
+  never proven either way — until this reproduction there was no baseline to
+  A/B the knob against, which is a different statement from "it was tried and
+  did not help".
+
 ## [0.22.0] - 2026-09-07
 
 ### Changed
@@ -2640,6 +2687,7 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.22.0...HEAD
 [0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0
