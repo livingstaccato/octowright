@@ -46,7 +46,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import functools
 import json
 import re
 import sys
@@ -93,7 +92,6 @@ _DELIBERATE_CRASH_MARKERS = ("Page.crash", "_pw.stop()")
 _DELIBERATE_NOTE = "  [crashes browsers on purpose]"
 
 
-@functools.cache
 def induces_deliberate_crashes(module_path: str) -> bool:
     """Whether this test module crashes a browser deliberately."""
     try:
@@ -108,9 +106,10 @@ def induces_deliberate_crashes(module_path: str) -> bool:
 
 def annotate(nodeid: str) -> str:
     """``nodeid`` plus a note when its module manufactures crashes."""
-    # A row is "<phase> <path>::<test>"; the module is what precedes the "::".
-    _, _, rest = nodeid.partition(" ")
-    module = (rest or nodeid).split("::", 1)[0]
+    # A row is "<phase> <path>::<test>". Split the nodeid off first, then take
+    # what follows the last space -- rpartition needs no branch for a row with
+    # no phase prefix, and tolerates a space inside a parametrize id.
+    module = nodeid.split("::", 1)[0].rpartition(" ")[2]
     return nodeid + (_DELIBERATE_NOTE if induces_deliberate_crashes(module) else "")
 
 
@@ -166,13 +165,26 @@ def crash_reports_available() -> bool:
     return sys.platform == "darwin"
 
 
-def newest_crash_report() -> Path | None:
+def newest_crash_report(thread: str | None = None) -> Path | None:
     """The most recently CRASHED browser report, or None.
 
     Ranked by the timestamp inside the report, not by file mtime: macOS
     rewrites these files (observed picking a report whose mtime was minutes old
     and whose crash was the previous day), so mtime answers "last touched"
     where the question is "last crashed".
+
+    ``thread`` restricts the choice to reports whose faulting thread contains
+    that substring, and it is the difference between this being useful and
+    actively misleading. The directory is dominated by crashes the suite
+    manufactures on purpose -- measured at 27 ``Chrome_ChildIOThread`` aborts
+    and 3 ``CrRendererMain`` segfaults against ONE real ``CrBrowserMain`` -- so
+    picking the newest blind hands you noise after any suite run.
+
+    Deliberately a class filter and NOT a "skip the manufactured ones" filter:
+    the chaos tests crash a real renderer, so their reports are byte-identical
+    in signature to a genuine renderer crash. Signature cannot say what was
+    deliberate -- only correlating against the timeline can, which is what the
+    annotation on those rows is for. This says "show me the class I am hunting".
     """
     try:
         reports = [p for p in DEFAULT_REPORTS_DIR.glob("*.ips") if _BROWSER_TOKENS_RE.search(p.name)]
@@ -180,6 +192,10 @@ def newest_crash_report() -> Path | None:
         return None
     dated: list[tuple[datetime, Path]] = []
     for report in reports:
+        if thread is not None:
+            signature = crash_signature(report)
+            if signature is None or thread.lower() not in signature[3].lower():
+                continue
         try:
             dated.append((_crash_time(str(report)), report))
         except (OSError, ValueError, KeyError, json.JSONDecodeError):
@@ -187,6 +203,29 @@ def newest_crash_report() -> Path | None:
     if not dated:
         return None
     return max(dated, key=lambda pair: pair[0])[1]
+
+
+def crash_signature(path: Path) -> tuple[str, str, str, str] | None:
+    """``(process, version, exception, faulting thread)``, or None if unreadable."""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        head, _, body = raw.partition("\n")
+        meta, report = json.loads(head), json.loads(body)
+    except (OSError, ValueError):
+        return None
+    index = report.get("faultingThread")
+    threads = report.get("threads") or []
+    thread = (
+        threads[index].get("name") or threads[index].get("queue") or "?"
+        if isinstance(index, int) and index < len(threads)
+        else "?"
+    )
+    return (
+        str(report.get("procName", "?")),
+        str(meta.get("app_version") or "?"),
+        str((report.get("exception") or {}).get("type", "?")),
+        str(thread),
+    )
 
 
 def describe_crash(path: Path) -> str:
@@ -200,22 +239,11 @@ def describe_crash(path: Path) -> str:
     usually nearest-symbol noise from a stripped build, so the process, the
     exception type and the faulting thread are the signal.
     """
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        head, _, body = raw.partition("\n")
-        meta, report = json.loads(head), json.loads(body)
-    except (OSError, ValueError):
+    signature = crash_signature(path)
+    if signature is None:
         return "(unreadable crash report)"
-    exception = (report.get("exception") or {}).get("type", "?")
-    index = report.get("faultingThread")
-    threads = report.get("threads") or []
-    thread = (
-        threads[index].get("name") or threads[index].get("queue") or "?"
-        if isinstance(index, int) and index < len(threads)
-        else "?"
-    )
-    version = meta.get("app_version") or "?"
-    return f"{report.get('procName', '?')} {version} -- {exception} on {thread}"
+    process, version, exception, thread = signature
+    return f"{process} {version} -- {exception} on {thread}"
 
 
 def _crash_time(target: str) -> datetime:
@@ -282,6 +310,16 @@ def main() -> int:
         action="store_true",
         help="Correlate against the most recent browser crash report on this machine.",
     )
+    parser.add_argument(
+        "--crash-thread",
+        metavar="SUBSTR",
+        help=(
+            "Restrict --newest-crash to reports whose faulting thread matches, "
+            "e.g. CrBrowserMain. The directory is dominated by crashes the suite "
+            "manufactures on purpose, so the newest one is usually not the one "
+            "you are hunting."
+        ),
+    )
     opts = parser.parse_args()
     if (opts.newest_crash or opts.correlate) and not crash_reports_available():
         print(
@@ -290,9 +328,10 @@ def main() -> int:
         )
         return 1
     if opts.newest_crash:
-        report = newest_crash_report()
+        report = newest_crash_report(thread=opts.crash_thread)
         if report is None:
-            print(f"no browser crash reports under {DEFAULT_REPORTS_DIR}")
+            scoped = f" with a faulting thread matching {opts.crash_thread!r}" if opts.crash_thread else ""
+            print(f"no browser crash reports under {DEFAULT_REPORTS_DIR}{scoped}")
             return 1
         print(f"newest crash report: {report.name}")
         print(f"  {describe_crash(report)}")
