@@ -329,14 +329,22 @@ class SessionIOMixin(SessionLike):
 
         self.page.on("console", _on_console)
 
-    def _register_popup(self, page: Page) -> None:
-        """Called by context's 'page' event. Appends new page and records the event."""
+    def _register_popup(self, page: Page, event: str = "popup_opened") -> None:
+        """Track a page this session did not open, and wire it like our own.
+
+        Called by the context's ``page`` event for a popup or new tab, and by
+        ``listeners.adopt_untracked_pages`` for a page that already existed when
+        the context was handed back -- which fires no event and would otherwise
+        stay dark. ``event`` names which of the two happened, because a page
+        Chromium restored at startup is not a popup and a recording that says
+        so is wrong about the only thing the row exists to state.
+        """
         from octowright.browser_pool.listeners import _wire_listeners
 
         self.pages.append(page)
         page_index = len(self.pages) - 1
         self.page_count = len(self.pages)
-        self.recorder.record("popup_opened", page_index=page_index, url=page.url)
+        self.recorder.record(event, page_index=page_index, url=page.url)
 
         # Attach console listener so logs from the new tab are collected.
         def _on_console(msg: ConsoleMessage) -> None:

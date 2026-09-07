@@ -41,6 +41,14 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "runs inside the same route callback to resolve redirect hops before the request is released",
     ),
+    "browser_pool/launch_helpers.py:_is_blank": (
+        "launch-time-before-session-publication",
+        "reads one handed-back page's url to decide whether navigating it would destroy content",
+    ),
+    "browser_pool/launch_helpers.py:select_launch_page": (
+        "launch-time-before-session-publication",
+        "chooses which handed-back page the launch will drive, before the session exists",
+    ),
     "browser_pool/launch_helpers.py:_open_browser_context": (
         "launch-time-before-session-publication",
         "creates context/page before BrowserSession construction and registry publication",
@@ -74,6 +82,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
     "browser_pool/listeners.py:_wire_close_evictor": (
         "launch-time-before-session-publication",
         "installs context/browser close signals before the session is published",
+    ),
+    "browser_pool/listeners.py:adopt_untracked_pages": (
+        "launch-time-before-session-publication",
+        "reads context.pages to track tabs the context was handed back holding, before publication",
     ),
     # These return or compare only Octowright-owned cached references.
     "session/core.py:BrowserSession.__post_init__": (
