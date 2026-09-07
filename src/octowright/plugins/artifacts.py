@@ -146,7 +146,7 @@ def reserve_artifact(
     # Resolve-and-contain AFTER mkdir so a pre-existing symlinked directory is
     # followed and then rejected, rather than being silently written through.
     contained_dir = reject_unsafe_path(art_dir, recordings_dir, label="plugin artifact directory")
-    # secure_artifact_tree, NOT secure_directory: the former gates on
+    # secure_artifact_tree, NOT secure_profile_tree: the former gates on
     # OCTOWRIGHT_RECORDINGS_PRIVATE (these files live under the recordings
     # root, so that is the policy that governs them) while the latter gates on
     # the PROFILES policy, and it also locks the intermediate

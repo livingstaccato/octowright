@@ -71,13 +71,6 @@ def _chmod_owner_only(path: Path) -> None:
         os.chmod(path, 0o700)
 
 
-def secure_directory(path: Path) -> None:
-    """Best-effort ``chmod 0700`` on *path* when the profile policy is on."""
-    if not profiles_private():
-        return
-    _chmod_owner_only(path)
-
-
 def _lock_tree(leaf: Path, root: Path, label: str) -> None:
     """Lock *leaf* and every directory up to and including *root*.
 
