@@ -137,4 +137,23 @@ def prune_stale_singleton_locks(user_data_dir: Path) -> list[str]:
     return removed
 
 
-__all__ = ["prune_stale_singleton_locks"]
+def profile_lock_present(user_data_dir: Path) -> bool:
+    """Whether a Chromium singleton lock is still sitting on this profile.
+
+    Meant to be asked AFTER ``prune_stale_singleton_locks``, which removes a
+    lock whose owner is provably dead. What remains is therefore an owner that
+    is alive, or one whose liveness cannot be established (a lock written by a
+    different host, an unreadable symlink). Both answer True, because the
+    caller uses this to decide whether it is safe to WRITE into the profile and
+    the safe direction there is to leave it alone.
+
+    Always False on Windows: Chromium writes the Singleton trio only on POSIX,
+    so there is nothing to read and a caller gets no protection there.
+    """
+    if os.name == "nt":
+        return False
+    lock = user_data_dir / "SingletonLock"
+    return lock.is_symlink() or lock.exists()
+
+
+__all__ = ["profile_lock_present", "prune_stale_singleton_locks"]
