@@ -41,6 +41,10 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
+from provide.telemetry import get_logger
+
+log = get_logger(__name__)
+
 DEFAULT_LIMIT: Final = 50
 MAX_LIMIT: Final = 500
 
@@ -77,7 +81,30 @@ def order_newest_first(
     Two passes rather than one composite key: a single ``reverse=True`` would
     reverse the name tiebreak too. Python's sort is stable, so sorting by name
     and then by time descending leaves equal-time rows in ascending name order.
+
+    **A ``time_key`` no row carries is reported, not tolerated.** Every row then
+    sorts on ``""`` and the descending pass is a stable no-op, leaving plain
+    alphabetical order while the caller believes it asked for newest-first --
+    which is exactly what ``scenario_list`` did, sorting on ``updated_at``
+    against rows that carry ``mtime``. Harmless while a listing was unbounded;
+    once a 50-row cap decides what an agent can see, it means a just-saved row
+    sorts to the end and falls off the first page, and the response looks
+    healthy. Logged rather than raised: a wrong order is bad, and a listing tool
+    that raises mid-inventory is worse.
+
+    **Honest limit of the tiebreak.** It makes rows with EQUAL timestamps
+    deterministic. It does nothing when a timestamp CHANGES: these lists are
+    rebuilt per call, so a save between two pages moves that row to the front
+    and shifts everything after it down by one, and an offset cursor then skips
+    a row at the page boundary. See ``paginate``.
     """
+    if rows and not any(row.get(time_key) for row in rows):
+        log.warning(
+            "octowright.listing.time_key_absent",
+            time_key=time_key,
+            rows=len(rows),
+            available=sorted({key for row in rows for key in row}),
+        )
     by_name = sorted(rows, key=lambda row: str(row.get(name_key) or ""))
     return sorted(by_name, key=lambda row: str(row.get(time_key) or ""), reverse=True)
 
@@ -115,6 +142,22 @@ def paginate(
     ``build_row`` optionally reshapes each returned row (a caller with a compact
     mode); the budget is measured on what it produces, since that is what
     crosses the transport.
+
+    **The cursor is a positional offset into a snapshot, and that is a real
+    limit rather than a detail.** These lists are rebuilt from a directory glob
+    on every call and re-sorted by a MUTABLE timestamp, so a write between two
+    pages reorders the list the offset indexes into: a `macro_save` moves that
+    row to position 0 and shifts every later row down one, so the follow-up call
+    resumes one row past where it left off and the row on the page boundary is
+    never returned. A delete produces the mirror image, returning one twice.
+    Neither errors, and `truncated`/`next_cursor` look healthy throughout.
+
+    ``order_newest_first``'s name tiebreak does NOT cover this -- it only makes
+    rows with EQUAL timestamps deterministic. Closing it properly needs a
+    content-addressed cursor (resume from the last returned name over a stable
+    ordering) rather than an offset. Until then: a caller that must enumerate
+    everything exactly should re-page from zero rather than trusting a cursor
+    held across a write.
     """
     resolved = resolve_limit(limit)
     # Negative arrives from an LLM-supplied int and would slice from the end.

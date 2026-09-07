@@ -124,3 +124,24 @@ class TestAnnotation:
     def test_a_row_with_no_phase_prefix_still_resolves(self, timeline: ModuleType) -> None:
         """`partition` yields an empty tail when there is no space; fall back to the whole row."""
         assert timeline.annotate("tests/test_stability_chaos_live.py::test_x").endswith(timeline._DELIBERATE_NOTE)
+
+    def test_a_module_path_containing_a_space_still_resolves(
+        self, timeline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """REGRESSION: taking what followed the LAST space assumed paths have none.
+
+        `rpartition(" ")` turned "call tests/my test.py::x" into "test.py", the
+        read failed, `induces_deliberate_crashes` swallowed the OSError, and the
+        row came back unannotated with nothing to say it had misparsed. Stripping
+        a known phase word instead is a branch, but a correct one.
+        """
+        module = tmp_path / "tests" / "my test.py"
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text(f"x = {timeline._DELIBERATE_CRASH_MARKERS[0]!r}\n", encoding="utf-8")
+        monkeypatch.setattr(timeline, "ROOT", tmp_path)
+
+        assert timeline.annotate("call tests/my test.py::test_x").endswith(timeline._DELIBERATE_NOTE)
+
+    def test_a_phase_like_word_that_is_not_a_phase_is_not_stripped(self, timeline: ModuleType) -> None:
+        """Only the phases conftest writes are stripped, not any first word."""
+        assert timeline.annotate("tests/test_stability_chaos_live.py::test_x").endswith(timeline._DELIBERATE_NOTE)
