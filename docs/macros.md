@@ -282,7 +282,7 @@ under `examples/pill-status-demo/` shows this end-to-end.
 | Tool | Purpose |
 |---|---|
 | `macro_save` | Snapshot a recording into a named macro JSON. |
-| `macro_list` | Enumerate all saved macros. |
+| `macro_list` | List saved macros in bounded pages. `response_mode="families"` rolls the flat namespace up by naming prefix and lists no macros — ask for that first on a large corpus, then narrow with `prefix`/`contains`. |
 | `macro_run` | Replay a single macro against a live instance. |
 | `macro_run_sequence` | Replay several macros in order on the same instance. |
 | `macro_compile` | Compile YAML macro DSL to canonical JSON; optionally save it. |
