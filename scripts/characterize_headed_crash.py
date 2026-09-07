@@ -39,15 +39,18 @@ independent of crashpad's pruning. Fresh macOS ``.ips`` reports are counted
 alongside as corroboration only.
 
 **Measured limitation -- a clean run here is NOT evidence of absence.** On
-Chrome for Testing 151.0.7922.34 this harness produced **912 headed launches
+Chrome for Testing 151.0.7922.34 the ``raw`` arm produced **912 headed launches
 across interleaved gpu-on/gpu-off blocks with zero crashes**, and minutes later
 a browser died during an ordinary ``make test`` with the byte-exact
 characterized signature: ``EXC_BREAKPOINT``/``SIGTRAP`` on ``CrBrowserMain``,
 reached through ``__CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__``,
-2.2 seconds after launch. So the bug is present on 151 and this harness does
-not reproduce it.
+2.2 seconds after launch. So the bug is present on 151 and that arm did not
+reproduce it. (The ``pool`` arm added below since has -- see the 2026-09-07
+note -- but a clean block still proves nothing either way, because the crash
+arrives in bursts.)
 
-The likely reason is the isolation this script was originally built with. It
+The likely reason the raw arm stays clean is the isolation this script was
+originally built with. It
 drove **raw Playwright** -- ``chromium.launch()``, an ephemeral context,
 ``about:blank``, no octowright code at all -- chosen to mirror ``doctor``'s
 engine probes. That removes precisely the variables the crashing workload has:
@@ -64,12 +67,79 @@ of the script rather than a detail of it:
   the viewport binding, the recorder and a real navigation are all present.
   If ``pool`` crashes where ``raw`` does not, the trigger is something we do,
   and the difference between the arms is the search space.
+* ``pool-sigterm`` -- as ``pool``, but each cycle ends by **SIGTERM-ing the
+  Playwright driver** instead of shutting the pool down gracefully. See below.
 
 That separation is the same one ``doctor``'s engine probes draw, and it is
 worth keeping for the same reason: collapsing the two answers neither.
 ``--browsers`` still governs concurrency, and the pool arm deliberately sets
 ``OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY`` to that number so the semaphore
 shipped as a mitigation cannot silently throttle the storm being measured.
+
+**Why ``pool-sigterm`` exists.** The only real correlation obtained so far, on
+2026-09-06, put a genuine ``CrBrowserMain`` abort at the end of six consecutive
+seconds of ``tests/test_protect_headed_launch_live.py`` -- one headed launch per
+second. What the suite does between those launches and this harness did not is
+the distinguishing factor: ``tests/conftest.py`` SIGTERMs the driver of any pool
+still holding one at EVERY test teardown, so the suite's shape is launch ->
+headed browser -> driver killed -> launch again, once a second. The ``pool`` arm
+calls ``pool.shutdown()``, a graceful ``pw.stop()``. A SIGTERM probe on its own
+(one idle browser, one killed driver) also produced nothing, so if the lead is
+right the trigger is the COMBINATION plus repetition, not either alone. Pair it
+with ``--browsers 1`` to reproduce the sequential shape the correlation shows.
+
+It is a lead, not a conclusion: one correlation, and the +/-20s window around it
+holds many tests. **It also turned out to be wrong, and the run that disproved
+it is the first reproduction this harness has ever managed** -- see below.
+
+**2026-09-07: REPRODUCED, on the ``pool`` arm, and the abort is at CLOSE.**
+Four interleaved rounds of ``pool``/``pool-sigterm`` at ``--browsers 1``,
+Playwright 1.62.0 / Chromium 151.0.7922.34 / macOS 26::
+
+    r1 pool           134 cycles    26 new .ips  (all CrBrowserMain)
+    r1 pool-sigterm   178 cycles     0
+    r2 pool-sigterm   176 cycles     0
+    r2 pool           133 cycles     0
+    r3 pool           171 cycles     0
+
+The 26 are byte-exact to the characterised field crash -- ``EXC_BREAKPOINT`` /
+``SIGTRAP`` on ``CrBrowserMain``, through
+``__CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__`` -> AppKit
+``nextEventMatchingMask:`` -> ``ChromeMain``.
+
+Two things follow, and the second is the useful one:
+
+* **Read 26-against-0 as a burst, not a rate.** The next two ``pool`` blocks,
+  same arm and same config, scored 0 over 304 cycles. That is precisely the
+  burstiness the Method note above describes, and precisely why the arms are
+  interleaved. A single block cannot attribute the crash to an arm.
+* **The abort lands at close.** Each report carries ``procLaunch`` and
+  ``captureTime``: across all 26 the browser lived **1.09-1.76s, mean 1.31s**,
+  against a measured cycle time of 1.34s. Every one died at the end of its
+  life, while the cycle was closing it. The field crash recorded as "2.2s after
+  launch" fits that shape too.
+
+So ``pool-sigterm``'s zero has a *mechanism* and not merely a caveat: killing
+the driver takes the browser down by signal before it can run its own shutdown
+path, leaving no graceful teardown in which to abort. Do not report that arm's
+zero as "SIGTERM prevents the crash" -- it is a weaker detector by construction.
+Working hypothesis: headed Chromium 151 aborts during its own graceful
+shutdown on the native AppKit path, conditional on something the clean ``pool``
+blocks did not have.
+
+The decisive run still outstanding is ``--launchers raw,pool``: ``raw`` also
+closes gracefully but has none of ours in the picture. Given the crash sits in
+the native AppKit event path, the pool-only difference to suspect first is
+``browser_pool/options.py``'s tile placement, which passes window
+position/size argv the raw arm never sends.
+
+**Reading this arm's ``.ips`` column needs the faulting thread, not a count.**
+Killing a driver makes its children abort, and those aborts write crash reports
+of their own -- measured at 27 ``Chrome_ChildIOThread`` aborts against ONE real
+``CrBrowserMain`` on a machine that had run the suite. So in this arm a raw
+report count is dominated by damage the arm inflicts on purpose, and the numbers
+are broken out per faulting thread instead. ``CrBrowserMain`` is the signature
+being hunted; everything else in that column is this harness's own teardown.
 
 Rate matters too: one crash report in 24 hours on a machine doing real work.
 Any A/B must compare episode counts over matched wall-clock and run for hours.
@@ -78,6 +148,9 @@ Usage::
 
     # is it Chromium, or is it us?
     uv run --active python scripts/characterize_headed_crash.py --launchers raw,pool
+    # the 2026-09-06 lead: sequential headed launch with the driver killed between
+    uv run --active python scripts/characterize_headed_crash.py \
+        --launchers pool,pool-sigterm --arms gpu-on --browsers 1 --rounds 4
     # does the GPU knob help, once something reproduces?
     uv run --active python scripts/characterize_headed_crash.py --arms gpu-on,gpu-off --rounds 6
 """
@@ -89,6 +162,7 @@ import asyncio
 import contextlib
 import json
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -109,6 +183,12 @@ DEFAULT_BROWSERS = 8
 DEFAULT_BLOCK_SECONDS = 180.0
 DEFAULT_ROUNDS = 1
 
+LAUNCHERS = ("raw", "pool", "pool-sigterm")
+
+# The faulting thread of the abort being hunted. Everything else this harness's
+# .ips column reports in the sigterm arm is its own teardown killing children.
+REAL_CRASH_THREAD = "CrBrowserMain"
+
 # Imported, never spelled again here: crash_reports already owns this location
 # for the daemon's own crash correlation, and two copies of an OS path drift.
 _IPS_DIR = DEFAULT_REPORTS_DIR
@@ -123,7 +203,16 @@ class BlockResult:
     launched: int
     crashes: int
     ips_new: int | None
+    #: New reports keyed by faulting thread. `None` off macOS, where there is no
+    #: report directory to read -- distinct from `{}`, which means "measured,
+    #: and nothing crashed".
+    ips_threads: dict[str, int] | None = None
     errors: list[str] = field(default_factory=list)
+
+    @property
+    def real_crash_reports(self) -> int:
+        """New reports on the hunted thread, ignoring self-inflicted ones."""
+        return (self.ips_threads or {}).get(REAL_CRASH_THREAD, 0)
 
 
 def _ips_supported() -> bool:
@@ -150,6 +239,49 @@ def _ips_names() -> set[str]:
         return {p.name for p in _IPS_DIR.glob("*.ips") if "hrome" in p.name}
     except OSError:
         return set()
+
+
+def _ips_threads(names: set[str]) -> dict[str, int]:
+    """Count *names* by the faulting thread each report blames.
+
+    The parser is imported from ``watch_test_timeline`` rather than restated:
+    two copies of an ``.ips`` reader drift, and that one is already the tool
+    used to pick a crash by class. Imported lazily, mirroring how ``_pool_cycle``
+    defers ``BrowserPool`` -- the raw arm needs neither.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from watch_test_timeline import crash_signature
+
+    counts: dict[str, int] = {}
+    for name in names:
+        signature = crash_signature(_IPS_DIR / name)
+        if signature is None:
+            continue
+        thread = signature[3] or "unknown"
+        counts[thread] = counts.get(thread, 0) + 1
+    return counts
+
+
+def _driver_pid(pw: object) -> int | None:
+    """OS pid of a live Playwright driver, or None if the chain has moved.
+
+    Playwright exposes no public handle on the node process it spawned, so this
+    walks ``_impl_obj._connection._transport._proc`` defensively: every hop is a
+    ``getattr`` and a broken chain simply means no kill, never an error.
+
+    ``tests/conftest.py`` carries the same walk for its driver reaper. They are
+    deliberately separate copies: this script must never import a conftest, and
+    a shared home in ``src/`` would ship introspection into Playwright privates
+    that nothing in the package needs. A Playwright change breaks both loudly --
+    the walk returns None and each caller simply stops killing.
+    """
+    node: object | None = pw
+    for attr in ("_impl_obj", "_connection", "_transport", "_proc"):
+        node = getattr(node, attr, None)
+        if node is None:
+            return None
+    pid = getattr(node, "pid", None)
+    return pid if isinstance(pid, int) else None
 
 
 async def _one_cycle(browser_type: Any, args: list[str], count: int, state: dict[str, int]) -> list[str]:
@@ -194,12 +326,41 @@ def _note_disconnect(browser: Any, state: dict[str, int]) -> None:
         state["crashes"] += 1
 
 
-async def _pool_cycle(args: list[str], count: int, state: dict[str, int]) -> list[str]:
+def _kill_driver(pool: Any) -> str | None:
+    """SIGTERM the pool's Playwright driver, the way `tests/conftest.py` does.
+
+    Returns an error string, or None on success (including "there was no driver
+    to kill", which is not a failure -- a pool that never launched never started
+    one). ``_pw`` is cleared first for the same reason the conftest clears it:
+    leaving it set would have the caller retry a dead pid.
+    """
+    pw = getattr(pool, "_pw", None)
+    if pw is None:
+        return None
+    pool._pw = None
+    pid = _driver_pid(pw)
+    if pid is None:
+        return "driver pid unreachable (Playwright internals moved)"
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return None  # Already gone; the arm's intent is satisfied either way.
+    except OSError as exc:
+        return f"kill {type(exc).__name__}: {exc}"[:160]
+    return None
+
+
+async def _pool_cycle(args: list[str], count: int, state: dict[str, int], *, sigterm: bool = False) -> list[str]:
     """Launch *count* headed browsers through a real BrowserPool, then close them.
 
     A fresh pool per cycle, matching the churn the raw arm produces: a pool
     reuses one Playwright driver, so keeping one alive across cycles would
     measure a different thing from the launch/relaunch storm being reproduced.
+
+    With *sigterm*, the driver is killed instead of shut down gracefully and the
+    per-session closes are skipped -- killing the driver takes the browsers with
+    it, so closing them first would remove the abruptness that is the point of
+    the arm. See the module docstring for why that difference is under test.
     """
     from octowright.browser_pool.pool import BrowserPool
 
@@ -219,15 +380,33 @@ async def _pool_cycle(args: list[str], count: int, state: dict[str, int]) -> lis
                 state["crashes"] += 1
             else:
                 state["launched"] += 1
-        for session in list(pool.iter_sessions()):
+        for session in [] if sigterm else list(pool.iter_sessions()):
             try:
                 await pool.close(session.instance_id, force=True)
             except Exception as exc:
                 errors.append(f"close {type(exc).__name__}: {exc}"[:160])
     finally:
-        with contextlib.suppress(Exception):
-            await pool.shutdown()
+        if sigterm:
+            failure = _kill_driver(pool)
+            if failure:
+                errors.append(failure)
+        else:
+            with contextlib.suppress(Exception):
+                await pool.shutdown()
     return errors
+
+
+def _thread_note(result: BlockResult) -> str:
+    """The per-thread breakdown of a block's new reports, for the live line.
+
+    Empty when nothing crashed, so the ordinary case stays quiet. The hunted
+    thread is spelled out rather than summarised because in the sigterm arm the
+    bare count is mostly this harness's own teardown.
+    """
+    if not result.ips_threads:
+        return ""
+    parts = [f"{thread}={n}" for thread, n in sorted(result.ips_threads.items())]
+    return "(" + " ".join(parts) + ")"
 
 
 async def _run_block(browser_type: Any, arm: str, seconds: float, count: int, launcher: str) -> BlockResult:
@@ -238,13 +417,14 @@ async def _run_block(browser_type: Any, arm: str, seconds: float, count: int, la
     cycles = 0
     started = time.monotonic()
     while time.monotonic() - started < seconds:
-        if launcher == "pool":
-            errors.extend(await _pool_cycle(args, count, state))
+        if launcher.startswith("pool"):
+            errors.extend(await _pool_cycle(args, count, state, sigterm=launcher == "pool-sigterm"))
         else:
             errors.extend(await _one_cycle(browser_type, args, count, state))
         cycles += 1
     # Reports are written a beat after the process dies.
     await asyncio.sleep(3)
+    fresh = _ips_names() - before if _ips_supported() else set()
     return BlockResult(
         launcher=launcher,
         arm=arm,
@@ -252,7 +432,8 @@ async def _run_block(browser_type: Any, arm: str, seconds: float, count: int, la
         cycles=cycles,
         launched=state["launched"],
         crashes=state["crashes"],
-        ips_new=len(_ips_names() - before) if _ips_supported() else None,
+        ips_new=len(fresh) if _ips_supported() else None,
+        ips_threads=_ips_threads(fresh) if _ips_supported() else None,
         errors=errors[:10],
     )
 
@@ -266,22 +447,25 @@ async def main() -> int:
     parser.add_argument(
         "--launchers",
         default="raw",
-        help="comma-separated: raw (bare Playwright), pool (a real BrowserPool). "
-        "Run both to separate 'Chromium is broken' from 'we break it'.",
+        help="comma-separated: raw (bare Playwright), pool (a real BrowserPool), "
+        "pool-sigterm (a real BrowserPool whose driver is killed between cycles, "
+        "the way the test suite's teardown does). Run raw with pool to separate "
+        "'Chromium is broken' from 'we break it'; run pool with pool-sigterm to "
+        "test whether the abrupt teardown is what the suite adds.",
     )
     parser.add_argument("--out", type=Path, default=None)
     opts = parser.parse_args()
 
     arms = [a.strip() for a in opts.arms.split(",") if a.strip()]
     launchers = [x.strip() for x in opts.launchers.split(",") if x.strip()]
-    unknown = set(launchers) - {"raw", "pool"}
+    unknown = set(launchers) - set(LAUNCHERS)
     if unknown:
         parser.error(f"unknown launcher(s): {', '.join(sorted(unknown))}")
 
     # The shipped semaphore would otherwise throttle the very storm being
     # measured, and a mitigation silently changing the experiment is how a
     # negative result gets believed.
-    if "pool" in launchers:
+    if any(x.startswith("pool") for x in launchers):
         os.environ["OCTOWRIGHT_HEADED_LAUNCH_CONCURRENCY"] = str(opts.browsers)
 
     results: list[BlockResult] = []
@@ -295,10 +479,11 @@ async def main() -> int:
                 result = await _run_block(p.chromium, arm, opts.block_seconds, opts.browsers, launcher)
                 results.append(result)
                 print(
-                    f"round {round_index + 1} {launcher:<5} {arm:<8} "
+                    f"round {round_index + 1} {launcher:<12} {arm:<8} "
                     f"{result.cycles:>3} cycles  {result.launched:>4} launched  "
                     f"{result.crashes:>4} crashes  "
-                    f"{'n/a' if result.ips_new is None else result.ips_new:>3} new .ips",
+                    f"{'n/a' if result.ips_new is None else result.ips_new:>3} new .ips  "
+                    f"{_thread_note(result)}",
                     flush=True,
                 )
 
@@ -310,10 +495,12 @@ async def main() -> int:
                 continue
             crashes = sum(r.crashes for r in blocks)
             launched = sum(r.launched for r in blocks)
-            hot = sum(1 for r in blocks if r.crashes)
+            real = sum(r.real_crash_reports for r in blocks)
+            hot = sum(1 for r in blocks if r.crashes or r.real_crash_reports)
             print(
-                f"  {launcher:<5} {arm:<8} {crashes:>5} crashes over {launched:>5} launches "
-                f"in {len(blocks)} block(s); {hot} block(s) saw any"
+                f"  {launcher:<12} {arm:<8} {crashes:>5} crashes over {launched:>5} launches "
+                f"in {len(blocks)} block(s); {hot} block(s) saw any; "
+                f"{real} {REAL_CRASH_THREAD} report(s)"
             )
     if opts.out:
         opts.out.write_text(json.dumps([r.__dict__ for r in results], indent=2), encoding="utf-8")
