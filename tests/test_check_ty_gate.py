@@ -26,21 +26,18 @@ substring rather than a prefix.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
+from tests._script_module import load_script_module
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ty.py"
 
 
 def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("check_ty", _SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script_module("scripts/check_ty.py")
 
 
 #: Verbatim ty --output-format concise output for one real diagnostic.
