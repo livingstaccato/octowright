@@ -346,9 +346,6 @@ class BrowserPool:
     def active_count(self) -> int:
         return len(self._sessions)
 
-    def protected_count(self) -> int:
-        return sum(1 for s in self._sessions.values() if s.protected)
-
     def list_sessions(self) -> list[dict[str, Any]]:
         # Snapshot values() into a tuple before iterating: Playwright sync
         # close callbacks fire _accept_external_close_nowait between awaits

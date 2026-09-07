@@ -222,13 +222,6 @@ def _write_manifest_unlocked(data: SessionManifest, path: Path) -> None:
             tmp.unlink()
 
 
-def write_manifest(data: SessionManifest, path: Path | None = None) -> None:
-    """Atomically replace the manifest under the shared writer lock."""
-    resolved = _resolve_path(path)
-    with _manifest_lock(resolved):
-        _write_manifest_unlocked(data, resolved)
-
-
 def record_launch(
     *,
     session_id: str,

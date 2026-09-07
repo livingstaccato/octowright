@@ -27,12 +27,3 @@ class ViewportInfo:
         if self.mode == ViewportMode.FIXED and self.width is not None and self.height is not None:
             payload.update({"w": self.width, "h": self.height})
         return payload
-
-    def to_wire(self) -> dict[str, Any]:
-        return {
-            "mode": self.mode.value,
-            "width": self.width,
-            "height": self.height,
-            "fixed": self.mode == ViewportMode.FIXED,
-            "fluid": self.mode == ViewportMode.FLUID,
-        }

@@ -154,10 +154,6 @@ def _safe_resolved_ips(host: str) -> list[str]:
     return resolved
 
 
-def _check_resolved_ips(host: str) -> None:
-    _safe_resolved_ips(host)
-
-
 def _check_hostname(host: str, *, resolve_host: bool) -> list[str]:
     if host in _BLOCKED_HOSTNAMES or host.endswith(".localhost"):
         raise ValueError(f"web discovery refuses non-public host {host!r}") from None
