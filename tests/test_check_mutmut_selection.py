@@ -20,24 +20,17 @@ extra entries must always pass, and these tests pin that.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
+
+from tests._script_module import load_script_module
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_guard():
-    spec = importlib.util.spec_from_file_location(
-        "_check_mutmut_selection", ROOT / "scripts" / "check_mutmut_selection.py"
-    )
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    return load_script_module("scripts/check_mutmut_selection.py")
 
 
 def test_repository_selection_is_currently_in_sync() -> None:
