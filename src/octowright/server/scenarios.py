@@ -46,7 +46,9 @@ def scenario_list(
     limit: int | None = None,
     cursor: int = 0,
 ) -> dict[str, Any]:
-    matching = order_newest_first(match_name(scenario_mod.list_scenarios(), prefix=prefix, contains=contains))
+    matching = order_newest_first(
+        match_name(scenario_mod.list_scenarios(), prefix=prefix, contains=contains), time_key="mtime"
+    )
     return paginate(matching, limit=limit, cursor=cursor, build_row=dict)
 
 
