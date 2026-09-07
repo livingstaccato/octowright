@@ -11,14 +11,10 @@ a new metric/notification can't ship undocumented."""
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
+from tests._script_module import REPO_ROOT, load_script_module
 
-_ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location("check_telemetry_docs", _ROOT / "scripts" / "check_telemetry_docs.py")
-assert _spec and _spec.loader
-checker = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(checker)
+_ROOT = REPO_ROOT
+checker = load_script_module("scripts/check_telemetry_docs.py")
 
 
 def test_extracts_the_new_stability_metrics() -> None:

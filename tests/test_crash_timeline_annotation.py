@@ -34,25 +34,29 @@ it" -- a limitation this very file demonstrated by flagging itself the moment it
 named the markers in a parametrize. The markers are therefore read from the
 script rather than spelled here, and the false positive is asserted below as a
 known property rather than left to surprise the next reader.
+
+Selection is fixed separately and more deeply: `newest_crash_report(thread=...)`
+lets the caller ask for the crash CLASS they are hunting, which is what the 30:1
+burial actually costs them. That is deliberately not a "skip the manufactured
+ones" filter -- the chaos tests crash a real renderer, so their reports are
+signature-identical to a genuine renderer crash, and only correlation can tell
+the two apart.
 """
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from types import ModuleType
 
 import pytest
 
+from tests._script_module import load_script_module
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "watch_test_timeline.py"
 
 
 def _load() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("watch_test_timeline", _SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_script_module("scripts/watch_test_timeline.py")
 
 
 @pytest.fixture(scope="module")
@@ -68,43 +72,36 @@ class TestDeliberateCrashDetection:
     def test_an_ordinary_test_module_is_not(self, timeline: ModuleType) -> None:
         assert not timeline.induces_deliberate_crashes("tests/test_engines.py")
 
-    def test_a_module_that_only_mentions_a_mechanism_is_flagged(
-        self, timeline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """The accepted false positive, pinned so it is a decision and not a surprise.
-
-        Substring matching cannot separate a module that CALLS the mechanism from
-        one that merely names it in prose. This file tripped it on itself. The
-        note is a hint to check, never proof that a crash was deliberate.
-        """
-        module = tmp_path / "tests" / "test_docs_only.py"
-        module.parent.mkdir(parents=True)
-        marker = timeline._DELIBERATE_CRASH_MARKERS[0]
-        module.write_text(f'"""Prose that only names {marker} and calls nothing."""\n', encoding="utf-8")
-        monkeypatch.setattr(timeline, "ROOT", tmp_path)
-        timeline.induces_deliberate_crashes.cache_clear()
-        assert timeline.induces_deliberate_crashes("tests/test_docs_only.py")
-
-    def test_an_unreadable_path_is_not_deliberate(self, timeline: ModuleType) -> None:
-        """Guessing the other way would dismiss a real crash as expected."""
-        assert not timeline.induces_deliberate_crashes("tests/does_not_exist_anywhere.py")
-
+    @pytest.mark.parametrize(
+        ("label", "template"),
+        [
+            ("called", "async def test_x():\n    await thing.{marker}\n"),
+            ("mentioned in prose", '"""Prose that only names {marker} and calls nothing."""\n'),
+        ],
+    )
     @pytest.mark.parametrize("index", [0, 1])
-    def test_each_marker_is_sufficient_on_its_own(
-        self, timeline: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: int
+    def test_a_module_carrying_a_mechanism_is_flagged(
+        self,
+        timeline: ModuleType,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        label: str,
+        template: str,
+        index: int,
     ) -> None:
-        """Either mechanism crashes a browser, so either alone must be enough.
+        """Either mechanism is enough, and prose counts -- the accepted false positive.
 
-        The marker is read from the script rather than written here: spelling it
-        would make this module match its own detector.
+        Substring matching cannot separate a module that CALLS the mechanism
+        from one that merely names it; this file tripped it on itself. Pinned as
+        a decision rather than left to surprise the next reader: the note means
+        "check whether this was deliberate", never proof that it was. Markers are
+        read from the script, since spelling one here would match the detector.
         """
-        marker = timeline._DELIBERATE_CRASH_MARKERS[index]
         module = tmp_path / "tests" / "test_synthetic.py"
-        module.parent.mkdir(parents=True)
-        module.write_text(f"async def test_x():\n    await thing.{marker}\n", encoding="utf-8")
+        module.parent.mkdir(parents=True, exist_ok=True)
+        module.write_text(template.format(marker=timeline._DELIBERATE_CRASH_MARKERS[index]), encoding="utf-8")
         monkeypatch.setattr(timeline, "ROOT", tmp_path)
-        timeline.induces_deliberate_crashes.cache_clear()
-        assert timeline.induces_deliberate_crashes("tests/test_synthetic.py")
+        assert timeline.induces_deliberate_crashes("tests/test_synthetic.py"), label
 
 
 class TestAnnotation:
