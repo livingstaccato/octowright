@@ -35,6 +35,9 @@ log = get_logger(__name__)
 _REPLAY_PASSIVE = {
     "console",
     "popup_opened",
+    # A page that already existed when the context was handed back (Chromium
+    # session restore). Adopting it is bookkeeping; replaying it is meaningless.
+    "adopted_page",
     "websocket_opened",
     "websocket_closed",
     "websocket_framesent",

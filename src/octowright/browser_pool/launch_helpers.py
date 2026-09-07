@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.browser_pool.restore_prompt import clear_crash_restore_prompt
 from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
 from octowright.defaults import DEFAULT_VIEWPORT_H, DEFAULT_VIEWPORT_W, PROFILES_DIR, RECORDINGS_DIR
@@ -322,6 +323,50 @@ def extra_http_headers_kwargs(
     return {"extra_http_headers": dict(headers)} if headers else {}
 
 
+# What a page reports before it has committed a navigation of its own. Both
+# spellings occur; neither is content anyone would miss.
+_BLANK_URLS = frozenset({"", "about:blank"})
+
+
+def _is_blank(page: Any) -> bool:
+    """Whether *page* holds nothing worth preserving.
+
+    A page that cannot be read is treated as NOT blank: it is closing, or
+    otherwise unhealthy, and the safe direction is to leave it alone rather
+    than elect it as the one we are about to navigate.
+    """
+    try:
+        return page.url in _BLANK_URLS
+    except Exception:
+        return False
+
+
+async def select_launch_page(context: Any) -> Any:
+    """Pick the page a persistent launch should navigate to the target URL.
+
+    ``context.pages[0]`` assumed the first page was octowright's own. Chromium
+    session restore breaks that assumption AND the order is a race -- two runs
+    of the same probe put ``about:blank`` first, then third -- so the caller
+    could navigate a restored tab and destroy its content.
+
+    One page is the ordinary case and is returned untouched whatever its URL:
+    Chromium's initial page is not always ``about:blank`` (the new-tab override
+    extension replaces it), so testing for blankness there would open a
+    spurious second page on every launch. Only a context handing back several
+    pages takes the other path, and even then nothing is closed or navigated
+    over -- with no blank page to spare, a new one is opened instead.
+    """
+    pages = list(context.pages)
+    if not pages:
+        return await context.new_page()
+    if len(pages) == 1:
+        return pages[0]
+    for page in pages:
+        if _is_blank(page):
+            return page
+    return await context.new_page()
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -360,6 +405,11 @@ async def _open_browser_context(
             # in use") on every future launch. Only a confirmed-dead local owner
             # is pruned; see singleton_locks.
             prune_stale_singleton_locks(pdir)
+            # A browser that died without an orderly shutdown also leaves the
+            # profile marked crashed, so every later launch opens behind a
+            # "Restore pages?" bubble covering the page we just navigated to.
+            # See restore_prompt.
+            clear_crash_restore_prompt(pdir)
         else:
             user_data_dir = session_user_data_dir
         context = await browser_type.launch_persistent_context(
@@ -374,7 +424,7 @@ async def _open_browser_context(
             **launch_kwargs,
         )
         browser = None
-        page = context.pages[0] if context.pages else await context.new_page()
+        page = await select_launch_page(context)
     else:
         browser = await browser_type.launch(headless=headless, **launch_kwargs)
         context = await browser.new_context(

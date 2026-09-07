@@ -70,6 +70,44 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
         page.on("framenavigated", framenav_handler(page))
 
 
+def adopt_untracked_pages(session: BrowserSession, context: Any) -> int:
+    """Track every page already open on *context* that the session does not know.
+
+    ``context.on("page", ...)`` only fires for pages created *after* it is
+    registered, and a context can be handed back already holding pages. Measured
+    against real Chromium: a profile relaunched with session restore returned
+    four pages at handback and fired **zero** page events, so three restored tabs
+    were invisible to ``page_list``, unreachable by ``page_switch``, and unwired
+    for dialogs, downloads, console and network -- inside a session octowright
+    otherwise believes it fully owns.
+
+    Chromium's restore prompt is suppressed by default (see
+    ``browser_pool.restore_prompt``), so this normally adopts nothing. It is the
+    backstop for the deployment that opts out, and for any other way a context
+    arrives non-empty.
+
+    Call this AFTER registering the ``page`` event, never before: a page created
+    in the gap between the two is caught by whichever runs second, and both are
+    safe because this one skips pages already tracked.
+
+    Returns the number adopted, for the caller to log.
+    """
+    try:
+        existing = list(context.pages)
+    except Exception as exc:  # pragma: no cover - a context dying mid-launch
+        log.debug("browser.adopt_pages_unreadable", error=str(exc))
+        return 0
+    adopted = 0
+    for page in existing:
+        if page in session.pages:
+            continue
+        # Reuses the popup path rather than repeating its wiring (append, count,
+        # console listener, _wire_listeners); only the recorded event differs.
+        session._register_popup(page, event="adopted_page")
+        adopted += 1
+    return adopted
+
+
 def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     """When the underlying browser/context/all-pages is closed externally (OS
     close button, crash, persistent-context flush, etc.), drop the session from
