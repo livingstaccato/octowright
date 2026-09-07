@@ -20,6 +20,7 @@ and the orphan reaper kills browsers whose driver died. Two of a real machine's
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -192,3 +193,41 @@ def test_opting_out_leaves_the_prompt_alone(tmp_path: Path, monkeypatch: pytest.
     clear_crash_restore_prompt(tmp_path)
 
     assert _exit_type(prefs) == "Crashed"
+
+
+class TestProfileInUse:
+    """The rewrite must not land on a profile another process is holding.
+
+    The docstring used to argue the write "races nothing" because the browser is
+    not running -- true only of the browser THIS call is about to start. A second
+    process launching the same persona would read-modify-write `Preferences`
+    under a live Chromium, violating its single-writer assumption, in the window
+    before Playwright's own lock check refused the launch.
+
+    The caller prunes provably-dead locks first, so a lock still present means a
+    live (or unverifiable) owner.
+    """
+
+    @staticmethod
+    def _lock(user_data_dir: Path, pid: int) -> None:
+        import socket
+
+        os.symlink(f"{socket.gethostname()}-{pid}", user_data_dir / "SingletonLock")
+
+    @pytest.mark.skipif(os.name == "nt", reason="Chromium writes the Singleton trio only on POSIX")
+    def test_a_locked_profile_is_left_alone(self, tmp_path: Path) -> None:
+        prefs = _write_prefs(tmp_path, {"profile": {"exit_type": "Crashed"}})
+        self._lock(tmp_path, 999_999)
+
+        clear_crash_restore_prompt(tmp_path)
+
+        assert _exit_type(prefs) == "Crashed", "wrote into a profile something else holds"
+
+    @pytest.mark.skipif(os.name == "nt", reason="Chromium writes the Singleton trio only on POSIX")
+    def test_an_unlocked_profile_is_still_cleared(self, tmp_path: Path) -> None:
+        """The guard must not disable the feature on the ordinary path."""
+        prefs = _write_prefs(tmp_path, {"profile": {"exit_type": "Crashed"}})
+
+        clear_crash_restore_prompt(tmp_path)
+
+        assert _exit_type(prefs) == "Normal"
