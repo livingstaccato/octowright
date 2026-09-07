@@ -160,12 +160,12 @@ profile is involved.
 
 | Tool | Purpose |
 |---|---|
-| `persona_list` | Enumerate every persona on disk. |
+| `persona_list` | List personas on disk in bounded pages. Filter with `prefix`/`contains`; page with `limit`/`cursor`. Returns an envelope (`items`, `total`, `returned`, `truncated`, `next_cursor`), not a bare list. |
 | `persona_get` | Fetch a single persona's metadata. |
 | `persona_create` | Scaffold a new persona dir with `profile.yaml`. |
 | `persona_delete` | Remove a persona (and all its engine profiles). |
 | `persona_credentials_check` | Pre-flight credential resolution without launching a browser. |
-| `profile_list` / `profile_delete` | Lower-level: enumerate or wipe per-engine profile dirs. |
+| `profile_list` / `profile_delete` | Lower-level: list (bounded, same envelope and filters as `persona_list`) or wipe per-engine profile dirs. |
 | `browser_suggest_for_url` | Pre-launch ranking: which saved persona owns this URL? |
 
 ## CLI

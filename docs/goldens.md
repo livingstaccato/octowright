@@ -49,7 +49,7 @@ The CI guard is intentional: in CI, "no baseline" must mean "test fails," not
 | `golden_save` | Write or overwrite a baseline. |
 | `golden_assert` | Compare live page to baseline; raise on mismatch. |
 | `golden_verify_loop` | Verify with an optional retry/wait loop for flake. |
-| `golden_list` | Enumerate all saved goldens. |
+| `golden_list` | List saved goldens in bounded pages. Filter with `prefix`/`contains`; page with `limit`/`cursor`. Returns an envelope (`items`, `total`, `returned`, `truncated`, `next_cursor`), not a bare list. |
 | `golden_delete` | Remove a saved golden. |
 
 ## Related

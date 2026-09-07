@@ -31,6 +31,19 @@ outside changed modules are being worked down. Use this non-gating probe command
 make typecheck-ty-probe
 ```
 
+### Pre-commit hook stages
+
+`.pre-commit-config.yaml` sets `default_stages: [pre-commit, pre-push]`. A hook
+that declares no `stages:` of its own runs at **every** stage, so a single
+`git commit` ran the whole battery twice — once at `pre-commit` and again at
+`commit-msg`, vulture, xenon and detect-secrets included. `commitlint`
+(`[commit-msg]`) and `pytest-quick` (`[pre-push]`) declare their own stages and
+are unaffected.
+
+Note the hooks only run if they are actually installed: a `core.hooksPath`
+pointing elsewhere (a global hooks directory, for instance) leaves
+`.git/hooks` empty and none of this config ever executes.
+
 ## CI Parity with `act`
 
 ```bash
