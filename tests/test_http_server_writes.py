@@ -290,6 +290,29 @@ def test_post_sessions_unknown_kind_400(client: TestClient) -> None:
     assert "kind must be one of" in r.json()["error"]
 
 
+def test_post_sessions_unknown_field_400_naming_the_key(client: TestClient) -> None:
+    """A body field that is not a launch option answers 400, naming it.
+
+    REGRESSION: `from_mapping` sat ABOVE the route's `try`, so the
+    `InvalidRequestError` it raises for an unknown field escaped every handler
+    -- Starlette is built with no `exception_handlers` and the sensitive-route
+    guard re-raises -- and the client got a bare 500 with the offending key
+    nowhere in the body. Three documents (the HTTP contract, AGENTS.md, the
+    0.22.0 changelog) asserted 400 while the code answered 500, because nothing
+    exercised this path: the option tests call `from_mapping` directly and only
+    mention the route in prose.
+
+    `headless` is the case that matters -- Playwright's own parameter name, so
+    it is what a client reaches for -- and a 500 tells them nothing, where the
+    400 names the field and the inverted `headed` to use instead.
+    """
+    r = client.post("/api/sessions", json={"kind": "chromium", "headless": True})
+    assert r.status_code == 400, r.text
+    error = r.json()["error"]
+    assert "headless" in error
+    assert "headed" in error
+
+
 def test_post_sessions_malformed_json_400(client: TestClient) -> None:
     r = client.post(
         "/api/sessions",
