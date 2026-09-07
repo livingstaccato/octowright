@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-09-07
+
+### Changed
+- **BREAKING: `macro_list`, `golden_list`, `persona_list`, `profile_list` and
+  `scenario_list` return an envelope (`items`, `total`, `returned`,
+  `truncated`, `next_cursor`) instead of a bare list**, and each accepts
+  `prefix` / `contains` / `limit` / `cursor`. `macro_list` returned every saved
+  macro with every description and no bound of any kind: measured on a real
+  337-macro corpus, **402,942 characters — roughly 100k tokens — in one call**,
+  from a tool that ships in the `macros` capability profile. An AST scan after
+  that fix found the same unbounded shape in the other four, so the rule now
+  lives in one shared `octowright/listing.py` rather than being copied five
+  times and drifting. A non-positive `limit` resolves to the default rather
+  than to unbounded — an LLM must not be able to remove the cap by passing `0`.
+- `macro_list` gains `response_mode`: `summary` (default) caps descriptions,
+  `full` returns rows verbatim, and `families` rolls the flat macro
+  directory's naming prefixes up and lists **no macros at all** — 4,059
+  characters against 402,942 on that corpus. What `summary` drops is measured,
+  not guessed: `description` is 85.5% of the payload and `path` a further 6.8%,
+  while `parameters` is 1.9% and stays, since an agent that cannot see a
+  macro's parameters cannot call it.
+
+### Fixed
+- **A crashed Chromium profile no longer opens behind "Restore pages?".**
+  Chromium records the previous run's outcome in the profile and the flag is
+  sticky — rewritten only when that profile exits cleanly, which an
+  agent-driven browser frequently never does. 2 of 27 profiles on a real
+  machine were sitting marked crashed. Cleared before a persistent launch;
+  `OCTOWRIGHT_SUPPRESS_RESTORE_PROMPT=0` opts out. Chromium-only in effect:
+  Firefox and WebKit profiles contain no such file (verified).
+- **Pages a restored context hands back are adopted instead of being
+  invisible.** `context.on("page", ...)` fires only for pages created after it
+  is registered. Measured against Chromium with three seeded tabs and restore
+  on: the relaunched context returned **four pages and fired zero page
+  events** — tabs unreachable by `page_switch`, absent from `page_list`, and
+  unwired for dialogs, downloads, console and network, inside a session
+  octowright believed it fully owned.
+- `_register_popup` no longer lists the same page twice.
+- The launch page-selection race is closed: octowright took `context.pages[0]`
+  and navigated it, and the handback order is not stable.
+
+### Internal
+- **The dead-code gate could not see dead code.** vulture ran at a confidence
+  threshold that reports only unused imports and unreachable code, so an
+  unused function, method or class — 60% confidence, the case the gate exists
+  for — passed silently. Found because a dead helper in a brand-new module
+  sailed through it. Five genuinely dead callables it surfaced are deleted.
+- The vulture and xenon baselines now **ratchet in both directions**. Both were
+  line-number sensitive, so adding a line to an unrelated file could invalidate
+  an entry and let a real finding through — proven by adding one.
+- **A daemon on Windows is now verified to outlive its job object.** The
+  detachment ladder asks for `CREATE_BREAKAWAY_FROM_JOB`, but nothing had ever
+  proven it worked; a green Windows leg showed that *something* did, not which
+  rung. Both directions are asserted on real amd64 and arm64 runners.
+- Crash tooling: the characterization harness gained a `BrowserPool` arm, crash
+  reports are correlated to the test that was in flight, a correlated row whose
+  module crashes browsers on purpose says so, and the tools state plainly when
+  correlation cannot work rather than reporting no crashes.
+- `CLAUDE.md` is a symlink to `AGENTS.md`, so there is one truth.
+
 ## [0.21.0] - 2026-09-06
 
 ### Changed
@@ -2537,6 +2597,7 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
+[0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0
 [0.19.4]: https://github.com/livingstaccato/octowright/compare/v0.19.3...v0.19.4
