@@ -272,25 +272,36 @@ async def session_launch(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    # Funnel through LaunchOptions.from_mapping so the HTTP body shape stays
-    # in lock-step with the MCP browser_launch surface — a new launch field
-    # is one edit in options.py, not three call sites.
-    launch_kwargs = LaunchOptions.from_mapping(
-        {**payload, "kind": kind, "url": payload.get("url") or get_default_url()}
-    ).to_pool_kwargs()
-
     pool = state.pool
     try:
+        # Funnel through LaunchOptions.from_mapping so the HTTP body shape stays
+        # in lock-step with the MCP browser_launch surface — a new launch field
+        # is one edit in options.py, not three call sites.
+        #
+        # INSIDE the try, and that is the whole point: from_mapping refuses a
+        # body field that is not a launch option, and it raises
+        # InvalidRequestError (a ValueError). Called above the try it escaped
+        # every handler -- Starlette is built with no exception_handlers and the
+        # sensitive-route guard re-raises -- so a client typo answered 500
+        # "Internal Server Error" with the offending key nowhere in the body,
+        # and paged whoever watches the 5xx rate for a caller's mistake.
+        launch_kwargs = LaunchOptions.from_mapping(
+            {**payload, "kind": kind, "url": payload.get("url") or get_default_url()}
+        ).to_pool_kwargs()
         result = await pool.launch(**launch_kwargs)
     except ValueError as e:
-        # pool.launch validates `kind`; surface that as 400 even though we
-        # already pre-checked, so we stay safe if SUPPORTED_KINDS drifts.
+        # Both refusals land here: from_mapping's (unknown field, bad har_mode,
+        # a header that cannot be sent) and pool.launch's own `kind` check,
+        # surfaced as 400 even though we pre-checked, so we stay safe if
+        # SUPPORTED_KINDS drifts.
         return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         state.log.exception(
             "octowright.http.session_launch_failed",
             kind=kind,
-            url=launch_kwargs["url"],
+            # Not launch_kwargs["url"]: this handler now also covers a failure
+            # from building them, where the name is unbound.
+            url=payload.get("url"),
         )
         return JSONResponse({"error": f"launch failed: {e}"}, status_code=500)
 
