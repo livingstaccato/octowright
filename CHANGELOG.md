@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   /api/sessions` with an unrecognised field now answers 400 rather than
   launching while ignoring part of the body.
 
+- **Otto is drawn for small sizes.** The full illustration loses its detail as a
+  favicon or an avatar, so `otto-mark.svg` is a simplified mark used wherever he
+  appears small — the dashboard, the session page, the playground, and the
+  generated favicon/avatar sets. Separately, `otto.svg` carried no `viewBox`, so
+  roughly a quarter of every rendered box was empty space and he sat visibly
+  off-centre at every size.
+
 ### Fixed
 - **A crashed Chromium profile no longer opens behind "Restore pages?".**
   Chromium records the previous run's outcome in the profile and the flag is
@@ -55,7 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agent-driven browser frequently never does. 2 of 27 profiles on a real
   machine were sitting marked crashed. Cleared before a persistent launch;
   `OCTOWRIGHT_SUPPRESS_RESTORE_PROMPT=0` opts out. Chromium-only in effect:
-  Firefox and WebKit profiles contain no such file (verified).
+  Firefox and WebKit profiles contain no such file (verified). The rewrite is
+  also **refused while another process holds the profile**: the caller prunes
+  provably-dead singleton locks first, so a lock still present means a live (or
+  unverifiable) owner, and writing `Preferences` under a running Chromium
+  violates its single-writer assumption. POSIX only — Chromium writes no such
+  lock on Windows, so there is nothing to consult there.
 - **Pages a restored context hands back are adopted instead of being
   invisible.** `context.on("page", ...)` fires only for pages created after it
   is registered. Measured against Chromium with three seeded tabs and restore
@@ -83,7 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Crash tooling: the characterization harness gained a `BrowserPool` arm, crash
   reports are correlated to the test that was in flight, a correlated row whose
   module crashes browsers on purpose says so, and the tools state plainly when
-  correlation cannot work rather than reporting no crashes.
+  correlation cannot work rather than reporting no crashes. `--crash-thread`
+  selects the crash **class** being hunted, which matters because the report
+  directory is dominated by crashes the suite manufactures on purpose —
+  measured at 27 `Chrome_ChildIOThread` aborts and 3 renderer segfaults against
+  a single real `CrBrowserMain` one, so picking the newest blind returns noise.
+  Deliberately not a "skip the manufactured ones" filter: the chaos tests crash
+  a real renderer, so their reports are signature-identical to a genuine
+  renderer crash and only correlation can separate them.
 - `CLAUDE.md` is a symlink to `AGENTS.md`, so there is one truth.
 - Pre-commit hooks are scoped to the `pre-commit` and `pre-push` stages. A hook
   declaring no `stages:` of its own runs at *every* stage, so one `git commit`
