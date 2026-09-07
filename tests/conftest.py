@@ -109,10 +109,9 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 
 # Where the id of the currently-running test is parked so a killed run can still
-# be attributed. Git-ignored; rewritten in place rather than appended to, so it
-# always holds exactly one line.
-CURRENT_TEST_BREADCRUMB = Path(__file__).resolve().parent.parent / ".pytest-current-test"
-
+# be attributed. Defined in tests/breadcrumb.py because scripts/ reads the same
+# file from outside the pytest process.
+from tests.breadcrumb import CURRENT_TEST_BREADCRUMB  # noqa: E402
 
 # Every BrowserPool built during the run, so a test that forgets to shut one
 # down cannot leak its Playwright driver into the rest of the session.

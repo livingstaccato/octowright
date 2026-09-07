@@ -97,6 +97,8 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
+from octowright.browser_pool.crash_reports import DEFAULT_REPORTS_DIR
+
 # Matches the shipped knob's flag set exactly; testing a different one would
 # answer a question nobody can act on.
 GPU_DISABLE_ARGS = ("--disable-gpu", "--disable-gpu-compositing")
@@ -106,7 +108,9 @@ DEFAULT_BROWSERS = 8
 DEFAULT_BLOCK_SECONDS = 180.0
 DEFAULT_ROUNDS = 1
 
-_IPS_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+# Imported, never spelled again here: crash_reports already owns this location
+# for the daemon's own crash correlation, and two copies of an OS path drift.
+_IPS_DIR = DEFAULT_REPORTS_DIR
 
 
 @dataclass

@@ -54,3 +54,4 @@ test_output*.txt
 # demo/tutorial-export/.
 demo/tutorial-export/
 .pytest-current-test
+.pytest-test-timeline.log
