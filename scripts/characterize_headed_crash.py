@@ -89,6 +89,7 @@ import asyncio
 import contextlib
 import json
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -121,8 +122,20 @@ class BlockResult:
     cycles: int
     launched: int
     crashes: int
-    ips_new: int
+    ips_new: int | None
     errors: list[str] = field(default_factory=list)
+
+
+def _ips_supported() -> bool:
+    """Whether the .ips corroboration column can be measured at all.
+
+    macOS-only. It matters that this is explicit: a glob on a directory that
+    does not exist returns an empty list rather than raising, so off macOS the
+    column would silently read 0 -- indistinguishable from "measured, and there
+    were none". The primary crash signal (the browser's own ``disconnected``
+    event) is cross-platform and unaffected.
+    """
+    return sys.platform == "darwin"
 
 
 def _ips_names() -> set[str]:
@@ -131,6 +144,8 @@ def _ips_names() -> set[str]:
     By NAME rather than count: macOS prunes this directory, so a count can fall
     while new reports arrive.
     """
+    if not _ips_supported():
+        return set()
     try:
         return {p.name for p in _IPS_DIR.glob("*.ips") if "hrome" in p.name}
     except OSError:
@@ -237,7 +252,7 @@ async def _run_block(browser_type: Any, arm: str, seconds: float, count: int, la
         cycles=cycles,
         launched=state["launched"],
         crashes=state["crashes"],
-        ips_new=len(_ips_names() - before),
+        ips_new=len(_ips_names() - before) if _ips_supported() else None,
         errors=errors[:10],
     )
 
@@ -282,7 +297,8 @@ async def main() -> int:
                 print(
                     f"round {round_index + 1} {launcher:<5} {arm:<8} "
                     f"{result.cycles:>3} cycles  {result.launched:>4} launched  "
-                    f"{result.crashes:>4} crashes  {result.ips_new:>3} new .ips",
+                    f"{result.crashes:>4} crashes  "
+                    f"{'n/a' if result.ips_new is None else result.ips_new:>3} new .ips",
                     flush=True,
                 )
 
