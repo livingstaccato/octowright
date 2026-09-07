@@ -5,7 +5,7 @@
 
 """A launch option octowright will not read must be refused, not dropped.
 
-`LaunchOptions.from_mapping` reads every key by name, so anything it did not
+`LaunchOptions.from_mapping` read every key by name, so anything it did not
 recognise was silently discarded while the caller went on believing the option
 had taken effect. The one that bit is `headless`: it is Playwright's OWN
 parameter name and therefore the natural guess, so
@@ -20,92 +20,86 @@ Refusing is the repository's established answer to a flag the caller believes
 took effect: `serve --wait-ready` rejects `--no-singleton` rather than quietly
 ignoring it. `InvalidRequestError` specifically, because a caller's mistake must
 never be filed as an engine fault -- the defect issue #214 fixed, where a bad URL
-left `engine_health` reporting chromium broken. It subclasses `ValueError`, so
-`POST /api/sessions` turns this into a 400 naming the key instead of a launch
-that ignores half the body.
+left `engine_health` reporting chromium broken. It subclasses `ValueError` (pinned
+in `tests/test_engine_health.py`), so `POST /api/sessions` turns this into a 400
+naming the key instead of a launch that ignores half the body.
 
-The accepted set is derived from the dataclass rather than listed, and pinned
-here against the keys `from_mapping` actually reads, so an accept-list nobody
-updated can neither reject a new field nor accept one that goes nowhere.
+The refusal is also what lets `from_mapping` splat: with nothing unknown left, it
+constructs with `cls(**options)` instead of hand-writing 28 `options.get("...")`
+calls that restated defaults the dataclass already declares. So "accepted" and
+"read" are now the same fact, and the drift guard this file used to carry -- a
+regex scrape of `from_mapping`'s own source -- has nothing left to guard.
 """
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 import pytest
 
-from octowright.browser_pool.options import LaunchOptions
+from octowright.browser_pool.options import CALLER_SETTABLE_FIELDS, LaunchOptions
 from octowright.request_errors import InvalidRequestError
-
-_SOURCE = Path(__file__).resolve().parents[1] / "src" / "octowright" / "browser_pool" / "options.py"
-
-
-def _keys_from_mapping_reads() -> set[str]:
-    """Every ``options.get("...")`` inside ``from_mapping``'s body."""
-    body = _SOURCE.read_text(encoding="utf-8").split("def from_mapping", 1)[1]
-    body = body.split("launch_options.validate()", 1)[0]
-    return set(re.findall(r'options\.get\(\s*"([a-z_]+)"', body))
 
 
 class TestTheFootgun:
-    def test_headless_is_refused_rather_than_dropped(self) -> None:
-        """The regression: this used to return a headed browser."""
+    def test_the_message_names_every_unknown_key_and_the_fix(self) -> None:
+        """The regression: `headless` used to return a headed browser.
+
+        Reporting only the first unknown key would cost a caller one round trip
+        per mistake, and naming `headless` alone is not enough -- the sense is
+        inverted, which is its own trap.
+        """
         with pytest.raises(InvalidRequestError) as excinfo:
-            LaunchOptions.from_mapping({"kind": "chromium", "headless": True})
-        assert "headless" in str(excinfo.value)
-
-    def test_the_message_names_the_option_to_use_instead(self) -> None:
-        """Naming the key is not enough -- the sense is inverted, which is its own trap."""
-        with pytest.raises(InvalidRequestError) as excinfo:
-            LaunchOptions.from_mapping({"headless": True})
-        message = str(excinfo.value)
-        assert "headed" in message
-        assert "inverted" in message
-
-    def test_it_is_a_value_error_so_the_http_route_answers_400(self) -> None:
-        """`POST /api/sessions` catches ValueError; a new type would 500 instead."""
-        assert issubclass(InvalidRequestError, ValueError)
-
-    def test_an_arbitrary_unknown_option_is_refused_too(self) -> None:
-        with pytest.raises(InvalidRequestError, match="nonsense"):
-            LaunchOptions.from_mapping({"kind": "chromium", "nonsense": 1})
-
-    def test_every_unknown_key_is_reported_not_just_the_first(self) -> None:
-        """A caller fixing one key at a time pays a round trip per key."""
-        with pytest.raises(InvalidRequestError) as excinfo:
-            LaunchOptions.from_mapping({"headless": True, "nonsense": 1})
+            LaunchOptions.from_mapping({"kind": "chromium", "headless": True, "nonsense": 1})
         message = str(excinfo.value)
         assert "headless" in message
         assert "nonsense" in message
+        assert "headed" in message
+        assert "inverted" in message
 
 
 class TestAcceptedSet:
-    def test_the_derived_set_matches_what_from_mapping_reads(self) -> None:
-        """The drift guard.
-
-        A field accepted but never read is the original bug wearing a different
-        hat; a field read but rejected breaks a legitimate caller.
-        """
-        assert LaunchOptions.caller_settable_fields() == _keys_from_mapping_reads()
-
     def test_an_output_field_is_not_caller_settable(self) -> None:
         """`protected_reason` is written by resolve_protected, never supplied."""
-        assert "protected_reason" not in LaunchOptions.caller_settable_fields()
+        assert "protected_reason" not in CALLER_SETTABLE_FIELDS
         with pytest.raises(InvalidRequestError, match="protected_reason"):
             LaunchOptions.from_mapping({"protected_reason": "headed_default"})
 
-    def test_the_pool_kwargs_round_trip_is_accepted(self) -> None:
-        """to_pool_kwargs -> pool.launch -> from_mapping is the internal path.
+    def test_the_pool_kwargs_round_trip_is_LOSSLESS(self) -> None:
+        """to_pool_kwargs -> pool.launch -> from_mapping must lose nothing.
 
-        Every internal caller (relaunch, roster, driver_relaunch, scenarios,
-        the recording replay route) reaches `pool.launch` this way, so a check
-        that rejected this shape would break all of them at once.
+        Every internal caller (relaunch, roster, driver_relaunch, scenarios, the
+        recording replay route) reaches `pool.launch` this way. The earlier
+        version of this test asserted only that the round trip was *accepted*,
+        and that is precisely how `base_url` hid: `to_pool_kwargs` named 27 keys
+        and omitted it, while `from_mapping` reads it and `launch_execution`
+        consumes it -- the same silent drop as `headless`, in the direction a
+        check on incoming keys cannot see. Both sides now derive from
+        CALLER_SETTABLE_FIELDS, so equality is the honest assertion.
         """
-        round_tripped = LaunchOptions(kind="chromium", url="about:blank").to_pool_kwargs()
-        assert LaunchOptions.from_mapping(round_tripped).url == "about:blank"
+        options = LaunchOptions(
+            kind="firefox",
+            url="about:blank",
+            base_url="https://dev.example",
+            label="round-trip",
+            har=True,
+        )
+        assert LaunchOptions.from_mapping(options.to_pool_kwargs()) == options
 
-    def test_an_empty_mapping_is_still_accepted(self) -> None:
-        """Every field has a default; supplying nothing is a legitimate launch."""
-        assert LaunchOptions.from_mapping({}).kind == "chromium"
+    def test_base_url_specifically_survives_the_pool_hop(self) -> None:
+        """Named on its own because it is the field that was lost."""
+        options = LaunchOptions(kind="chromium", base_url="https://dev.example")
+        assert LaunchOptions.from_mapping(options.to_pool_kwargs()).base_url == "https://dev.example"
+
+    def test_an_output_field_is_not_transported_either(self) -> None:
+        """`protected_reason` is the one exclusion, and it is the same on both sides."""
+        assert "protected_reason" not in LaunchOptions(kind="chromium").to_pool_kwargs()
+
+    def test_every_accepted_key_actually_constructs(self) -> None:
+        """The accepted set and the constructor cannot disagree.
+
+        This replaces a regex scrape of `from_mapping`'s source. Since the
+        construction is now a splat, the only way the two could diverge is a
+        field that cannot take its own default -- which this catches by
+        building from the set itself.
+        """
+        defaults = {f: getattr(LaunchOptions(), f) for f in CALLER_SETTABLE_FIELDS}
+        assert LaunchOptions.from_mapping(defaults) == LaunchOptions()

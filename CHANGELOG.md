@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while `parameters` is 1.9% and stays, since an agent that cannot see a
   macro's parameters cannot call it.
 
+- **`base_url` no longer disappears on the way to the pool.** `to_pool_kwargs()`
+  hand-listed 27 keys and omitted `base_url`, which `from_mapping` reads and
+  `launch_execution` consumes — so `LaunchOptions(base_url=...).to_pool_kwargs()`
+  lost it silently, exactly the way `pool.launch(headless=True)` lost its option.
+  Same defect, opposite direction, and a check that only inspects *incoming*
+  keys structurally cannot see it. Both sides now derive from one
+  `CALLER_SETTABLE_FIELDS` set, so the round trip is lossless by construction
+  and pinned by equality rather than by two hand-kept lists agreeing.
+
 - **A launch option octowright cannot read is refused instead of dropped.**
   `LaunchOptions.from_mapping` read every key by name and silently discarded
   the rest, so `pool.launch(headless=True)` — `headless` being Playwright's own

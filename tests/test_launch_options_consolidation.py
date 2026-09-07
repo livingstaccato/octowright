@@ -27,11 +27,19 @@ from octowright.browser_pool.options import LaunchOptions
 
 class TestToPoolKwargs:
     def test_round_trip_all_fields_populated(self) -> None:
-        """``to_pool_kwargs`` returns every LaunchOptions field as a kwarg.
+        """``to_pool_kwargs`` returns every caller-settable field as a kwarg.
 
-        A new field is the only thing that should break this test — if you
-        added one to LaunchOptions, add it to to_pool_kwargs and update the
-        golden dict below.
+        This docstring said "every field" while the golden dict below listed 27
+        and omitted ``base_url`` -- so the test asserted the very defect it read
+        as ruling out, and passed while ``LaunchOptions(base_url=...)
+        .to_pool_kwargs()`` silently dropped it.
+
+        ``to_pool_kwargs`` now derives its keys from ``CALLER_SETTABLE_FIELDS``,
+        the same set ``from_mapping`` accepts, so a new field appears here
+        without anyone editing it. The golden dict is kept anyway: derivation
+        makes the two SETS agree, and this is what still catches a field being
+        renamed or emitted with the wrong value. ``protected_reason`` is the one
+        exclusion, being an output of ``resolve_protected`` rather than an input.
         """
         opts = LaunchOptions(
             kind="firefox",
@@ -61,9 +69,11 @@ class TestToPoolKwargs:
             extra_http_headers={"X-Env": "staging"},
             extra_http_headers_urls=["**/api/**"],
             disable_gpu=True,
+            base_url="https://dev.test",
         )
         assert opts.to_pool_kwargs() == {
             "kind": "firefox",
+            "base_url": "https://dev.test",
             "url": "https://x.test",
             "headed": False,
             "label": "lab",
