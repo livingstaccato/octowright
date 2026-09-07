@@ -341,6 +341,14 @@ class SessionIOMixin(SessionLike):
         """
         from octowright.browser_pool.listeners import _wire_listeners
 
+        # Already listed: the context event can fire for a page some other path
+        # registered (adoption, an explicit open_url, a re-emitted event). A
+        # duplicate is not cosmetic -- page_index is the list position and
+        # page_count its length, so the recording, page_list and page_switch
+        # would all disagree with the browser about how many tabs exist.
+        # core_ops_mixin.open_url has guarded its own append all along.
+        if page in self.pages:
+            return
         self.pages.append(page)
         page_index = len(self.pages) - 1
         self.page_count = len(self.pages)
