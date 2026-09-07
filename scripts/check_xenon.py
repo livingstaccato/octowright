@@ -83,6 +83,18 @@ def main() -> int:
             print(f"  {line}")
         return 1
 
+    # A baseline is a ratchet, not a parking space. An entry whose violation is
+    # gone means a function was simplified, and leaving it behind silently
+    # pre-approves the NEXT regression in the same place -- which is how a
+    # complexity budget stops being a budget. Only checked on a full scan.
+    if set(args.paths) == set(parser.get_default("paths")):
+        stale = sorted(baseline - set(violations))
+        if stale:
+            print("xenon check failed: baseline entries no longer violate; delete them.")
+            for line in stale:
+                print(f"  {line}")
+            return 1
+
     print("xenon check passed (baseline only): no new complexity violations.")
     return 0
 
