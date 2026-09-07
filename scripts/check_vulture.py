@@ -8,8 +8,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess  # nosec B404
 from pathlib import Path
+
+# Drop the ":<lineno>" so an edit ABOVE a baselined finding does not shift it
+# into looking new. Proven, not theoretical: adding one line to web_parse.py
+# turned all three of its baselined callbacks into "new findings" and failed
+# the gate. check_xenon.py has stripped line numbers for exactly this reason
+# since it was written; this pass shipped without it.
+_LINENO_RE = re.compile(r"^(.*?\.py):\d+:")
+
+
+def _normalize(line: str) -> str:
+    return _LINENO_RE.sub(r"\1:", line.strip())
 
 
 def _load_baseline(path: Path) -> set[str]:
@@ -19,7 +31,7 @@ def _load_baseline(path: Path) -> set[str]:
     items = data.get("allow_findings", []) if isinstance(data, dict) else []
     if not isinstance(items, list):
         return set()
-    return {item for item in items if isinstance(item, str)}
+    return {_normalize(item) for item in items if isinstance(item, str)}
 
 
 # Vulture scores an unused FUNCTION, method or class at 60% confidence, so the
@@ -93,12 +105,26 @@ def main() -> int:
         return 0
 
     baseline = _load_baseline(args.baseline)
-    new_findings = sorted(set(lines) - baseline)
+    current = {_normalize(line) for line in lines}
+    new_findings = sorted(current - baseline)
     if new_findings:
         print("vulture check failed: new findings detected.")
         for line in new_findings:
             print(f"  {line}")
         return 1
+
+    # A baseline is a ratchet, not a parking space: an entry whose finding is
+    # gone means the code was fixed, and leaving it behind lets a LATER
+    # regression in the same place land silently pre-approved. Only checked on
+    # a full scan -- a caller narrowing --paths would otherwise see every
+    # unscanned entry as stale.
+    if not args.skip_dead_callables and set(args.paths) == set(parser.get_default("paths")):
+        stale = sorted(baseline - current)
+        if stale:
+            print("vulture check failed: baseline entries no longer occur; delete them.")
+            for line in stale:
+                print(f"  {line}")
+            return 1
 
     print("vulture check passed (baseline only): no new findings.")
     return 0
