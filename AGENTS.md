@@ -970,13 +970,23 @@ Strictness was checked against every caller before adoption rather than after:
 the internal paths (`relaunch`, `roster`, `driver_relaunch`, `scenarios`, the
 recording-replay route) all build explicit dicts, and the `to_pool_kwargs` →
 `from_mapping` round trip is clean. Only `POST /api/sessions` can carry
-arbitrary keys, and it already catches `ValueError`, so an unrecognised field
-becomes a **400 naming it** instead of a launch that ignored half the body.
+arbitrary keys, and its validation runs **inside** the route's `try`, so an
+unrecognised field becomes a **400 naming it** instead of a launch that ignored
+half the body. That placement is load-bearing rather than incidental: called
+above the `try` the `InvalidRequestError` escaped every handler — the app is
+built with no `exception_handlers` and `guard_sensitive_http` re-raises — so a
+client typo answered **500** with the key nowhere in the body, and paged
+whoever watches the 5xx rate for a caller's mistake. Three documents asserted
+the 400 while the code did the 500, because nothing exercised the route;
+`tests/test_http_server_writes.py` now does.
+
 `browser_launch` has a typed signature and was never affected — this is a
-library- and HTTP-caller footgun only. The refusal lands in
-`octowright_status()["pool"]["refusals"]` as `by_guard`
-`{"browser_pool.options": N}` with no wiring, since that tracker reads the
-module from the traceback.
+library- and HTTP-caller footgun only. A refusal raised inside
+`BrowserPool.launch` lands in `octowright_status()["pool"]["refusals"]` as
+`by_guard` `{"browser_pool.options": N}` with no wiring, since that tracker
+reads the module from the traceback. **The HTTP route's refusal does not**: it
+validates before entering `pool.launch`, so nothing reaches the tracker. That
+is the honest scope — the 400 is the signal on that surface, not the counter.
 
 **Honest scope: nothing about the classification is inherited.** Both sinks
 test `isinstance(exc, InvalidRequestError)`, so a new check written with the
