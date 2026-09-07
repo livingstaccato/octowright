@@ -44,6 +44,7 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.browser_pool.relaunch import handoff_browser
 from octowright.browser_pool.roster import close_all, spawn_roster
 from octowright.browser_pool.session_event_bus import session_event_bus
+from octowright.request_errors import InvalidRequestError
 from octowright.session import BrowserSession
 from octowright.session.operation.gate import SessionClosedError, SessionClosingError
 from tests._pool_invariants import hold_operation, wait_for_active, wait_for_state, wait_until
@@ -273,10 +274,16 @@ class TestLaunchOptionsSessionName:
 
 
 class TestLaunchOptionsFromMapping:
-    def test_unknown_keys_ignored(self) -> None:
-        """Unknown options in dict don't crash from_mapping."""
-        opts = LaunchOptions.from_mapping({"kind": "firefox", "extraneous": "drop me"})
-        assert opts.kind == "firefox"
+    def test_unknown_keys_are_refused(self) -> None:
+        """INVERTED: they used to be dropped silently.
+
+        This asserted "doesn't crash", which is what a silently discarded
+        option looks like from the outside. The caller went on believing the
+        option applied -- `pool.launch(headless=True)` launched a HEADED
+        browser. See tests/test_launch_option_rejection.py.
+        """
+        with pytest.raises(InvalidRequestError, match="extraneous"):
+            LaunchOptions.from_mapping({"kind": "firefox", "extraneous": "drop me"})
 
     def test_validate_called_during_construction(self) -> None:
         """from_mapping invokes validate() — bad input raises here."""

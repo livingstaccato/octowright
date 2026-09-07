@@ -27,6 +27,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while `parameters` is 1.9% and stays, since an agent that cannot see a
   macro's parameters cannot call it.
 
+- **A launch option octowright cannot read is refused instead of dropped.**
+  `LaunchOptions.from_mapping` read every key by name and silently discarded
+  the rest, so `pool.launch(headless=True)` — `headless` being Playwright's own
+  parameter name, and so the natural guess — launched a **headed** browser and
+  the caller never learned otherwise. It now raises `InvalidRequestError`
+  naming the unknown key, with the inverted `headed` spelling suggested for
+  `headless`. The accepted set is derived from the launch-option fields rather
+  than listed, and pinned against the keys `from_mapping` actually reads.
+  `browser_launch` has a typed signature and was never affected; `POST
+  /api/sessions` with an unrecognised field now answers 400 rather than
+  launching while ignoring part of the body.
+
 ### Fixed
 - **A crashed Chromium profile no longer opens behind "Restore pages?".**
   Chromium records the previous run's outcome in the profile and the flag is
@@ -64,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   module crashes browsers on purpose says so, and the tools state plainly when
   correlation cannot work rather than reporting no crashes.
 - `CLAUDE.md` is a symlink to `AGENTS.md`, so there is one truth.
+- Pre-commit hooks are scoped to the `pre-commit` and `pre-push` stages. A hook
+  declaring no `stages:` of its own runs at *every* stage, so one `git commit`
+  ran the whole battery twice — vulture, xenon and detect-secrets included.
 
 ## [0.21.0] - 2026-09-06
 

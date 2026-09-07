@@ -6,15 +6,31 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from octowright import defaults
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
 from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
 from octowright.request_errors import InvalidRequestError
+
+#: Dataclass fields that are OUTPUTS rather than caller inputs.
+#: ``protected_reason`` is written by ``resolve_protected`` to explain why a
+#: browser ended up protected; a caller supplying it would be describing a
+#: decision that has not been made yet.
+_NOT_CALLER_SETTABLE: Final = frozenset({"protected_reason"})
+
+#: Names a caller plausibly reaches for that mean something else here, mapped to
+#: what they should have written. ``headless`` is Playwright's OWN parameter
+#: name and therefore the natural guess -- it is the one that actually bit:
+#: ``pool.launch(headless=True)`` was accepted, silently dropped, and launched a
+#: HEADED browser, because ``from_mapping`` reads each key by name and ignores
+#: the rest.
+_MISLEADING_ALIASES: Final = {
+    "headless": "headed (inverted -- headless=True is headed=False)",
+}
 
 #: Playwright's ``channel`` param picks a real installed browser build instead
 #: of the bundled one (e.g. system Chrome/Edge, for native GPU/DRM/codec
@@ -185,7 +201,44 @@ class LaunchOptions:
     disable_gpu: bool | None = None
 
     @classmethod
+    def caller_settable_fields(cls) -> frozenset[str]:
+        """Launch option names a caller may supply.
+
+        Derived from the dataclass rather than listed, so a new field cannot be
+        rejected by an accept-list nobody remembered to update.
+        ``tests/test_launch_option_rejection.py`` pins this against the keys
+        ``from_mapping`` actually reads, so the two cannot drift apart.
+        """
+        return frozenset(f.name for f in fields(cls)) - _NOT_CALLER_SETTABLE
+
+    @classmethod
+    def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
+        """Refuse an option this class will not read.
+
+        ``from_mapping`` reads every key by name, so anything it does not
+        recognise was silently discarded -- and the caller went on believing the
+        option took effect. That is not hypothetical: ``pool.launch(headless=
+        True)`` launched a HEADED browser and cost a wasted investigation run.
+
+        Raising is the repository's established answer to a flag the caller
+        believes took effect (``serve --wait-ready`` refuses ``--no-singleton``
+        rather than quietly ignoring it). ``InvalidRequestError`` specifically,
+        so a caller's mistake is never filed as an engine fault -- see
+        ``BrowserPool._record_engine_health``. It subclasses ``ValueError``, so
+        the HTTP route's existing handler turns this into a 400 naming the key.
+        """
+        unknown = sorted(set(options) - cls.caller_settable_fields())
+        if not unknown:
+            return
+        described = [
+            f"{key!r} (did you mean {_MISLEADING_ALIASES[key]}?)" if key in _MISLEADING_ALIASES else repr(key)
+            for key in unknown
+        ]
+        raise InvalidRequestError(f"unknown launch option(s): {', '.join(described)}")
+
+    @classmethod
     def from_mapping(cls, options: dict[str, Any]) -> LaunchOptions:
+        cls._reject_unknown_options(options)
         launch_options = cls(
             kind=options.get("kind", "chromium"),
             url=options.get("url"),
