@@ -1,3 +1,10 @@
+# Hooks with no `stages:` of their own would otherwise run at EVERY stage,
+# including commit-msg -- so a single `git commit` ran the whole battery twice,
+# vulture, xenon and detect-secrets included. `default_stages` scopes them to
+# the two that matter; commitlint ([commit-msg]) and pytest-quick ([pre-push])
+# declare their own and are unaffected.
+default_stages: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
