@@ -61,7 +61,7 @@ The next `octowright_status` or `octowright_advisor_status` call shows a `macro_
 
 ## Macro Management
 
-**Reuse:** Check `macro_list` before manually implementing a common flow (login, form submit, navigation sequence).
+**Reuse:** Check `macro_list` before manually implementing a common flow (login, form submit, navigation sequence). It is paged: `response_mode="families"` returns only a prefix roll-up (a 337-macro corpus answers in ~4k characters instead of ~400k), then filter with `prefix`/`contains` and page with `cursor`.
 
 **Evolve:** If a macro fails, identify the correct new selectors, then call `macro_save` to update it. Don't patch the current session in isolation.
 

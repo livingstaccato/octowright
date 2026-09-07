@@ -13,13 +13,13 @@ from mcp.server.mcpserver import Context
 
 import octowright.macros as macro_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.macros import listing as macro_listing
 from octowright.mcp_types import (
     CleanupResult,
     MacroCompileResult,
     MacroDeleteResult,
     MacroLintIssue,
     MacroLintResult,
-    MacroListEntry,
     MacroRepairApplyResult,
     MacroRepairPreviewResult,
     MacroRunResult,
@@ -59,9 +59,34 @@ def macro_save(
     return {"saved": True, "name": name, "path": str(path)}
 
 
-@mcp.tool(structured_output=False, description="List saved macros with their parameters and metadata.")
-def macro_list() -> list[MacroListEntry]:
-    return macro_mod.list_macros()
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "List saved macros, newest first, in bounded pages. Filter with prefix/contains, page with "
+        "cursor. response_mode='families' rolls the flat namespace up by naming prefix and lists no "
+        "macros at all -- ask for that first when you do not know what exists, then filter. "
+        "'summary' (default) caps descriptions and omits paths; 'full' returns every field."
+    ),
+)
+def macro_list(
+    prefix: str | None = None,
+    contains: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+    response_mode: str = "summary",
+) -> dict[str, Any]:
+    # Unbounded, this returned every macro with every description: 402,942
+    # characters on a real 337-macro machine, in a tool that ships in the
+    # `macros` capability profile. See macros/listing.py.
+    return macro_listing.select_macros(
+        macro_mod.list_macros(),
+        prefix=prefix,
+        contains=contains,
+        limit=limit,
+        cursor=cursor,
+        response_mode=response_mode,
+        root=str(macro_mod.MACROS_DIR),
+    )
 
 
 @mcp.tool(structured_output=False, description="Plan/update a saved macro artifact manifest without running it.")

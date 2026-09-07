@@ -36,7 +36,13 @@ def test_macro_save_list_delete(_patch_deps: dict[str, MagicMock]) -> None:
     deleted = _macros.macro_delete("m")
 
     assert saved["saved"] is True
-    assert listed == [{"name": "m"}]
+    # macro_list returns a bounded envelope, not a bare list: unbounded it put
+    # 402,942 characters on the transport from a real 337-macro directory.
+    # See macros/listing.py and tests/test_macro_listing.py.
+    assert [row["name"] for row in listed["macros"]] == ["m"]
+    assert listed["total"] == 1
+    assert listed["truncated"] is False
+    assert listed["next_cursor"] is None
     assert deleted["deleted"] is True
 
 

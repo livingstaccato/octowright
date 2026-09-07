@@ -11,8 +11,9 @@ Task: $ARGUMENTS
 ## Steps
 
 1. **Resolve the macro.** Parse `$ARGUMENTS` for a macro name (and optionally
-   a target session or persona). If no macro name is given, call `macro_list`
-   and ask the user to choose.
+   a target session or persona). If no macro name is given, call
+   `macro_list(response_mode="families")` to see what exists, then
+   `macro_list(prefix="<family>-")`, and ask the user to choose.
 
 2. **Resolve the session.** If a session or persona was specified, find the
    matching `instance_id` from `octowright_status`. If none exists, launch one:

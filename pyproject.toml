@@ -392,6 +392,7 @@ source_paths = [
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
 # etc.), so we point it at the targeted unit suites only.
 pytest_add_cli_args_test_selection = [
+    "tests/test_macro_listing.py",
     "tests/test_launch_page_selection.py",
     "tests/test_adopt_untracked_pages.py",
     "tests/artifacts_paths/test_run_id_containment.py",
