@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from octowright import goldens as goldens_mod
+from octowright.listing import match_name, order_newest_first, paginate
 from octowright.server._state import mcp, pool
 from octowright.server.browser._operation import browser_operation
 
@@ -91,8 +92,17 @@ async def golden_verify_loop(instance_id: str, name: str) -> dict[str, Any]:
 
 
 @mcp.tool(structured_output=False, description="List saved goldens.")
-def golden_list() -> list[dict[str, Any]]:
-    return goldens_mod.list_goldens()
+def golden_list(
+    prefix: str | None = None,
+    contains: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+) -> dict[str, Any]:
+    # Bounded like macro_list: goldens hold accessibility trees and accumulate
+    # without any pruning, so an unbounded list is a context bomb waiting for a
+    # busy project. See octowright.listing.
+    matching = order_newest_first(match_name(goldens_mod.list_goldens(), prefix=prefix, contains=contains))
+    return paginate(matching, limit=limit, cursor=cursor, build_row=dict)
 
 
 @mcp.tool(structured_output=False, description="Delete a saved golden by name.")

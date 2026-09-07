@@ -40,28 +40,31 @@ helpers behind the ``macro_explain`` tool.
 
 from __future__ import annotations
 
-import json
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
-# Chosen so an ordinary listing is a few thousand characters. Paging is one
-# extra round trip; an unbounded first response is a lost conversation.
-MACRO_LIST_DEFAULT_LIMIT: Final = 50
-MACRO_LIST_MAX_LIMIT: Final = 500
+from octowright.listing import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    MAX_RESPONSE_CHARS,
+    match_name,
+    order_newest_first,
+    paginate,
+    resolve_limit,
+)
 
-# Ceiling on the rows a single call may serialize. Sized well above a default
-# summary page, so an ordinary call never meets it.
-MACRO_LIST_MAX_RESPONSE_CHARS: Final = 60_000
+# Re-exported under the macro-specific names this module's callers and tests
+# already use; the values and the rules behind them live in octowright.listing,
+# shared with golden_list/persona_list/profile_list/scenario_list.
+MACRO_LIST_DEFAULT_LIMIT: Final = DEFAULT_LIMIT
+MACRO_LIST_MAX_LIMIT: Final = MAX_LIMIT
+MACRO_LIST_MAX_RESPONSE_CHARS: Final = MAX_RESPONSE_CHARS
 
 # Enough to tell two macros apart; the average saved description is ~844
 # characters, which is the 85.5% this exists to cut.
 MACRO_LIST_SUMMARY_DESCRIPTION_CHARS: Final = 120
 
 RESPONSE_MODES: Final = ("summary", "full", "families")
-
-# A per-row constant covering the JSON structure the row's own strings sit in,
-# so the budget cannot be walked past by many tiny rows.
-_ROW_OVERHEAD_CHARS: Final = 24
 
 _FAMILY_SEPARATORS: Final = ("-", "_", ".")
 
@@ -76,37 +79,6 @@ def family_of(name: str) -> str:
         if separator in name:
             return name.split(separator, 1)[0]
     return name
-
-
-def resolve_limit(limit: int | None) -> int:
-    """Rows per call: default when unset or non-positive, clamped to the max.
-
-    Non-positive resolving to the DEFAULT (never to unbounded) is the point:
-    ``limit=0`` reads as "no limit" in many APIs, and here that is exactly the
-    response this module exists to prevent.
-    """
-    if limit is None or limit <= 0:
-        return MACRO_LIST_DEFAULT_LIMIT
-    return min(limit, MACRO_LIST_MAX_LIMIT)
-
-
-def _ordered(entries: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    """Newest first, ties broken by name.
-
-    Two passes rather than one composite key: a single ``reverse=True`` sort
-    would reverse the NAME tiebreak as well as the date. Python's sort is
-    stable, so sorting by name and then by date descending leaves same-second
-    macros in ascending name order.
-    """
-    by_name = sorted(entries, key=lambda entry: str(entry.get("name") or ""))
-    return sorted(by_name, key=lambda entry: str(entry.get("updated_at") or ""), reverse=True)
-
-
-def _matches(entry: Mapping[str, Any], prefix: str | None, contains: str | None) -> bool:
-    name = str(entry.get("name") or "")
-    if prefix and not name.startswith(prefix):
-        return False
-    return not (contains and contains.lower() not in name.lower())
 
 
 def _summary_row(entry: Mapping[str, Any]) -> dict[str, Any]:
@@ -138,35 +110,6 @@ def _families(entries: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str
     return ordered[:limit]
 
 
-def _page_rows(
-    matching: Sequence[Mapping[str, Any]],
-    *,
-    start: int,
-    limit: int,
-    response_mode: str,
-) -> tuple[list[dict[str, Any]], int]:
-    """One page of rows, and the absolute index of the first row NOT returned.
-
-    Two bounds apply together, because a row cap does not bound size: at most
-    ``limit`` rows, and at most ``MACRO_LIST_MAX_RESPONSE_CHARS`` of serialized
-    row content.
-    """
-    rows: list[dict[str, Any]] = []
-    budget = MACRO_LIST_MAX_RESPONSE_CHARS
-    index = start
-    for entry in matching[start : start + limit]:
-        row = dict(entry) if response_mode == "full" else _summary_row(entry)
-        cost = len(json.dumps(row, default=str)) + _ROW_OVERHEAD_CHARS
-        # The first row is returned even when it alone exceeds the budget, or a
-        # caller pages forever on a row that can never fit.
-        if rows and cost > budget:
-            break
-        budget -= cost
-        rows.append(row)
-        index += 1
-    return rows, index
-
-
 def select_macros(
     entries: Sequence[Mapping[str, Any]],
     *,
@@ -182,7 +125,7 @@ def select_macros(
         raise ValueError(f"response_mode must be one of {', '.join(RESPONSE_MODES)}; got {response_mode!r}")
 
     resolved_limit = resolve_limit(limit)
-    matching = _ordered([entry for entry in entries if _matches(entry, prefix, contains)])
+    matching = order_newest_first(match_name(entries, prefix=prefix, contains=contains))
 
     if response_mode == "families":
         families = _families(matching, resolved_limit)
@@ -194,16 +137,21 @@ def select_macros(
             "root": root,
         }
 
-    # Negative arrives from an LLM-supplied int and would slice from the end.
-    start = max(0, cursor)
-    rows, index = _page_rows(matching, start=start, limit=resolved_limit, response_mode=response_mode)
-    more = index < len(matching)
+    page = paginate(
+        matching,
+        limit=resolved_limit,
+        cursor=cursor,
+        # `dict` copies: handing back the stored mapping would let one caller's
+        # in-place edit rewrite what every later reader sees, the defect
+        # _select_console_tail and the websocket registry each had.
+        build_row=dict if response_mode == "full" else _summary_row,
+    )
     return {
-        "macros": rows,
-        "total": len(matching),
-        "returned": len(rows),
-        "truncated": more,
-        "next_cursor": index if more else None,
+        "macros": page["items"],
+        "total": page["total"],
+        "returned": page["returned"],
+        "truncated": page["truncated"],
+        "next_cursor": page["next_cursor"],
         "response_mode": response_mode,
         "root": root,
     }

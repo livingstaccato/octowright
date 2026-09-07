@@ -38,6 +38,27 @@ expect it to be alive -- immediate, attributable to the block that caused it, an
 independent of crashpad's pruning. Fresh macOS ``.ips`` reports are counted
 alongside as corroboration only.
 
+**Measured limitation -- a clean run here is NOT evidence of absence.** On
+Chrome for Testing 151.0.7922.34 this harness produced **912 headed launches
+across interleaved gpu-on/gpu-off blocks with zero crashes**, and minutes later
+a browser died during an ordinary ``make test`` with the byte-exact
+characterized signature: ``EXC_BREAKPOINT``/``SIGTRAP`` on ``CrBrowserMain``,
+reached through ``__CFRUNLOOP_IS_CALLING_OUT_TO_A_SOURCE0_PERFORM_FUNCTION__``,
+2.2 seconds after launch. So the bug is present on 151 and this harness does
+not reproduce it.
+
+The likely reason is the isolation this script was built with. It drives **raw
+Playwright** -- ``chromium.launch()``, an ephemeral context, ``about:blank``,
+no octowright code at all -- chosen to mirror ``doctor``'s engine probes. That
+removes precisely the variables the crashing workload has: persistent profile
+contexts, the init scripts injected into every page (badge, title, macro pill),
+the viewport binding, and real navigation. The suite that crashed goes through
+``BrowserPool``. **Next change to make here: add an arm that launches through
+``BrowserPool``**, so the comparison is raw-vs-octowright as well as gpu on/off.
+
+Rate matters too: one crash report in 24 hours on a machine doing real work.
+Any A/B must compare episode counts over matched wall-clock and run for hours.
+
 Usage::
 
     uv run --active python scripts/characterize_headed_crash.py --rounds 1 --arms gpu-on

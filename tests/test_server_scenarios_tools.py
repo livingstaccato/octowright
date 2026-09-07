@@ -61,7 +61,7 @@ def test_scenario_list_and_status(_patch_deps: dict[str, MagicMock], monkeypatch
     monkeypatch.setattr(_scenarios.scenario_mod, "list_scenarios", lambda: [{"name": "demo"}])
     _patch_deps["scenario_pool"].list_live.return_value = [{"scenario_id": "s1", "participants": []}]
     monkeypatch.setattr(_scenarios.fmt, "scenario_summary", lambda live: f"{len(live)} live")
-    assert _scenarios.scenario_list() == [{"name": "demo"}]
+    assert _scenarios.scenario_list()["items"] == [{"name": "demo"}]
     out = _scenarios.scenario_status()
     assert out["summary"] == "1 live"
     assert out["count"] == 1

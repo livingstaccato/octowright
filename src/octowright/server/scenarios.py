@@ -18,6 +18,7 @@ from octowright import runner as runner_mod
 from octowright import scenarios as scenario_mod
 from octowright._paths import reject_unsafe_path
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
+from octowright.listing import match_name, order_newest_first, paginate
 from octowright.mcp_types import (
     ScenarioParticipant,
     ScenarioParticipantsResult,
@@ -39,8 +40,14 @@ from octowright.server._state import mcp, pool, scenario_pool
 
 
 @mcp.tool(structured_output=False, description="List scenario specs on disk (YAML or Python).")
-def scenario_list() -> list[dict[str, Any]]:
-    return scenario_mod.list_scenarios()
+def scenario_list(
+    prefix: str | None = None,
+    contains: str | None = None,
+    limit: int | None = None,
+    cursor: int = 0,
+) -> dict[str, Any]:
+    matching = order_newest_first(match_name(scenario_mod.list_scenarios(), prefix=prefix, contains=contains))
+    return paginate(matching, limit=limit, cursor=cursor, build_row=dict)
 
 
 @mcp.tool(
