@@ -56,6 +56,7 @@ from typing import Any, Final
 from provide.telemetry import get_logger
 
 from octowright._paths import atomic_write_text
+from octowright.browser_pool.singleton_locks import profile_lock_present
 
 log = get_logger(__name__)
 
@@ -133,12 +134,28 @@ def _clear_one(prefs: Path) -> None:
 def clear_crash_restore_prompt(user_data_dir: Path) -> None:
     """Mark every profile under *user_data_dir* as having exited cleanly.
 
-    Call this immediately before ``launch_persistent_context``: the browser is
-    not running, so the rewrite races nothing, and Chromium reads the file on
-    startup. A user-data-dir normally holds one profile (``Default``), but it
-    may hold several, and a prompt from any of them lands on the user.
+    Call this immediately before ``launch_persistent_context``. Chromium reads
+    the file on startup, and a user-data-dir normally holds one profile
+    (``Default``) though it may hold several -- a prompt from any of them lands
+    on the user.
+
+    **Refuses to write a profile something else is holding.** An earlier version
+    of this docstring reasoned that "the browser is not running, so the rewrite
+    races nothing", which is only true of the browser THIS call is about to
+    start. Nothing stopped a second process launching the same persona from
+    read-modify-writing ``Preferences`` under a live Chromium -- violating its
+    single-writer assumption and able to clobber the running session's state --
+    in the window before Playwright's own lock check refused the launch. The
+    caller prunes provably-dead locks first, so a lock still present means a
+    live or unverifiable owner, and this leaves the file alone.
+
+    Windows gets no protection here: Chromium writes the Singleton trio only on
+    POSIX, so there is no lock to consult (see ``profile_lock_present``).
     """
     if not suppress_restore_prompt():
+        return
+    if profile_lock_present(user_data_dir):
+        log.debug("browser.restore_prompt_skipped_profile_in_use", path=str(user_data_dir))
         return
     try:
         candidates = sorted(user_data_dir.glob(f"*/{_PREFERENCES}"))
