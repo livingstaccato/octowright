@@ -138,11 +138,32 @@ Working hypothesis: headed Chromium 151 aborts during its own graceful
 shutdown on the native AppKit path, conditional on something the clean ``pool``
 blocks did not have.
 
-The decisive run still outstanding is ``--launchers raw,pool``: ``raw`` also
-closes gracefully but has none of ours in the picture. Given the crash sits in
-the native AppKit event path, the pool-only difference to suspect first is
-``browser_pool/options.py``'s tile placement, which passes window
-position/size argv the raw arm never sends.
+**That decisive run was then attempted, and found nothing.** Six interleaved
+rounds of ``raw``/``pool`` an hour later, ``raw`` deliberately first so the
+run's first-block position went to the arm hypothesised clean::
+
+    raw    0 reports / 1262 launches / 6 blocks
+    pool   0 reports /  872 launches / 6 blocks
+
+Zero new reports on the machine at all. **That is not "no difference between
+the arms" -- the crash did not occur, so there was nothing to compare**, and
+the question is still open. The exposure comparison is the part worth keeping:
+the same ``pool`` arm scored 26 in 134 launches earlier the same afternoon and
+0 in 872 launches an hour later, so the burst is conditional on machine state
+rather than on the arm.
+
+**So do not reach for another blind A/B first.** Each 36-minute run is a coin
+flip on whether the machine is even in the state, and the rate note above
+already puts it at roughly one report per 24h of real work. Every field
+observation came from the suite running, and the only correlation ever obtained
+came from ``scripts/watch_test_timeline.py --correlate --newest-crash
+--crash-thread CrBrowserMain``. Use that to find the state; use this harness to
+A/B a hypothesis once it is known.
+
+The pool-only difference to suspect first, when there is something to test
+against, is ``browser_pool/options.py``'s tile placement -- it passes window
+position/size argv the raw arm never sends, and the crash sits in the native
+AppKit event path.
 
 **Reading this arm's ``.ips`` column needs the faulting thread, not a count.**
 Killing a driver makes its children abort, and those aborts write crash reports
