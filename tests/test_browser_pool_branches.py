@@ -1899,6 +1899,49 @@ class TestCloseCoordinatorFinallyResilience:
 
         await wait_until(lambda: session.instance_id not in pool._closing_sessions)
 
+    @pytest.mark.anyio
+    async def test_fallback_browser_close_gets_a_short_budget_after_context_close_times_out(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Once context.close() has already timed out, the teardown's fallback
+        close_handle.close() attempt is almost always the SAME unresponsive
+        target -- it must not stack a second full timeout budget on top of
+        the first. Both mocks are wedged forever; the whole close() call must
+        still resolve close to the FAST fallback budget, not roughly double
+        the primary one."""
+        from octowright.browser_pool import close_helpers as _lc
+        from octowright.session import core_teardown_helpers as _teardown_helpers
+        from octowright.session import timeouts as _timeouts
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        monkeypatch.delenv("OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS", raising=False)
+        # Deliberately far apart: without the fast-path fix, the fallback
+        # would wait the full DEFAULT budget again (~2.0s total); with it,
+        # the fallback is bounded to the much smaller FAST budget (~1.05s
+        # total) -- the two are easy to tell apart even with test-suite
+        # timing jitter.
+        monkeypatch.setattr(_timeouts, "DEFAULT_UNBOUNDED_CALL_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(_teardown_helpers, "_FALLBACK_CLOSE_FAST_TIMEOUT_SECONDS", 0.05)
+
+        async def _wedged(*_a: object, **_kw: object) -> None:
+            await asyncio.sleep(3600)
+
+        session.context.close.side_effect = _wedged
+        browser = MagicMock()
+        browser.close = AsyncMock(side_effect=_wedged)
+        session.browser = browser
+
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(SessionCallTimeoutError, match="browser_close_context"):
+            await asyncio.wait_for(pool.close(session.instance_id, force=True), timeout=5.0)
+        elapsed = asyncio.get_running_loop().time() - started
+
+        assert elapsed > 0.9  # the primary DID actually time out, not skipped
+        assert elapsed < 1.5  # and the fallback did NOT stack a second full DEFAULT wait
+        browser.close.assert_awaited()
+
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
+
 
 # ─── Compound close operations (Task 8): preparation-at-ticket atomicity ────
 
