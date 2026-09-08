@@ -530,7 +530,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
             # empties `context.pages`, so anything read afterwards describes
             # nothing. Only used when the resolved video turns out empty.
             self._pages_at_close = _teardown.describe_context_videos(self)
-            await self.context.close()
+            await bounded(self.context.close(), operation="browser_close_context")
             await _teardown.resolve_video_path_after_close(self)
         finally:
             await _teardown.close_browser_handle_after_context_close(self)

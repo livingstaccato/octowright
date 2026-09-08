@@ -47,6 +47,7 @@ from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.request_errors import InvalidRequestError
 from octowright.session import BrowserSession
 from octowright.session.operation.gate import SessionClosedError, SessionClosingError
+from octowright.session.timeouts import SessionCallTimeoutError
 from tests._pool_invariants import hold_operation, wait_for_active, wait_for_state, wait_until
 
 
@@ -1869,6 +1870,34 @@ class TestCloseCoordinatorFinallyResilience:
             await asyncio.wait_for(pool.close("broken1", force=True), timeout=2.0)
 
         await wait_until(lambda: "broken1" not in pool._closing_sessions)
+
+    @pytest.mark.anyio
+    async def test_unresponsive_context_close_is_bounded_not_a_hang(
+        self, pool: BrowserPool, session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A browser that stops answering CDP during ``context.close()`` must
+        fail the close after the timeout budget, not wedge every caller of
+        ``reservation.wait()`` forever. Reproduces a real multi-hour hang
+        observed on Windows: the driver and browser processes sat idle
+        (near-zero CPU on both) awaiting a CDP reply that never came, because
+        ``context.close()``/``browser.close()`` were the only unbounded
+        Playwright calls in the teardown path not wrapped in ``bounded()``."""
+        from octowright.browser_pool import close_helpers as _lc
+        from octowright.session import timeouts as _timeouts
+
+        monkeypatch.setattr(_lc, "remove_manifest_session", lambda _id: None)
+        monkeypatch.delenv("OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS", raising=False)
+        monkeypatch.setattr(_timeouts, "DEFAULT_UNBOUNDED_CALL_TIMEOUT_SECONDS", 0.05)
+
+        async def _wedged(*_a: object, **_kw: object) -> None:
+            await asyncio.sleep(3600)
+
+        session.context.close.side_effect = _wedged
+
+        with pytest.raises(SessionCallTimeoutError, match="browser_close_context"):
+            await asyncio.wait_for(pool.close(session.instance_id, force=True), timeout=2.0)
+
+        await wait_until(lambda: session.instance_id not in pool._closing_sessions)
 
 
 # ─── Compound close operations (Task 8): preparation-at-ticket atomicity ────
