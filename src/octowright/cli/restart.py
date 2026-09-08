@@ -61,8 +61,17 @@ _FORCE_KILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
 
 
 def _resolve_octowright_entry() -> str:
-    """Path to the installed ``octowright`` console script for this interpreter."""
-    venv_bin = Path(sys.executable).parent / "octowright"
+    """Path to the installed ``octowright`` console script for this interpreter.
+
+    Windows console scripts are always named ``<name>.exe`` -- ``sys.executable``
+    is ``...\\Scripts\\python.exe``, so the venv-neighbour candidate needs the
+    same suffix, or ``.exists()`` is always False there and this silently falls
+    through to the PATH lookup below on every Windows machine, never actually
+    preferring the current venv (which matters: a stale/different version on
+    PATH would then respawn the daemon from the wrong install).
+    """
+    suffix = ".exe" if sys.platform == "win32" else ""
+    venv_bin = Path(sys.executable).parent / f"octowright{suffix}"
     if venv_bin.exists():
         return str(venv_bin)
     import shutil
