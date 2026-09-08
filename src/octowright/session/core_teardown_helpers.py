@@ -23,6 +23,12 @@ from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
+# Used only when the context.close() this precedes already timed out -- the
+# target is already confirmed unresponsive, so this best-effort fallback gets
+# a short budget instead of a second full DEFAULT_UNBOUNDED_CALL_TIMEOUT_SECONDS
+# wait on what is almost always the same wedged process.
+_FALLBACK_CLOSE_FAST_TIMEOUT_SECONDS = 3.0
+
 
 async def stop_trace_if_enabled(session: Any) -> None:
     if not session.trace:
@@ -53,7 +59,7 @@ async def resolve_video_path_after_close(session: Any) -> None:
         )
 
 
-async def close_browser_handle_after_context_close(session: Any) -> None:
+async def close_browser_handle_after_context_close(session: Any, *, fast_timeout: bool = False) -> None:
     close_handle = getattr(session, "_browser_for_close", None) or session.browser
     if close_handle is None:
         return
@@ -63,8 +69,12 @@ async def close_browser_handle_after_context_close(session: Any) -> None:
     # continue. Also bounded: an unresponsive browser process can leave this
     # awaiting a CDP reply that never comes (observed on Windows as a
     # multi-hour wedge with near-zero CPU on both the driver and the browser).
+    # ``fast_timeout`` -- set when context.close() itself just timed out on
+    # this same session -- shortens the budget instead of stacking a second
+    # full wait on what is almost always the same wedged target.
+    timeout = _FALLBACK_CLOSE_FAST_TIMEOUT_SECONDS if fast_timeout else None
     try:
-        await bounded(close_handle.close(), operation="browser_close_handle")
+        await bounded(close_handle.close(), operation="browser_close_handle", timeout=timeout)
     except Exception as exc:
         log.debug(
             "octowright.session.browser_close_after_context_close_failed",
