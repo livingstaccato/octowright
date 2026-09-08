@@ -206,6 +206,7 @@ from typing import Any
 from playwright.async_api import async_playwright
 
 from octowright.browser_pool.crash_reports import DEFAULT_REPORTS_DIR
+from octowright.session.timeouts import bounded
 
 # Matches the shipped knob's flag set exactly; testing a different one would
 # answer a question nobody can act on.
@@ -348,7 +349,12 @@ async def _one_cycle(browser_type: Any, args: list[str], count: int, state: dict
     for browser in browsers:
         browser._expected_close = True
         try:
-            await browser.close()
+            # Bounded: an unresponsive browser leaves this awaiting a CDP
+            # reply that never comes -- observed as a 15+ hour wedge with
+            # near-zero CPU on both the driver and the orphaned browser, the
+            # same class of hang the octowright.session.timeouts module
+            # exists to bound everywhere else in the codebase.
+            await bounded(browser.close(), operation="raw_browser_close")
         except Exception as exc:
             errors.append(f"close {type(exc).__name__}: {exc}"[:160])
     return errors
