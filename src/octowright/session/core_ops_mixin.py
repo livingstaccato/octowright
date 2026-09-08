@@ -17,7 +17,7 @@ from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.a11y_dragdrop import run_a11y_dragdrop
 from octowright.session.operation.gate import gated_operation
-from octowright.session.timeouts import bounded
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 from octowright.session.viewport_ops import SessionViewportMixin
 
 log = get_logger(__name__)
@@ -523,6 +523,12 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
     async def _teardown_after_close_cutoff(self, *, reason: str | None = None) -> None:
         from octowright.session import core_teardown_helpers as _teardown
 
+        # Set when context.close() itself timed out -- the finally block's own
+        # close_handle.close() attempt below is then almost certainly the SAME
+        # unresponsive target, so it gets a much smaller budget instead of a
+        # second full wait stacked on top of the first (observed doubling the
+        # total close latency for a target already known to be unresponsive).
+        context_close_timed_out = False
         try:
             await self._drain_background_tasks()
             await _teardown.stop_trace_if_enabled(self)
@@ -530,10 +536,14 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
             # empties `context.pages`, so anything read afterwards describes
             # nothing. Only used when the resolved video turns out empty.
             self._pages_at_close = _teardown.describe_context_videos(self)
-            await bounded(self.context.close(), operation="browser_close_context")
+            try:
+                await bounded(self.context.close(), operation="browser_close_context")
+            except SessionCallTimeoutError:
+                context_close_timed_out = True
+                raise
             await _teardown.resolve_video_path_after_close(self)
         finally:
-            await _teardown.close_browser_handle_after_context_close(self)
+            await _teardown.close_browser_handle_after_context_close(self, fast_timeout=context_close_timed_out)
             _teardown.flush_and_close_websocket_fh(self)
             self.recorder.record("close", **_teardown.close_recorder_fields(self, reason))
             self.recorder.close()
