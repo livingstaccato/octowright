@@ -14,12 +14,16 @@ and serves both stdio MCP and HTTP MCP. Subsequent instances become
 HTTP MCP endpoint instead of spawning their own pool.
 
 The leader-election decision (read-probe-then-maybe-spawn) is serialised
-across processes by ``election_lock``, an advisory ``fcntl.flock`` on a
-sibling lockfile. Without it, two simultaneous starters could both observe
-"no live leader" and both spawn a daemon; the second daemon would silently
-bind a different port and leave followers bridging to the abandoned one.
-On Windows (no fcntl) the lock is a no-op and the original race remains —
-self-corrects on the next boot via the PID + HTTP probe.
+across processes by ``election_lock``, an advisory lock on a sibling
+lockfile — ``fcntl.flock`` on POSIX, ``msvcrt.locking`` on Windows. Without
+it, two simultaneous starters could both observe "no live leader" and both
+spawn a daemon; the second daemon would silently bind a different port and
+leave followers bridging to the abandoned one. Reproduced live on Windows
+with 8 concurrent starters and no lock: all 8 observed "no live leader" and
+all 8 spawned a competing daemon for the same canonical port — not a rare
+edge case once real concurrency is applied, which is why Windows gets a real
+lock rather than relying on the PID + HTTP probe to self-correct after the
+fact.
 """
 
 from __future__ import annotations
@@ -89,6 +93,10 @@ def write_lock(info: LeaderInfo, path: Path = LOCK_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # chmod is a no-op on Windows for mode bits beyond read-only; the
     # invocation is still safe and keeps the POSIX path single-branched.
+    # Verified not a gap in practice -- see private_paths.py's module
+    # docstring for the icacls evidence: a Windows per-user profile ACL
+    # already excludes every other local account from this file's parent
+    # tree, chmod or no chmod.
     if os.name != "nt":
         try:
             path.parent.chmod(0o700)
@@ -202,6 +210,52 @@ def _release_flock(fh: Any) -> None:
         pass
 
 
+def _try_msvcrt_lock(fh: Any) -> bool:
+    """Windows equivalent of :func:`_try_flock`: a non-blocking exclusive
+    lock on a single byte of the sibling lockfile, via ``msvcrt.locking``.
+
+    ``msvcrt.locking`` locks a BYTE RANGE from the file's current position,
+    not the whole file like ``flock`` -- so every caller must seek to the
+    same offset (0) first, which is why this and :func:`_release_msvcrt_lock`
+    both do it. Verified empirically (not assumed): a second handle to the
+    same path raises ``PermissionError`` (an ``OSError``) on contention, and
+    reacquires cleanly once the first releases -- see the election-lock
+    tests for the reproduction this backs.
+    """
+    import msvcrt
+
+    fh.seek(0)
+    try:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return False
+    return True
+
+
+def _release_msvcrt_lock(fh: Any) -> None:
+    """Best-effort ``msvcrt`` lock release; swallow OSError during teardown."""
+    import msvcrt
+
+    fh.seek(0)
+    try:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass
+
+
+def _try_election_lock(fh: Any) -> bool:
+    """Platform-dispatching non-blocking exclusive lock attempt."""
+    return _try_msvcrt_lock(fh) if os.name == "nt" else _try_flock(fh)
+
+
+def _release_election_lock(fh: Any) -> None:
+    """Platform-dispatching lock release."""
+    if os.name == "nt":
+        _release_msvcrt_lock(fh)
+    else:
+        _release_flock(fh)
+
+
 @contextlib.contextmanager
 def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[None]:
     """Synchronous leader-election lock.
@@ -210,27 +264,25 @@ def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[
     :func:`async_election_lock` instead so the event loop isn't blocked
     by the ``time.sleep`` back-off on contention.
 
-    Implementation shares the open/flock loop with :func:`async_election_lock`
+    Implementation shares the open/lock loop with :func:`async_election_lock`
     so a timeout-logic change applied to one automatically applies to both.
     Only the sleep primitive differs: sync uses ``time.sleep``; async uses
-    ``anyio.sleep``.
+    ``anyio.sleep``. Locking itself is platform-dispatched by
+    :func:`_try_election_lock` (``fcntl.flock`` / ``msvcrt.locking``), so
+    this function has no platform branch of its own.
     """
-    if os.name == "nt":
-        yield
-        return
-
     election_path = _election_paths(path)
     deadline = time.monotonic() + timeout
     fh = election_path.open("a+", encoding="utf-8")
     try:
-        while not _try_flock(fh):
+        while not _try_election_lock(fh):
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"timed out waiting {timeout:.1f}s for election lock at {election_path}") from None
             time.sleep(0.05)
         try:
             yield
         finally:
-            _release_flock(fh)
+            _release_election_lock(fh)
     finally:
         fh.close()
 
@@ -240,29 +292,22 @@ async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) 
     """Async-friendly version of :func:`election_lock`.
 
     Uses ``anyio.sleep`` for back-off so contention doesn't stall the
-    event loop. On Windows (no ``fcntl``) the lock is a no-op; concurrent
-    election is theoretically possible there but rare and self-corrects
-    via the PID + HTTP probe.
-
-    Shares ``_try_flock`` / ``_release_flock`` with :func:`election_lock`
-    so the acquire/release semantics stay in lock-step across the two.
+    event loop. Shares :func:`_try_election_lock` / :func:`_release_election_lock`
+    with :func:`election_lock` so the acquire/release semantics -- and the
+    platform dispatch -- stay in lock-step across the two.
     """
-    if os.name == "nt":
-        yield
-        return
-
     election_path = _election_paths(path)
     deadline = time.monotonic() + timeout
     fh = election_path.open("a+", encoding="utf-8")
     try:
-        while not _try_flock(fh):
+        while not _try_election_lock(fh):
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"timed out waiting {timeout:.1f}s for election lock at {election_path}") from None
             await anyio.sleep(0.05)
         try:
             yield
         finally:
-            _release_flock(fh)
+            _release_election_lock(fh)
     finally:
         fh.close()
 
