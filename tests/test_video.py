@@ -213,6 +213,65 @@ def test_extract_frames_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch, 
         _v.extract_frames(video, tmp_path / "out", fps=1.0)
 
 
+# ---------------------------------------------------------------------------
+# _replace_with_retry — Windows AV/handle-hold survives, a genuine lock doesn't
+# ---------------------------------------------------------------------------
+
+
+def test_replace_with_retry_succeeds_after_transient_permission_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A destination held briefly by AV scanning (or a lingering ffmpeg
+    handle) on Windows must not fail the rename outright -- only a lock that
+    outlives every retry should. Simulated with a fake ``Path.replace`` since
+    real Windows file-locking isn't reproducible on every CI runner this
+    suite runs on."""
+    from octowright.video import _replace_with_retry
+
+    src = tmp_path / "src.png"
+    dst = tmp_path / "dst.png"
+    src.write_bytes(b"new")
+    dst.write_bytes(b"old")
+
+    real_replace = Path.replace
+    calls = {"count": 0}
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise PermissionError("[WinError 32] The process cannot access the file")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr("octowright.video.time.sleep", lambda _seconds: None)
+
+    _replace_with_retry(src, dst)
+
+    assert calls["count"] == 3
+    assert dst.read_bytes() == b"new"
+    assert not src.exists()
+
+
+def test_replace_with_retry_raises_once_attempts_are_exhausted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A lock that never clears (not just AV scanning, but e.g. another
+    process genuinely holding the file open) must still surface — the retry
+    is a bounded ride-out, not a silent swallow."""
+    from octowright.video import _replace_with_retry
+
+    src = tmp_path / "src.png"
+    dst = tmp_path / "dst.png"
+    src.write_bytes(b"new")
+
+    def always_locked(self: Path, target: Path) -> Path:
+        raise PermissionError("[WinError 32] The process cannot access the file")
+
+    monkeypatch.setattr(Path, "replace", always_locked)
+    monkeypatch.setattr("octowright.video.time.sleep", lambda _seconds: None)
+
+    with pytest.raises(PermissionError):
+        _replace_with_retry(src, dst)
+
+
 def test_extract_frame_emits_single_frame_command(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _v, cmds = _import_video_mock_run(monkeypatch, tmp_path)
     video = tmp_path / "test.webm"

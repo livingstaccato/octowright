@@ -45,11 +45,18 @@ def _pid_listening_on_port_windows(port: int) -> int | None:
         "-ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess"
     )
     try:
+        # Bounded: measured ~37-42s for this exact call on a loaded dev box
+        # (Get-NetTCPConnection's cold module load dominates over the actual
+        # lookup) -- nowhere near the "couple hundred ms" a shell-out is often
+        # assumed to cost, and unbounded this would hang restart's port-probe
+        # step indefinitely on a wedged/slow powershell.exe. 60s leaves margin
+        # above the measured worst case while still failing eventually.
         out = subprocess.run(  # nosec B603 B607
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
             capture_output=True,
             text=True,
             check=False,
+            timeout=60.0,
         )
     except (OSError, subprocess.SubprocessError):
         return None

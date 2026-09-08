@@ -145,13 +145,24 @@ def _list_processes_windows() -> list[tuple[int, int, str]]:
         "Select-Object ProcessId,ParentProcessId,CommandLine | "
         "ConvertTo-Csv -NoTypeInformation"
     )
-    # Fixed PowerShell argv, literal script body, no shell metachars.
-    out = subprocess.run(  # nosec B603 B607
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    # Fixed PowerShell argv, literal script body, no shell metachars. Bounded:
+    # measured 8-10s for this exact call on a loaded dev box (240 processes,
+    # Windows PowerShell cold-start dominates over query cost) -- an order of
+    # magnitude past the "couple hundred ms" this call is often assumed to
+    # cost, and with no timeout a wedged powershell.exe would hang every
+    # caller (the orphan sweep, ``octowright restart``) forever. Degrading to
+    # an empty table on timeout matches the existing "PowerShell missing"
+    # fallback below: callers already treat no data as "nothing to act on."
+    try:
+        out = subprocess.run(  # nosec B603 B607
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+        )
+    except subprocess.SubprocessError:
+        return []
     rows: list[tuple[int, int, str]] = []
     reader = csv.reader(io.StringIO(out.stdout))
     try:
