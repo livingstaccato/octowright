@@ -526,7 +526,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         try:
             await self._drain_background_tasks()
             await _teardown.stop_trace_if_enabled(self)
-            await self.context.close()
+            await bounded(self.context.close(), operation="browser_close_context")
             await _teardown.resolve_video_path_after_close(self)
         finally:
             await _teardown.close_browser_handle_after_context_close(self)

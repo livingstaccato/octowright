@@ -19,6 +19,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.session.timeouts import bounded
+
 log = get_logger(__name__)
 
 
@@ -58,9 +60,11 @@ async def close_browser_handle_after_context_close(session: Any) -> None:
     # context.close() may have already terminated the underlying browser
     # process (persistent contexts in particular). A second .close() then
     # raises and bypasses the recorder terminal-event write below — log and
-    # continue.
+    # continue. Also bounded: an unresponsive browser process can leave this
+    # awaiting a CDP reply that never comes (observed on Windows as a
+    # multi-hour wedge with near-zero CPU on both the driver and the browser).
     try:
-        await close_handle.close()
+        await bounded(close_handle.close(), operation="browser_close_handle")
     except Exception as exc:
         log.debug(
             "octowright.session.browser_close_after_context_close_failed",
