@@ -304,14 +304,29 @@ def _kill_pid_windows(pid: int) -> tuple[bool, str | None]:
     return False, message
 
 
-def _signal_pids(pids: list[int], signum: int, stage: str) -> list[dict[str, str]]:
-    """SIGTERM/SIGKILL each pid; return a per-pid error record list."""
+def _signal_pids(pids: list[int], signum: int, stage: str) -> tuple[list[dict[str, str]], set[int]]:
+    """SIGTERM/SIGKILL each pid; return (per-pid error records, confirmed-gone pids).
+
+    "Confirmed gone" is populated on Windows only: ``taskkill /F`` is a forceful,
+    synchronous kill, so its own success (including "already not there") is more
+    authoritative than a follow-up ``Get-CimInstance Win32_Process`` rescan --
+    that rescan has been observed live to lag well behind real process state
+    (a boot-time reap reported ten pids ``still_alive`` after BOTH signal stages
+    told us, correctly, that every one was already gone). POSIX gets no such
+    treatment: a bare SIGTERM success doesn't mean the process has actually
+    exited yet, only that it was asked to -- only a genuinely absent pid
+    (``ProcessLookupError``) would qualify, and the final rescan already
+    catches that case reliably via ``ps``.
+    """
     errors: list[dict[str, str]] = []
+    confirmed_gone: set[int] = set()
     for pid in pids:
         ok, err = _kill_pid(pid, signum=signum)
+        if ok and _is_windows():
+            confirmed_gone.add(pid)
         if not ok and err is not None:
             errors.append({"pid": str(pid), "stage": stage, "error": err})
-    return errors
+    return errors, confirmed_gone
 
 
 def browser_pids_owned_by(leader_pids: Iterable[int]) -> list[int]:
@@ -347,10 +362,12 @@ def _reap_verified(targets: list[int], grace_seconds: float, scope_label: str) -
     """
     if not targets:
         return ReapSummary(killed=[], still_alive=[], errors=[])
-    errors = _signal_pids(targets, signal.SIGTERM, "sigterm")
+    errors, confirmed_gone = _signal_pids(targets, signal.SIGTERM, "sigterm")
     time.sleep(grace_seconds)
-    errors.extend(_signal_pids(_still_browser_pids(targets), KILL_SIGNAL, "sigkill"))
-    return _reap_summary(targets, errors, scope_label)
+    more_errors, more_confirmed = _signal_pids(_still_browser_pids(targets), KILL_SIGNAL, "sigkill")
+    errors.extend(more_errors)
+    confirmed_gone |= more_confirmed
+    return _reap_summary(targets, errors, scope_label, confirmed_gone=frozenset(confirmed_gone))
 
 
 def _still_browser_pids(pids: list[int]) -> list[int]:
@@ -365,15 +382,26 @@ def _still_browser_pids(pids: list[int]) -> list[int]:
     return [pid for pid in pids if pid in still_browsers]
 
 
-def _reap_summary(targets: list[int], errors: list[dict[str, str]], scope_label: str) -> ReapSummary:
-    """Split the signalled pids into killed/still-alive and record the metric."""
+def _reap_summary(
+    targets: list[int],
+    errors: list[dict[str, str]],
+    scope_label: str,
+    *,
+    confirmed_gone: frozenset[int] = frozenset(),
+) -> ReapSummary:
+    """Split the signalled pids into killed/still-alive and record the metric.
+
+    A pid in ``confirmed_gone`` (Windows: a signal stage's own outcome, more
+    authoritative than this rescan can be -- see ``_signal_pids``) counts as
+    killed even if the rescan still lists it.
+    """
     final = set(find_browser_pids("all"))
-    killed = [pid for pid in targets if pid not in final]
+    killed = [pid for pid in targets if pid not in final or pid in confirmed_gone]
     if killed:
         _ORPHAN_REAPED.add(len(killed), attributes={"scope": scope_label})
     return ReapSummary(
         killed=killed,
-        still_alive=[pid for pid in targets if pid in final],
+        still_alive=[pid for pid in targets if pid in final and pid not in confirmed_gone],
         errors=errors,
     )
 

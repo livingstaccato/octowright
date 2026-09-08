@@ -380,6 +380,32 @@ def test_list_processes_windows_skips_non_numeric_pid(monkeypatch: pytest.Monkey
     assert pids == {2000}
 
 
+def test_reap_trusts_windows_taskkill_over_a_stale_rescan(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reproduces a live incident: a boot-time reap reported ten pids
+    ``still_alive`` after ``taskkill`` told us, correctly, at BOTH the
+    SIGTERM and SIGKILL stages, that every one of them was already gone
+    (returncode 128). The final ``Get-CimInstance``-backed rescan just
+    hadn't caught up yet and still listed the pid as present -- so the
+    summary must trust taskkill's own per-pid outcome over that rescan,
+    not report a false "still_alive"."""
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+    # The bulk rescan is permanently stale for this test: it always shows
+    # the pid present, no matter how many times it's called.
+    monkeypatch.setattr(process_reaper, "find_browser_pids", lambda _scope, **_kw: [777])
+    monkeypatch.setattr(
+        process_reaper.subprocess,
+        "run",
+        lambda *_a, **_kw: subprocess.CompletedProcess(args=[], returncode=128, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(process_reaper.time, "sleep", lambda _s: None)
+
+    summary = process_reaper._reap_verified([777], grace_seconds=0.0, scope_label="orphaned")
+
+    assert summary["killed"] == [777]
+    assert summary["still_alive"] == []
+    assert summary["errors"] == []
+
+
 def test_reap_meters_killed_orphans(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests._metric_recorders import RecordingCounter
 
@@ -394,7 +420,7 @@ def test_reap_meters_killed_orphans(monkeypatch: pytest.MonkeyPatch) -> None:
         return [123] if calls["n"] <= 2 else []
 
     monkeypatch.setattr(process_reaper, "find_browser_pids", fake_find)
-    monkeypatch.setattr(process_reaper, "_signal_pids", lambda _pids, _signum, _stage: [])
+    monkeypatch.setattr(process_reaper, "_signal_pids", lambda _pids, _signum, _stage: ([], set()))
     monkeypatch.setattr(process_reaper.time, "sleep", lambda _s: None)
 
     summary = process_reaper.reap_orphan_browsers(scope="orphaned")
