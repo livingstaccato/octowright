@@ -436,12 +436,20 @@ def test_wait_for_health_follows_lockfile_auto_bumped_port(monkeypatch: pytest.M
 
 
 def test_resolve_octowright_entry_prefers_venv_neighbour(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """Path(sys.executable).parent / 'octowright' must win over PATH discovery."""
+    """Path(sys.executable).parent / 'octowright[.exe]' must win over PATH discovery.
+
+    Named with the real per-platform suffix -- a bare ``octowright`` file here
+    would pass even if the resolver forgot Windows console scripts are always
+    ``<name>.exe``, since ``.exists()`` would still find THIS fabricated file.
+    That exact gap once made venv-neighbour resolution silently never trigger
+    on Windows (always falling through to PATH) despite this test being green.
+    """
     bin_dir = tmp_path / "venv-bin"
     bin_dir.mkdir()
-    fake_python = bin_dir / "python"
+    suffix = ".exe" if _restart_mod.sys.platform == "win32" else ""
+    fake_python = bin_dir / f"python{suffix}"
     fake_python.write_text("")
-    fake_octowright = bin_dir / "octowright"
+    fake_octowright = bin_dir / f"octowright{suffix}"
     fake_octowright.write_text("")
 
     monkeypatch.setattr(_restart_mod.sys, "executable", str(fake_python))

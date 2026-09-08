@@ -72,7 +72,9 @@ def _free_port() -> int:
 
 
 def _octowright_bin() -> str:
-    return str(Path(sys.executable).parent / "octowright")
+    from octowright.cli.restart import _resolve_octowright_entry
+
+    return _resolve_octowright_entry()
 
 
 def _hermetic_env(tmp_path: Path, port: int) -> dict[str, str]:
