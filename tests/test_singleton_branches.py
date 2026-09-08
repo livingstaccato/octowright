@@ -368,15 +368,41 @@ class TestLockPathDefault:
 
 # ─── election_lock / async_election_lock ─────────────────────────────────────
 #
-# The shared core (_try_flock / _release_flock helpers) means a regression in
+# The shared core (_try_election_lock / _release_election_lock, dispatching to
+# fcntl.flock on POSIX and msvcrt.locking on Windows) means a regression in
 # either ctx mgr's timeout/release logic gets caught by the symmetric tests
-# below. Skipped on Windows because the implementation no-ops there.
+# below on EITHER platform — there is no longer a Windows no-op to skip.
+# Contention is simulated through the same dispatching helpers the ctx mgrs
+# use, rather than a hardcoded ``fcntl`` call, so these tests run unchanged on
+# both platforms.
 
 
 _WINDOWS = os.name == "nt"
 
 
-@pytest.mark.skipif(_WINDOWS, reason="election_lock is a no-op on Windows (no fcntl)")
+def _hold_election_lock(election_path: Path) -> Any:
+    """Acquire the platform lock on *election_path* via a second handle, the
+    way a genuinely separate process would — for simulating contention in a
+    single-process test. Caller must close the returned handle (releasing the
+    lock as a side effect on POSIX; ``_release_election_lock`` first is
+    tidier on Windows but not required since closing a locked handle also
+    releases the OS-level lock there).
+    """
+    from octowright import singleton as _sg
+
+    holder = election_path.open("a+", encoding="utf-8")
+    acquired = _sg._try_election_lock(holder)
+    assert acquired, "test setup: could not acquire the contention-simulating lock"
+    return holder
+
+
+def _release_held_lock(holder: Any) -> None:
+    from octowright import singleton as _sg
+
+    _sg._release_election_lock(holder)
+    holder.close()
+
+
 class TestElectionLockSync:
     def test_acquire_release_basic(self, tmp_path: Path) -> None:
         """Plain acquire + release with no contention."""
@@ -393,22 +419,16 @@ class TestElectionLockSync:
 
     def test_timeout_raises_when_held(self, tmp_path: Path) -> None:
         """Lock held by another fh → TimeoutError after `timeout` elapses."""
-        import fcntl
-
         lock_path = tmp_path / "lock"
         election_path = tmp_path / "lock.election"
-        # Pre-acquire the flock in a separate fh to simulate contention.
-        holder = election_path.open("a+", encoding="utf-8")
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        holder = _hold_election_lock(election_path)
         try:
             with pytest.raises(TimeoutError), election_lock(lock_path, timeout=0.1):
                 pass  # pragma: no cover
         finally:
-            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
-            holder.close()
+            _release_held_lock(holder)
 
 
-@pytest.mark.skipif(_WINDOWS, reason="async_election_lock is a no-op on Windows (no fcntl)")
 class TestAsyncElectionLock:
     @pytest.mark.anyio
     async def test_acquire_release_basic(self, tmp_path: Path) -> None:
@@ -442,20 +462,16 @@ class TestAsyncElectionLock:
 
     @pytest.mark.anyio
     async def test_timeout_raises_when_held(self, tmp_path: Path) -> None:
-        """With another flock held, async caller raises TimeoutError."""
-        import fcntl
-
+        """With the lock held by another handle, async caller raises TimeoutError."""
         lock_path = tmp_path / "lock"
         election_path = tmp_path / "lock.election"
-        holder = election_path.open("a+", encoding="utf-8")
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        holder = _hold_election_lock(election_path)
         try:
             with pytest.raises(TimeoutError):
                 async with async_election_lock(lock_path, timeout=0.1):
                     pass  # pragma: no cover
         finally:
-            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
-            holder.close()
+            _release_held_lock(holder)
 
     @pytest.mark.anyio
     async def test_second_caller_waits_then_acquires(self, tmp_path: Path) -> None:
@@ -519,7 +535,32 @@ class TestReleaseFlockSwallowsOsError:
             pass
 
 
-@pytest.mark.skipif(_WINDOWS, reason="election_lock is a no-op on Windows (no fcntl)")
+@pytest.mark.skipif(not _WINDOWS, reason="msvcrt is windows-only")
+class TestReleaseMsvcrtLockSwallowsOsError:
+    """Windows counterpart of :class:`TestReleaseFlockSwallowsOsError`: the
+    shared ``_release_msvcrt_lock`` helper must swallow OSError at teardown
+    too, for the same reason -- a closed fd or similar race at unlock must
+    not bubble out of the ctx mgr exit."""
+
+    def test_oserror_swallowed_during_sync_release(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """msvcrt.locking raising OSError on unlock is silently swallowed."""
+        import msvcrt
+
+        from octowright import singleton as _sg
+
+        original_locking = msvcrt.locking
+
+        def selective_locking(fd: int, mode: int, nbytes: int) -> None:
+            if mode == msvcrt.LK_UNLCK:
+                raise OSError("simulated release failure")
+            original_locking(fd, mode, nbytes)
+
+        monkeypatch.setattr(msvcrt, "locking", selective_locking)
+        # Must not raise even though the unlock blows up.
+        with _sg.election_lock(tmp_path / "lock", timeout=1.0):
+            pass
+
+
 class TestSharedImplementationParity:
     """Both lock ctx mgrs share the same acquire/release helpers, so they
     must accept the same args and raise the same exception class."""
@@ -537,12 +578,9 @@ class TestSharedImplementationParity:
     @pytest.mark.anyio
     async def test_both_raise_timeouterror_on_contention(self, tmp_path: Path) -> None:
         """Identical exception class for both flavours under contention."""
-        import fcntl
-
         lock_path = tmp_path / "lock"
         election_path = tmp_path / "lock.election"
-        holder = election_path.open("a+", encoding="utf-8")
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        holder = _hold_election_lock(election_path)
         try:
             with pytest.raises(TimeoutError), election_lock(lock_path, timeout=0.05):
                 pass  # pragma: no cover
@@ -550,5 +588,41 @@ class TestSharedImplementationParity:
                 async with async_election_lock(lock_path, timeout=0.05):
                     pass  # pragma: no cover
         finally:
-            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
-            holder.close()
+            _release_held_lock(holder)
+
+
+class TestPlatformLockDispatch:
+    """Direct coverage of the dispatch functions themselves -- the bug this
+    session found live (8 concurrent ``octowright serve`` starters on
+    Windows all observing "no live leader" and all spawning a competing
+    daemon) was that these were no-ops on Windows, not a timeout/release
+    logic bug the ctx-mgr tests above would have caught."""
+
+    def test_second_handle_cannot_acquire_while_first_holds(self, tmp_path: Path) -> None:
+        from octowright import singleton as _sg
+
+        path = tmp_path / "lock"
+        fh1 = path.open("a+", encoding="utf-8")
+        fh2 = path.open("a+", encoding="utf-8")
+        try:
+            assert _sg._try_election_lock(fh1) is True
+            assert _sg._try_election_lock(fh2) is False
+        finally:
+            _sg._release_election_lock(fh1)
+            fh1.close()
+            fh2.close()
+
+    def test_lock_is_reacquirable_after_release(self, tmp_path: Path) -> None:
+        from octowright import singleton as _sg
+
+        path = tmp_path / "lock"
+        fh1 = path.open("a+", encoding="utf-8")
+        fh2 = path.open("a+", encoding="utf-8")
+        try:
+            assert _sg._try_election_lock(fh1) is True
+            _sg._release_election_lock(fh1)
+            assert _sg._try_election_lock(fh2) is True
+        finally:
+            _sg._release_election_lock(fh2)
+            fh1.close()
+            fh2.close()
