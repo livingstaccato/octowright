@@ -10,10 +10,31 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import TypedDict
 
 from octowright.video_overlay import render_overlay_image
+
+# Windows-only: AV real-time scanning (or ffmpeg's own process exiting before
+# releasing its output handle) can hold a just-written file for a beat after
+# the subprocess returns, so a rename onto it raises PermissionError/WinError
+# 32 -- a failure mode rename-over-open-file cannot hit on POSIX. Retried
+# rather than avoided because there is no portable way to ask "is anyone still
+# holding this handle" up front.
+_REPLACE_RETRY_ATTEMPTS = 5
+_REPLACE_RETRY_DELAY_SECONDS = 0.3
+
+
+def _replace_with_retry(temp_path: Path, path: Path) -> None:
+    for attempt in range(1, _REPLACE_RETRY_ATTEMPTS + 1):
+        try:
+            temp_path.replace(path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
 
 
 class VideoPlacement(TypedDict):
@@ -150,7 +171,7 @@ def optimize_png(path: Path, *, max_width: int = 960) -> Path:
         "-y",
     ]
     _run_ffmpeg(cmd)
-    temp_path.replace(path)
+    _replace_with_retry(temp_path, path)
     return path
 
 
@@ -347,7 +368,11 @@ def apply_video_overlay(
         ]
         _run_ffmpeg(cmd)
     finally:
-        with contextlib.suppress(FileNotFoundError):
+        # PermissionError alongside FileNotFoundError: same Windows AV/handle
+        # contention _replace_with_retry exists for, but this cleanup is
+        # already best-effort -- a stray temp file is cheaper to accept than
+        # a retry loop on a path nothing downstream depends on.
+        with contextlib.suppress(FileNotFoundError, PermissionError):
             overlay_path.unlink()
         with contextlib.suppress(OSError):
             temp_dir.rmdir()
