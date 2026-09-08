@@ -27,6 +27,20 @@ engine owns.
 
 Best-effort by design: a ``chmod`` that fails (exotic filesystem, read-only
 mount, foreign owner) must never block a launch.
+
+Windows: ``os.chmod`` cannot restrict directory access there (POSIX mode bits
+on a directory are meaningless on NTFS), so the locking below is a no-op on
+that platform -- but verified NOT a gap in practice. ``icacls`` against a real
+profile tree under ``%LOCALAPPDATA%``/``%APPDATA%`` on Windows 10/11 shows the
+per-user profile ACL already excludes every other local account by the time
+the path reaches ``C:\\Users\\<owner>``: only ``SYSTEM``, ``Administrators``,
+and the owning account appear, with no ``Users``/``Everyone`` entry -- unlike
+``C:\\Users`` itself, which does grant those groups list access, the per-user
+subtree does not inherit it. A same-machine non-admin account cannot read
+another user's profile directory at all, chmod or no chmod, so there is
+nothing this module needs to add there. (Verified 2026-09-08 on Windows Server
+build 26200; a system with per-user profile isolation deliberately disabled is
+outside what any application-level chmod could fix either.)
 """
 
 from __future__ import annotations
