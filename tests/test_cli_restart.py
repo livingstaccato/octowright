@@ -480,6 +480,36 @@ def test_looks_like_follower_rejects_daemon_processes() -> None:
     assert not _restart_mod._looks_like_follower("unrelated process")
 
 
+def test_matching_tolerates_windows_exe_and_quote() -> None:
+    """Reproduces a live incident: a genuinely running daemon's command line
+
+    ``"C:\\...\\octowright.EXE" serve --daemon-mode`` was reported as "not an
+    octowright daemon" because the old bare ``"octowright serve" in command``
+    check requires the two words adjacent -- Windows console-script
+    invocation always has ``.exe``/``.EXE`` plus a closing quote between
+    them, which POSIX's ``octowright serve --daemon-mode`` never has. All
+    three matchers share ``_command_names_octowright_serve`` and must
+    recognise the Windows form the same as the POSIX one.
+    """
+    windows_daemon = '"C:\\Users\\root\\.local\\bin\\octowright.EXE" serve --daemon-mode --http-port 8765'
+    windows_follower = '"C:\\venv\\Scripts\\octowright.exe" serve'
+    assert _restart_mod._command_names_octowright_serve(windows_daemon)
+    assert _restart_mod._command_names_octowright_serve(windows_follower)
+    assert _restart_mod._looks_like_restart_target(windows_daemon, target_port=8765)
+    assert _restart_mod._looks_like_follower(windows_follower)
+    assert not _restart_mod._looks_like_follower(windows_daemon)
+
+
+def test_locked_pid_is_octowright_matches_windows_exe_command_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lockfile-identity check must recognise a Windows daemon's command
+    line too -- the same bug left a real running daemon's pid untouched by
+    `restart`, logged as "not an octowright daemon (stale lock or recycled
+    pid)"."""
+    windows_cmd = '"C:\\Users\\root\\.local\\bin\\octowright.EXE" serve --daemon-mode'
+    monkeypatch.setattr(_restart_mod, "_list_process_commands", lambda: [(7772, windows_cmd)])
+    assert _restart_mod._locked_pid_is_octowright(7772) is True
+
+
 def test_follower_pids_returns_bare_serve_pids(monkeypatch: pytest.MonkeyPatch) -> None:
     """_follower_pids must return PIDs for bare serve processes only."""
 

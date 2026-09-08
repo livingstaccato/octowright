@@ -291,13 +291,22 @@ def _kill_pid(pid: int, *, signum: int) -> tuple[bool, str | None]:
 def _kill_pid_windows(pid: int) -> tuple[bool, str | None]:
     # taskkill exit codes: 0 success; 128 = process not found (treat as
     # ProcessLookupError-equivalent). Anything else is a real failure.
-    # Fixed `taskkill` argv, integer pid arg, no shell.
-    out = subprocess.run(  # nosec B603 B607
-        ["taskkill", "/F", "/PID", str(pid)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    # Fixed `taskkill` argv, integer pid arg, no shell. Bounded for the same
+    # reason _list_processes_windows is: a wedged taskkill.exe would
+    # otherwise hang this loop's caller (the orphan sweep, ``octowright
+    # restart``) forever, one pid at a time. A timeout is reported as a
+    # failure, not treated as "gone" -- unlike a clean non-zero exit, it
+    # gives no confirmation either way.
+    try:
+        out = subprocess.run(  # nosec B603 B607
+            ["taskkill", "/F", "/PID", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+        )
+    except subprocess.SubprocessError as exc:
+        return False, repr(exc)
     if out.returncode == 0 or out.returncode == 128:
         return True, None
     message = (out.stderr or out.stdout or "").strip() or f"taskkill exit {out.returncode}"
