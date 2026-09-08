@@ -456,9 +456,19 @@ async def _run_leader(
     bound_port = http_port if http_port is not None else HTTP_PORT
 
     _reap_orphan_session_dirs(no_singleton)
-    # Sweep browsers orphaned by a previous (dead) leader generation before this
-    # leader brings its own pool up.
-    await _asyncio.to_thread(reap_orphan_browsers_at_boot, log=_log)
+    # Sweep browsers orphaned by a previous (dead) leader generation. Only
+    # ever touches dead-driver orphans (scope="orphaned"), so it can never
+    # mistake a browser this leader's own (very-alive) pool just launched for
+    # one -- safe to run CONCURRENTLY with startup rather than blocking it.
+    # Measured live on Windows: this sweep alone took ~31s (three sequential
+    # Get-CimInstance process-table scans at ~8-10s each, enumerating pids
+    # from a prior generation) while the rest of startup -- HTTP listening,
+    # MCP ready -- took under 1s. Awaiting it inline before HTTP/MCP came up
+    # meant a slow sweep could, and did, blow straight through an MCP
+    # client's own connect timeout on an otherwise-instant boot.
+    boot_reap_task = _asyncio.create_task(
+        _asyncio.to_thread(reap_orphan_browsers_at_boot, log=_log), name="octowright.boot_orphan_reap"
+    )
 
     # First run after an update: announce "what's new" (octowright.upgrade) — records
     # the notice for octowright_status and echoes a banner (human terminal inline, log otherwise).
@@ -539,7 +549,7 @@ async def _run_leader(
         await _run_leader_phases(wait_for, mcp_task, watch_task, sidecars, discoverable)
     finally:
         _uninstall_leader_signal_handlers(loop, installed_signals, installed_signal_handlers)
-        await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task, housekeeping_task)
+        await _cancel_and_collect_tasks(sidecars, watch_task, mcp_task, housekeeping_task, boot_reap_task)
         from octowright.process_reaper import reap_descendant_browsers_on_shutdown, shutdown_browser_pool_on_shutdown
 
         await reap_descendant_browsers_on_shutdown(pool, log=_log)
