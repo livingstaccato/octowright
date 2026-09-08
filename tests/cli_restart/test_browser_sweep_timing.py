@@ -82,9 +82,9 @@ def _tables(monkeypatch: pytest.MonkeyPatch, *tables: list[tuple[int, int, str]]
 def _capture_signals(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, str]]:
     signalled: list[tuple[int, str]] = []
 
-    def _fake_signal(pids: list[int], signum: int, stage: str) -> list[dict[str, str]]:
+    def _fake_signal(pids: list[int], signum: int, stage: str) -> tuple[list[dict[str, str]], set[int]]:
         signalled.extend((pid, stage) for pid in pids)
-        return []
+        return [], set()
 
     monkeypatch.setattr(process_reaper, "_signal_pids", _fake_signal)
     monkeypatch.setattr(process_reaper.time, "sleep", lambda _s: None)
