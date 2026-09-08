@@ -35,6 +35,7 @@ import contextlib
 import csv
 import io
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -58,6 +59,22 @@ _POLL_INTERVAL_S = 0.25
 # signum, so SIGTERM is the strongest available signal. Matches the
 # escalation pattern in ``process_reaper.KILL_SIGNAL``.
 _FORCE_KILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
+
+# A bare substring check for "octowright serve" matches the POSIX command
+# line (``octowright serve --daemon-mode``) but NEVER the Windows one: Windows
+# console-script invocation is ``...\octowright.EXE" serve --daemon-mode`` --
+# an extension plus a closing quote sit between the name and "serve". Found
+# live: a genuinely running daemon's lockfile pid was reported as "not an
+# octowright daemon (stale lock or recycled pid)" and left untouched by
+# `restart`, on a process whose command line visibly WAS `octowright.EXE"
+# serve --daemon-mode`. This tolerates an optional `.exe`/`.EXE` and an
+# optional closing quote between the two words, so it matches on both
+# platforms.
+_OCTOWRIGHT_SERVE_RE = re.compile(r"octowright(\.exe)?[\"']?\s+serve", re.IGNORECASE)
+
+
+def _command_names_octowright_serve(command: str) -> bool:
+    return _OCTOWRIGHT_SERVE_RE.search(command) is not None
 
 
 def _resolve_octowright_entry() -> str:
@@ -128,7 +145,7 @@ def _looks_like_restart_target(command: str, target_port: int) -> bool:
     hit). A daemon with no explicit port is left alone — the lockfile PID path
     still covers the one daemon restart is actually replacing.
     """
-    if "octowright serve" not in command:
+    if not _command_names_octowright_serve(command):
         return False
     if "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command:
         return False
@@ -143,7 +160,7 @@ def _looks_like_follower(command: str) -> bool:
     client's connection. ``--kill-followers`` sweeps them for a full reset
     when sessions are already dead or the user explicitly wants a clean slate.
     """
-    if "octowright serve" not in command:
+    if not _command_names_octowright_serve(command):
         return False
     return "--daemon-mode" not in command and "--http-host" not in command and "--http-port" not in command
 
@@ -185,7 +202,11 @@ def _list_process_commands_posix() -> list[tuple[int, str]]:
 
 def _list_process_commands_windows() -> list[tuple[int, str]]:
     # ``wmic`` is deprecated on recent Windows; ``Get-CimInstance`` is current.
-    # Matches the pattern in ``process_reaper._list_processes_windows``.
+    # Matches the pattern in ``process_reaper._list_processes_windows`` --
+    # including the 60s timeout: this call backs restart's own safety checks
+    # (is the lockfile pid really an octowright process? is a port squatter
+    # really one?), so a wedged powershell.exe must not hang `restart`
+    # itself, the exact recovery tool this exists to make reliable.
     script = "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Csv -NoTypeInformation"
     try:
         out = subprocess.run(  # nosec B603 B607
@@ -193,8 +214,9 @@ def _list_process_commands_windows() -> list[tuple[int, str]]:
             capture_output=True,
             text=True,
             check=False,
+            timeout=60.0,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.SubprocessError):
         return []
     rows: list[tuple[int, str]] = []
     reader = csv.reader(io.StringIO(out.stdout))
@@ -304,7 +326,7 @@ def _locked_pid_is_octowright(locked: int) -> bool:
     pid's command line before trusting it. If the pid isn't in the process list
     (a ps race), fall through to the pgrep path rather than killing blind.
     """
-    return any(pid == locked and "octowright serve" in cmd for pid, cmd in _list_process_commands())
+    return any(pid == locked and _command_names_octowright_serve(cmd) for pid, cmd in _list_process_commands())
 
 
 def _spawn_port_squatter(spawn_port: int | None, already: set[int]) -> int | None:

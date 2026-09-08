@@ -331,6 +331,21 @@ def test_kill_pid_windows_returns_error_on_nonzero_taskkill(monkeypatch: pytest.
     assert err is not None and "Access denied" in err
 
 
+def test_kill_pid_windows_reports_failure_on_timeout_not_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A wedged taskkill.exe must not hang the reap loop forever, and a
+    timeout gives no confirmation either way -- it must be reported as a
+    failure, never treated as "process is gone" the way a clean exit is."""
+    monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
+
+    def _wedged(*_a: object, **_kw: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="taskkill", timeout=60.0)
+
+    monkeypatch.setattr(process_reaper.subprocess, "run", _wedged)
+    ok, err = process_reaper._kill_pid(9999, signum=signal.SIGTERM)
+    assert ok is False
+    assert err is not None
+
+
 def _powershell_csv(monkeypatch: pytest.MonkeyPatch, stdout: str) -> None:
     """Pin platform to Windows + scripted PowerShell stdout."""
     monkeypatch.setattr(process_reaper, "_is_windows", lambda: True)
