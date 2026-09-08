@@ -22,7 +22,10 @@ import pytest
 from octowright.private_paths import PROFILES_PRIVATE_ENV, profiles_private, secure_profile_tree
 
 # Windows ignores POSIX mode bits on directories, so the assertions below say
-# nothing there. The production helper is best-effort and simply no-ops.
+# nothing there. The production helper is best-effort and simply no-ops --
+# verified not a gap: see private_paths.py's module docstring for the icacls
+# evidence that Windows' own per-user profile ACL already excludes every
+# other local account from this tree before octowright's chmod would matter.
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission-bit assertion")
 
 
