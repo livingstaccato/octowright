@@ -199,11 +199,21 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
 
     Each job is wrapped so a transient failure (a flaky ``ps``, a racing
     truncate) is logged but never crashes the leader or stops the loop.
+
+    ``_reap_orphans_once`` and ``_sample_process_rss`` are run via
+    ``asyncio.to_thread`` -- both bottom out in a full process-table scan
+    (``process_reaper``'s ``ps``/``Get-CimInstance``), and on Windows that
+    scan alone measured 8-10s live. Calling them inline used to block the
+    ENTIRE event loop -- not just this task, every concurrent MCP request
+    and browser coordination -- for that long, every single cycle. At the
+    default 60s interval that is up to a third of wall-clock time frozen,
+    for the daemon's whole lifetime, not just at boot (the analogous
+    one-time boot-sweep cost was fixed separately in cli/serve.py).
     """
     while True:
         await asyncio.sleep(interval_seconds)
         try:
-            _reap_orphans_once(log=log)
+            await asyncio.to_thread(_reap_orphans_once, log=log)
         except Exception as exc:
             log.warning("octowright.housekeeping.reap_failed", error=repr(exc))
         try:
@@ -211,7 +221,7 @@ async def daemon_housekeeping(*, interval_seconds: float, log: Any) -> None:
         except Exception as exc:
             log.warning("octowright.housekeeping.log_guard_failed", error=repr(exc))
         try:
-            _sample_process_rss()
+            await asyncio.to_thread(_sample_process_rss)
         except Exception as exc:
             log.warning("octowright.housekeeping.rss_sample_failed", error=repr(exc))
         try:
