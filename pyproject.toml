@@ -205,7 +205,7 @@ dev = [
     # PID with zero code changes and zero instrumentation overhead, and --
     # unlike memray -- works on Windows as well as Linux/macOS, so it's the
     # one hot-path tool that actually covers every platform this project
-    # ships tests on. See `make profile-daemon` / docs/profiling.md.
+    # ships tests on. See `make profile-dump` / docs/profiling.md.
     "py-spy>=0.4.0",
     "pytest>=8.3.0",
     "pytest-anyio>=0.0.0",
