@@ -21,6 +21,7 @@ see the [top-level README](../README.md); come here for deep-dives on specific f
 - [ci-quality.md](ci-quality.md) — local quality gates (`make ci`), coverage floor, `act` subset parity
 - [troubleshooting.md](troubleshooting.md) — common failure modes and fast diagnosis
 - [telemetry.md](telemetry.md) — structured logging, OTLP export, HTTP metrics
+- [profiling.md](profiling.md) — finding hot paths with `py-spy` (`make profile-dump` / `make profile-record`)
 
 ## Architecture & Internals
 
