@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import sys
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import asdict, dataclass
@@ -221,7 +222,18 @@ def _try_msvcrt_lock(fh: Any) -> bool:
     same path raises ``PermissionError`` (an ``OSError``) on contention, and
     reacquires cleanly once the first releases -- see the election-lock
     tests for the reproduction this backs.
+
+    The ``sys.platform`` guard (rather than this module's usual ``os.name``)
+    is deliberate: mypy special-cases ``sys.platform`` checks and prunes the
+    branch that doesn't match the platform IT runs on, so the msvcrt-only
+    branch is simply never type-checked on Linux/macOS CI -- where msvcrt's
+    typeshed stub is empty and ``locking``/``LK_NBLCK`` would otherwise be
+    "no attribute" errors. ``os.name`` gets no such special-casing, which is
+    why the fcntl calls elsewhere in this file DO error under a Windows-run
+    mypy (pre-existing, invisible to CI since the Lint job runs on Linux).
     """
+    if sys.platform != "win32":
+        raise NotImplementedError("Windows only; callers dispatch on os.name")  # pragma: no cover
     import msvcrt
 
     fh.seek(0)
@@ -233,7 +245,13 @@ def _try_msvcrt_lock(fh: Any) -> bool:
 
 
 def _release_msvcrt_lock(fh: Any) -> None:
-    """Best-effort ``msvcrt`` lock release; swallow OSError during teardown."""
+    """Best-effort ``msvcrt`` lock release; swallow OSError during teardown.
+
+    See :func:`_try_msvcrt_lock` for why this guards on ``sys.platform``
+    rather than ``os.name``.
+    """
+    if sys.platform != "win32":
+        return  # pragma: no cover
     import msvcrt
 
     fh.seek(0)
