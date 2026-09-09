@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -88,6 +89,44 @@ def _pending_task() -> Any:
     task = MagicMock()
     task.done.return_value = False
     return task
+
+
+class TestDetachConsoleIfDaemon:
+    """A background daemon must never own a visible console window --
+    reproduces a live incident: a black conhost.exe window appeared for the
+    detached daemon on Windows despite daemonize.py's spawn-time flags."""
+
+    def test_noop_when_not_daemon_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A human running plain `octowright serve` in a terminal keeps it --
+        this must return before ever importing ctypes for that path."""
+        monkeypatch.setattr(_serve.sys, "platform", "win32")
+        monkeypatch.setitem(sys.modules, "ctypes", None)  # import ctypes would raise if reached
+        _serve._detach_console_if_daemon(daemon_mode=False)  # must not raise
+
+    def test_noop_on_non_windows_even_in_daemon_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_serve.sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "ctypes", None)  # import ctypes would raise if reached
+        _serve._detach_console_if_daemon(daemon_mode=True)  # must not raise
+
+    def test_calls_free_console_when_daemon_mode_on_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import ctypes as real_ctypes
+
+        monkeypatch.setattr(_serve.sys, "platform", "win32")
+        fake_windll = MagicMock()
+        monkeypatch.setattr(real_ctypes, "windll", fake_windll, raising=False)
+        _serve._detach_console_if_daemon(daemon_mode=True)
+        fake_windll.kernel32.FreeConsole.assert_called_once()
+
+    def test_swallows_oserror_from_free_console(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No console to free (already detached, or an odd host) must not
+        crash daemon startup over what is purely a cosmetic best-effort."""
+        import ctypes as real_ctypes
+
+        monkeypatch.setattr(_serve.sys, "platform", "win32")
+        fake_windll = MagicMock()
+        fake_windll.kernel32.FreeConsole.side_effect = OSError("no console")
+        monkeypatch.setattr(real_ctypes, "windll", fake_windll, raising=False)
+        _serve._detach_console_if_daemon(daemon_mode=True)  # must not raise
 
 
 class TestLogFirstDone:
