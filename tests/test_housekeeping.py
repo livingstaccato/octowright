@@ -234,8 +234,13 @@ def test_daemon_housekeeping_loop_runs_jobs_and_survives_failures(monkeypatch: p
 
     async def _run() -> None:
         task = asyncio.create_task(housekeeping.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if calls["reap"] >= 1 and calls["guard"] >= 1:
                 break
         task.cancel()
@@ -551,8 +556,13 @@ def test_daemon_housekeeping_loop_survives_tmp_sweep_failure(monkeypatch: pytest
 
     async def _run() -> None:
         task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if log.warning.call_args_list:
                 break
         task.cancel()
@@ -591,8 +601,13 @@ def test_reap_dead_follower_sessions_swallows_failure_in_loop(monkeypatch: pytes
 
     async def _run() -> None:
         task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if calls["follower"] >= 1:
                 break
         task.cancel()
@@ -721,8 +736,13 @@ def test_daemon_housekeeping_loop_runs_tmp_sweep_job(monkeypatch: pytest.MonkeyP
 
     async def _run() -> None:
         task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if calls["sweep"] >= 1:
                 break
         task.cancel()
@@ -829,8 +849,13 @@ def test_daemon_housekeeping_loop_runs_active_timeout_job(monkeypatch: pytest.Mo
 
     async def _run() -> None:
         task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if calls["active_timeout"] >= 1:
                 break
         task.cancel()
@@ -863,8 +888,13 @@ def test_daemon_housekeeping_loop_survives_active_timeout_failure(monkeypatch: p
 
     async def _run() -> None:
         task = asyncio.create_task(_hk.daemon_housekeeping(interval_seconds=0.001, log=log))
-        for _ in range(200):
-            await asyncio.sleep(0.001)
+        # Generous budget (not the 200*1ms this used to be): _reap_orphans_once
+        # and _sample_process_rss now run via asyncio.to_thread (see
+        # housekeeping.py's fix for a real -- not mocked -- blocking cost), and
+        # that real thread-pool dispatch overhead was enough to flake this
+        # loop's tight polling window even with an instant mock underneath it.
+        for _ in range(2000):
+            await asyncio.sleep(0.005)
             if log.warning.call_args_list:
                 break
         task.cancel()
