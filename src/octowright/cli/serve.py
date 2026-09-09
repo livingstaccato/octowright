@@ -15,8 +15,6 @@ bridge stdin/stdout to its HTTP-MCP endpoint instead of spawning a pool. Pass
 
 from __future__ import annotations
 
-import contextlib
-import sys
 from collections.abc import Callable
 from types import FrameType
 from typing import Any
@@ -30,34 +28,6 @@ from octowright.cli._leader_runtime import _run_leader_phases
 from octowright.cli._root import cli
 
 _log = get_logger(__name__)
-
-
-def _detach_console_if_daemon(daemon_mode: bool) -> None:
-    """A background daemon must never own a visible console window.
-
-    ``daemonize.py``'s spawn flags (``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP``)
-    are the documented way to prevent Windows from attaching a console at
-    spawn time, but a visible ``conhost.exe`` window has still been observed
-    live for a daemon-mode process on this platform -- inconclusive to fully
-    explain (isolated repro attempts with the identical flags were
-    inconsistent), so this is an independent second line of defense: detach
-    from whatever console this process has, right at startup, before
-    anything else runs. ``FreeConsole`` only detaches the console OBJECT --
-    stdin/stdout/stderr are separate OS handles (already redirected to
-    DEVNULL/a log file by the spawn call) and are unaffected.
-
-    Never called for the bare ``octowright serve`` path (interactive use or
-    the MCP-client follower) -- only ``--daemon-mode`` is guaranteed to never
-    need a console; a human running plain ``serve`` in a terminal, or a
-    client's own subprocess-spawn choices, are out of scope here.
-    """
-    if not daemon_mode or sys.platform != "win32":
-        return
-    import ctypes
-
-    with contextlib.suppress(OSError):
-        ctypes.windll.kernel32.FreeConsole()
-
 
 _SignalHandler = Callable[[int, FrameType | None], Any] | int | None
 
@@ -234,8 +204,6 @@ def serve(
     """
     import asyncio as _asyncio
     import os as _os
-
-    _detach_console_if_daemon(daemon_mode)
 
     # Set the env var BEFORE setup_telemetry so the logger picks it up.
     # Also export it so spawned daemons inherit it (daemonize uses
