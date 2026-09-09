@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 recordings/
 profiles/
+# make profile-record's output (py-spy flamegraph)
+profile.svg
 dist/
 *.egg-info/
 .ruff_cache/

@@ -1,4 +1,4 @@
-.PHONY: help install test test-terminal test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean
+.PHONY: help install test test-terminal test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -74,6 +74,31 @@ mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in)
 
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run --active python scripts/normalize_spdx_headers.py
+
+# py-spy over memray: memray (above) is Linux/macOS-only (native allocator
+# hooks with no Windows equivalent) and isn't wired up anywhere in this repo.
+# py-spy is a native sampling profiler that attaches to an ALREADY-RUNNING
+# pid with zero code changes and zero instrumentation overhead, and works
+# identically on Windows/Linux/macOS -- the one hot-path tool that actually
+# covers every platform this project ships tests on. See docs/profiling.md.
+#
+# PID defaults to the live octowright leader (read from its lockfile) so the
+# common case is just `make profile-dump` / `make profile-record` with
+# nothing to look up by hand; override with PID=<pid> to target anything
+# else (a follower, a test daemon, an unrelated process). Lazily expanded --
+# this shell-out only runs when a profile-* target actually references PID,
+# never on an unrelated `make` invocation.
+PID ?= $(shell uv run --active python -c "from octowright import singleton as s; info = s.read_lock(); print(info.pid if info else '')" 2>/dev/null)
+PROFILE_DURATION ?= 30
+
+profile-dump: ## One-shot py-spy stack dump of the running octowright leader (override PID=<pid>)
+	@test -n "$(PID)" || (echo "No running octowright leader found and no PID= given -- pass PID=<pid> explicitly." >&2 && exit 1)
+	uv run --active py-spy dump --pid $(PID)
+
+profile-record: ## Record a py-spy flamegraph of the leader to profile.svg (PROFILE_DURATION seconds, default 30; override PID=<pid>)
+	@test -n "$(PID)" || (echo "No running octowright leader found and no PID= given -- pass PID=<pid> explicitly." >&2 && exit 1)
+	uv run --active py-spy record -o profile.svg --duration $(PROFILE_DURATION) --pid $(PID)
+	@echo "Flamegraph written to profile.svg"
 
 diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
 	bash scripts/render_diagrams.sh docs/architecture

@@ -201,6 +201,12 @@ dev = [
     "pip-audit>=2.7.0",
     "pip-licenses>=5.0.0",
     "pre-commit>=4.6.0",
+    # Sampling profiler, unlike memray (above): attaches to an already-running
+    # PID with zero code changes and zero instrumentation overhead, and --
+    # unlike memray -- works on Windows as well as Linux/macOS, so it's the
+    # one hot-path tool that actually covers every platform this project
+    # ships tests on. See `make profile-daemon` / docs/profiling.md.
+    "py-spy>=0.4.0",
     "pytest>=8.3.0",
     "pytest-anyio>=0.0.0",
     "pytest-asyncio>=1.0",
