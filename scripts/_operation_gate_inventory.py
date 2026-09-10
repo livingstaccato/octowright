@@ -151,6 +151,19 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "the file's three teardown-body functions, alongside stop_trace_if_enabled and "
         "close_browser_handle_after_context_close",
     ),
+    "session/core_teardown_helpers.py:describe_context_videos": (
+        "teardown-only",
+        "snapshots context.pages/page.video/page.url before context.close() empties them; "
+        "called only from _teardown_after_close_cutoff, which already runs after a reserved "
+        "close owns the cutoff",
+    ),
+    "session/core_teardown_helpers.py:_save_video_again": (
+        "teardown-only",
+        "retry helper invoked by resolve_video_path_after_close, itself already bypassed as "
+        "teardown-only; runs only after context.close() has already happened. The save_as() "
+        "call is separately wrapped in bounded() for wall-clock safety -- the gate bypass and "
+        "the timeout are orthogonal concerns",
+    ),
     # Browser callbacks must respond synchronously or unblock the admitted call.
     "session/core_interaction_mixin.py:SessionInteractionMixin._handle_dialog._act": (
         "event-critical",
