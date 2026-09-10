@@ -89,7 +89,7 @@ async def _save_video_again(session: Any, size: int) -> int:
     real artifact of a real run, and the harness is entitled to judge it.
     """
     try:
-        await session._video.save_as(str(session.video_path))
+        await bounded(session._video.save_as(str(session.video_path)), operation="video_save_as_retry")
         size = session.video_path.stat().st_size
     except Exception as exc:
         log.debug(
