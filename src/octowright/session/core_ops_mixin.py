@@ -526,6 +526,10 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         try:
             await self._drain_background_tasks()
             await _teardown.stop_trace_if_enabled(self)
+            # Snapshot the pages while the context still HAS pages: closing it
+            # empties `context.pages`, so anything read afterwards describes
+            # nothing. Only used when the resolved video turns out empty.
+            self._pages_at_close = _teardown.describe_context_videos(self)
             await self.context.close()
             await _teardown.resolve_video_path_after_close(self)
         finally:
