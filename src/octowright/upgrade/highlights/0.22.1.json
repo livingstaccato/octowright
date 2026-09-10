@@ -1,0 +1,22 @@
+[
+  {
+    "title": "A wedged browser close no longer hangs forever",
+    "body": "context.close()/browser.close() were the only Playwright calls in the teardown path not wrapped in this codebase's own bounded() timeout helper. Reproduced as a 15+ hour wedge. Both are now bounded, so a wedged close surfaces as a timeout instead of hanging every caller of reservation.wait() forever -- including a second, smaller gap in the same path: once the primary close had already timed out, the teardown used to immediately attempt a second full-budget wait on the browser handle, almost always the same unresponsive target, roughly doubling the wait before the failure surfaced."
+  },
+  {
+    "title": "A session that stops writing a video no longer ships an empty one silently",
+    "body": "Video.path() only reports where the file WILL be; measured against a real tier, that guarantee does not always hold -- one capture unit produced a zero-byte .webm in 5 of 9 runs at one specific viewport while every sibling recorded normally. The video is now retried once when it comes back empty, and that retry is itself bounded so it cannot introduce a new hang of its own."
+  },
+  {
+    "title": "Windows leader-election was a documented no-op",
+    "body": "Reproduced live: 8 concurrent octowright serve starters with no lock all observed \"no live leader\" and all spawned a competing daemon for the same port. A real msvcrt.locking-based lock now closes it, the Windows analog of the existing fcntl.flock path used on POSIX."
+  },
+  {
+    "title": "octowright restart now recognizes a Windows daemon",
+    "body": "\"octowright serve\" in command never matches the real Windows command-line form (...octowright.EXE\" serve --daemon-mode), which silently made restart's identity checks, follower detection, and target matching all fail on Windows -- reproduced live as a genuinely running daemon reported as \"not an octowright daemon\" and left untouched."
+  },
+  {
+    "title": "Daemon startup no longer stalls on a slow Windows process scan",
+    "body": "The boot-time orphan sweep measured at ~31s on Windows (three sequential slow process-table scans) while the rest of startup took under 1s -- long enough to blow through an MCP client's own connect timeout on an otherwise-instant boot. The sweep only ever touches dead-driver orphans, so it now runs in the background instead of blocking HTTP/MCP coming up."
+  }
+]
