@@ -12,7 +12,73 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.22.1] - 2026-09-10
+
+### Fixed
+- **Unbounded CDP close hangs.** `context.close()`/`browser.close()` were the
+  only Playwright calls in the teardown path not wrapped in this codebase's
+  existing `bounded()` timeout helper. Reproduced as a 15+ hour wedge in
+  session code, and separately in the crash-characterization script's own raw
+  launcher. Both are now bounded; a wedged close surfaces as a timeout instead
+  of hanging every caller of `reservation.wait()` forever. A second, smaller
+  gap in the same path is also closed: once `context.close()` had already
+  timed out, the teardown's `finally` block immediately attempted a second
+  full-budget wait on `close_handle.close()` -- almost always the same
+  unresponsive target, roughly doubling the wait before the failure surfaced.
+  That second wait now gets a short fixed budget once the primary close is
+  known to have timed out.
+- **A session that stops writing a video no longer ships an empty one
+  silently.** `Video.path()` only reports where the file WILL be; measured
+  against a real tier, that guarantee does not always hold -- one capture unit
+  produced a zero-byte `.webm` in 5 of 9 runs at one specific viewport while
+  every sibling recorded normally. `page.video.save_as()`, which waits until
+  the file is genuinely finished, is now retried once when the resolved video
+  comes back empty; the pre-close page list is snapshotted before
+  `context.close()` empties it so the diagnostic survives the close, and the
+  retry's own `save_as()` call is itself bounded.
+- **Windows leader-election lock was a documented no-op.** Reproduced live: 8
+  concurrent `octowright serve` starters with no lock all observed "no live
+  leader" and all spawned a competing daemon for the same port. Added a real
+  `msvcrt.locking`-based lock, the Windows analog of the existing
+  `fcntl.flock` path.
+- **`process_reaper` trusted a stale Windows process-table rescan.** A
+  boot-time reap logged 10 pids as `still_alive` after `taskkill` had already
+  confirmed, correctly, that every one was gone at both signal stages. Now
+  trusts each pid's own kill-stage outcome over that rescan (Windows only;
+  POSIX's `ps`-based rescan doesn't have this staleness problem). Known
+  narrow edge case, not closed: if Windows recycles a just-killed pid to a
+  genuinely new, unrelated, live browser before the final rescan, that
+  browser would misreport as "killed" in the summary -- cosmetic only, no
+  wrong kill results from it.
+- **`restart` couldn't recognize Windows command lines.**
+  `"octowright serve" in command` never matches the real Windows form
+  (`...octowright.EXE" serve --daemon-mode`), which silently made `restart`'s
+  identity checks, follower detection, and target matching all fail on
+  Windows -- reproduced live as a genuinely running daemon reported as "not an
+  octowright daemon" and left untouched. A separate, smaller bug in the same
+  area is also fixed: the venv-neighbour entrypoint resolver never appended
+  `.exe`.
+- **Boot-time orphan sweep blocked daemon startup**, measured live at ~31s
+  (three sequential slow Windows process-table scans) while the rest of
+  startup took under 1s -- long enough to blow through an MCP client's own
+  connect timeout on an otherwise-instant boot. The sweep only ever touches
+  dead-driver orphans, so it now runs as a background task instead of
+  blocking HTTP/MCP coming up.
+- **Unbounded Windows shell-outs.** `restart.py`'s and `process_reaper.py`'s
+  PowerShell/`taskkill` subprocess calls had no timeout. Now bounded, matching
+  the timeout already applied to the sibling `_list_processes_windows` call.
+- **Windows file-rename race.** `video.py`'s `optimize_png` could hit a
+  transient `PermissionError` on Windows (AV scanning / a lingering handle)
+  doing `temp_path.replace(path)` right after an ffmpeg subprocess; POSIX
+  never has this failure mode. Now retries with backoff.
+
 ### Internal
+- `describe_context_videos` and `_save_video_again` (the video-retry helpers
+  above) were missing from the operation-gate architecture scanner
+  (`make lint`'s `check_operation_gate_architecture.py`) -- invisible in CI
+  because the GitHub Actions lint job runs a lighter subset than `make lint`.
+  Registered as `teardown-only` bypasses matching their siblings in the same
+  file.
 - **The headed-Chromium browser-process abort is reproducible on demand**, for
   the first time since it was first reported.
   `scripts/characterize_headed_crash.py` gained a `pool-sigterm` launcher arm
@@ -2688,6 +2754,7 @@ history that led to the first published release.
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
 [Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.22.0...HEAD
+[0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0
