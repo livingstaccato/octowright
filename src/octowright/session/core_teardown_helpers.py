@@ -33,6 +33,72 @@ async def stop_trace_if_enabled(session: Any) -> None:
         session.trace_path = None
 
 
+def describe_context_videos(session: Any) -> list[dict[str, Any]]:
+    """Every page in this context, snapshotted BEFORE the context is closed.
+
+    The session tracks ONE video: `page.video` for the page that existed at
+    launch. A journey that opens a second page records a second video that
+    nothing here resolves, and the tracked one can be a page that never
+    painted -- which reaches the caller as a zero-byte file rather than as a
+    missing one, and those are indistinguishable downstream.
+
+    ORDER IS THE WHOLE POINT. `context.pages` is empty once the context has
+    closed, so a description taken after the close reports `[]` for every
+    session and answers nothing -- measured, on the first version of this
+    diagnostic. It has to be captured while the context is still live and
+    carried to the point where the video size is known.
+    """
+    described: list[dict[str, Any]] = []
+    for index, page in enumerate(getattr(session.context, "pages", []) or []):
+        video = getattr(page, "video", None)
+        entry: dict[str, Any] = {"index": index, "has_video": video is not None}
+        try:
+            entry["url"] = str(getattr(page, "url", ""))[:200]
+        except Exception:  # diagnostics never raise
+            entry["url"] = "<unreadable>"
+        described.append(entry)
+    return described
+
+
+async def _save_video_again(session: Any, size: int) -> int:
+    """Ask Playwright to finish writing a video that came back empty.
+
+    `Video.path()` only reports where the file WILL be; its guarantee is tied
+    to the context closing, and measured against a real tier that guarantee
+    does not always hold -- `guest_buyer.guest_checkout` at 390x844 produced a
+    zero-byte .webm in 5 of 9 runs while its desktop and tablet siblings, and
+    every other mobile unit in the same sweep, recorded normally. Page count at
+    teardown is 0 for the passes that work and the passes that do not, so this
+    is inside Playwright's writer rather than anything the close path controls.
+
+    `save_as()` is the call that WAITS: "waits until the page is closed and the
+    video is fully saved". It runs only when the file is already empty, so the
+    passes that record normally keep the cheaper path and are unaffected.
+
+    A repair that cannot fail is worse than none, so this reports what it got:
+    the size after the retry, still 0 when the video was genuinely never
+    written. The caller keeps `video_path` either way -- an empty video is a
+    real artifact of a real run, and the harness is entitled to judge it.
+    """
+    try:
+        await session._video.save_as(str(session.video_path))
+        size = session.video_path.stat().st_size
+    except Exception as exc:
+        log.debug(
+            "octowright.session.video_save_as_failed",
+            instance_id=getattr(session, "instance_id", None),
+            error=repr(exc),
+        )
+    log.warning(
+        "octowright.session.video_was_empty",
+        instance_id=getattr(session, "instance_id", None),
+        video_path=str(session.video_path),
+        size_after_save_as=size,
+        recovered=size > 0,
+    )
+    return size
+
+
 async def resolve_video_path_after_close(session: Any) -> None:
     # Resolve video path after context close (Playwright finalises file on close).
     if session._video is None:
@@ -40,6 +106,17 @@ async def resolve_video_path_after_close(session: Any) -> None:
     try:
         resolved = await session._video.path()
         session.video_path = Path(resolved)
+        # An EMPTY video is not a missing one, and the difference is the whole
+        # diagnosis: `path()` answers for the page this session tracked, so a
+        # zero-byte file means that page produced no frames -- typically
+        # because the journey ran on a page opened later. Recorded here, at
+        # the only point where the context is still readable.
+        try:
+            size = session.video_path.stat().st_size
+        except OSError:
+            size = -1
+        if size <= 0:
+            size = await _save_video_again(session, size)
     except Exception as exc:
         # Per silent-swallow policy: video_path stays None and the dashboard
         # can't surface the video. Log so the failure is diagnosable rather

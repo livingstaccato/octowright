@@ -256,6 +256,62 @@ class TestCloseVideo:
         assert inst.recorder.closed is True
 
     @pytest.mark.anyio
+    async def test_an_empty_video_is_saved_again(self, tmp_path: Path) -> None:
+        """`path()` reports where a video WILL be; only `save_as()` waits for it.
+
+        Measured against a deployed tier: guest_buyer.guest_checkout at 390x844
+        produced a zero-byte .webm in 5 of 9 runs while its desktop and tablet
+        siblings recorded normally, and page count at teardown was 0 for the
+        passes that worked and the passes that did not. `save_as()` is the call
+        documented to wait "until the page is closed and the video is fully
+        saved", so an empty file gets one.
+        """
+        target = tmp_path / "video.webm"
+        target.write_bytes(b"")
+        video_obj = MagicMock()
+        video_obj.path = AsyncMock(return_value=str(target))
+
+        async def _save_as(path: str) -> None:
+            Path(path).write_bytes(b"frames")
+
+        video_obj.save_as = AsyncMock(side_effect=_save_as)
+        inst = _build(tmp_path, _video=video_obj)
+        await inst.close()
+        video_obj.save_as.assert_awaited_once_with(str(target))
+        assert inst.video_path == target
+        assert target.stat().st_size > 0
+
+    @pytest.mark.anyio
+    async def test_a_video_that_records_is_not_saved_again(self, tmp_path: Path) -> None:
+        """The 128 units that record normally must keep the cheaper path."""
+        target = tmp_path / "video.webm"
+        target.write_bytes(b"frames")
+        video_obj = MagicMock()
+        video_obj.path = AsyncMock(return_value=str(target))
+        video_obj.save_as = AsyncMock()
+        inst = _build(tmp_path, _video=video_obj)
+        await inst.close()
+        video_obj.save_as.assert_not_awaited()
+
+    @pytest.mark.anyio
+    async def test_a_video_that_stays_empty_still_reports_its_path(self, tmp_path: Path) -> None:
+        """A repair that cannot fail is worse than none.
+
+        When `save_as()` also produces nothing, the video is genuinely absent.
+        The path is still kept: an empty video is a real artifact of a real
+        run, and judging it belongs to the caller, not to the repair.
+        """
+        target = tmp_path / "video.webm"
+        target.write_bytes(b"")
+        video_obj = MagicMock()
+        video_obj.path = AsyncMock(return_value=str(target))
+        video_obj.save_as = AsyncMock(side_effect=RuntimeError("nothing to save"))
+        inst = _build(tmp_path, _video=video_obj)
+        await inst.close()
+        assert inst.video_path == target
+        assert target.stat().st_size == 0
+
+    @pytest.mark.anyio
     async def test_video_none_skips_resolution(self, tmp_path: Path) -> None:
         """_video=None → no path() call, video_path stays None."""
         inst = _build(tmp_path, _video=None)
