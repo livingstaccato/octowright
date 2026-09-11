@@ -13,6 +13,7 @@ from octowright._paths import atomic_write_text
 from octowright.artifacts.evidence import redact_preview
 from octowright.artifacts.models import now_iso
 from octowright.artifacts.redaction import redact_mapping
+from octowright.macros.privacy import redact_args, scrub_sensitive_values
 
 
 def _json_write(path: Path, payload: dict[str, Any]) -> Path:
@@ -35,6 +36,7 @@ def write_run_bundle(
     evidence: list[dict[str, Any]],
     summary: str,
     verification: dict[str, Any] | None = None,
+    sensitive_values: tuple[str, ...] = (),
 ) -> dict[str, Path]:
     run_dir.mkdir(parents=True, exist_ok=True)
     result_path = run_dir / "result.json"
@@ -42,14 +44,16 @@ def write_run_bundle(
     summary_path = run_dir / "summary.md"
 
     result_payload = dict(result)
-    result_payload["args_used"] = redact_mapping(result_payload.get("args_used"))
+    result_payload["args_used"] = redact_args(result_payload.get("args_used") or {})
     result_payload["evidence_path"] = str(evidence_path)
     # Kept so the summary can be regenerated once verification exists. This
     # bundle is necessarily written BEFORE verification runs -- verification
     # reads result.json and evidence.json -- so the verdict cannot be in the
     # first render, and re-rendering needs this prose back.
     result_payload["summary"] = summary
-    evidence_payload = _redact_evidence(evidence)
+    result_payload = scrub_sensitive_values(result_payload, sensitive_values)
+    evidence_payload = scrub_sensitive_values(_redact_evidence(evidence), sensitive_values)
+    summary = str(scrub_sensitive_values(summary, sensitive_values))
 
     _json_write(result_path, result_payload)
     _json_write(evidence_path, {"records": evidence_payload})
@@ -57,7 +61,10 @@ def write_run_bundle(
     paths = {"result": result_path, "evidence": evidence_path}
     if verification is not None:
         verification_path = run_dir / "verification.json"
-        _json_write(verification_path, verification)
+        _json_write(
+            verification_path,
+            scrub_sensitive_values(verification, sensitive_values),
+        )
         paths["verification"] = verification_path
 
     atomic_write_text(

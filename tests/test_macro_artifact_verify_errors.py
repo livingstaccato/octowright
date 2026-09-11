@@ -463,7 +463,7 @@ async def test_running_an_unplanned_macro_builds_its_own_manifest(
     listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
     meta = listed["metadata"]
 
-    assert listed["parameters"] == {"user": "tanuki"}
+    assert listed["parameters"] == {"user": "<redacted>"}
     assert meta["missing_args"] == ["password"]
     assert meta["ready"] is False  # a required argument was not supplied
     assert meta["description"] == "Login flow"
