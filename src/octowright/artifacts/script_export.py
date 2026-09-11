@@ -15,6 +15,7 @@ from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
+    FIELD_NAME_PATTERN,
     SENSITIVE_KEY_PAIRS,
     SENSITIVE_KEY_TOKENS,
     is_sensitive_arg_key,
@@ -70,6 +71,7 @@ _SENSITIVE_KEY_PAIRS = {tuple(sorted(SENSITIVE_KEY_PAIRS))!r}
 _MAX_ENCODING_DEPTH = 3
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {placeholder_re!r}
+_FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 
 def _now() -> str:
@@ -119,7 +121,7 @@ def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
     if isinstance(value, dict):
         for key, item in value.items():
             branch_sensitive = inherited or _is_sensitive_arg_key(key)
-            if inherited and key not in (None, ""):
+            if inherited and key not in (None, "") and not _FIELD_NAME_RE.fullmatch(str(key)):
                 values.add(str(key))
             values.update(_collect_sensitive_values(item, inherited=branch_sensitive))
     elif isinstance(value, (list, tuple, set, frozenset)):
