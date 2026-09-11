@@ -330,6 +330,11 @@ executed += 1
     "screenshot": """
 if not action.get("path"):
     skipped += 1
+elif _sensitive_arg_values(args):
+    raise RuntimeError(
+        "classified macro screenshot requires a composition-owned privacy handler; "
+        "standalone exports do not provide one"
+    )
 else:
     await _page(state).screenshot(path=action["path"])
     executed += 1
