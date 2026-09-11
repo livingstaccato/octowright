@@ -59,13 +59,29 @@ def is_sensitive_arg_key(key: object) -> bool:
 
 _MAX_ENCODING_DEPTH = 3
 
+# A mapping key that reads as structure rather than as data. Nested keys under a
+# classified branch are collected because a map can be *keyed* by an identity
+# (``{"credential": {"user@host": ...}}``), but the collected set feeds a blind
+# substring scrub over every returned diagnostic, so a plain field name
+# ("name", "role", "id") collected there rewrites unrelated failure text --
+# ``[name=q]`` became ``[<redacted>=q]`` -- destroying the macro failure bundle
+# this scrub exists to keep safe. Honest limit: an identifier-shaped secret used
+# as a mapping key is not collected from the key position; it is still collected
+# wherever it appears as a value.
+FIELD_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_-]*"
+_FIELD_NAME_RE = re.compile(FIELD_NAME_PATTERN)
+
+
+def is_field_name(key: object) -> bool:
+    return bool(_FIELD_NAME_RE.fullmatch(str(key)))
+
 
 def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
     values: set[str] = set()
     if isinstance(value, Mapping):
         for key, item in value.items():
             branch_sensitive = inherited or is_sensitive_arg_key(key)
-            if inherited and key not in (None, ""):
+            if inherited and key not in (None, "") and not is_field_name(key):
                 values.add(str(key))
             values.update(_collect_sensitive_values(item, inherited=branch_sensitive))
     elif isinstance(value, (list, tuple, set, frozenset)):
