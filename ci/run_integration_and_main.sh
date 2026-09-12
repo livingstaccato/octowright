@@ -35,13 +35,13 @@ JUNIT_PATH=".ci/integration-local-${OS}-${ARCH}.xml"
 
 mkdir -p .ci
 
-uv run --active pytest -q tests/ -m integration_local --no-cov \
+uv run pytest -q tests/ -m integration_local --no-cov \
     --junitxml="$JUNIT_PATH"
 
 if [[ "${VERBOSE:-0}" == "1" ]]; then
-    uv run --active pytest -vv tests/ -m "not integration_local and not memory_isolated" --tb=short -ra --color=no
+    uv run pytest -vv tests/ -m "not integration_local and not memory_isolated" --tb=short -ra --color=no
 else
-    uv run --active pytest -q tests/ -m "not integration_local and not memory_isolated"
+    uv run pytest -q tests/ -m "not integration_local and not memory_isolated"
 fi
 
-uv run --active pytest -q tests/ -m memory_isolated --no-cov
+uv run pytest -q tests/ -m memory_isolated --no-cov

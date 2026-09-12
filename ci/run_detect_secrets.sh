@@ -14,4 +14,4 @@ set -eu
 # with spaces or unusual characters.
 git ls-files -z \
     | grep -zEv '^(\.secrets\.baseline|uv\.lock)$' \
-    | xargs -0 uv run --active detect-secrets-hook --baseline .secrets.baseline
+    | xargs -0 uv run detect-secrets-hook --baseline .secrets.baseline

@@ -65,6 +65,12 @@ a section that is already tagged and on PyPI.
   To record a form with several password fields, record with
   `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment. Macros already saved
   with the marker are not repaired by this change and need re-saving.
+- **Make targets and CI scripts still ran `uv run --active`.** The earlier fix
+  dropped the flag from the pre-commit hooks and the docs only, so `make lint`
+  or `make test` from a shell whose `VIRTUAL_ENV` belongs to another project
+  still rebuilt that project's venv against these requirements. The flag is
+  gone from the Makefile, the `ci/` scripts, both workflows, the terminal
+  plugin README, and the usage notes in `scripts/`.
 
 ### Documentation
 - **Macro argument privacy is documented** in `docs/macros.md`: which argument

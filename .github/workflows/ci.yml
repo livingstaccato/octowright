@@ -76,50 +76,50 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/bootstrap-uv
       - name: Ruff check
-        run: uv run --active ruff check .
+        run: uv run ruff check .
       - name: Ruff format check
-        run: uv run --active ruff format --check .
+        run: uv run ruff format --check .
       # Mirror `make lint` — mypy, codespell, and the LOC gate were
       # previously local-only, which let bigger regressions slip past CI.
       - name: mypy
-        run: uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
+        run: uv run mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
       - name: ty check
-        run: uv run --active ty check src/octowright
+        run: uv run ty check src/octowright
       - name: Bandit
-        run: uv run --active bandit -q -r src/octowright -s B101,B110,B112,B404,B405
+        run: uv run bandit -q -r src/octowright -s B101,B110,B112,B404,B405
       - name: codespell
         # packages/octowright-terminal/.../assets/renderer.js is a committed,
         # minified build artifact (see packages/octowright-terminal/assets-src/) --
         # same reason core's built frontend is excluded above. Keep this in
         # sync with the Makefile's `lint` target.
-        run: uv run --active codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
+        run: uv run codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
       - name: SPDX headers
-        run: uv run --active python scripts/check_spdx_headers.py
+        run: uv run python scripts/check_spdx_headers.py
       - name: Max LOC per file (<=777)
-        run: uv run --active python scripts/check_max_loc.py
+        run: uv run python scripts/check_max_loc.py
       - name: Agent docs sync
-        run: uv run --active python scripts/check_agent_docs_sync.py
+        run: uv run python scripts/check_agent_docs_sync.py
       # mutmut mutates whole modules but runs only the test files it is given.
       # When those drift apart, mutants whose killing test never ran are
       # reported as survivors — indistinguishable from real assertion gaps.
       - name: mutmut test selection in sync
-        run: uv run --active python scripts/check_mutmut_selection.py
+        run: uv run python scripts/check_mutmut_selection.py
       # Catch plugin-manifest version drift server-side: the same check runs as a
       # pre-commit hook, but that only fires on local commits — this enforces it
       # on every push/PR so a stale .claude/.codex/.antigravity plugin.json fails CI.
       - name: Plugin manifest versions match VERSION
-        run: uv run --active python scripts/check_plugin_versions.py
+        run: uv run python scripts/check_plugin_versions.py
       - name: Vulture (dead code)
-        run: uv run --active python scripts/check_vulture.py
+        run: uv run python scripts/check_vulture.py
       - name: Xenon (complexity)
-        run: uv run --active python scripts/check_xenon.py
+        run: uv run python scripts/check_xenon.py
       - name: Secret scan
         run: bash ci/run_detect_secrets.sh
       # Audits the core-only environment (`--no-group terminal`). The terminal
       # group's own dependency tree is audited by the terminal-plugin job, the
       # one leg that installs it.
       - name: pip-audit (deps)
-        run: uv run --active python scripts/check_pip_audit.py
+        run: uv run python scripts/check_pip_audit.py
 
   frontend:
     name: 🧪 Frontend tests
@@ -196,10 +196,10 @@ jobs:
       # or browser has been closed".
       - name: Install Playwright browsers + Linux deps
         if: ${{ runner.os == 'Linux' }}
-        run: uv run --active playwright install --with-deps webkit firefox chromium
+        run: uv run playwright install --with-deps webkit firefox chromium
       - name: Install Playwright browsers
         if: ${{ runner.os != 'Linux' }}
-        run: uv run --active playwright install webkit firefox chromium
+        run: uv run playwright install webkit firefox chromium
       # Under act, skip tests that need real-display/popup/live-engine support.
       - name: Run unit tests (headless, act-safe subset)
         if: ${{ env.ACT == 'true' }}
@@ -241,13 +241,13 @@ jobs:
       # failing step instead of a buried tail of pytest output.
       - name: Coverage gate (--cov-fail-under)
         if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
-        run: uv run --active coverage report
+        run: uv run coverage report
       # Generate machine-readable + browsable coverage artifacts for review.
       - name: Coverage XML + HTML reports
         if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
         run: |
-          uv run --active coverage xml -o coverage.xml
-          uv run --active coverage html -d htmlcov
+          uv run coverage xml -o coverage.xml
+          uv run coverage html -d htmlcov
       # Publish a coverage totals + per-file table to the workflow summary.
       - name: Coverage summary (GitHub step summary)
         if: ${{ env.ACT != 'true' && runner.os == 'Linux' }}
@@ -263,7 +263,7 @@ jobs:
             htmlcov/
           if-no-files-found: warn
       - name: Selftest — verify tool registration
-        run: uv run --active octowright selftest
+        run: uv run octowright selftest
       # The built SPA at src/octowright/server/frontend/ is gitignored —
       # build it before the wheel so check_wheel_assets.py finds the
       # dashboard HTML/JS/CSS.
@@ -273,9 +273,9 @@ jobs:
       - name: Build frontend SPA
         run: npm ci && npm run build --workspace=packages/octowright-frontend
       - name: Build wheel + sdist
-        run: uv run --active python -m build --wheel --sdist
+        run: uv run python -m build --wheel --sdist
       - name: Verify packaged assets in wheel
-        run: uv run --active python scripts/check_wheel_assets.py
+        run: uv run python scripts/check_wheel_assets.py
       # Exercise the `octowright skill` CLI surface end-to-end against a
       # sandboxed CODEX_HOME inside the workspace.
       - name: Skill CLI smoke
@@ -320,13 +320,13 @@ jobs:
       # availability.py) passed there by construction. This is the only leg
       # where "ships py.typed, so it types cleanly" is checked, not assumed.
       - name: mypy (plugin, with provide-uterm present)
-        run: uv run --active mypy packages/octowright-terminal/src
+        run: uv run mypy packages/octowright-terminal/src
       # pip-audit over the one environment that contains the terminal group's
       # dependency tree: asyncssh, aiosqlite, provide-uterm and its siblings.
       # The lint job's audit runs under `--no-group terminal`, so none of those
       # were ever scanned -- while uv.lock ships them to every `make install`.
       - name: pip-audit (deps incl. terminal group)
-        run: uv run --active python scripts/check_pip_audit.py
+        run: uv run python scripts/check_pip_audit.py
       # The plugin's own suite, plus an end-to-end check that the entry point
       # reaches the real tool surface: OCTOWRIGHT_PLUGINS=terminal must add
       # exactly 7 terminal_* tools, and an unset value must add none.

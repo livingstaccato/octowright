@@ -13,8 +13,8 @@ install: ## uv sync --all-groups (deps + dev tools)
 # -m "not live_browser and not memory_isolated" for a genuinely browser-free run.
 # The second line splits out the one suite that needs a clean process.
 test: ## Run the Python test suite (launches real browsers where engines are installed)
-	uv run --active pytest -q tests/ -m "not memory_isolated"
-	uv run --active pytest -q tests/ -m memory_isolated --no-cov
+	uv run pytest -q tests/ -m "not memory_isolated"
+	uv run pytest -q tests/ -m memory_isolated --no-cov
 
 # The terminal session-kind plugin's own suite. `make test` above runs tests/
 # only, so this is the local equivalent of CI's terminal-plugin job -- and it
@@ -37,39 +37,39 @@ typecheck-assets: ## Type-check the JS init scripts injected into every page
 	npm run typecheck:assets
 
 lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
-	uv run --active ruff check .
-	uv run --active ruff format --check .
+	uv run ruff check .
+	uv run ruff format --check .
 	# tests/plugins/reference is included so the reference plugin's
 	# `_assert_structural_conformance` pin is actually checked: `activate`
 	# types a plugin pool as `Any`, so nothing else verifies that a pool
 	# satisfies the SessionPool Protocol's signatures.
-	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
-	uv run --active ty check src/octowright
-	uv run --active bandit -q -r src/octowright -s B110,B112,B404,B405
+	uv run mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
+	uv run ty check src/octowright
+	uv run bandit -q -r src/octowright -s B110,B112,B404,B405
 	# packages/octowright-terminal/.../assets/renderer.js is a committed,
 	# minified build artifact (see packages/octowright-terminal/assets-src/) --
 	# same reason core's built frontend is excluded above.
-	uv run --active codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
-	uv run --active python scripts/check_spdx_headers.py
-	uv run --active python scripts/check_max_loc.py
-	uv run --active python scripts/check_js_typecheck_coverage.py
-	uv run --active python scripts/check_operation_gate_architecture.py
-	uv run --active python scripts/check_agent_docs_sync.py
-	uv run --active python scripts/check_telemetry_docs.py
-	uv run --active python scripts/check_tool_inventory_docs.py
-	uv run --active python scripts/check_mutmut_selection.py
-	uv run --active python scripts/check_vulture.py
-	uv run --active python scripts/check_xenon.py
+	uv run codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
+	uv run python scripts/check_spdx_headers.py
+	uv run python scripts/check_max_loc.py
+	uv run python scripts/check_js_typecheck_coverage.py
+	uv run python scripts/check_operation_gate_architecture.py
+	uv run python scripts/check_agent_docs_sync.py
+	uv run python scripts/check_telemetry_docs.py
+	uv run python scripts/check_tool_inventory_docs.py
+	uv run python scripts/check_mutmut_selection.py
+	uv run python scripts/check_vulture.py
+	uv run python scripts/check_xenon.py
 	bash ci/run_detect_secrets.sh
 
 audit: ## Run pip-audit against the dependency tree (uses .ci/pip-audit-allow.txt)
-	uv run --active python scripts/check_pip_audit.py
+	uv run python scripts/check_pip_audit.py
 
 vulture: ## Dead-code scan (baseline-ratchet, no new findings allowed)
-	uv run --active python scripts/check_vulture.py
+	uv run python scripts/check_vulture.py
 
 xenon: ## Cyclomatic-complexity scan (baseline-ratchet, no new violations allowed)
-	uv run --active python scripts/check_xenon.py
+	uv run python scripts/check_xenon.py
 
 secrets-scan: ## Re-run detect-secrets across the repo against .secrets.baseline
 	bash ci/run_detect_secrets.sh
@@ -77,10 +77,10 @@ secrets-scan: ## Re-run detect-secrets across the repo against .secrets.baseline
 mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in)
 	# mutmut 3.x copies the project to mutants/ before running pytest; src-layout
 	# packages need PYTHONPATH=src so the copied tree can import octowright.
-	PYTHONPATH=src uv run --active mutmut run
+	PYTHONPATH=src uv run mutmut run
 
 spdx-fix: ## Normalize SPDX headers in source files
-	uv run --active python scripts/normalize_spdx_headers.py
+	uv run python scripts/normalize_spdx_headers.py
 
 # py-spy over memray: memray (above) is Linux/macOS-only (native allocator
 # hooks with no Windows equivalent) and isn't wired up anywhere in this repo.
@@ -95,16 +95,16 @@ spdx-fix: ## Normalize SPDX headers in source files
 # else (a follower, a test daemon, an unrelated process). Lazily expanded --
 # this shell-out only runs when a profile-* target actually references PID,
 # never on an unrelated `make` invocation.
-PID ?= $(shell uv run --active python -c "from octowright import singleton as s; info = s.read_lock(); print(info.pid if info else '')" 2>/dev/null)
+PID ?= $(shell uv run python -c "from octowright import singleton as s; info = s.read_lock(); print(info.pid if info else '')" 2>/dev/null)
 PROFILE_DURATION ?= 30
 
 profile-dump: ## One-shot py-spy stack dump of the running octowright leader (override PID=<pid>)
 	@test -n "$(PID)" || (echo "No running octowright leader found and no PID= given -- pass PID=<pid> explicitly." >&2 && exit 1)
-	uv run --active py-spy dump --pid $(PID)
+	uv run py-spy dump --pid $(PID)
 
 profile-record: ## Record a py-spy flamegraph of the leader to profile.svg (PROFILE_DURATION seconds, default 30; override PID=<pid>)
 	@test -n "$(PID)" || (echo "No running octowright leader found and no PID= given -- pass PID=<pid> explicitly." >&2 && exit 1)
-	uv run --active py-spy record -o profile.svg --duration $(PROFILE_DURATION) --pid $(PID)
+	uv run py-spy record -o profile.svg --duration $(PROFILE_DURATION) --pid $(PID)
 	@echo "Flamegraph written to profile.svg"
 
 diagrams: ## Render docs/architecture/*.puml to SVG (requires `plantuml`)
@@ -114,7 +114,7 @@ diagrams-png: ## Render diagrams to SVG + 2400-px PNG into /tmp/octowright-diagr
 	bash scripts/render_diagrams.sh docs/architecture --png
 
 export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-recording)
-	uv run --active python scripts/demos/sync_exports.py
+	uv run python scripts/demos/sync_exports.py
 
 # Default per-macro-action delay used when re-recording. Slower playback is
 # easier to follow by eye in the captured video. Override with e.g.
@@ -122,29 +122,29 @@ export-demos: ## Regenerate demo/tutorial-export/ from demo/bundles/ (no re-reco
 RERECORD_SLOWMO_MS ?= 500
 
 rerecord-real-site-demos: ## Re-record the Wikipedia-targeted bundles (cross-engine-trio, macro-replay-loop). Needs Playwright browsers + network.
-	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/record_demo.py cross-engine-trio
-	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/record_demo.py macro-replay-loop
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/record_demo.py cross-engine-trio
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/record_demo.py macro-replay-loop
 
 rerecord-playground-demos: ## Re-record the playground-targeted bundles (seven-mix-orchestration, role-based-duo). Needs Playwright browsers.
-	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/with_playground.py seven-mix-orchestration
-	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run --active python scripts/demos/with_playground.py role-based-duo
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/with_playground.py seven-mix-orchestration
+	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/with_playground.py role-based-duo
 
 format: ## Apply ruff format + ruff --fix
-	uv run --active ruff format .
-	uv run --active ruff check --fix .
+	uv run ruff format .
+	uv run ruff check --fix .
 
 typecheck: ## mypy only
-	uv run --active mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
+	uv run mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 
 typecheck-ty-probe: ## Non-gating: probe broader ty coverage and collect remaining baseline errors
-	uv run --active ty check src/octowright
+	uv run ty check src/octowright
 
 precommit: ## Run pre-commit on all files
-	uv run --active pre-commit run --all-files
+	uv run pre-commit run --all-files
 
 precommit-install: ## Install the pre-commit hooks into .git/hooks
-	uv run --active pre-commit install --install-hooks
-	uv run --active pre-commit install --hook-type commit-msg
+	uv run pre-commit install --install-hooks
+	uv run pre-commit install --hook-type commit-msg
 
 act-lint: ## Run the lint job locally via act
 	env -u DOCKER_HOST act -j lint --rm
