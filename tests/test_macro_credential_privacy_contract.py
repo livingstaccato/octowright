@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-Comment: Part of octowright.
+#
 
 """One macro credential must stay out of every returned diagnostic surface."""
 
@@ -33,7 +34,7 @@ SOCIAL_ARGS = {
     "email": EMAIL,
     "password": PASSWORD,
     "peer_email": "a4-peer-private@example.test",
-    "peer_password": "A4-PEER-PASSWORD-CANARY",
+    "peer_password": "A4-PEER-PASSWORD-CANARY",  # pragma: allowlist secret
     "user": "a4-driver-subject",
     "peer": "a4-peer-subject",
 }
@@ -374,7 +375,7 @@ def test_exported_runtime_args_redaction_removes_sensitive_value_aliases(
 
 
 def test_nested_sensitive_keys_are_found_below_ordinary_containers() -> None:
-    secret = "A4-NESTED-ORDINARY-CONTAINER-CANARY"
+    secret = "A4-NESTED-ORDINARY-CONTAINER-CANARY"  # pragma: allowlist secret
     args = {"payload": {"profile": {"password": secret}, "display": "public"}}
 
     values = sensitive_arg_values(args)
@@ -618,9 +619,8 @@ async def test_nested_classified_screenshot_cannot_bypass_privacy_handler(
     monkeypatch.setattr(execution, "_push_status", AsyncMock())
 
     if container == "conditional":
-        async def dispatch_conditional(
-            nested_session: Any, _action: dict[str, Any], recurse: Any
-        ) -> tuple[int, int]:
+
+        async def dispatch_conditional(nested_session: Any, _action: dict[str, Any], recurse: Any) -> tuple[int, int]:
             return await recurse(
                 nested_session,
                 {"action": "screenshot", "path": "/tmp/raw-nested.png"},
@@ -632,9 +632,7 @@ async def test_nested_classified_screenshot_cannot_bypass_privacy_handler(
         monkeypatch.setattr(
             execution,
             "load_macro",
-            lambda _name: {
-                "actions": [{"action": "screenshot", "path": "/tmp/raw-nested.png"}]
-            },
+            lambda _name: {"actions": [{"action": "screenshot", "path": "/tmp/raw-nested.png"}]},
         )
         action = {"action": "macro_call", "name": "nested", "args": {}}
 
