@@ -15,9 +15,11 @@ from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
+    DEPLURALIZE_MIN_LENGTH,
     FIELD_NAME_PATTERN,
     SENSITIVE_KEY_PAIRS,
-    SENSITIVE_KEY_TOKENS,
+    SUBSTRING_TOKENS,
+    TOKEN_TOKENS,
     is_sensitive_arg_key,
     scrub_sensitive_values,
     sensitive_arg_values,
@@ -66,8 +68,10 @@ from playwright.async_api import async_playwright
 ACTIONS_JSON = {action_json!r}
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
-_SENSITIVE_KEY_TOKENS = {tuple(sorted(SENSITIVE_KEY_TOKENS))!r}
+_SUBSTRING_TOKENS = {tuple(sorted(SUBSTRING_TOKENS))!r}
+_TOKEN_TOKENS = {tuple(sorted(TOKEN_TOKENS))!r}
 _SENSITIVE_KEY_PAIRS = {tuple(sorted(SENSITIVE_KEY_PAIRS))!r}
+_DEPLURALIZE_MIN_LENGTH = {DEPLURALIZE_MIN_LENGTH!r}
 _MAX_ENCODING_DEPTH = 3
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {placeholder_re!r}
@@ -83,12 +87,21 @@ def _key_tokens(key: object) -> tuple[str, ...]:
     return tuple(part for part in re.split(r"[^A-Za-z0-9]+", text.lower()) if part)
 
 
+def _depluralized(token: str) -> str:
+    if len(token) >= _DEPLURALIZE_MIN_LENGTH and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
 def _is_sensitive_arg_key(key: object) -> bool:
     tokens = _key_tokens(key)
+    if any(token in "_".join(tokens) for token in _SUBSTRING_TOKENS):
+        return True
+    candidates = set(tokens) | {{_depluralized(token) for token in tokens}}
+    if candidates.intersection(_TOKEN_TOKENS):
+        return True
     adjacent = set(zip(tokens, tokens[1:]))
-    return any(token in _SENSITIVE_KEY_TOKENS for token in tokens) or bool(
-        adjacent.intersection(_SENSITIVE_KEY_PAIRS)
-    )
+    return bool(adjacent.intersection(_SENSITIVE_KEY_PAIRS))
 
 
 def _redact_nested_args(value: Any) -> Any:
