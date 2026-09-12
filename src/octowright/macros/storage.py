@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_text, reject_unsafe_path
+from octowright.macros.privacy import is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -52,6 +53,88 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _value_to_name(param_map: dict[str, str]) -> dict[str, str]:
+    """Invert the parameter map, refusing two parameters that share a value.
+
+    Substitution is keyed by recorded value, so a shared value cannot say which
+    field belongs to which parameter: ``{"username": "admin", "password":
+    "admin"}`` used to turn BOTH fields into ``{{password}}`` and silently drop
+    ``{{username}}``. The message names the parameters and never the value,
+    which is often a credential and would otherwise reach the MCP transcript.
+    """
+    names_by_value: dict[str, list[str]] = {}
+    for name, value in param_map.items():
+        names_by_value.setdefault(value, []).append(name)
+    shared = sorted(sorted(names) for names in names_by_value.values() if len(names) > 1)
+    if shared:
+        groups = "; ".join(", ".join(repr(n) for n in names) for names in shared)
+        raise ValueError(
+            f"parameters {groups} share the same value, so save_macro cannot tell which recorded "
+            "field belongs to which parameter; record them with distinct values"
+        )
+    return {value: names[0] for value, names in names_by_value.items()}
+
+
+def _redacted_fields(actions: list[dict[str, Any]]) -> list[tuple[int, str]]:
+    marker = defaults.REDACTED_INPUT_PLACEHOLDER
+    return [(i, key) for i, action in enumerate(actions) for key, value in action.items() if value == marker]
+
+
+def _field_label(action: dict[str, Any], index: int) -> str:
+    selector = action.get("selector")
+    return str(selector) if selector else f"action {index} ({action.get('action', '?')})"
+
+
+def _unmatched_credential_parameters(entries: list[dict[str, Any]], param_map: dict[str, str]) -> list[str]:
+    recorded = {value for entry in entries for value in entry.values() if isinstance(value, str)}
+    return sorted(name for name, value in param_map.items() if value not in recorded and is_credential_key(name))
+
+
+def _bind_redacted_inputs(
+    actions: list[dict[str, Any]], entries: list[dict[str, Any]], param_map: dict[str, str]
+) -> list[dict[str, Any]]:
+    """Fill a field redacted at record time, or refuse to save a macro that cannot replay.
+
+    ``OCTOWRIGHT_REDACT_INPUTS`` (default ``passwords``) records a password field as
+    ``REDACTED_INPUT_PLACEHOLDER``, so the declared value is never there to match
+    and the marker used to be written into the macro -- which replay then typed
+    into the page. A redacted field is bound only when exactly one field was
+    redacted and exactly one credential-named parameter matched nothing else in
+    the recording; every other case is ambiguous and refused, the way replay
+    already refuses a redacted header rather than failing confusingly later.
+    """
+    redacted = _redacted_fields(actions)
+    if not redacted:
+        return actions
+    candidates = _unmatched_credential_parameters(entries, param_map)
+    if len(redacted) == 1 and len(candidates) == 1:
+        index, key = redacted[0]
+        actions[index] = {**actions[index], key: "{{" + candidates[0] + "}}"}
+        return actions
+    fields = ", ".join(_field_label(actions[i], i) for i, _key in redacted)
+    raise ValueError(_redaction_refusal(fields, len(redacted), candidates))
+
+
+def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:
+    lead = (
+        f"the recording holds {field_count} input field(s) redacted at record time ({fields}), because "
+        "OCTOWRIGHT_REDACT_INPUTS hid the typed value; saving would write the redaction marker into the "
+        "macro and replay would type it into the page. "
+    )
+    if not candidates:
+        return lead + (
+            "Declare a credential-named parameter (for example `password`) for that field, or re-record "
+            "with OCTOWRIGHT_REDACT_INPUTS=off in a trusted environment."
+        )
+    if field_count > 1:
+        return lead + (
+            "Only a single redacted field can be bound automatically; re-record the fields separately, "
+            "or with OCTOWRIGHT_REDACT_INPUTS=off in a trusted environment."
+        )
+    names = ", ".join(repr(n) for n in candidates)
+    return lead + f"Parameters {names} could each fill it; declare only the one that was typed there."
+
+
 def save_macro(
     *,
     recording_path: Path,
@@ -61,11 +144,11 @@ def save_macro(
     include_launch: bool = False,
 ) -> Path:
     param_map = normalise_parameters(parameters)
-    value_to_name = {value: key for key, value in param_map.items()}
-    actions = [
-        substitute_in_action(entry, value_to_name)
-        for entry in iter_macro_actions(recording_path, include_launch=include_launch, strict_json=True)
-    ]
+    value_to_name = _value_to_name(param_map)
+    entries = list(iter_macro_actions(recording_path, include_launch=include_launch, strict_json=True))
+    actions = _bind_redacted_inputs(
+        [substitute_in_action(entry, value_to_name) for entry in entries], entries, param_map
+    )
 
     dest = macro_path(name)
     created_at = now_iso()
