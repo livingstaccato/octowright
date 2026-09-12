@@ -279,24 +279,95 @@ def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str,
     return scrub_sensitive_values(redacted, sensitive_arg_values(args), marker=marker)
 
 
-class SensitiveRecorder:
-    """Scrub macro values at the recorder boundary before any durable write."""
+#: The session attribute that owns its scrub set, in the private namespace
+#: composition roots already use (``_octowright_before_macro_action``).
+SESSION_PRIVACY_LEDGER_ATTR = "_octowright_privacy_ledger"
 
-    def __init__(self, recorder: Any, sensitive_values: tuple[str, ...]) -> None:
+
+class PrivacyLedger:
+    """An append-only, de-duplicated set of values to scrub, longest first.
+
+    Longest first because a replacing scrub must not let a shorter value consume
+    the characters a longer one needed. De-duplicated because the scrub cost is
+    per value per write, so it has to track distinct credentials, not runs.
+    """
+
+    def __init__(self, values: Iterable[str] = ()) -> None:
+        self._members: set[str] = set()
+        self._values: tuple[str, ...] = ()
+        self.add(values)
+
+    def add(self, values: Iterable[str]) -> None:
+        new = {value for value in values if isinstance(value, str) and value} - self._members
+        if new:
+            self._members |= new
+            self._values = tuple(sorted(self._members, key=lambda value: (-len(value), value)))
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        return self._values
+
+
+class SessionPrivacyLedger(PrivacyLedger):
+    """A session's scrub set: appended to by every run and nested call, never cleared.
+
+    Deliberately not restored at the run boundary. Recorder rows are driven by
+    page events that outlive the run, and a credential typed in one sequence step
+    keeps appearing in the next step's page-derived rows, so restoring would
+    reopen cleartext rather than prevent stacking. Stacking is prevented by
+    identity instead: exactly one ``SensitiveRecorder`` reads this ledger.
+    """
+
+
+class SensitiveRecorder:
+    """Scrub macro values at the recorder boundary before any durable write.
+
+    Holds a reference to the session ledger, not a copy of its values, so a
+    value appended by a later run or a nested call is scrubbed from the very next
+    write without installing anything.
+    """
+
+    def __init__(self, recorder: Any, ledger: PrivacyLedger) -> None:
         self._recorder = recorder
-        self._sensitive_values = sensitive_values
+        self.ledger = ledger
+
+    def _scrubbed(self, fields: dict[str, Any]) -> dict[str, Any]:
+        values = self.ledger.values
+        # Nothing to scrub is the common case for a session that never ran a
+        # classified macro, and scrubbing an empty set still copies every field.
+        return scrub_sensitive_values(fields, values) if values else fields
 
     def record(self, action: str, **fields: Any) -> None:
-        self._recorder.record(action, **scrub_sensitive_values(fields, self._sensitive_values))
+        self._recorder.record(action, **self._scrubbed(fields))
 
     def record_control(self, action: str, **fields: Any) -> None:
-        self._recorder.record_control(action, **scrub_sensitive_values(fields, self._sensitive_values))
+        self._recorder.record_control(action, **self._scrubbed(fields))
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._recorder, name)
 
 
-def install_sensitive_recorder(session: Any, sensitive_values: tuple[str, ...]) -> None:
+def session_privacy_ledger(session: Any) -> SessionPrivacyLedger:
+    """The session's ledger, created on first use."""
+    ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
+    # isinstance rather than ``is None``: a mock session answers every getattr.
+    if not isinstance(ledger, SessionPrivacyLedger):
+        ledger = SessionPrivacyLedger()
+        setattr(session, SESSION_PRIVACY_LEDGER_ATTR, ledger)
+    return ledger
+
+
+def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:
+    """Add values to the session's scrub set and make sure exactly one wrapper reads it.
+
+    Idempotent and never uninstalled: a session that is already wrapped gets its
+    ledger appended to, never a second wrapper. It wraps even when there is
+    nothing to scrub yet, because a nested call or a later run may append a
+    credential, and that append has to reach a ledger something reads.
+    """
+    ledger = session_privacy_ledger(session)
+    ledger.add(sensitive_values)
     recorder = getattr(session, "recorder", None)
-    if sensitive_values and recorder is not None:
-        session.recorder = SensitiveRecorder(recorder, sensitive_values)
+    if recorder is not None and not isinstance(recorder, SensitiveRecorder):
+        session.recorder = SensitiveRecorder(recorder, ledger)
+    return ledger
