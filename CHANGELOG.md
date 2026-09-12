@@ -12,6 +12,75 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.23.0] - 2026-09-11
+
+### Added
+- **Macro argument privacy.** A macro argument named like a credential
+  (`password`, `passwd`, `passphrase`, `secret`, `token`, `api_key`, `auth`,
+  `credential` and their variants, matched on tokenized key names rather than
+  substrings) is classified at run time, and its value is scrubbed out of every
+  diagnostic surface a failure returns before that payload leaves the process:
+  the diagnostic bundle, the healing suggestion, the failed-request tail, the
+  executed-action descriptors, and the recorder, which writes to disk. Matching
+  covers raw, JSON-escaped, and repeatedly URL-encoded spellings, so a value
+  laundered through an encoding is caught too. Classification descends through
+  ordinary containers, so a secret nested under a plain `payload`/`profile` key
+  is still found.
+
+  Two boundaries are **refusals** rather than scrubs, because a text scrub
+  structurally cannot reach them. A screenshot taken while classified arguments
+  are in play is a durable copy of whatever is on the page, so the generic
+  capture path is refused unless a composition root has installed both an
+  explicit authority flag and a handler that knows what evidence is safe to
+  keep. And the generic diagnostic producer persists raw HTML and a raw
+  screenshot, so on a classified macro it is not invoked at all -- the payload
+  records `diagnostic_suppressed` rather than silently omitting the field.
+
+  Honest scope: a mapping *key* that is itself an identifier-shaped secret is
+  not collected from the key position (collecting plain field names there would
+  rewrite unrelated failure text and destroy the bundle this exists to keep
+  safe); it is still collected wherever it appears as a value.
+
+### Fixed
+- **A window-title tag could wedge a renderer and OOM the pool.**
+  `title_tag.js` appended its suffix through `Document.prototype.title`'s setter
+  and observed the `<head>` subtree its own write mutates. Its `cur !== want`
+  guard only ever stopped it re-entering *itself*; against a page that
+  re-asserts its own title -- a bot-challenge page showing status -- the two
+  parties ping-ponged without bound. Measured on such a page: a Firefox content
+  process allocated ~1GB/s, reached 20GB in 140s, and OOM-killed every sibling
+  browser in the pool and then the daemon's own sessions. Raw Playwright on the
+  same URL with no init scripts stayed flat at 0.54GB, and injecting this one
+  script alone reproduced the climb, so the page was never the cause.
+
+  Backing off on a timer was tried first and is not sufficient: the tag is
+  restored, the page reverts it within a microtask, and the window title a
+  human is meant to read never actually shows it. The fight has to not start.
+  So the page is handed back its OWN value on read -- the getter masks the
+  suffix -- while the real `<title>` node, which is what the window and tab
+  render, keeps it. A page comparing `document.title` against what it last set
+  now finds them equal and reverts nothing.
+
+  Masking costs octowright's own tooling nothing, which is measured rather than
+  assumed: Playwright evaluates in an isolated world with its own
+  `Document.prototype`, so this main-world patch is not there and
+  `page.title()` reads the real tagged value. A burst backstop remains as a
+  second, independent bound for any loop driven some other way (writing the
+  `<title>` node's text directly), and the script now carries the top-frame
+  guard the other four injected assets already had. Live result on the page
+  that triggered the incident: 0.53GB flat, tag present in both the window
+  chrome and `page.title()`.
+
+### Changed
+- **`AGENTS.md` split into per-directory guides.** It had grown to the point
+  where an agent reading it paid for the whole repo's conventions to learn
+  about one directory. The directory-specific material now lives in `AGENTS.md`
+  files next to the code it describes (`browser_pool`, `cli`, `macros`,
+  `session`, `tests`), each with the `CLAUDE.md` symlink the sync check
+  requires, and the two reference tables that were never directory-scoped moved
+  to `docs/env-vars.md` (every `OCTOWRIGHT_*` knob) and `docs/telemetry.md`
+  (spans, metrics, trace propagation, exporter setup).
+
 ## [0.22.1] - 2026-09-10
 
 ### Fixed
