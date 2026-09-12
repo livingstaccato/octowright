@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from octowright.artifacts.redaction import redact_mapping
+from octowright.macros.privacy import redact_args
 
 ARTIFACT_VERSION = 1
 
@@ -64,7 +65,7 @@ def new_run_result(
         "ended_at": stamp,
         "instance_id": instance_id,
         "macro": macro,
-        "args_used": redact_mapping(args_used),
+        "args_used": redact_args(args_used or {}),
         "executed": executed,
         "skipped": skipped,
         "error": error,

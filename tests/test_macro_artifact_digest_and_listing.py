@@ -214,15 +214,14 @@ def test_export_records_what_it_wrote_in_the_manifest(monkeypatch: pytest.Monkey
     assert listed["exports"] == [{"path": result["path"], "kind": "python-cli"}]
 
 
-def test_export_carries_its_arguments_into_the_generated_script(
+def test_export_keeps_sensitive_arguments_out_of_script_and_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """`args` become the argparse defaults of the emitted CLI.
+    """Classified `args` remain supplied for readiness without being persisted.
 
-    Only a macro that *declares* a parameter produces a parser line at all,
-    which is why the value has to be threaded all the way through: drop the
-    `args=` keyword and the generated script still runs, still parses, and
-    silently defaults the parameter to empty.
+    Only a macro that declares a parameter produces a parser line. A supplied
+    sensitive value satisfies the missing-argument check, but neither the
+    generated default nor its manifest may retain the value.
     """
     storage, macro_artifacts = _reload(monkeypatch, tmp_path)
     storage.write_macro(
@@ -239,10 +238,10 @@ def test_export_carries_its_arguments_into_the_generated_script(
 
     script = Path(result["path"]).read_text(encoding="utf-8")
     assert "--user" in script
-    assert "tanuki-tim" in script
+    assert "tanuki-tim" not in script
 
     listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
-    assert listed["parameters"] == {"user": "tanuki-tim"}
+    assert listed["parameters"] == {"user": "<redacted>"}
     assert listed["metadata"]["missing_args"] == []
 
 
@@ -349,14 +348,14 @@ def test_planning_records_the_manifest_it_built(monkeypatch: pytest.MonkeyPatch,
 
     assert planned["ok"] is False  # a required argument is missing
     assert planned["missing_args"] == ["password"]
-    assert planned["args_used"] == {"user": "tanuki"}
+    assert planned["args_used"] == {"user": "<redacted>"}
     assert Path(planned["paths"]["macro_path"]).exists()
     assert len(set(planned["paths"].values())) == 5  # no two paths collapse to one
 
     listed = macro_artifacts.list_macro_artifacts(name="login")["artifacts"][0]
     meta = listed["metadata"]
 
-    assert listed["parameters"] == {"user": "tanuki"}
+    assert listed["parameters"] == {"user": "<redacted>"}
     assert meta["missing_args"] == ["password"]
     assert meta["ready"] is False
     assert meta["description"] == "Login flow"

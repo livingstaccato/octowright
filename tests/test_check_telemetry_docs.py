@@ -11,9 +11,8 @@ a new metric/notification can't ship undocumented."""
 
 from __future__ import annotations
 
-from tests._script_module import REPO_ROOT, load_script_module
+from tests._script_module import load_script_module
 
-_ROOT = REPO_ROOT
 checker = load_script_module("scripts/check_telemetry_docs.py")
 
 
@@ -52,9 +51,11 @@ def test_empty_doc_flags_everything() -> None:
     assert len(missing_notifs) == len(checker.notification_methods())
 
 
-def test_current_agents_md_is_in_sync() -> None:
-    # The catch half: the real AGENTS.md documents everything emitted today.
-    doc = (_ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    missing_metrics, missing_notifs = checker.undocumented(doc)
+def test_current_agent_docs_are_in_sync() -> None:
+    # The catch half: the real docs cover everything emitted today. Read through
+    # the checker's own DOCS tuple rather than naming AGENTS.md here, so moving a
+    # table between the two accepted files cannot make this test disagree with
+    # the guard `make lint` actually runs.
+    missing_metrics, missing_notifs = checker.undocumented(checker.doc_text())
     assert missing_metrics == [], f"undocumented metrics: {missing_metrics}"
     assert missing_notifs == [], f"undocumented notifications: {missing_notifs}"
