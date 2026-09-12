@@ -76,6 +76,29 @@ a section that is already tagged and on PyPI.
   rather than reference documentation, so `docs/` now describes only current
   behavior. The one script that only served those notes,
   `scripts/derive_privacy_sites.py`, went with them.
+- **Corrections to the macro argument privacy docs.** The list of writers that
+  are not scrubbed now includes Playwright traces and launch video. A new "Short
+  and common values" section explains that a short classified value, such as
+  `session="1"`, rewrites matching text in every later row of the session's
+  recording (#247). Exported scripts carry `_ARG_PRIVACY_CLASSIFIER_VERSION`, with
+  the leading underscore. The `macro_save` refusal rules now say plainly that a
+  recording with no redacted field is unaffected, and describe `all` mode.
+- **Session-kind plugins have an author guide**, `docs/plugins.md`: the entry
+  point and descriptor, what core validates before loading, the pool and launch
+  transaction, side artifacts, scenario capabilities, and the dashboard renderer
+  contract.
+- **Code and test comments no longer cite the removed design plans** by task or
+  section number; each now states its reason directly.
+- **The unimplemented privacy design work is tracked in #248.** The 0.23.0 entry
+  below points at a design document and derivation script that are no longer in
+  the repository.
+
+### Internal
+- **The tool-count docs check matches its exclusions by path segment.** A
+  changelog is skipped wherever it sits, rather than only at the root and any
+  file whose name starts with `CHANGELOG.md`. Local design notes under
+  `docs/superpowers/` and `docs/reviews/` are skipped, and both directories are
+  gitignored, so a plan quoting an old tool count cannot fail `make lint`.
 
 ## [0.23.0] - 2026-09-12
 
