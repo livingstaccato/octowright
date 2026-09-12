@@ -167,7 +167,7 @@ def test_the_scan_skips_dot_directories_at_any_depth(guard) -> None:
     The test above only proves anything while a worktree happens to exist.
     """
     assert guard._is_skipped_doc_path("CHANGELOG.md")
-    # Design specs and plans are kept locally under `.superpowers/`, never committed.
+    # Local design notes under a dot-directory are skipped like any other dot-directory.
     assert guard._is_skipped_doc_path(".superpowers/docs/superpowers/plans/x.md")
     assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/CHANGELOG.md")
     assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/README.md")
@@ -175,3 +175,20 @@ def test_the_scan_skips_dot_directories_at_any_depth(guard) -> None:
     assert guard._is_skipped_doc_path("packages/octowright-frontend/node_modules/x/README.md")
     assert not guard._is_skipped_doc_path("README.md")
     assert not guard._is_skipped_doc_path("docs/getting-started.md")
+
+
+def test_history_and_local_notes_are_skipped_by_segment(guard) -> None:
+    """Both remaining rules match whole path segments, as the dot-directory rule does.
+
+    A changelog is history wherever it sits, and a file that merely starts with
+    ``CHANGELOG.md`` is not one. ``docs/superpowers/`` and ``docs/reviews/`` hold
+    local design notes that are gitignored but still on disk, where the scan
+    would otherwise read a plan quoting an old tool count.
+    """
+    assert guard._is_skipped_doc_path("packages/octowright-terminal/CHANGELOG.md")
+    assert not guard._is_skipped_doc_path("CHANGELOG.md-draft.md")
+    assert guard._is_skipped_doc_path("docs/superpowers/plans/2026-09-13-example.md")
+    assert guard._is_skipped_doc_path("docs/reviews/example.md")
+    assert not guard._is_skipped_doc_path("docs/superpowers.md")
+    assert not guard._is_skipped_doc_path("docs/macros.md")
+    assert not guard._is_skipped_doc_path("packages/docs/superpowers/example.md")
