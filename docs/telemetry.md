@@ -254,7 +254,7 @@ PROVIDE_TRACE_ENABLED=true PROVIDE_METRICS_ENABLED=true \
 PROVIDE_TELEMETRY_SERVICE_NAME=octowright-smoketest \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf \
-uv run --active python -c "
+uv run python -c "
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 from octowright._tracing import span, counter
 setup_telemetry()
