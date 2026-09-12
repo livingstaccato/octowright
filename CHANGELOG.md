@@ -12,6 +12,23 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Added
+- **Redacted screenshots for classified macro runs.** A run holding classified
+  argument values (credentials, and identity values such as `email`) refused every
+  `screenshot` unless the embedding application wrote its own privacy handler, so
+  nearly every signed-in macro lost its screenshots. octowright now provides the
+  safe path itself: `macros.safe_screenshot.enable_redacted_screenshots(session)`
+  or `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` replaces every rendered
+  spelling of the run's classified values in the page, refuses if any remains,
+  screenshots, and restores the page. The default is still refusal, and an
+  application's own handler still wins. Related: #247, #248.
+
+### Changed
+- **An automatic artifact screenshot of a classified run** is taken redacted when
+  the session opts in, and otherwise the evidence manifest records
+  `screenshot_suppressed` instead of silently omitting it. It is never taken on a
+  session whose application installed its own handler.
+
 ### Fixed
 - **An upgrade that skipped a release dropped that release's highlights**
   (#240). `compute_upgrade` attached only the current version's entries, so a

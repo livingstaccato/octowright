@@ -403,6 +403,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_save_authoring.py",
     "tests/test_macro_privacy_value_variants.py",
     "tests/test_macro_privacy_session_ledger.py",
+    "tests/test_macro_redacted_screenshot.py",
     "tests/test_launch_page_selection.py",
     "tests/test_adopt_untracked_pages.py",
     "tests/artifacts_paths/test_run_id_containment.py",

@@ -22,6 +22,7 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
+from octowright.macros import safe_screenshot
 from octowright.macros.privacy import redact_args, scrub_sensitive_values, sensitive_arg_values
 from octowright.macros.storage import load_macro, macro_path
 
@@ -299,11 +300,22 @@ async def _capture_screenshot(
             return
         path = run_dir / "screenshots" / f"{label}.png"
         if sensitive_values:
-            # Automatic screenshots have no composition-owned rendered-value
-            # redaction or post-await authority check. Refuse them before the
-            # browser is asked for bytes. A macro may still request an explicit
-            # screenshot through execution's privacy-handler boundary.
+            # An automatic screenshot of a classified run is taken only through
+            # octowright's own redaction, and never on a session whose caller
+            # installed a handler of its own (that handler's checks would be
+            # bypassed). Otherwise the manifest says it was suppressed.
             path.unlink(missing_ok=True)
+            if not safe_screenshot.built_in_redaction_applies(session):
+                evidence.screenshot_suppressed(label=label)
+                return
+            try:
+                await safe_screenshot.redacted_screenshot(
+                    session, {"action": "screenshot", "path": str(path)}, sensitive_values, root=run_dir
+                )
+            except Exception as exc:  # Best-effort evidence must not hide macro results.
+                evidence.log_excerpt(path=path, offset=0, preview=exc.__class__.__name__)
+                return
+            evidence.screenshot(path=path, label=label)
             return
         screenshot = getattr(session, "screenshot", None)
         if screenshot is None:
