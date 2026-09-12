@@ -102,7 +102,7 @@ def _capture_session(log_root: Path | None = None, *, instance_id: str = "i", ki
 def capture_pool(monkeypatch: pytest.MonkeyPatch, recordings_dir: Path) -> BrowserPool:
     """A REAL ``BrowserPool`` wired into ``inspect_capture.pool``.
 
-    ``browser_capture_and_close`` (Task 8) runs its capture as a preparation
+    ``browser_capture_and_close`` runs its capture as a preparation
     callback INSIDE the pool's close coordinator (``_sessions_lock``,
     ``_closing_sessions``, the session's real gate) -- a fully-mocked pool
     can't provide any of that, unlike every OTHER inspect tool in this file.

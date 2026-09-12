@@ -32,7 +32,7 @@ def _patch_pool(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
     ``browser_navigate``/``browser_navigate_back``/``browser_resize``/
     ``browser_viewport_status``/``browser_viewport_sync``/``browser_open_url``
-    live in ``lifecycle_navigate`` (Task 10 split, keeps ``lifecycle.py``
+    live in ``lifecycle_navigate`` (split out to keep ``lifecycle.py``
     under the LOC ceiling), so both modules' ``pool`` references must point
     at the same fake for a `.get()` call made from either to be observed.
     """

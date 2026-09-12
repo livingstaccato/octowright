@@ -83,7 +83,7 @@ async def test_concurrent_ensure_pw_initializes_playwright_once(monkeypatch: pyt
 @pytest.mark.asyncio
 async def test_concurrent_close_claims_session_once() -> None:
     """Concurrent closes for the SAME identity coalesce onto one durable
-    coordinator (Task 7): both callers get the SAME successful outcome
+    coordinator: both callers get the SAME successful outcome
     (neither raises KeyError), and the teardown body runs exactly once."""
     from octowright.session.operation.gate import SessionOperationGate
 

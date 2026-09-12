@@ -214,7 +214,7 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
         self._invariant_reason: str | None = None
         self._close_reservation: CloseReservation | None = None
         self._granted_close_reservation: CloseReservation | None = None
-        # F1 (2026-08-29 hang-resilience whole-branch review): which task's
+        # Which task's
         # cancellation `enforce_active_timeout` itself requested, and the
         # `Task.cancelling()` count the CURRENT owner had at the moment it
         # became one -- together let `operation()` tell "the ceiling cancelled
@@ -550,8 +550,7 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
     ) -> AsyncIterator[None]:
         """Acquire (or re-enter) the gate's lease for *operation_name*.
 
-        F1 (2026-08-29 hang-resilience whole-branch review, CRITICAL): a
-        cancellation ``enforce_active_timeout`` requested on THIS lease's
+        A cancellation ``enforce_active_timeout`` requested on THIS lease's
         owner must never reach the caller as a bare ``asyncio.CancelledError``.
         In the daemon, that owning task either IS the MCP request task, or
         is awaited by it through ``asyncio.shield`` (the idempotency cache),
@@ -605,7 +604,7 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             # against the ``_LeaseToken`` captured above instead, or every
             # cancellation-safe exit would falsely trip the ownership
             # invariant.
-            # N1 (whole-branch re-review): the absorption in the
+            # The absorption in the
             # except-CancelledError clause above does NOT cover this
             # release. A `finally` is a sibling of that clause, not nested
             # in it, so a ceiling breach landing while the owner is

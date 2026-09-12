@@ -424,7 +424,7 @@ class BrowserPool:
         )
 
     async def relaunch_fluid(self, instance_id: str) -> dict[str, Any]:
-        # Body lives in browser_pool.relaunch (Task 8): the URL/profile
+        # Body lives in browser_pool.relaunch: the URL/profile
         # snapshot used to build the replacement launch must be taken INSIDE
         # the close ticket, after it owns the gate -- see
         # ``relaunch_fluid_browser`` / ``RelaunchSnapshot``.

@@ -18,7 +18,7 @@ Pins:
 - close_all + spawn_roster (per-spec error captured without aborting siblings)
 - shutdown_pool (close_all + pw stop + tmpdir cleanup)
 - TestDurableCloseCoordinator: the durable, coalesced close coordinator
-  (Task 7) -- caller cancellation vs. accepted-close durability, duplicate
+  -- caller cancellation vs. accepted-close durability, duplicate
   close identity coalescing, close_all's two-stage reserve-then-await,
   protection-race both orderings, external-close-wins-mid-drain, a broken
   gate's teardown-only path, and replayed Playwright close-listener no-ops.
@@ -905,7 +905,7 @@ class TestHandoffBrowser:
     @pytest.mark.anyio
     async def test_stateless_with_opt_in_proceeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """accept_stateless=True bypasses the stateless guard. Routes through
-        the REAL close coordinator (Task 8: close_original=True no longer
+        the REAL close coordinator (close_original=True no longer
         calls pool.close() directly) so the replacement launches from the
         preparation callback's RelaunchSnapshot, not a pre-close read."""
         from octowright.browser_pool import close_helpers as _lc
@@ -1438,7 +1438,7 @@ class TestSessionsLock:
         assert sess.instance_id not in pool._sessions
 
 
-# ─── durable, coalesced close coordinator (Task 7) ──────────────────────────
+# ─── durable, coalesced close coordinator ───────────────────────────────────
 #
 # These tests use a REAL BrowserSession (not the SimpleNamespace double
 # above) with a mocked context/page/recorder, so the coordinator's actual
@@ -1786,7 +1786,7 @@ class TestDurableCloseCoordinator:
         assert spans[1][1]["reason"] == "user_close"
 
 
-# ─── _coordinate_close finally-block resilience (hardening, Task 8 review) ──
+# ─── _coordinate_close finally-block resilience ─────────────────────────────
 
 
 class TestCloseCoordinatorFinallyResilience:
@@ -1943,7 +1943,7 @@ class TestCloseCoordinatorFinallyResilience:
         await wait_until(lambda: session.instance_id not in pool._closing_sessions)
 
 
-# ─── Compound close operations (Task 8): preparation-at-ticket atomicity ────
+# ─── Compound close operations: preparation-at-ticket atomicity ─────────────
 
 
 class TestCompoundCloseOperations:

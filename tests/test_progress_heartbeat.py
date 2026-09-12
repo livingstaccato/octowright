@@ -272,7 +272,7 @@ async def test_leader_heartbeat_rearms_follower_deadline(monkeypatch: pytest.Mon
     assert sent == []
 
 
-# ─── operation-gate queue timeout vs. heartbeat ceiling (Task 13) ─────────
+# ─── operation-gate queue timeout vs. heartbeat ceiling ───────────────────
 #
 # ``server/_state.py`` warns (but never refuses) when a configured operation-
 # gate queue timeout reaches the heartbeat's ceiling -- past that point a

@@ -648,7 +648,7 @@ async def test_control_update_after_close_reservation_is_rejected() -> None:
     """The other direction of the same race: once the close reservation has
     committed and moved the gate to ``closing``, a protection change loses --
     it must raise ``SessionClosingError`` rather than silently mutating a
-    session whose teardown is already in flight (design spec Sec 7.1)."""
+    session whose teardown is already in flight."""
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
     mutated = False
 
@@ -842,7 +842,7 @@ async def test_break_locked_fails_queued_waiters_with_invariant_error() -> None:
 
 @pytest.mark.asyncio
 async def test_cancelled_close_coordinator_does_not_wedge_the_gate() -> None:
-    """Regression test for the CRITICAL review finding: cancelling the close
+    """Regression test: cancelling the close
     coordinator inside ``close_operation`` must not leave the gate in a
     ``closing`` limbo that (a) makes a retry raise a false "broken" invariant
     error and (b) leaves duplicate ``reservation.wait()`` callers hanging

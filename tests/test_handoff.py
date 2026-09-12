@@ -344,8 +344,8 @@ async def test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snap
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A ceiling breach mid-teardown is NOT the ordinary close-vs-eviction
-    race ``_close_with_fallback_snapshot`` otherwise falls back from (Task 3
-    review round 3, D1). Driven end to end through ``pool.handoff``, not
+    race ``_close_with_fallback_snapshot`` otherwise falls back from. Driven
+    end to end through ``pool.handoff``, not
     just at the gate level: ``_teardown_after_close_cutoff`` hangs,
     preparation (spied on below, not assumed) has already produced a fresh
     snapshot by the time the ceiling fires, and the close is expected to

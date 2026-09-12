@@ -123,7 +123,7 @@ async def test_browser_get_text_by_full_mode_preserves_text(_patch_pool_input: M
     assert out == {"text": "x" * 20, "truncated": False, "text_size": 20}
 
 
-# ─── failure containment at the tool boundary (Task 13) ───────────────────
+# ─── failure containment at the tool boundary ─────────────────────────────
 
 
 @pytest.mark.anyio

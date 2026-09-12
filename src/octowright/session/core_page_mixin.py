@@ -539,7 +539,7 @@ class SessionPageMixin(SessionLike):
 
         async def _write(tmp: Path) -> None:
             # Nested closure is its own scope, independent of the decorator
-            # above (Task 11 scanner rule) -- re-enters the same "browser_screenshot"
+            # above (taint-scanner rule) -- re-enters the same "browser_screenshot"
             # lease this method's own @gated_operation already holds (same task).
             async with self.operation("browser_screenshot"):
                 await self.page.screenshot(path=str(tmp), type=img_type)

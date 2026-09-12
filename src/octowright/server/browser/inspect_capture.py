@@ -7,8 +7,8 @@
 
 Split out of ``inspect.py`` to keep that module under the repository's LOC
 ceiling. The title/URL/screenshot/optional-ARIA capture runs as a
-``preparation`` callback INSIDE the pool's close coordinator (Task 8,
-``browser_pool.lifecycle.close_with_preparation``) rather than as ordinary
+``preparation`` callback INSIDE the pool's close coordinator
+(``browser_pool.lifecycle.close_with_preparation``) rather than as ordinary
 calls sandwiched before a separate ``pool.close()`` -- so a concurrent
 navigation can never race the capture, a protected-browser refusal has ZERO
 capture side effects (the protection preflight runs before the reservation
@@ -75,7 +75,7 @@ async def _capture_before_close(
     target: Path,
     snapshot: bool,
 ) -> dict[str, Any]:
-    # Re-enters the coordinator's own task (exact-task reentrancy, Task 2):
+    # Re-enters the coordinator's own task (exact-task reentrancy):
     # the close ticket already owns the gate under this exact root operation
     # name, so this never queues -- it does NOT let a direct outside caller
     # bypass admission, since the observable root stays the reservation's

@@ -363,7 +363,7 @@ def test_schedule_relaunch_without_running_loop_returns_none(monkeypatch: pytest
     assert pool.launched == []  # nothing relaunched without a loop
 
 
-# --- Task 7: relaunch awaits the retained teardown before reusing the identity ---
+# --- relaunch awaits the retained teardown before reusing the identity -----------
 
 
 def test_relaunch_awaits_teardown_before_launching_replacement(monkeypatch: pytest.MonkeyPatch) -> None:

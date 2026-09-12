@@ -78,7 +78,7 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
 
 
 async def _prepare_handoff_snapshot(session: BrowserSession) -> RelaunchSnapshot:
-    # Re-enters the coordinator's own task (exact-task reentrancy, Task 2) --
+    # Re-enters the coordinator's own task (exact-task reentrancy) --
     # the close ticket already owns the gate under this same root operation
     # name, so this never queues; it exists to make the lease-holding intent
     # explicit and match every other compound-operation preparation.
