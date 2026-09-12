@@ -20,8 +20,10 @@ from __future__ import annotations
 from octowright.upgrade.core import (
     HIGHLIGHTS,
     HIGHLIGHTS_DIR,
+    MAX_BANNER_TITLES,
     UPGRADE_STATE_PATH,
     Highlight,
+    ReleaseHighlights,
     UpgradeNotice,
     announce_upgrade_if_changed,
     compute_upgrade,
@@ -33,8 +35,10 @@ from octowright.upgrade.core import (
 __all__ = [
     "HIGHLIGHTS",
     "HIGHLIGHTS_DIR",
+    "MAX_BANNER_TITLES",
     "UPGRADE_STATE_PATH",
     "Highlight",
+    "ReleaseHighlights",
     "UpgradeNotice",
     "announce_upgrade_if_changed",
     "compute_upgrade",
