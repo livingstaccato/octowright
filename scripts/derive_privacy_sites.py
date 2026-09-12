@@ -166,7 +166,17 @@ class Scanner(ast.NodeVisitor):
         )
 
     def _record_write(self, node: ast.Call, name: str, shape: str) -> None:
-        self.writes.append({"file": str(self.path), "line": node.lineno, "fn": self.fn, "call": name, "shape": shape})
+        self.writes.append(
+            {
+                "file": str(self.path),
+                "line": node.lineno,
+                "fn": self.fn,
+                "call": name,
+                "shape": shape,
+                "has_policy": sorted(self.bound_names() & POLICYISH),
+                "streaming": shape != "helper",
+            }
+        )
 
     def visit_Call(self, node: ast.Call) -> None:
         name = call_name(node)
@@ -345,12 +355,16 @@ def _print_writes(writes: list[dict[str, Any]]) -> None:
     print("\n" + "=" * 100)
     print("B. DURABLE WRITES -- enumerated independently of the policy surface")
     print("=" * 100)
-    for row in writes:
-        marker = "" if in_scope(row) else "   [out of Part 0 scope]"
-        print(f"{row['file']}:{row['line']:<6} {row['fn']:<34} {row['call']:<20} ({row['shape']}){marker}")
     scoped = [r for r in writes if in_scope(r)]
-    raw = [r for r in writes if r["shape"] != "helper"]
-    print(f"\ntotal: {len(writes)}   in Part 0 scope: {len(scoped)}   not via a write helper: {len(raw)}")
+    print(f"{'file:line':<50}{'enclosing fn':<28}{'shape':<18}holds policy")
+    for row in scoped:
+        loc = f"{row['file']}:{row['line']}"
+        policy = ",".join(row["has_policy"]) or "-- NONE --"
+        print(f"{loc:<50}{row['fn']:<28}{row['shape']:<18}{policy}")
+    needs = [r for r in scoped if not r["has_policy"]]
+    streaming = [r for r in scoped if r["streaming"]]
+    print(f"\ntotal: {len(writes)}   in Part 0 scope: {len(scoped)}")
+    print(f"of those STREAMING (not via a write helper): {len(streaming)}   holding no policy: {len(needs)}")
 
 
 def _print_branches(branches: list[dict[str, Any]]) -> None:

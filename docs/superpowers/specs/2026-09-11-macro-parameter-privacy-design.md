@@ -1,7 +1,7 @@
 # Macro parameter privacy: Parts 0 and B, derived
 
 Date: 2026-09-11
-Status: design, revision 5. Not approved.
+Status: design, revision 6. Not approved.
 
 **Part A shipped separately** as `c4d96753` and is out of scope here. What
 remains is Part 0 (threading) and Part B (`parameter_specs`).
@@ -14,6 +14,7 @@ remains is Part 0 (threading) and Part B (`parameter_specs`).
 | r2 | 2 resolve sites, 2 consumers | 3 sites, 6 consumers | converged, 13 upheld, 1 deadlocked |
 | r3 | 3 sites, 6 consumers, "purely additive" | a 4th redaction site; the union claim was false | converged, 12 upheld, 0 deadlocked |
 | r4 | every table AST-derived | tables were derived; two filters bounding them were not disclosed, and the conclusion drawn from measurement E was false | not converged, 12 upheld, 1 refuted, 1 deadlocked |
+| r5 | filters disclosed, script committed | the inventories held; the recorder *lifetime* decision was wrong in three directions at once, and one path builds two ledgers | not converged, 11 upheld, 1 refuted, 1 deadlocked, 1 unproven |
 
 r1-r3 failed by writing prose about code. r4 fixed that and failed one level up,
 in three distinct ways worth separating because they have different fixes:
@@ -33,6 +34,15 @@ in three distinct ways worth separating because they have different fixes:
    flushes a raw handle per action, and is the sink a macro run actually streams
    to -- was missing. Writes are now enumerated by write *shape*, independent of
    the policy surface.
+
+r5 disclosed both filters and committed the script, and the inventories held. It
+failed on a **decision**: it restored the recorder wrapper at the run boundary
+to stop wrappers stacking, and three findings then showed that restoring is what
+*creates* the leak -- the stacking r5 called corruption is also the only thing
+scrubbing step 1's credential out of step 2's rows. Restoring it, in a session
+whose browser keeps emitting events after the run returns, trades a bounded
+annoyance for an unbounded exposure. That is the knot this revision unties, and
+it is the same knot as issues #234 and #235.
 
 The third generalises into the gate's design: **a rule defined over redaction
 calls gets greener when a redaction call is deleted.** The gate is inverted
@@ -129,40 +139,46 @@ through. They work without a ledger and get strictly better with one.
 derivation script lists them by package and callee so the scope decision is
 visible rather than implied.
 
-### B. Durable writes -- 15 in scope, enumerated by write shape
+### B. Durable writes -- 15 in scope, by write shape and what they hold
 
 ```
-src/octowright/artifacts/reports.py:21           _json_write               atomic_write_text  (helper)
-src/octowright/artifacts/reports.py:29           write_artifact_manifest   _json_write        (helper)
-src/octowright/artifacts/reports.py:58           write_run_bundle          _json_write        (helper)
-src/octowright/artifacts/reports.py:59           write_run_bundle          _json_write        (helper)
-src/octowright/artifacts/reports.py:64           write_run_bundle          _json_write        (helper)
-src/octowright/artifacts/reports.py:70           write_run_bundle          atomic_write_text  (helper)
-src/octowright/artifacts/reports.py:94           refresh_run_summary       atomic_write_text  (helper)
-src/octowright/artifacts/script_export.py:353    write_macro_cli           atomic_write_text  (helper)
-src/octowright/macros/artifacts.py:527           macro_artifact_verify     atomic_write_text  (helper)
-src/octowright/macros/storage.py:103             save_macro                atomic_write_text  (helper)
-src/octowright/macros/storage.py:169             write_macro               atomic_write_text  (helper)
-src/octowright/recorder.py:119                   __init__                  open               (open for write)
-src/octowright/recorder.py:157                   record                    write              (raw handle)
-src/octowright/recorder.py:179                   record_control            write              (raw handle)
-src/octowright/recorder.py:193                   _write_truncation_marker  write              (raw handle)
+file:line                                         enclosing fn                shape             holds policy
+src/octowright/artifacts/reports.py:21            _json_write                 helper            -- NONE --
+src/octowright/artifacts/reports.py:29            write_artifact_manifest     helper            -- NONE --
+src/octowright/artifacts/reports.py:58            write_run_bundle            helper            sensitive_values
+src/octowright/artifacts/reports.py:59            write_run_bundle            helper            sensitive_values
+src/octowright/artifacts/reports.py:64            write_run_bundle            helper            sensitive_values
+src/octowright/artifacts/reports.py:70            write_run_bundle            helper            sensitive_values
+src/octowright/artifacts/reports.py:94            refresh_run_summary         helper            -- NONE --
+src/octowright/artifacts/script_export.py:353     write_macro_cli             helper            -- NONE --
+src/octowright/macros/artifacts.py:527            macro_artifact_verify       helper            -- NONE --
+src/octowright/macros/storage.py:103              save_macro                  helper            -- NONE --
+src/octowright/macros/storage.py:169              write_macro                 helper            -- NONE --
+src/octowright/recorder.py:119                    __init__                    open for write    -- NONE --
+src/octowright/recorder.py:157                    record                      raw handle        -- NONE --
+src/octowright/recorder.py:179                    record_control              raw handle        -- NONE --
+src/octowright/recorder.py:193                    _write_truncation_marker    raw handle        -- NONE --
 
-total: 59   in Part 0 scope: 15   not via a write helper: 20
+total: 59   in Part 0 scope: 15
+of those STREAMING (not via a write helper): 4   holding no policy: 11
 ```
 
-These split into two categories with **different mechanisms**, which r4's flat
-"all eleven, with the ledger" concealed:
+The "holds policy" column is new in r6 and it fixes a budget that was counted
+from the wrong inventory: r5 derived twelve signature changes from inventory A
+while the gate ran over inventory B, so sinks that appear only in B were costed
+at zero. **Four sink categories, not two** -- r5's binary split missed the last
+two:
 
-- **Run-scoped (13)** -- a ledger exists. `reports.py` x7, `script_export.py:353`,
-  `macros/artifacts.py:527`, `recorder.py` x4.
-- **Authoring-time (2)** -- `save_macro` (`storage.py:103`) and `write_macro`
-  (`storage.py:169`) run inside `macro_save`/`repair_apply` with no session, no
-  args and no run. No ledger can exist. Their exposure is a credential typed
-  during recording that was never declared a parameter, so it stays literal in
-  the macro JSON. That needs a save-time literal scan, not a ledger; stamping a
-  run-time privacy marker into a macro definition would put `privacy_unverified`
-  on ordinary authoring output forever.
+| Category | Sinks | Mechanism |
+|---|---|---|
+| Streaming | `recorder.py:119,157,179,193` | The session wrapper. No parameter; asserts *installed*, never *sealed*. |
+| Bundle writers holding a tuple | `reports.py:58,59,64,70` | Swap `sensitive_values` for a sealed run snapshot. |
+| Bundle writers holding nothing | `reports.py:29`, `reports.py:94`, `script_export.py:353` | Take the snapshot as a parameter. |
+| Authoring-time | `storage.py:103`, `storage.py:169` | No run exists. Save-time literal scan. |
+| Post-hoc rewriters | `artifacts.py:527` | An MCP tool with no session, args or run. Operates only on already-redacted data; may mark `privacy_unverified`, may never introduce values. |
+
+`reports.py:21` is `_json_write` itself, the helper the bundle writers call, not
+a sink of its own.
 
 ### C. Branches on the scrub tuple -- 5
 
@@ -261,119 +277,179 @@ So: `ResolvedPrivacy` stays frozen and per-invocation, and a **mutable
 `PrivacyLedger` is threaded down** beside it. Each resolve appends. Down-passing
 a mutable sink needs no change to `tuple[int, int]`.
 
-### The ledger has two forms, and only one may be written
+### Scope: the ledger belongs to the session, not the run
 
-`sensitive_arg_values` returns **cleartext** -- `_scrub_text` needs the literal to
-build `_serialized_variants` and substitute it. An in-memory ledger accumulating
-those values is correct. Persisting it is not: `result.json` under the recordings
-tree would then carry the production password on the happy path, for every one of
-the 81 `session-sign-in` callers, written deliberately by the mechanism meant to
-prevent leaks.
+This is r6's central change and it reverses r5.
 
-- `PrivacyLedger` -- in-memory only. Holds scrub values. No `__json__`, no
-  `asdict`, not a dataclass that serialises by default.
-- `PrivacyLedger.persistable() -> PersistedLedger` -- counts, classifier version,
-  sink-blocked parameter **names**, warnings, `resolved_sites`, `sealed`, and
-  salted digests if a later tripwire needs absence-checking. No values.
+The recorder is one long-lived append-only JSONL handle per browser session
+(`recorder.py:93-122`). `SensitiveRecorder` scrubs by literal value match, so its
+coverage is only as wide as the value set it holds. r5 restored the wrapper at
+the run boundary to stop wrappers stacking. Three consequences, all of them
+arguments against restoring:
 
-`macro_artifact_verify`'s in-process caller (`artifacts.py:249`) already has the
-live ledger in scope and needs no disk round-trip at all.
+- **Restoring removes real coverage.** `run_sequence` passes the same `session`
+  to every step (`execution.py:657-659`). A credential typed in step 1 keeps
+  appearing in step 2's page-derived rows -- `get_text_by` results, console
+  entries, `navigate` URLs, websocket `payload_preview` -- none of which any
+  other guard covers. Today's stacking is what scrubs them. r5 called that
+  corruption and removed it without noticing it was also the protection.
+- **Recorder writes outlive the run.** They are driven by asynchronous page
+  events, so a per-run restore opens a cleartext window between one run ending
+  and the next installing, with no quiesce step that could close it.
+- **A streaming sink cannot assert a sealed ledger.** Sealing happens at run end;
+  the recorder writes continuously during the run. r5's single gate rule was
+  unsatisfiable at the one sink r6's inventory B was rebuilt to capture.
+
+So the scrub set is **session-scoped and never uninstalled**, and stacking is
+prevented by identity rather than by removal:
+
+- `SessionPrivacyLedger` lives on the session. Exactly **one**
+  `SensitiveRecorder` wraps `session.recorder`, installed idempotently -- if the
+  recorder is already wrapped, the install is a no-op that returns the existing
+  ledger. Nested resolves and later runs *append to the ledger the wrapper
+  already holds*. Never a second wrapper. This is the constraint that reconciles
+  #234 with #235: fixing nested collection by installing a wrapper per nested
+  call would make #234 strictly worse.
+- `RunLedgerView` is what a single run contributes: its resolved sites, its
+  sink-blocked parameter names, its warnings. It is **sealed at run end** and it
+  is what bundle writers receive. Run-scoped artifacts stay run-scoped; only
+  recorder coverage is session-wide.
+
+Two invariants, because there are two kinds of sink:
+
+| Sink kind | Invariant |
+|---|---|
+| Streaming (`recorder.py` x4) | A live ledger is **installed**. Asserted at install, not at write. |
+| Bundle write | A **sealed** `RunLedgerView` was supplied. |
+
+### What makes session scope safe: the shape guard, applied to everything
+
+r5's worry about cross-step scrubbing was not baseless -- a short or common value
+from step 1 rewriting step 2's output is corruption of the log an operator is
+reading. r5 answered it by narrowing *lifetime*. r6 answers it by narrowing
+*membership*, which is the axis that actually distinguishes the two cases.
+
+The shape guard r5 applied only to author-marked values applies to **every**
+value entering the substring pass: `str` leaves only, at least `MIN_SCRUB_LEN`
+characters, not a common word. A value failing it never enters the session set;
+it gets key-level redaction in bundles instead, and lint reports the exclusion.
+A password survives that filter. `true`, `1`, `admin` and a two-letter locale do
+not, and those are exactly the values whose substring match corrupts unrelated
+rows.
+
+### Bounding the hot path
+
+A session-scoped set that only grows would put unbounded regex work on
+`Recorder.record`, which is synchronous and runs on the single event loop that
+owns every live browser session.
+
+- **Deduplicate.** The set is keyed by value, so re-running the same macro
+  contributes nothing. r5's stacking made the cost O(runs); this makes it
+  O(distinct qualifying values).
+- **Compile once.** `_serialized_variants` output is built per value at insert
+  and cached with it, not rebuilt per `record()`.
+- **Cap it.** `MAX_SCRUB_VALUES` bounds the set. On overflow the ledger stops
+  accepting values, sets `scrub_saturated`, and the run result carries a warning:
+  degraded to key-level redaction is a state an operator must be told about, not
+  a silent ceiling.
+
+### Persisted form: no new abstraction
+
+r5 proposed a `PersistedLedger`. Cut. The run result already carries `warnings`
+and the design already adds `privacy_tripwire`; the classifier version and
+`resolved_sites` join them as plain fields. No second representation, no digests
+justified by hypothetical diagnostics, and -- the point r5 got right and keeps --
+**no scrub values on disk in any form**. `sensitive_arg_values` returns cleartext
+because `_scrub_text` needs the literal; that tuple stays in memory.
+
+`macro_artifact_verify`'s in-process caller (`artifacts.py:249`) has the live
+ledger in scope and needs no disk round-trip.
 
 ### A green tripwire must not mean "policy never arrived"
 
-The tripwire recognises a credential by matching the ledger's values. If a
-resolve site is never reached the ledger is empty, zero values are matched, and
-the write looks clean -- so "no tripwire" means either "nothing leaked" or "the
-policy never arrived", and an operator cannot tell which. The static gate does
-not close this: it proves a boundary *receives* a ledger, not that one was
-*populated*.
-
-Therefore the ledger carries `resolved_sites: int` and `sealed: bool`. Every
-run-scoped write asserts sealed; an unsealed or zero-resolve ledger arriving at a
-durable write is itself an event (`privacy_unresolved`), not a pass.
+The tripwire recognises a credential by matching the ledger's values, so an empty
+ledger matches nothing and the write looks clean. `RunLedgerView` therefore
+carries `resolved_sites: int` and `sealed: bool`, and a bundle write that
+receives an unsealed or zero-resolve view raises `privacy_unresolved` rather than
+passing. The streaming sinks assert `installed` instead, per the table above.
 
 `conditional.dispatch_conditional` (`execution.py:294-306`) re-enters
 `_dispatch_one` with the parent's values and appends nothing -- it is in the
 resolve-site inventory for exactly this reason.
 
-### The recorder is the sink, and it is currently frozen
+### One resolve per invocation, one ledger per session
 
-`install_sensitive_recorder` (`execution.py:544`) captures a tuple built from the
-*outer* args at `execution.py:543`. `SensitiveRecorder` holds it immutably
-(`privacy.py:247-249`). Per measurement B the recorder is a durable write; per
-measurement F the gap is latent today. Part B must not make it live: the recorder
-takes a **reference to the mutable ledger**, so a nested resolve tightens the
-recording sink immediately.
+`run_macro_artifact` resolves at `artifacts.py:158` and then calls `run_macro`
+at `artifacts.py:194`, which resolves again at `execution.py:543`. Under r5 that
+produced **two independent ledgers**, and the bundle was written from the outer
+one, which never sees a nested resolve -- making r5's own first test
+("ledger accumulates across `macro_call` and is visible to the outer bundle")
+unsatisfiable on the path that writes bundles.
 
-### Recorder lifetime -- r4 open item 2, decided
-
-`session.recorder = SensitiveRecorder(...)` has no uninstall anywhere in the
-tree: no restore, no context manager, and `_run_macro_impl`'s `finally` does not
-unwrap. `run_sequence` loops `run_macro` per step, so an N-step sequence leaves N
-nested wrappers on a long-lived session, each holding a previous step's cleartext
-and each running its own `_serialized_variants` pass per `record()`.
-
-Decision: **one ledger per step; the recorder wrapper is per-run and restored.**
-Install it as a context manager around the run, restoring `session.recorder` in
-`finally`, with a test asserting the attribute is the original `Recorder` after
-`run_macro` returns. Cross-step scrubbing of recordings is corruption, not
-caution: step 2's output rewritten with step 1's values destroys the replay log
-an operator is reading.
-
-Note for the release in flight: Part A widened the vocabulary, so more values now
-enter that stacking. It does not create the bug; it enlarges its input.
-
-### Keep a read-side floor
-
-r4 removed redaction at `_compact_manifest` (`artifacts.py:394`, read) and
-`write_artifact_manifest` (`reports.py:27`, write) in the same change. Manifests
-written before Part A contain exactly what `privacy.py:20-30` records as fact --
-`private_key`, `cookie`, `set_cookie`, `otp` and plurals in cleartext -- and
-`_compact_manifest` is what masks them today on the path to `macro_artifact_list`,
-`macro_artifact_status` and `macro_artifact_critical_points_get`.
-
-Replace, do not remove: on load, a manifest without a
-`privacy_classifier_version >= 3` stamp is redacted and rewritten once, then
-trusted. Keep `reports.py:27` until the gate proves every caller pre-redacts.
+`_run_macro_impl` and `run_macro` take `ledger: SessionPrivacyLedger | None`.
+`run_macro_artifact` passes the session ledger and its own `RunLedgerView` down.
+Session scope makes this cheap to get right: the second resolve appends to the
+same set rather than starting a new one, so the failure mode is a duplicated
+resolve, not a divergent policy.
 
 ### Resolve from the dict that executes
 
-`load_macro` is an uncached disk read and both `save_macro` and `write_macro`
-rewrite the same path atomically as concurrent MCP calls. Resolving policy from
-one read and executing from another lets a mid-flight rewrite separate the
-enforced policy from the executed macro.
+`load_macro` is uncached and `save_macro`/`write_macro` rewrite the same path
+atomically as concurrent MCP calls. Policy is therefore resolved from the dict
+that executes -- `_run_macro_impl` and `dispatch_macro_call` each pass the macro
+they already loaded, never the name, and `run_sequence` resolves inside the step
+rather than ahead of it.
 
-The judges split on the scope of this, and they were right to: `calls.py:54`
-already holds one loaded `called` dict and `calls.py:55` is in-memory, so nested
-calls introduce no second read. Only a sequence-level pre-resolve does. So:
-**pass the loaded dict, never the name, to the resolver**, and record the macro's
-`updated_at` (or `digest_macro`, `artifacts/digest.py`) in the ledger so a
-mid-flight rewrite is detectable afterwards.
+This **designs the divergence out rather than detecting it**, which settles what
+r5 left as an unbuilt detector: r5 recorded a digest but named no comparator, no
+comparison time and no operator-visible outcome. With one read per invocation
+there is nothing to compare. `digest_macro` (`artifacts/digest.py`) is still
+recorded in the run result, for provenance -- so an operator can tell afterwards
+*which* revision ran -- and explicitly not as a tripwire.
 
 ### `run_sequence`: keep the fallback, narrow it
 
-The r4 text -- resolve before the `try`, fall back to heuristic-only if it raises
--- does not abort a sequence, because the fallback catches the raise and
-`run_macro` fails inside the existing handler. That claim was refuted correctly.
-
-The fallback is still too wide: it swallows `FileNotFoundError` and
-`JSONDecodeError` from a missing or truncated macro into "use heuristics". Only
-spec-shape errors fall back. A macro that cannot be loaded must reach
+Resolving inside the step keeps the `load_macro` inside the handler that turns a
+bad step into a recorded failure. Only spec-shape errors fall back to a
+heuristic-only policy; `FileNotFoundError` and `JSONDecodeError` must reach
 `run_macro`'s handler and become a recorded failed step honouring
 `stop_on_failure`.
 
-### `parameter_specs` must survive a re-save
+`stop_on_failure` defaults to **`True`** (`execution.py:629`,
+`server/macros.py:197`), so on the default path the re-raise discards `steps`
+entirely -- including the record of which steps already mutated the live browser.
+That is a pre-existing gap, not one this design introduces, and it is named in
+the open items rather than quietly assumed away: r5's test line asserted
+behaviour the default does not have.
 
-`save_macro` composes a fresh dict (`storage.py:92-99`) and writes it; it carries
-no key it does not name. `write_macro` deep-copies (`storage.py:144`), so specs
-survive there and not in the tool an author actually calls. Re-recording a macro
-to fix a selector would silently drop `{"display": {"sensitive": true}}` -- the
-non-heuristic case the feature exists for, with no warning and no diff.
+### Read paths do not write
 
-`save_macro` already reads the existing file for its collision guard
-(`storage.py:72-76`). Carry `parameter_specs` forward from it unless the caller
-supplies a new one, test it, and make lint warn when a macro's resolved
-`sensitive_parameters` shrinks against the previous version on disk.
+r5 proposed that a manifest without a `privacy_classifier_version >= 3` stamp be
+redacted and rewritten on load, then trusted. That turns `macro_artifact_list`,
+`macro_artifact_status` and `macro_artifact_critical_points_get` -- read-only
+tools -- into writers of durable state, with no stated behaviour when the write
+fails, no copy of the original, and a self-asserted stamp as the only gate.
+
+Split it: **reads redact, and only redact.** `_compact_manifest`
+(`artifacts.py:394`) keeps its read-side `redact_args`, which is the floor
+protecting every manifest written before Part A. A separate explicit
+`macro_artifact_migrate` performs the one-time rewrite, reports what it changed,
+and is the only thing that writes. `reports.py:27` stays until the gate proves
+every caller pre-redacts.
+
+### `parameter_specs` must survive a re-save, without a lost-update race
+
+`save_macro` composes a fresh dict (`storage.py:92-99`) and carries no key it
+does not name, so a re-record would silently drop `{"display": {"sensitive":
+true}}`. `write_macro` deep-copies (`storage.py:144`) and does not.
+
+Carrying specs forward means read-modify-write, which r5 specified as if there
+were a single writer in a document that elsewhere notes `macro_save` and
+`repair_apply` are concurrent MCP calls. So the carry-forward is
+**compare-and-set**: the existing file is read once (the collision guard already
+reads it, `storage.py:72-76`), its `updated_at` is captured, and the write
+refuses if the value on disk changed in between. A refused save is an error the
+author sees, not a spec silently lost to the other writer.
 
 ### Capture decouples from redaction
 
@@ -402,16 +478,19 @@ branch; no path syntax, so a nested leaf cannot be unmarked.
 
 Resolved at three sites -- `_run_macro_impl:541`, `run_macro_artifact:158`,
 `dispatch_macro_call:54` -- each from the dict it already loaded, each appending
-to the ledger.
+to the one session ledger. `run_macro_artifact` passes its ledger into the
+`run_macro` it calls (`artifacts.py:194`) rather than letting a second one be
+built.
 
 Sink guard is **one-directional**: `sensitive: true` tightens, `sensitive: false`
 never loosens. Only `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` unblocks a sink; an
 author-supplied file must not. An ignored unmark warns in lint and in the run
 result.
 
-A marked value enters the substring scrub only behind a shape guard: `str` leaves
-only, minimum length, not a common word. Values failing it get key-level
-redaction, and lint reports the exclusion.
+The shape guard is not special to marked values -- since r6 it admits *every*
+value into the session set, marked or heuristic. An author-marked value that
+fails it is still excluded, and lint reports that exclusion, because a marked
+short or common value is precisely the one that would rewrite unrelated rows.
 
 **No new environment variables.** r4 proposed `OCTOWRIGHT_PARAMETER_SPEC_WARN`
 (three modes) and `OCTOWRIGHT_PARAMETER_SPEC_UNKNOWN` (two) -- six combinations of
@@ -433,66 +512,101 @@ the one representation a client asks for, when one does.
 error. No dedicated counter until an alert or telemetry consumer is named -- the
 marker already makes the event machine-detectable and CI asserts on it.
 
-## The gate, inverted
+## The gate, inverted -- and scoped
 
 A rule that enumerates redaction calls and checks each receives a ledger is
 satisfiable by **deleting a redaction call**. The gate therefore enumerates
-**durable-write sinks first** (inventory B, by write shape) and requires each
-run-scoped sink to receive a sealed ledger. Deleting redaction does not make that
-rule greener; removing a sink does, and removing a sink is the safe direction.
+**durable-write sinks** (inventory B, by write shape) and requires each to carry
+the invariant its category names: a sealed `RunLedgerView` for bundle writes, an
+installed ledger for streaming sinks. Deleting redaction does not make that rule
+greener.
 
-Boundary threading (inventory A) stays a secondary check. The scope decision --
-`macros/`, `artifacts/`, `recorder.py` in; `session/`, `http/`, `personas.py` out
--- is printed by the derivation script with per-package counts, so narrowing it later is a
-visible diff rather than an unstated filter.
+The review argued for cutting the derived gate entirely in favour of contract
+tests on the privacy outputs, on the grounds that a repository-wide write-shape
+inventory is broader than this feature. Half-accepted. The scan is **scoped to
+Part 0 packages** (`macros/`, `artifacts/`, `recorder.py`) so it constrains the
+code this design owns and not the whole tree, and the derivation script keeps
+printing the out-of-scope counts so narrowing it further is a visible diff. The
+generic part is kept deliberately: it is the only rule that survives someone
+deleting the thing it checks, and that is the failure r1-r5 kept reproducing by
+hand.
+
+Contract tests on the outputs are added alongside, not instead -- they catch a
+wrong value, which the gate cannot, and the gate catches a missing call site,
+which they cannot.
 
 Part A's `tests/fixtures/privacy_classifier_baseline.json` is this idea for
 vocabulary; this is it for threading.
 
 ## Testing
 
-- Ledger accumulates across `macro_call` and is visible to the outer bundle,
-  against a real two-level macro.
+- Exactly one `SensitiveRecorder` wraps a session no matter how many runs,
+  sequence steps or nested calls execute: after N runs, `session.recorder` is
+  wrapped once and the ledger holds the union (#234).
+- A value first seen in step 1 is still scrubbed from step 2's page-derived rows
+  -- `get_text_by`, console, `navigate` URL, websocket preview -- which is the
+  coverage r5's restore would have removed.
 - A two-level macro whose **inner** macro holds the credential produces a JSONL
-  with no cleartext -- the live form of the latent gap in measurement F.
+  with no cleartext (#235), and the nested resolve appends to the ledger the
+  wrapper already holds rather than installing another.
 - A credential **literal** inside a nested macro definition is caught; a nested
   credential fed by an unclassified outer name is caught. Both measure zero in
-  the corpus and are the shapes that turn F live.
+  the corpus and are the shapes that turn measurement F live.
+- The artifact path resolves once: `run_macro_artifact` and the `run_macro` it
+  calls share one ledger, and the bundle sees nested resolves.
+- A value failing the shape guard never enters the substring pass, gets
+  key-level redaction, and is reported by lint.
+- `MAX_SCRUB_VALUES` overflow sets `scrub_saturated` and surfaces a warning in
+  the run result.
+- Bundle writes with an unsealed or zero-resolve view raise `privacy_unresolved`.
+- Re-saving a macro preserves `parameter_specs`; a concurrent rewrite between
+  read and write is refused rather than silently dropping specs.
+- A read-only artifact tool never writes; `macro_artifact_migrate` does, and
+  reports what it changed.
+- `run_sequence` with `stop_on_failure=False` and a missing macro returns the
+  other steps.
+- Widening does not newly refuse a corpus macro in a sink -- before/after over
+  the real corpus, the check omitted for Part A and caught in peer review.
 - `session-sign-in` marked via `parameter_specs` takes effect for all 81 callers.
-- Re-saving a macro preserves `parameter_specs`.
-- `session.recorder` is the original `Recorder` instance after `run_macro`
-  returns; an N-step sequence leaves no wrapper behind.
-- Every run-scoped inventory-B sink receives a sealed ledger (the derived gate);
-  an unsealed ledger at a sink raises `privacy_unresolved`.
-- A pre-Part-A manifest without a classifier stamp is redacted on first load.
-- Widening does not newly refuse a corpus macro in a sink -- before/after over the
-  real corpus, the check omitted for Part A and caught in peer review.
-- `run_sequence` with a missing macro still returns the other steps.
 - Marking a non-credential parameter does not suppress screenshots.
 
 ## Risks
 
-**Twelve signature changes** across `artifacts/` and `macros/`: five new
-parameters and seven tuple-to-ledger type changes. The inverted gate is what
-keeps that honest.
+**The signature budget, derived from inventory B rather than asserted**: four
+bundle writers swap a tuple for a sealed view (`reports.py:58,59,64,70`), three
+take one they do not have (`reports.py:29`, `reports.py:94`,
+`script_export.py:353`), five boundaries in inventory A need a parameter
+(`models.py:38`, `reports.py:27`, `reports.py:131`, `artifacts.py:394`,
+`execution.py:215`), and `run_macro`/`_run_macro_impl` take an optional ledger.
+The four streaming sinks need no signature change at all -- they are served by
+the wrapper. r5 costed twelve from inventory A while gating over inventory B;
+this is thirteen plus two optional parameters, counted from the inventory the
+gate actually runs on.
 
-**The recorder reference makes scrubbing live-mutable.** A ledger that grows
-mid-run changes what later `record()` calls scrub. That is the point, and it means
-the recording is not uniformly scrubbed across a run: actions written before a
-nested resolve saw a smaller value set. Values are per-run constants here, so this
-only matters for a credential first seen at depth 2, which the inner-macro test
-covers.
+**Session scope is a deliberate trade.** A credential from run 1 is scrubbed out
+of run 40's recording on the same session. That is protection, and it is also
+why the shape guard is load-bearing: without it, session scope would eventually
+rewrite unrelated text. The guard, not the lifetime, is what keeps this safe.
+
+**A saturated ledger degrades quietly if the warning is ignored.** The cap is a
+real ceiling, not a soft limit, and an operator who does not read warnings gets
+key-level redaction without knowing.
 
 **Corpus shape is one machine's.** 340 macros, the sign-in concentration, and
 every zero in measurement F are from this checkout.
 
 ## Open items
 
-1. `MIN_SCRUB_LEN` and the common-word list.
+1. `MIN_SCRUB_LEN`, `MAX_SCRUB_VALUES`, and the common-word list. All three are
+   now load-bearing rather than cosmetic.
 2. Whether `lint_urls` migrates off `artifacts/redaction.py` here or later; Part A
    kept that module alive deliberately.
 3. The authoring-time literal scan for `save_macro`/`write_macro`: severity (warn
    versus refuse) and whether it runs in `macro_lint` instead.
+4. `run_sequence` with the default `stop_on_failure=True` discards accumulated
+   step records on the re-raise, so an operator loses the record of which steps
+   already mutated the browser. Pre-existing and out of scope for privacy, but it
+   is the reason a privacy test cannot be written against the default path.
 
 ## Review provenance
 
@@ -501,14 +615,22 @@ every zero in measurement F are from this checkout.
 - r3 `run-20260911T204026-c1bddcab` -- converged, 12 upheld, 0 deadlocked
 - r4 `run-20260911T221508-a3242176` -- not converged, 12 upheld, 1 refuted, 1
   deadlocked, 1 unproven
+- r5 `run-20260911T230447-2a443ad4` -- not converged, 11 upheld, 1 refuted, 1
+  deadlocked, 1 unproven
 
-r4 findings addressed: `c-0001` (measurement E corrected, ledger re-justified),
-`c-0002` (`PersistedLedger`), `c-0003` (`sealed`/`resolved_sites`,
-`privacy_unresolved`, conditional recursion in the inventory), `c-0004` (recorder
-in inventory B and wired to the ledger), `c-0005` (recorder lifetime, open item 2
-decided), `c-0006` (read-side floor kept with a migration stamp), `c-0007`
-(`save_macro` preserves specs), `c-0008` (resolve from the loaded dict, digest
-recorded), `c-0009` (refuted; fallback narrowed anyway), `c-0010` (derived
-surface, sinks-first gate, scope printed), `c-0011` (inventory B split
-run-scoped/authoring-time), `c-0012` (derivation script committed), `c-0013` (knobs cut),
-`c-0014` (single published shape), `c-0015` (counter cut).
+r5 findings addressed: `c-0001` (session scope replaces the per-run restore),
+`c-0002` (compare-and-set carry-forward), `c-0003` (one resolve per invocation,
+ledger passed into `run_macro`), `c-0004` (no restore, so no post-run window),
+`c-0005` (two invariants: installed for streaming sinks, sealed for bundle
+writes), `c-0006` (refuted), `c-0007` (five sink categories, post-hoc rewriters
+named), `c-0008` (budget derived from inventory B, with the "holds policy"
+column), `c-0009` (`stop_on_failure` default stated; test corrected; gap in open
+items), `c-0010` (divergence designed out; digest kept for provenance only),
+`c-0011` (reads redact, `macro_artifact_migrate` writes), `c-0012` (dedup,
+compile-once, cap), `c-0013` (`PersistedLedger` cut), `c-0014` (gate scoped to
+Part 0 packages, contract tests added alongside).
+
+Tracked as issues from this work: livingstaccato/octowright#234 (recorder
+wrappers stack and are never uninstalled) and #235 (nested `macro_call` args are
+never collected). They are one design, not two fixes -- see "Scope: the ledger
+belongs to the session, not the run".
