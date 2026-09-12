@@ -226,3 +226,48 @@ where it is rendered are different modules and a call-site scan cannot see the
 forwarded case. `label` names the ARGUMENT (`"har_path"`); a label naming a
 *distinct* input (`macro name 'x'`, where the name is not the resolved path) is
 useful and unaffected.
+
+### Type-checking the injected assets (`_assets/*.js`)
+
+The five init scripts injected into every page are **type-checked in place**,
+not compiled: `npm run typecheck:assets` (`make typecheck-assets`) runs `tsc
+--checkJs` over them via `ci/js-typecheck/tsconfig.json`, wired into CI's
+frontend job.
+
+They stay plain `.js` deliberately. They are read from the wheel at runtime,
+templated, and injected as strings, so compiling them would add a build
+artifact that can drift from its source — for code that runs inside every page
+octowright drives, in a repo that already needs `check_wheel_assets.py` because
+packaging can silently drop assets. `checkJs` buys the type safety with no
+build step and nothing new to ship.
+
+**The settings are chosen from measurement, not taste.** Under full `strict`
+the five files report 72 errors, 62 of them `TS70xx` "implicitly has an 'any'
+type" — which measures annotation coverage, not correctness, and buries the
+findings that matter. With `noImplicitAny` off the same run reports 10, all of
+them real classes (`strictNullChecks`, unknown properties, `this` context).
+`strictNullChecks` is the one that earns its place: it caught a live defect in
+`title_tag.js`, where `desc.get`/`desc.set` were read from three places and
+guarded in only one, so on an engine without that descriptor the script would
+throw and swallow twice per `<head>` mutation forever. No test, lint rule or
+mutant covered it — and a `biome` pass over all five files reports only style
+nits, so linting alone would not have found it either.
+
+Two things are load-bearing about the setup:
+
+- **The `__PLACEHOLDER__` tokens are declared in `injected-globals.d.ts`**, typed
+  to the JSON shape of the `json.dumps(...)` value at the substitution site in
+  `visuals.py`. Without them `tsc` reports 13 "Cannot find name" errors that are
+  not defects — which is most of why these files went untyped for so long. A
+  placeholder typed `any` there buys a green check and no safety, so keep them
+  accurate.
+- **`scripts/check_js_typecheck_coverage.py` asserts the include glob still
+  matches every asset.** A glob that stops matching does not fail: `tsc` reports
+  success having checked nothing, so the gate goes green covering zero files.
+  Identical output either way, which is why it gets a guard rather than trust.
+
+The `window` bindings and the binding *results* are deliberately loose
+(`Record<string, any>`). They cross into `dict[str, Any]` on the Python side —
+`_viewport_action` returns three different shapes by action — so a precise
+hand-written interface would be fiction that drifts from `pool.py` with nothing
+keeping the two in sync.

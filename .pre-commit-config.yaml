@@ -67,6 +67,13 @@ repos:
         always_run: true
         types: [python]
 
+      - id: js-typecheck-coverage
+        name: injected browser assets are type-checked
+        entry: uv run --active python scripts/check_js_typecheck_coverage.py
+        language: system
+        pass_filenames: false
+        always_run: true
+
       - id: agent-docs-sync
         name: agent docs sync
         entry: uv run --active python scripts/check_agent_docs_sync.py

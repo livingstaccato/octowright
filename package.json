@@ -7,8 +7,12 @@
   "scripts": {
     "build:frontend": "npm run build --workspace=packages/octowright-frontend",
     "typecheck:frontend": "npm run typecheck --workspace=packages/octowright-frontend",
+    "typecheck:assets": "tsc -p ci/js-typecheck/tsconfig.json",
     "lint:frontend": "npm run lint --workspace=packages/octowright-frontend",
     "fix:frontend": "npm run fix --workspace=packages/octowright-frontend",
     "test:frontend": "npm run test --workspace=packages/octowright-frontend"
+  },
+  "devDependencies": {
+    "typescript": "6.0.2"
   }
 }
