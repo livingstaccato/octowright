@@ -66,6 +66,17 @@ a section that is already tagged and on PyPI.
   `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment. Macros already saved
   with the marker are not repaired by this change and need re-saving.
 
+### Documentation
+- **Macro argument privacy is documented** in `docs/macros.md`: which argument
+  names are classified, where their values are scrubbed, what is refused
+  instead of scrubbed, how nested calls and later runs on a session are
+  covered, and which writers are not scrubbed.
+- **Design specs, implementation plans and review reports are no longer in the
+  repository.** `docs/superpowers/` and `docs/reviews/` held working notes
+  rather than reference documentation, so `docs/` now describes only current
+  behavior. The one script that only served those notes,
+  `scripts/derive_privacy_sites.py`, went with them.
+
 ## [0.23.0] - 2026-09-12
 
 ### Added

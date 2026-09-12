@@ -73,6 +73,17 @@ Lifecycle actions (`launch`, `close`, `snapshot`) are dropped by default — mac
 are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=True`
 on `macro_save` if you need the initial navigation baked into the macro.
 
+`OCTOWRIGHT_REDACT_INPUTS` (default `passwords`) records a password field as a
+redaction marker, so the declared value never appears in the recording.
+`macro_save` binds that field to `{{name}}` when exactly one field was redacted
+and exactly one credential-named parameter matched nothing else in the
+recording, as `password` does above. Any other case is refused before anything
+is written: several redacted fields, several unmatched credential parameters,
+or none. Parameters that share a value are refused too, because the recorded
+fields could belong to either; the message names the parameters, never the
+value. Record such parameters with distinct values, or re-record with
+`OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment.
+
 Recorded CSS `click` and `fill` actions may include semantic metadata such as
 `role`, `role_name`, `label`, `text`, or `test_id`. Macro replay treats those as
 ARIA-first hints: it tries `click_by` / `fill_by` with the semantic metadata,
