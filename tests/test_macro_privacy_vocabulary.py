@@ -14,7 +14,8 @@ caught them, ``otp`` was known only to the sink guard, and plural forms bypassed
 all three.
 
 The invariant is measured, not asserted. ``tests/fixtures/privacy_classifier_baseline.json``
-freezes what every classifier decided at 0.23.0; no name sensitive to *any* of
+freezes what every classifier decided at c58a1461, the commit before they were
+unified; no name sensitive to *any* of
 them may become insensitive to the unified one.
 """
 
@@ -50,7 +51,7 @@ def baseline() -> dict[str, Any]:
     return json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
 
 
-def test_no_name_sensitive_at_0_23_0_becomes_insensitive(baseline: dict[str, Any]) -> None:
+def test_no_name_sensitive_before_the_union_becomes_insensitive(baseline: dict[str, Any]) -> None:
     """The union invariant. Unifying vocabularies must never narrow one."""
     lost = [name for name, _flags in baseline["sensitive_to_any"] if not is_sensitive_arg_key(name)]
 
@@ -79,15 +80,44 @@ def test_sink_guard_covers_the_whole_credential_tier(key: str) -> None:
     assert is_credential_arg(key) is True
 
 
+#: 0.22.1's export template matched ``pwd`` by substring, so a fused parameter
+#: name like ``dbpwd`` was redacted there. Token matching would silently stop
+#: redacting it on regeneration. No dictionary word contains ``pwd``, so the
+#: substring match costs no false positives.
+#: ``oldpwd`` is deliberately absent: it is the shell's OLDPWD, a directory, and
+#: is classified anyway as an accepted false positive (see the vocabulary
+#: comment) -- pinning it here as a credential would read as intent.
+FUSED_PWD = ("rootpwd", "newpwd", "userpwd", "adminpwd", "dbpwd")
+
+
+@pytest.mark.parametrize("key", FUSED_PWD)
+def test_fused_pwd_names_are_credentials(key: str) -> None:
+    assert is_sensitive_arg_key(key)
+    assert is_credential_arg(key)
+
+
 def test_depluralization_does_not_break_the_access_key_pair() -> None:
     """`access` ends in `s` without being plural; a naive strip destroys the pair."""
     assert is_sensitive_arg_key("access_key") is True
     assert is_sensitive_arg_key("access_keys") is True
 
 
-def test_redaction_classifier_stays_a_subset_of_the_unified_one(baseline: dict[str, Any]) -> None:
-    """`artifacts.redaction` keeps its own callers (`macros/lint_urls.py`), so it
-    must not drift below the union while it still exists."""
+def test_redaction_classifier_keeps_every_name_it_caught_at_baseline(baseline: dict[str, Any]) -> None:
+    """`artifacts.redaction` keeps its OWN table, for artifact mappings and
+    `macros/lint_urls.py`; it does not delegate to the unified vocabulary and is
+    not held to the union. What this guards is narrower: it must never stop
+    catching a name it caught when the baseline was measured."""
     lost = [name for name, flags in baseline["sensitive_to_any"] if "r" in flags and not is_sensitive_key(name)]
 
-    assert not lost, f"redaction classifier narrowed: {sorted(lost)[:12]}"
+    assert not lost, f"redaction classifier dropped names it used to catch: {sorted(lost)[:12]}"
+
+
+def test_redaction_classifier_catches_nothing_the_unified_one_misses(baseline: dict[str, Any]) -> None:
+    """The other direction: the redactor may lag the unified vocabulary, but it
+    must never be the only classifier that knows a name. A name added to the
+    redactor's table alone would be redacted from artifacts while still reaching
+    failure payloads, exports and URL sinks in cleartext."""
+    names = {name for name, _flags in baseline["sensitive_to_any"]} | set(baseline["insensitive"])
+    redactor_only = sorted(name for name in names if is_sensitive_key(name) and not is_sensitive_arg_key(name))
+
+    assert not redactor_only, f"known only to the redaction classifier: {redactor_only[:12]}"
