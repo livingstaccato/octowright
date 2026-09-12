@@ -25,7 +25,7 @@ REDACTED = "<redacted>"
 # cleartext because only the redaction classifier knew them, ``otp`` was known
 # only to the sink guard, and plural forms bypassed all three.
 #
-# The vocabulary below is the UNION of what all three matched at 0.23.0, frozen
+# The vocabulary below is the UNION of what all three matched before it (at c58a1461), frozen
 # in tests/fixtures/privacy_classifier_baseline.json and enforced by
 # tests/test_macro_privacy_vocabulary.py. Narrowing any entry re-opens a hole.
 #

@@ -12,65 +12,20 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
-## [0.23.1] - 2026-09-11
-
-### Fixed
-- **The macro credential sink guard missed five credential spellings.**
-  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` defaults to `block`, so an operator is
-  entitled to believe a credential-named argument cannot expand into a
-  navigation or code sink. For `passphrase`, `pw`, `pwd`, `authorization`,
-  `access_key` and `private_key` it silently could: the guard matched on its own
-  name table, in which `auth` required an underscore or end-of-string boundary
-  (so `authorization` missed) and only `api_key`/`apikey` were listed (so
-  `access_key` and `private_key` missed). `{{password}}` in a `url` was refused
-  while `{{passphrase}}` expanded. Measured against a corpus of 340 macros and
-  147 distinct placeholder names, no macro used any affected name, so this was a
-  latent hole rather than live exposure -- one corpus, on one machine.
-- **Three classifiers disagreed about what is sensitive.** `macros.privacy`,
-  `artifacts.redaction` and the sink guard each carried a private vocabulary,
-  disagreeing 1173 times across a 1916-name corpus. `private_key`, `cookie`,
-  `cookies` and `set_cookie` were caught by the redactor and missed by the macro
-  classifier; `otp` was known only to the sink guard; plural forms bypassed all
-  three. They now share one vocabulary -- the union of what all three matched at
-  0.23.0, with a match mode declared per token. `artifacts.redaction` is kept and
-  held to that union by test, because `lint_urls` imports from it.
-
-### Changed
-- **More argument names are refused in a macro sink than at 0.23.0.** Because
-  `substitution.is_credential_arg` now delegates to the shared classifier, the
-  guard refuses the names listed above, and their plurals, when a macro expands
-  them into a `url`, `expression`, `verify_js` or `grabbed_predicate_js`. A macro
-  that put `{{access_key}}` in a query string worked at 0.23.0 and raises at
-  0.23.1 with no config change on the operator's side. The opt-out is named in
-  the error text and exists for that legitimate case:
-  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
-- **`ARG_PRIVACY_CLASSIFIER_VERSION` 2 -> 3.** The matcher baked into an exported
-  script is a copy, not a reference, so a script exported before this release
-  keeps classifying by the old table and will miss `private_key`, `cookie`,
-  `set_cookie`, `otp` and every plural the runtime now catches. **Regenerate
-  exported scripts.** There is no staleness detection for this today; it is
-  recorded as deferred work in the design spec.
-
-### Added
-- 21 tests for the shared vocabulary, plus a frozen baseline fixture asserting
-  that no name any 0.23.0 classifier considered sensitive became insensitive.
-- The macro parameter privacy design spec, at revision 3. Parts 0 and B
-  (threading and `parameter_specs`) are specified but not implemented.
-
-## [0.23.0] - 2026-09-11
+## [0.23.0] - 2026-09-12
 
 ### Added
 - **Macro argument privacy.** A macro argument named like a credential
-  (`password`, `passwd`, `passphrase`, `secret`, `token`, `api_key`, `auth`,
-  `credential` and their variants, matched on tokenized key names rather than
-  substrings) is classified at run time, and its value is scrubbed out of every
-  diagnostic surface a failure returns before that payload leaves the process:
-  the diagnostic bundle, the healing suggestion, the failed-request tail, the
-  executed-action descriptors, and the recorder, which writes to disk. Matching
-  covers raw, JSON-escaped, and repeatedly URL-encoded spellings, so a value
-  laundered through an encoding is caught too. Classification descends through
-  ordinary containers, so a secret nested under a plain `payload`/`profile` key
-  is still found.
+  (`password`, `passwd`, `passphrase`, `secret`, `token`, `api_key`,
+  `access_key`, `private_key`, `authorization`, `auth`, `bearer`, `cookie`,
+  `otp`, `credential`, and their plural and camelCase forms) is classified at
+  run time, and its value is scrubbed out of every diagnostic surface a failure
+  returns before that payload leaves the process: the diagnostic bundle, the
+  healing suggestion, the failed-request tail, the executed-action descriptors,
+  and the recorder, which writes to disk. Matching covers raw, JSON-escaped, and
+  repeatedly URL-encoded spellings, so a value laundered through an encoding is
+  caught too. Classification descends through ordinary containers, so a secret
+  nested under a plain `payload`/`profile` key is still found.
 
   Two boundaries are **refusals** rather than scrubs, because a text scrub
   structurally cannot reach them. A screenshot taken while classified arguments
@@ -84,7 +39,23 @@ a section that is already tagged and on PyPI.
   Honest scope: a mapping *key* that is itself an identifier-shaped secret is
   not collected from the key position (collecting plain field names there would
   rewrite unrelated failure text and destroy the bundle this exists to keep
-  safe); it is still collected wherever it appears as a value.
+  safe); it is still collected wherever it appears as a value. Two structural
+  gaps are tracked rather than fixed: recorder wrappers stack across runs on a
+  long-lived session (#234), and a nested `macro_call`'s own arguments are not
+  collected (#235) -- latent in the measured corpus, which is stated in each.
+- **`octowright.macros.privacy.sensitive_value_variants()`**, the public
+  multi-value form of the per-value variant expansion, for a caller that has to
+  remove every encoding of every classified value from a live DOM before a
+  screenshot. Ordered **longest first**, and that ordering is the contract: when
+  one variant is a substring of another -- which percent-encoding routinely
+  produces -- replacing the shorter one first consumes the characters the longer
+  match needed and leaves the rest of it on the page while reporting nothing
+  remaining. Non-string entries are skipped rather than raising.
+- **`scripts/derive_privacy_sites.py`** and the macro parameter privacy design
+  spec (revision 7). Every inventory in the spec is read from the script's AST
+  walk rather than asserted in prose, because three earlier revisions got their
+  own call-site counts wrong. Parts 0 (threading) and B (`parameter_specs`) are
+  specified, not implemented.
 
 ### Fixed
 - **A window-title tag could wedge a renderer and OOM the pool.**
@@ -115,8 +86,61 @@ a section that is already tagged and on PyPI.
   guard the other four injected assets already had. Live result on the page
   that triggered the incident: 0.53GB flat, tag present in both the window
   chrome and `page.title()`.
+- **The macro credential sink guard missed six credential spellings.**
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` defaults to `block`, so an operator is
+  entitled to believe a credential-named argument cannot expand into a
+  navigation or code sink. Through 0.22.1, for `passphrase`, `pw`, `pwd`,
+  `authorization`, `access_key` and `private_key` it silently could: the guard
+  matched on its own name table, in which `auth` required an underscore or
+  end-of-string boundary (so `authorization` missed) and only `api_key`/`apikey`
+  were listed (so `access_key` and `private_key` missed). `{{password}}` in a
+  `url` was refused while `{{passphrase}}` expanded. Measured against a corpus
+  of 340 macros and 147 distinct placeholder names, no macro used any affected
+  name, so this was a latent hole rather than live exposure -- one corpus, on
+  one machine.
+- **The sink guard and the artifact redactor disagreed about what is
+  sensitive.** Through 0.22.1 `artifacts.redaction` already knew `passphrase`,
+  `authorization`, `pw`, `pwd` and `cookie` while the sink guard did not, so the
+  same name could be scrubbed from an artifact and still expanded into a URL.
+  The guard, the redactor and the new macro argument classifier now share one
+  vocabulary -- the union of what every classifier matched before unification,
+  with a match mode declared per token: substring for long unambiguous tokens,
+  whole-token for short ones, so `auth` does not catch `author`. A frozen
+  baseline fixture asserts that no name an earlier runtime classifier called
+  sensitive became insensitive. `artifacts.redaction` is kept and held to the
+  union by test, because `lint_urls` imports from it.
+- **`docs/env-vars.md` listed two of the four credential sink fields** and the
+  guard's old private name table. It now names `verify_js` and
+  `grabbed_predicate_js`, and states the shared vocabulary and its match modes.
+- **Pre-commit hooks ran `uv run --active`**, which resolves whatever
+  `VIRTUAL_ENV` happens to be set rather than this project's environment; from a
+  shell whose venv belongs to another project it rebuilt that project's venv
+  against these requirements. Dropped from the hooks and from the docs that
+  instructed it.
 
 ### Changed
+- **More argument names are refused in a macro sink than in 0.22.1.** Because
+  the guard now uses the shared vocabulary, it refuses the six names above, and
+  their plurals, when a macro expands them into a `url`, `expression`,
+  `verify_js` or `grabbed_predicate_js`. A macro that put `{{access_key}}` in a
+  query string worked in 0.22.1 and raises now, with no config change on the
+  operator's side. The opt-out is named in the error text and exists for that
+  legitimate case: `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+- **Regenerate exported scripts, and know the one trade.** An exported script
+  carries a copy of the argument matcher, not a reference. Scripts exported by
+  0.22.1 use a narrow substring table -- `password`, `passwd`, `pwd`, `token`,
+  `secret`, `email`, `username` -- and miss `api_key`, `authorization`,
+  `passphrase`, `private_key`, `cookie`, `otp`, `bearer` and more. A regenerated
+  script uses the shared vocabulary and is stamped
+  `ARG_PRIVACY_CLASSIFIER_VERSION = 3`. The trade: `password`, `passwd`,
+  `token` and `secret` stay substring-matched, but `pwd`, `email` and `username`
+  are now whole tokens, so a parameter that fuses one of those with no
+  separator -- `oldpwd`, `useremail`, `adminusername` -- is redacted by a 0.22.1
+  export and not by a regenerated one. `old_pwd` and `user_email` tokenise and
+  stay covered. Measured: 235 such fused names lost across a 2281-name corpus,
+  **none** among the 157 real parameters of a 340-macro corpus. Rename such
+  parameters with a separator before regenerating. There is no staleness
+  detection for exported scripts today.
 - **`AGENTS.md` split into per-directory guides.** It had grown to the point
   where an agent reading it paid for the whole repo's conventions to learn
   about one directory. The directory-specific material now lives in `AGENTS.md`
@@ -125,6 +149,10 @@ a section that is already tagged and on PyPI.
   requires, and the two reference tables that were never directory-scoped moved
   to `docs/env-vars.md` (every `OCTOWRIGHT_*` knob) and `docs/telemetry.md`
   (spans, metrics, trace propagation, exporter setup).
+- **The JavaScript injected into every page is type-checked in CI** with
+  `tsc --checkJs` -- no build step and nothing new shipped. It found a real
+  defect in the title-tag fix above before release: the real accessors were
+  read from three places and guarded in one.
 
 ## [0.22.1] - 2026-09-10
 
@@ -2868,7 +2896,7 @@ history that led to the first published release.
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
 [Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.22.0...HEAD
-[0.23.1]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.23.1
+[0.23.0]: https://github.com/livingstaccato/octowright/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
