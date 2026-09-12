@@ -92,8 +92,7 @@ class SessionOperationAbortedError(RuntimeError):
     owner, the same pattern ``asyncio.timeout.__aexit__`` uses to tell "my
     own cancel" apart from a genuine outer one).
 
-    Review finding F1 (2026-08-29 hang-resilience plan, whole-branch pass):
-    a bare ``CancelledError`` reaching an MCP tool-call task -- or a task an
+    Why it exists: a bare ``CancelledError`` reaching an MCP tool-call task -- or a task an
     MCP caller awaits via ``asyncio.shield`` through the idempotency cache
     -- is a ``BaseException``, not caught by ``except Exception``, so it
     propagated all the way to the JSON-RPC dispatcher, which reported

@@ -5,12 +5,12 @@
 
 """Live proof that ``SessionOperationGate`` correctly serializes real
 Playwright operations -- the fakes-based proofs in ``test_operation_gate_
-integration.py`` (Task 13) exercise the state machine in isolation, but only
+integration.py`` exercise the state machine in isolation, but only
 a real browser can show the gate actually blocks/admits/rejects real CDP
 calls rather than a mocked stand-in that happens to agree with the design.
 
 One focused test drives two headless Chromium sessions through all four
-acceptance behaviors from the design spec:
+behaviors the gate must guarantee:
 
 1. A manual action queues FIFO behind a running macro and lands after it.
 2. The gate is per-session: holding session A does not block session B.

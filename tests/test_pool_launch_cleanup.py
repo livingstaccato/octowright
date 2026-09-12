@@ -104,12 +104,12 @@ async def test_launch_failure_closes_context_browser_and_recorder(
 
     monkeypatch.setattr("octowright.browser_pool.pool.RECORDINGS_DIR", tmp_path)
     # Recorder construction lives in launch_pipeline.post_context_setup, as the
-    # first statement in its try block (restored there in the Task 10 review
-    # follow-up: it must NOT live inside launch_publish._prepare_session_before_
-    # publication, or a failure partway through that helper would leave the
-    # surrounding except handlers with no live Recorder reference to close
-    # deterministically — see test_launch_failure_during_prepublication_setup_
-    # closes_recorder_deterministically below).
+    # first statement in its try block. It must NOT live inside
+    # launch_publish._prepare_session_before_publication, or a failure partway
+    # through that helper would leave the surrounding except handlers with no
+    # live Recorder reference to close deterministically — see
+    # test_launch_failure_during_prepublication_setup_closes_recorder_deterministically
+    # below.
     monkeypatch.setattr("octowright.browser_pool.launch_pipeline.Recorder", fake_recorder)
 
     # Navigation failures no longer tear down the browser — the session stays

@@ -3,14 +3,14 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Tests for the opt-in active-duration ceiling (Task 3 of the hang-resilience plan).
+"""Tests for the opt-in active-duration ceiling.
 
-Task 1 bounds the Playwright call sites that are known today
-(``session/timeouts.bounded``). This ceiling is the backstop for the ones
+``session/timeouts.bounded`` bounds the Playwright call sites that are known
+today. This ceiling is the backstop for the ones
 nobody has found yet: the gate already tracks how long its root operation has
 been active, so ``SessionOperationGate.enforce_active_timeout`` can notice one
-that has run impossibly long without any call site enumeration. Unlike Task 1
-it is OFF by default -- cancelling in-flight browser work is heavier than
+that has run impossibly long without any call site enumeration. Unlike those
+per-call bounds it is OFF by default -- cancelling in-flight browser work is heavier than
 failing one call.
 
 Uses the fake-clock pattern from ``tests/session/test_operation_gate.py``
@@ -399,8 +399,8 @@ async def test_ceiling_breach_in_the_release_window_is_absorbed_too() -> None:
 
     The window is one scheduler iteration wide, which is why the first fix
     missed it; the consequence when it lands is identical to the Critical it
-    was meant to close. Found by a whole-branch re-review sweeping the phase
-    between body completion and the ceiling check.
+    was meant to close. It sits in the phase between body completion and the
+    ceiling check.
     """
     gate = SessionOperationGate("release-window", "chromium")
     started = asyncio.Event()

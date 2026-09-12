@@ -15,6 +15,7 @@ see the [top-level README](../README.md); come here for deep-dives on specific f
 - [scenarios.md](scenarios.md) — YAML spec, participant roles, fixtures, lifecycle, JUnit output
 - [goldens.md](goldens.md) — accessibility-tree baseline capture, verify policy, CI vs local rules
 - [dashboard.md](dashboard.md) — web UI: live sessions, per-session debugger, trace deep-dive
+- [plugins.md](plugins.md) — writing a session-kind plugin: entry point, descriptor, pool, launch transaction, dashboard renderer
 
 ## Operations & Quality
 

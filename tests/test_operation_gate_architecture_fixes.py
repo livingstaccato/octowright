@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Contract tests for the Task 11 review fix round: cached-handle root attrs,
+"""Contract tests for the gate taint scanner's edge cases: cached-handle root attrs,
 assignment-target embedded reads, lambda-as-independent-scope, with-as taint
 propagation, and the ambiguous-name (request/response/websocket) suppression.
 

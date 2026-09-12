@@ -291,8 +291,8 @@ def _scan_expr(node: ast.expr | None, ctx: _FuncCtx, *, gated: bool) -> bool:
         return _scan_expr(node.elt, ctx, gated=gated)
 
     if isinstance(node, ast.Lambda):
-        # Independent scope, same rule as a nested ``def`` (Task 11 scanner
-        # rule): a lambda registered as an event handler
+        # Independent scope, same rule as a nested ``def``: a lambda
+        # registered as an event handler
         # (page.on("dialog", lambda: ...)) executes long after whatever
         # lexically-enclosing gate was active when it was DEFINED, so it must
         # never inherit that gate's ``gated=True``.

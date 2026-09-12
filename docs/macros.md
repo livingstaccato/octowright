@@ -74,14 +74,18 @@ are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=Tru
 on `macro_save` if you need the initial navigation baked into the macro.
 
 `OCTOWRIGHT_REDACT_INPUTS` (default `passwords`) records a password field as a
-redaction marker, so the declared value never appears in the recording.
-`macro_save` binds that field to `{{name}}` when exactly one field was redacted
-and exactly one credential-named parameter matched nothing else in the
-recording, as `password` does above. Any other case is refused before anything
-is written: several redacted fields, several unmatched credential parameters,
-or none. Parameters that share a value are refused too, because the recorded
-fields could belong to either; the message names the parameters, never the
-value. Record such parameters with distinct values, or re-record with
+redaction marker, so the declared value never appears in the recording. A
+recording with no redacted field saves as before. When there is one,
+`macro_save` binds it to `{{name}}` only if exactly one field was redacted and
+exactly one credential-named parameter matched nothing else in the recording,
+as `password` does above. Otherwise it refuses before writing anything: when
+more than one field was redacted, when more than one credential-named parameter
+is left unmatched, or when none is left to fill the field. Under
+`OCTOWRIGHT_REDACT_INPUTS=all` every `fill`, `fill_by` and `type_text` value is
+redacted, so a recording with more than one of those is always refused.
+Parameters that share a value are refused too, because the recorded fields
+could belong to either; the message names the parameters, never the value.
+Record such parameters with distinct values, or re-record with
 `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment.
 
 Recorded CSS `click` and `fill` actions may include semantic metadata such as
@@ -250,23 +254,39 @@ session accumulate for that session's lifetime and are scrubbed from every
 later recording write, including in the next step of a `macro_run_sequence`,
 because a credential typed once can keep rendering in later page output.
 
+**Short and common values.** The scrub replaces a value's text wherever it
+appears in a row, not only in the field it came from. A value of four or more
+characters is replaced anywhere, including inside a longer word; a shorter one
+only where it stands alone between non-alphanumeric characters. Because the
+session keeps every value for its lifetime, a classified argument holding a
+short or common value rewrites that text in every later row: after
+`session="1"`, a recorded `li:nth-child(1)` becomes `li:nth-child(<redacted>)`
+and `?page=1` becomes `?page=<redacted>`, so a macro saved or a script exported
+from that recording no longer replays. Give classified arguments distinctive
+values, or start a new session after a run that needed a short one.
+
 **Credential-named arguments in URLs and code.** A credential-named argument
 expanded into `url`, `expression`, `verify_js` or `grabbed_predicate_js` is
 refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
 **Exported scripts** carry their own copy of the classifier, stamped
-`ARG_PRIVACY_CLASSIFIER_VERSION = 4`. A script exported by an older
+`_ARG_PRIVACY_CLASSIFIER_VERSION = 4`. A script exported by an older
 octowright keeps the table it was generated with; regenerate it to pick up the
 current one.
 
-**Not covered.** These writers sit outside the recording and are not scrubbed:
+**Not covered.** Writers outside the recording are not scrubbed. They include:
 
 - the page HTML and screenshot the generic diagnostic producer saves when a run
   with no classified values fails, which can still show a credential an earlier
   run left on the page;
 - the websocket frame sidecar, which stores frame payloads as received;
-- a HAR file, when HAR recording is enabled at launch.
+- a HAR file, when HAR recording is enabled at launch;
+- a Playwright trace, when `browser_launch` is called with `trace=true`, saved
+  beside the recording as `.trace.zip` with each action's arguments, including
+  typed values, alongside DOM snapshots and screenshots;
+- a launch video, when `browser_launch` is called with `record_video=true`,
+  which shows whatever a field displays while it is filled.
 
 ## Linting
 

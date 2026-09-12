@@ -7,7 +7,7 @@ const { getSessionMock, getEventsMock } = vi.hoisted(() => ({
   getSessionMock: vi.fn(),
   getEventsMock: vi.fn(),
 }));
-// The registry-driven dispatch (Task 7) dynamically imports "./session-stream.js"
+// The registry-driven dispatch dynamically imports "./session-stream.js"
 // for any non-core-reserved kind (including "terminal", now a plugin kind
 // like any other). Mocked here so the dispatch tests can assert what
 // session.ts hands it -- the resolved mount function and the boot
@@ -414,7 +414,7 @@ describe("renderFooter", () => {
 });
 
 // ---------------------------------------------------------------------------
-// bootSession — registry-driven dispatch (Task 7)
+// bootSession — registry-driven dispatch
 //
 // resolveRenderer's own decision (registered/mismatched/unknown kind -> a
 // moduleUrl or a FallbackReason) is already exercised end-to-end in

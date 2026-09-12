@@ -239,7 +239,7 @@ describe("importRenderer", () => {
   });
 });
 
-// Registry-driven dispatch (Task 7, session.ts) deliberately has no describe
+// Registry-driven dispatch (session.ts) deliberately has no describe
 // block here. Its "which URL/renderer did the dispatcher choose" decision IS
 // `resolveRenderer` from plugin-registry.ts -- session.ts calls it directly
 // and branches on its result -- and that decision is already fully exercised

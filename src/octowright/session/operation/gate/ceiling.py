@@ -12,8 +12,7 @@ composed ``SessionOperationGate`` instance -- see that class and its
 ``operation()`` method (``core.py``) for the other half of the mechanism
 this backstop depends on (the cancellation-absorption check that keeps a
 ceiling breach from reaching an in-flight caller as a bare
-``asyncio.CancelledError`` -- 2026-08-29 hang-resilience whole-branch
-review, finding F1).
+``asyncio.CancelledError``).
 """
 
 from __future__ import annotations
@@ -116,8 +115,7 @@ class _CeilingGateMixin:
         caller the ceiling actually cancels sees something different: see
         ``core.py``'s ``operation()`` docstring for why that in-flight
         caller gets ``SessionOperationAbortedError`` instead of a bare
-        ``asyncio.CancelledError`` (F1, 2026-08-29 hang-resilience
-        whole-branch review) -- this method's job is only to request the
+        ``asyncio.CancelledError`` -- this method's job is only to request the
         cancellation and mark who it targeted; the conversion itself lives
         where the exception is actually caught.
 

@@ -588,7 +588,7 @@ async def test_all_pages_closed_runs_full_session_close(
     # The context was actually torn down (the whole point) — not just popped.
     assert session.context.close.await_count >= 1
     # Last-page-gone now routes through the SAME external-close acceptance
-    # seam as context.close/browser.disconnected (Task 7), so it logs the
+    # seam as context.close/browser.disconnected, so it logs the
     # external line, not the explicit-close one.
     assert any("octowright.browser.evicted_externally" in m for m in listeners_log.messages()), listeners_log.messages()
 
@@ -795,7 +795,7 @@ async def test_persistent_context_has_no_browser_disconnect(monkeypatch: pytest.
     assert iid not in pool._sessions
 
 
-# ─── failure-containment integration at the tool boundary (Task 13) ────────
+# ─── failure-containment integration at the tool boundary ──────────────────
 #
 # Real BrowserSession + BrowserPool wiring (not the Playwright stub above) so
 # the operation gate's failure modes are proven through the ACTUAL MCP tool

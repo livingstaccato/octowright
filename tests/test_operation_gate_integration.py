@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Integration tests pinning the one-gate-per-session wiring added in Task 4:
+"""Integration tests pinning the one-gate-per-session wiring:
 
 - ``BrowserSession.__post_init__`` constructs exactly one ``SessionOperationGate``.
 - ``operation_snapshot()`` is a stable, repeatable read of that gate.
@@ -359,7 +359,7 @@ def test_pool_default_operation_timeout_resolves_from_env(
     assert session.operation_snapshot()["queue_timeout_seconds"] == 42.0
 
 
-# ─── close_with_preparation (Task 8): preparation runs at the close ticket ──
+# ─── close_with_preparation: preparation runs at the close ticket ───────────
 
 
 def _real_pool_session(
@@ -393,7 +393,7 @@ async def test_close_with_preparation_keeps_reservation_name_as_observable_root(
 ) -> None:
     """The preparation callback re-enters ``session.operation(...)`` under
     the SAME literal name as the close reservation's own ``operation_name``
-    -- exact-task reentrancy (Task 2) admits it without queueing, and the
+    -- exact-task reentrancy admits it without queueing, and the
     snapshot's ``active_operation`` stays that reservation's root the whole
     time it runs, proving a direct outside caller could never observe (or
     piggyback on) a different root by racing the ticket."""
@@ -463,7 +463,7 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
     """Closing a wedged session is the first thing a human or agent does --
     the ceiling must not be disarmed the moment ``reserve_close`` moves the
     gate to CLOSING, or the backstop is off exactly when someone reaches
-    for it (Task 3 review, I3).
+    for it.
 
     Real close machinery end to end: ``reserve_close_browser`` queues the
     close reservation's waiter behind the still-active wedged owner (it can
@@ -533,7 +533,7 @@ async def test_active_timeout_ceiling_unwedges_a_close_in_progress(
 async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks_cancelled_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The already-granted-coordinator sub-case (Task 3 review round 2, N1).
+    """The already-granted-coordinator sub-case.
 
     Unlike the still-queued case above, here nothing else holds the gate
     when the close is requested, so ``reserve_close`` grants the close
@@ -557,7 +557,7 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
     AWAITING task cancelled too. This test proves the caller instead gets an
     ordinary, catchable ``SessionCloseAbortedError`` -- the ``SessionClosedError``
     subclass ``_terminal_close_failure`` raises specifically for a close
-    aborted mid-teardown (Task 3 review round 3, D1), which
+    aborted mid-teardown, which
     ``relaunch._close_with_fallback_snapshot`` relies on to tell this case
     apart from an ordinary close-vs-eviction race (see
     ``tests/test_handoff.py::test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snapshot``).
@@ -609,8 +609,9 @@ async def test_active_timeout_ceiling_on_a_close_already_in_teardown_never_leaks
 async def test_ceiling_abort_produces_the_same_error_type_regardless_of_where_it_lands(
     cancellation_lands: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """SessionCloseAbortedError must be uniform (Task 3 review round 4,
-    Defect 2). Two landing spots for the SAME cause -- a ceiling breach
+    """SessionCloseAbortedError must be uniform.
+
+    Two landing spots for the SAME cause -- a ceiling breach
     cancelling a close that is already granted and mid-teardown:
 
     - ``inside_prepare_then_teardown``: the cancellation lands in
@@ -926,7 +927,7 @@ async def test_await_in_flight_close_waits_only_when_an_entry_exists() -> None:
     assert waited.is_set()
 
 
-# ─── Task 9: macro replay holds one root lease per logical invocation ──────
+# ─── macro replay holds one root lease per logical invocation ──────────────
 #
 # run_macro/run_sequence/run_macro_artifact each wrap their ENTIRE body in a
 # single outer session.operation(...) lease. Nested session-method calls
@@ -1078,13 +1079,13 @@ def test_gate_operation_names_never_enter_the_replay_or_recorder_vocabulary() ->
     assert gate_operation_names.isdisjoint(replay_and_recorder_vocabulary)
 
 
-# ─── Task 10: complete-workflow composites keep ONE observable root op ─────
+# ─── complete-workflow composites keep ONE observable root op ──────────────
 #
 # browser_operation(pool, instance_id, operation_name) defines a boundary
 # around a WHOLE MCP-tool call. A composite like browser_click(...,
 # response_mode="outline") dispatches a click AND builds an outline
 # response; both must run under the SAME root operation (exact-task
-# reentrancy, Task 2) rather than two separate gate acquisitions with a
+# reentrancy) rather than two separate gate acquisitions with a
 # window between them where a concurrent caller could interleave.
 
 

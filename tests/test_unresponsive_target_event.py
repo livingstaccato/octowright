@@ -10,18 +10,18 @@ only signal is a raw error string and the agent cannot tell "relaunch this
 session" from "the transport died".
 
 Covers:
-- ``scope="unresponsive"`` is a valid ``CrashScope`` (Task 2, Step 1).
+- ``scope="unresponsive"`` is a valid ``CrashScope``.
 - A ``SessionCallTimeoutError`` raised inside a gated session operation
   publishes exactly one ``SessionCrashedEvent(scope="unresponsive")`` on the
-  pool's event bus (Task 2, Step 3), via ``SessionOperationGate``'s
+  pool's event bus, via ``SessionOperationGate``'s
   ``on_call_timeout`` hook, wired by ``BrowserSession.__post_init__`` to
   ``BrowserSession._notify_call_timeout``.
 - Nesting does not multiply the notification: the INNERMOST gated operation
   to see a ``SessionCallTimeoutError`` escape it fires the hook, and marks
   the exception instance (``_mark_call_timeout_published``) so an ancestor
   frame that also sees it (still propagating, or via its own ``__cause__``
-  walk) stays silent -- not "the root lease", which review round 3 (R1)
-  found false for a caller that swallows the error inside its own root
+  walk) stays silent -- not "the root lease", which is false for a caller
+  that swallows the error inside its own root
   lease (``macros/artifacts.py``'s ``macro_artifact_run``, ``run_sequence
   (stop_on_failure=False)``): nothing ever escapes a root frame there for a
   root-only check to see, so those two shapes published nothing until this
@@ -34,12 +34,11 @@ Covers:
   and ``session/core.py``'s ``_notify_call_timeout`` docstring).
 - TWO tests go through real production call sites rather than hand-raising
   ``SessionCallTimeoutError`` inside a bare ``session.operation(...)`` block
-  (review finding F2 on 2026-08-29's Task 2 review: the hand-raised tests
-  above pin the mechanism but not the wiring, which is exactly how the
-  macro/scenario gap in F1 shipped unnoticed): ``session.evaluate()`` really
+  (the hand-raised tests above pin the mechanism but not the wiring, which
+  is how a macro/scenario gap once shipped unnoticed): ``session.evaluate()`` really
   timing out via ``@gated_operation`` + ``bounded()``, and
   ``macros.execution.run_macro`` wrapping the timeout in its own
-  ``RuntimeError`` (review finding F1) and still publishing via the gate's
+  ``RuntimeError`` and still publishing via the gate's
   ``__cause__``-chain walk.
 """
 
@@ -68,7 +67,7 @@ def _reset_incidents() -> None:
 
 
 def test_unresponsive_is_a_valid_crash_scope() -> None:
-    # NOTE (review finding F4): this proves nothing at runtime by itself --
+    # NOTE: this proves nothing at runtime by itself --
     # `Literal` is not enforced by Python, and `SessionCrashedEvent` does no
     # validation, so this assignment would succeed even if "unresponsive"
     # were never added to `CrashScope` at all. The REAL enforcement is
@@ -104,7 +103,7 @@ def fake_session_kwargs(tmp_path: Path) -> dict[str, object]:
 
 
 async def _assert_nothing_else_arrives(sub: object) -> None:
-    """Deterministic "no second event" check (review finding F5).
+    """Deterministic "no second event" check.
 
     ``session_event_bus.publish_nowait`` schedules delivery via
     ``loop.call_soon`` on the SAME loop, and any (hypothetical, buggy) second
@@ -183,7 +182,7 @@ async def test_ordinary_error_does_not_publish_unresponsive_event(fake_session_k
 async def test_wrapped_non_timeout_error_does_not_publish(fake_session_kwargs: dict[str, object]) -> None:
     """A wrapped exception whose ``__cause__`` chain does NOT contain a
     ``SessionCallTimeoutError`` must not publish either — the gate's
-    ``__cause__``-chain walk (added for review finding F1) is specific to
+    ``__cause__``-chain walk is specific to
     that one exception type, not "any wrapped error"."""
     session = BrowserSession(**fake_session_kwargs)  # type: ignore[arg-type]
 
@@ -198,7 +197,7 @@ async def test_wrapped_non_timeout_error_does_not_publish(fake_session_kwargs: d
         await _assert_nothing_else_arrives(sub)
 
 
-# ─── real call sites (review finding F2) ──────────────────────────────────
+# ─── real call sites ──────────────────────────────────────────────────────
 
 
 async def test_real_evaluate_call_site_publishes_via_bounded(
@@ -223,7 +222,7 @@ async def test_real_evaluate_call_site_publishes_via_bounded(
 
     async with session_event_bus.subscribe() as sub:
         # A second outer bound, deliberately separate from bounded()'s own
-        # 0.2s budget above (review round 3, R2): if bounded() ever regresses
+        # 0.2s budget above: if bounded() ever regresses
         # out of core_page_mixin.evaluate() -- stops actually bounding the
         # call -- this test must fail fast rather than hang the suite
         # indefinitely (no pytest-timeout plugin is configured here). A
@@ -245,7 +244,7 @@ async def test_real_evaluate_call_site_publishes_via_bounded(
 async def test_run_macro_wrapped_timeout_still_publishes(
     monkeypatch: pytest.MonkeyPatch, fake_session_kwargs: dict[str, object]
 ) -> None:
-    """Reproduces review finding F1: ``macros/execution.py``'s per-action
+    """Regression: ``macros/execution.py``'s per-action
     failure handling re-raises every action failure as
     ``RuntimeError(payload) from exc`` INSIDE the root
     ``session.operation("macro_run")`` frame, so a bare ``isinstance`` check
@@ -293,7 +292,7 @@ async def test_run_macro_wrapped_timeout_still_publishes(
     assert received.recovering is False
 
 
-# ─── _call_timeout_cause: the __cause__-chain walk itself (review finding F1) ──
+# ─── _call_timeout_cause: the __cause__-chain walk itself ──────────────────────
 
 
 def test_call_timeout_cause_finds_the_top_level_exception() -> None:
@@ -354,7 +353,7 @@ def test_call_timeout_cause_respects_the_hop_bound() -> None:
     assert _call_timeout_cause(cyclic, max_hops=4) is None
 
 
-# ─── octowright_status() pull surface (Task 2 review round 2, F3) ─────────
+# ─── octowright_status() pull surface ─────────────────────────────────────
 
 
 async def test_unresponsive_target_is_retrievable_from_status(fake_session_kwargs: dict[str, object]) -> None:
@@ -391,7 +390,7 @@ async def test_unresponsive_target_is_retrievable_from_status(fake_session_kwarg
     assert all(entry.get("instance_id") != session.instance_id for entry in crash["recent"])
 
 
-# ─── R1 (review round 3): shapes that swallow inside their OWN root lease ──
+# ─── shapes that swallow inside their OWN root lease ───────────────────────
 
 
 async def test_run_sequence_stop_on_failure_false_still_publishes(

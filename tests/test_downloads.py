@@ -73,8 +73,8 @@ def _make_session(tmp_path: Path) -> BrowserSession:
 async def _drain(session: BrowserSession) -> None:
     """Let ``_handle_download``'s background save task run to completion.
 
-    ``save_download`` is now ``async with session.operation("download_save")``
-    (Task 6), so it goes through the gate's FIFO admission path rather than
+    ``save_download`` is now ``async with session.operation("download_save")``,
+    so it goes through the gate's FIFO admission path rather than
     completing within whatever event-loop turn a single ``sleep(0)`` covers.
     """
     tasks = list(session._bg_tasks)
@@ -307,7 +307,7 @@ async def test_wait_for_download_raises_timeout(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# operation-gate serialization (Task 6)
+# operation-gate serialization
 # ---------------------------------------------------------------------------
 
 

@@ -19,7 +19,7 @@
  * no conversion.
  *
  * Two identical interfaces can silently diverge, so a test pins their
- * compatibility (Task 3, step 2) rather than trusting the comment.
+ * compatibility rather than trusting the comment.
  */
 export interface SessionEvent {
   ts: string;

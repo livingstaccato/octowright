@@ -78,8 +78,13 @@ _README_TOTAL_RE = re.compile(r"every core-install tool registers\.\s*\|\s*(?P<t
 _PROSE_TOTAL_RE = re.compile(r"(?P<total>\d+) tools on a core install")
 # History records the counts that were true when it was written; dragging those
 # forward would falsify the record, so the changelog is scanned past rather than
-# corrected.
-_HISTORY = ("CHANGELOG.md",)
+# corrected. Matched by file NAME: a changelog is history wherever it sits, and a
+# file whose name merely starts with ``CHANGELOG.md`` is not one.
+_HISTORY = frozenset({"CHANGELOG.md"})
+# Local design notes. Gitignored, but still on disk where ``rglob`` finds them, and
+# a plan routinely quotes the tool count of the day it was written. Matched as
+# leading path segments, so ``docs/superpowers.md`` is still scanned.
+_LOCAL_NOTE_TREES = (("docs", "superpowers"), ("docs", "reviews"))
 # Directory names that never hold canonical documentation, matched as path
 # SEGMENTS at any depth rather than as prefixes. Prefix matching skipped
 # `CHANGELOG.md` at the root and then scanned the identical file one directory
@@ -125,13 +130,15 @@ def core_surface() -> dict:
 def _is_skipped_doc_path(rel: str) -> bool:
     """True for a repo-relative path the total scan must not read.
 
-    Two rules, both segment-based: the historical records (which state what was
-    true when written), and directories that are copies, caches or vendored
-    trees rather than sources.
+    Three rules, all segment-based: the historical records (which state what was
+    true when written), local design notes, and directories that are copies,
+    caches or vendored trees rather than sources.
     """
-    if rel.startswith(_HISTORY):
-        return True
     parts = rel.split("/")
+    if parts[-1] in _HISTORY:
+        return True
+    if any(tuple(parts[: len(tree)]) == tree for tree in _LOCAL_NOTE_TREES):
+        return True
     return any(part.startswith(".") or part in _SKIPPED_DIRS for part in parts[:-1])
 
 
