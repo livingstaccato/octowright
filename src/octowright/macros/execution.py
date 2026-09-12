@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
@@ -19,6 +18,18 @@ from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.descriptions import describe_action
+from octowright.macros.privacy import (
+    install_sensitive_recorder,
+)
+from octowright.macros.privacy import (
+    redact_args as _privacy_redact_args,
+)
+from octowright.macros.privacy import (
+    scrub_sensitive_values as _privacy_scrub_sensitive_values,
+)
+from octowright.macros.privacy import (
+    sensitive_arg_values as _sensitive_arg_values,
+)
 from octowright.macros.repair import repair_apply as repair_apply_impl
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
@@ -48,33 +59,13 @@ log = get_logger(__name__)
 # (imported above) so repair.py can redact the same way without a circular
 # import back into this module.
 
-_SENSITIVE_ARG_KEY_PARTS = (
-    "password",
-    "passwd",
-    "passphrase",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "access_key",
-    "credential",
-)
-# ``email`` and ``username`` are exact-match only: the lint module already
-# flags raw email-shaped values as PII; redacting them in the response keeps
-# the args_used echo from leaking the user's identity even when the value
-# was supplied via plain ``{{email}}`` template substitution.
-_SENSITIVE_ARG_EXACT_KEYS = frozenset({"pw", "pwd", "auth", "email", "username"})
+
+def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    return _privacy_scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
 
 
-def _redact_args_for_response(args: Mapping[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
-    for key, value in args.items():
-        normalized = str(key).lower().replace("-", "_")
-        if normalized in _SENSITIVE_ARG_EXACT_KEYS or any(part in normalized for part in _SENSITIVE_ARG_KEY_PARTS):
-            redacted[str(key)] = _REDACTED_MACRO_VALUE
-        else:
-            redacted[str(key)] = value
-    return redacted
+def _redact_args_for_response(args: dict[str, Any]) -> dict[str, Any]:
+    return _privacy_redact_args(args, marker=_REDACTED_MACRO_VALUE)
 
 
 _MACRO_RUN = counter(
@@ -225,6 +216,28 @@ def _format_status(invocation_stack: list[str] | None, action: dict[str, Any]) -
     return f"{chain} | {desc}" if chain else desc
 
 
+async def _dispatch_classified_screenshot(
+    session: SessionLike,
+    action: dict[str, Any],
+    sensitive_values: tuple[str, ...],
+) -> tuple[int, int]:
+    """Route a screenshot taken under classified args through the privacy handler.
+
+    A screenshot of a page a credential was typed into is a durable copy of
+    that credential, so the generic capture path is refused outright: a
+    composition root must install both the authority flag and a handler that
+    knows what evidence is safe to keep.
+    """
+    authorized = getattr(session, "_octowright_sensitive_screenshot_authority", None) is True
+    handler = getattr(session, "_octowright_sensitive_screenshot_handler", None)
+    if not authorized or not callable(handler):
+        raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
+    handled = await handler(action=action, sensitive_values=sensitive_values)
+    if handled is None:
+        raise RuntimeError("classified macro screenshot privacy handler refused the action")
+    return handled
+
+
 async def _dispatch_one(
     session: SessionLike,
     action: dict[str, Any],
@@ -232,6 +245,7 @@ async def _dispatch_one(
     invocation_stack: list[str] | None = None,
     max_depth: int | None = None,
     slowmo_ms: int = 0,
+    sensitive_values: tuple[str, ...] = (),
 ) -> tuple[int, int]:
     resolved_max_depth = max_depth if max_depth is not None else MAX_MACRO_CALL_DEPTH
 
@@ -245,7 +259,12 @@ async def _dispatch_one(
             max_depth=resolved_max_depth,
             load_macro=load_macro,
             substitute=substitute,
-            dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, **kw),
+            dispatch_one=lambda *a, **kw: _dispatch_one(
+                *a,
+                slowmo_ms=slowmo_ms,
+                sensitive_values=sensitive_values,
+                **kw,
+            ),
         )
 
     # Push status before dispatch so the pill reflects the action that's
@@ -258,6 +277,20 @@ async def _dispatch_one(
     if slowmo_ms > 0:
         await asyncio.sleep(slowmo_ms / 1000)
 
+    # A composition root may install a synchronous, process-local authority
+    # check for browser actions. It runs after every awaited status/slowmo step
+    # and immediately before conditional/plain dispatch, so no scheduler turn
+    # can separate the check from the browser operation.
+    boundary = getattr(session, "_octowright_before_macro_action", None)
+    if boundary is not None:
+        boundary(
+            action=action,
+            invocation_stack=tuple(invocation_stack or ()),
+        )
+
+    if action.get("action") == "screenshot" and sensitive_values:
+        return await _dispatch_classified_screenshot(session, action, sensitive_values)
+
     if action.get("action") in conditional.CONDITIONAL_ACTIONS:
 
         async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
@@ -267,6 +300,7 @@ async def _dispatch_one(
                 invocation_stack=invocation_stack,
                 max_depth=resolved_max_depth,
                 slowmo_ms=slowmo_ms,
+                sensitive_values=sensitive_values,
             )
 
         return await conditional.dispatch_conditional(session, action, _recurse)
@@ -383,6 +417,119 @@ async def run_macro(
             return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
 
 
+async def _build_failure_payload(
+    session: SessionLike,
+    *,
+    name: str,
+    index: int,
+    action: dict[str, Any],
+    actions: list[dict[str, Any]],
+    executed: int,
+    safe_original: str,
+    sensitive_values: tuple[str, ...],
+) -> dict[str, Any]:
+    """Assemble the failure payload from three independently-fallible producers.
+
+    Each producer is tried separately so one failing does not cost the caller
+    the other two: its own error is recorded IN the payload rather than raised
+    over the dispatch failure the payload exists to explain.
+    """
+    if sensitive_values:
+        # The generic diagnostic producer persists raw HTML and a raw
+        # screenshot. Classified macros may have rendered an argument into
+        # either, so do not invoke it. Composition roots can retain their own
+        # explicitly safe evidence at the authorized screenshot boundary.
+        bundle: dict[str, Any] = {"diagnostic_suppressed": "classified macro arguments"}
+    else:
+        try:
+            bundle = _truncate_bundle_console(await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL))
+        except Exception as secondary:
+            bundle = {"diagnostic_error": repr(secondary)}
+
+    redacted_action = _scrub_sensitive_values(_redact_action(action), sensitive_values)
+    try:
+        fix_suggestion = _scrub_sensitive_values(await _suggest_fix(session, redacted_action), sensitive_values)
+    except Exception as secondary:
+        fix_suggestion = None
+        bundle["healing_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
+    try:
+        failed_requests = _scrub_sensitive_values(_failed_requests_tail(session), sensitive_values)
+    except Exception as secondary:  # defensive around injected session implementations
+        failed_requests = []
+        bundle["network_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
+
+    payload: dict[str, Any] = {
+        "macro": name,
+        "failed_at_step": index,
+        # Partial-state signal: a multi-step macro that fails midway has
+        # already applied steps 0..index-1 to the live browser. Surface both
+        # the count and the (credential-redacted) descriptors of what landed so
+        # the agent can reason about the half-applied state instead of seeing
+        # an opaque error.
+        "executed": executed,
+        "executed_actions": [
+            _scrub_sensitive_values(_redact_action(done), sensitive_values) for done in actions[:index]
+        ],
+        "failed_action": redacted_action,
+        "original": safe_original,
+        "bundle": bundle,
+        # The console tail and final URL were already in `bundle`; the failing
+        # requests were not, so a payload could report "timed out waiting for
+        # #foo" while the 409 that explains it sat unread. Carries the response
+        # body for a failed same-origin request (see
+        # session/core_network_mixin), which is usually the whole diagnosis --
+        # a status code alone is not actionable.
+        #
+        # A sibling of `bundle` rather than a key inside it: `bundle` is what
+        # diagnostic_bundle() returned, and folding another producer's data into
+        # it makes that claim false for every reader (a whole-record assertion
+        # caught exactly this).
+        "failed_requests": failed_requests,
+    }
+    if fix_suggestion:
+        payload["healing_suggestion"] = fix_suggestion
+    return payload
+
+
+async def _finish_macro_run(
+    session: SessionLike,
+    *,
+    name: str,
+    completed_ok: bool,
+    macro_started: float,
+    executed: int,
+    skipped: int,
+    resolved_slowmo: int,
+) -> float:
+    """Close out a run: final pill push, metrics, structured log. Returns elapsed.
+
+    Runs from the caller's ``finally`` so both the ok and failed paths reach it
+    -- outside it, a raised RuntimeError skips the lot: the "failed" datapoint
+    never lands, the histogram only ever measures successful runs, and the
+    operator-visible log line vanishes on the unhappy path.
+    """
+    elapsed_s = time.monotonic() - macro_started
+    status = "ok" if completed_ok else "failed"
+    # Pill stays open showing the final state -- `done` freezes the elapsed
+    # counter and suspends auto-hide so the user can read it. The next macro's
+    # `start` push (or an explicit visible:false) clears it.
+    await _push_status(session, text=f"{name} | {'done' if completed_ok else 'failed'}", done=True)
+    macro_label = _macro_label(name)
+    _MACRO_RUN.add(1, attributes={"macro": macro_label, "status": status})
+    _MACRO_RUN_DURATION.record(elapsed_s, attributes={"macro": macro_label})
+    log.info(
+        "octowright.macro.run",
+        name=name,
+        instance_id=session.instance_id,
+        executed=executed,
+        skipped=skipped,
+        slowmo_ms=resolved_slowmo,
+        status=status,
+        elapsed_s=round(elapsed_s, 3),
+    )
+    return elapsed_s
+
+
 async def _run_macro_impl(
     session: SessionLike,
     name: str,
@@ -393,6 +540,8 @@ async def _run_macro_impl(
 ) -> MacroRunResult:
     macro = load_macro(name)
     effective_args = args or {}
+    sensitive_values = _sensitive_arg_values(effective_args)
+    install_sensitive_recorder(session, sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args)
 
     executed = 0
@@ -408,64 +557,43 @@ async def _run_macro_impl(
     completed_ok = False
     try:
         for index, action in enumerate(actions):
+            failure: RuntimeError | None = None
+            failure_cause: Exception | None = None
+            safe_original: str | None = None
             try:
                 executed_count, skipped_count = await _dispatch_one(
                     session,
                     action,
                     invocation_stack=invocation_stack,
                     slowmo_ms=resolved_slowmo,
+                    sensitive_values=sensitive_values,
                 )
             except Exception as exc:
-                # Ship the console tail: without it the payload reports the
-                # symptom ("timed out waiting for #foo") while the line that
-                # explains it ("net::ERR_NETWORK_CHANGED") sits unread in the
-                # session's ring buffer, so a whole class of CI failures needs
-                # the raw JSONL opened by hand to diagnose. Only built on the
-                # failure path, so the happy path pays nothing.
-                bundle = _truncate_bundle_console(
-                    await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
+                safe_original = str(_scrub_sensitive_values(repr(exc), sensitive_values))
+                if not sensitive_values:
+                    failure_cause = exc
+            if safe_original is not None:
+                # Leave the raw dispatch handler before asking any diagnostic
+                # producer to run. If one of those producers fails, its error
+                # is represented in the payload; it never escapes while the
+                # credential-bearing dispatch exception is active context.
+                payload = await _build_failure_payload(
+                    session,
+                    name=name,
+                    index=index,
+                    action=action,
+                    actions=actions,
+                    executed=executed,
+                    safe_original=safe_original,
+                    sensitive_values=sensitive_values,
                 )
-                # The action dict reaches the MCP client AND the structured
-                # log line below. ``substitute()`` has already resolved
-                # ``{{password}}``-style placeholders into the action, so
-                # the raw value field can be a literal credential — strip
-                # it before exposing the payload to either sink, AND before
-                # handing it to _suggest_fix: summarize_action() embeds the
-                # raw value/text verbatim into the healing_suggestion string,
-                # which is a third sink for the same credential.
-                redacted_action = _redact_action(action)
-                fix_suggestion = await _suggest_fix(session, redacted_action)
-                payload: dict[str, Any] = {
-                    "macro": name,
-                    "failed_at_step": index,
-                    # Partial-state signal: a multi-step macro that fails midway
-                    # has already applied steps 0..index-1 to the live browser.
-                    # Surface both the count and the (credential-redacted)
-                    # descriptors of what landed so the agent can reason about
-                    # the half-applied state instead of seeing an opaque error.
-                    "executed": executed,
-                    "executed_actions": [_redact_action(done) for done in actions[:index]],
-                    "failed_action": redacted_action,
-                    "original": repr(exc),
-                    "bundle": bundle,
-                    # The console tail and final URL were already in `bundle`;
-                    # the failing requests were not, so a payload could report
-                    # "timed out waiting for #foo" while the 409 that explains
-                    # it sat unread. Carries the response body for a failed
-                    # same-origin request (see session/core_network_mixin),
-                    # which is usually the whole diagnosis -- a status code
-                    # alone is not actionable.
-                    #
-                    # A sibling of `bundle` rather than a key inside it:
-                    # `bundle` is what diagnostic_bundle() returned, and
-                    # folding another producer's data into it makes that claim
-                    # false for every reader (a whole-record assertion caught
-                    # exactly this).
-                    "failed_requests": _failed_requests_tail(session),
-                }
-                if fix_suggestion:
-                    payload["healing_suggestion"] = fix_suggestion
-                raise RuntimeError(payload) from exc
+                failure = RuntimeError(payload)
+            # Raise after leaving the handler so the raw caught exception is
+            # not retained as ``__context__`` on the caller-visible failure.
+            if failure is not None:
+                if failure_cause is not None:
+                    raise failure from failure_cause
+                raise failure from None
             executed += executed_count
             skipped += skipped_count
             # Emit progress after each landed step (count up to the total). Drives
@@ -473,32 +601,14 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
-        elapsed_s = time.monotonic() - macro_started
-        # Pill stays open showing the final state — `done` freezes the elapsed
-        # counter and suspends auto-hide so the user can read it. The next
-        # macro's `start` push (or an explicit visible:false) clears it.
-        outcome_label = "done" if completed_ok else "failed"
-        await _push_status(session, text=f"{name} | {outcome_label}", done=True)
-        # Metrics + structured log must fire on BOTH the ok and failed paths.
-        # Outside the try/finally a raised RuntimeError skips them entirely:
-        # the "failed" datapoint never lands, the histogram only ever measures
-        # successful runs, and the operator-visible log line vanishes on the
-        # unhappy path.
-        macro_label = _macro_label(name)
-        _MACRO_RUN.add(
-            1,
-            attributes={"macro": macro_label, "status": "ok" if completed_ok else "failed"},
-        )
-        _MACRO_RUN_DURATION.record(elapsed_s, attributes={"macro": macro_label})
-        log.info(
-            "octowright.macro.run",
+        elapsed_s = await _finish_macro_run(
+            session,
             name=name,
-            instance_id=session.instance_id,
+            completed_ok=completed_ok,
+            macro_started=macro_started,
             executed=executed,
             skipped=skipped,
-            slowmo_ms=resolved_slowmo,
-            status="ok" if completed_ok else "failed",
-            elapsed_s=round(elapsed_s, 3),
+            resolved_slowmo=resolved_slowmo,
         )
 
     return {

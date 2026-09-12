@@ -20,9 +20,9 @@ from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.artifacts.models import new_manifest, new_run_result
 from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
-from octowright.artifacts.redaction import redact_mapping
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
+from octowright.macros.privacy import redact_args, scrub_sensitive_values, sensitive_arg_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -62,7 +62,7 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         "ok": not missing_args,
         "macro": name,
         "missing_args": missing_args,
-        "args_used": redact_mapping(args_used),
+        "args_used": redact_args(args_used),
         "paths": {
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),
@@ -155,6 +155,7 @@ async def run_macro_artifact(
     async with session.operation("macro_artifact_run"):
         macro = load_macro(name)
         args_used = dict(args or {})
+        sensitive_values = sensitive_arg_values(args_used)
         store = ArtifactStore()
         artifact_dir = store.macro_dir(name)
         runs_dir = artifact_dir / "runs"
@@ -176,7 +177,14 @@ async def run_macro_artifact(
 
         run_dir = store.next_run_dir(artifact_dir)
         evidence = EvidenceBuilder()
-        await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="before", enabled=capture)
+        await _capture_screenshot(
+            session=session,
+            run_dir=run_dir,
+            evidence=evidence,
+            label="before",
+            enabled=capture,
+            sensitive_values=sensitive_values,
+        )
 
         status = "ok"
         error: str | None = None
@@ -196,7 +204,14 @@ async def run_macro_artifact(
                 preview=traceback.format_exc(limit=8),
             )
 
-        await _capture_screenshot(session=session, run_dir=run_dir, evidence=evidence, label="after", enabled=capture)
+        await _capture_screenshot(
+            session=session,
+            run_dir=run_dir,
+            evidence=evidence,
+            label="after",
+            enabled=capture,
+            sensitive_values=sensitive_values,
+        )
 
         recording_path = str(getattr(session, "log_path", "")) or None
         run_result = new_run_result(
@@ -210,8 +225,19 @@ async def run_macro_artifact(
             error=error,
             recording_path=recording_path,
         )
-        summary = notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}."
-        paths = write_run_bundle(run_dir=run_dir, result=run_result, evidence=evidence.records, summary=summary)
+        summary = str(
+            scrub_sensitive_values(
+                notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}.",
+                sensitive_values,
+            )
+        )
+        paths = write_run_bundle(
+            run_dir=run_dir,
+            result=run_result,
+            evidence=evidence.records,
+            summary=summary,
+            sensitive_values=sensitive_values,
+        )
 
         manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
         write_artifact_manifest(manifest_path, manifest)
@@ -262,6 +288,7 @@ async def _capture_screenshot(
     evidence: EvidenceBuilder,
     label: str,
     enabled: bool,
+    sensitive_values: tuple[str, ...] = (),
 ) -> None:
     # Re-enters run_macro_artifact's own "macro_artifact_run" lease (same
     # task, Task 2 reentrancy) -- both call sites already hold it, so this
@@ -270,10 +297,17 @@ async def _capture_screenshot(
     async with session.operation("macro_artifact_run"):
         if not enabled or getattr(session, "page", None) is None:
             return
+        path = run_dir / "screenshots" / f"{label}.png"
+        if sensitive_values:
+            # Automatic screenshots have no composition-owned rendered-value
+            # redaction or post-await authority check. Refuse them before the
+            # browser is asked for bytes. A macro may still request an explicit
+            # screenshot through execution's privacy-handler boundary.
+            path.unlink(missing_ok=True)
+            return
         screenshot = getattr(session, "screenshot", None)
         if screenshot is None:
             return
-        path = run_dir / "screenshots" / f"{label}.png"
         try:
             await screenshot(path)
         except Exception as exc:  # Best-effort evidence must not hide macro results.
@@ -307,7 +341,7 @@ def _manifest_for_plan(
         artifact_type="macro",
         name=name,
         source={"type": "macro", "path": str(macro_path(name))},
-        parameters=args_used,
+        parameters=redact_args(args_used),
         metadata={
             "description": macro.get("description"),
             "action_count": len(macro.get("actions", [])) if isinstance(macro.get("actions"), list) else 0,
@@ -357,7 +391,7 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         "artifact_type": manifest.get("artifact_type"),
         "name": manifest.get("name"),
         "source": manifest.get("source"),
-        "parameters": redact_mapping(manifest.get("parameters")),
+        "parameters": redact_args(manifest.get("parameters") or {}),
         "created_at": manifest.get("created_at"),
         "updated_at": manifest.get("updated_at"),
         "latest_run": manifest.get("latest_run"),

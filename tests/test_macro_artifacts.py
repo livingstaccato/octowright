@@ -9,6 +9,7 @@ import importlib
 import json
 import sys
 import types
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -371,6 +372,105 @@ async def test_run_macro_artifact_writes_bundle(monkeypatch: pytest.MonkeyPatch,
 
     manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
     assert manifest["latest_run"] == {"run_id": "run_0001", "path": result["paths"]["run_dir"]}
+
+
+@pytest.mark.asyncio
+async def test_run_macro_artifact_never_persists_social_identity_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage, parameters=["user", "peer", "payload"])
+    session = FakeSession(tmp_path)
+    args = {
+        "user": "driver/subject-a4",
+        "peer": "peer-subject-a4",
+        "payload": {"profile": {"subject": "nested-subject-a4"}},
+    }
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {
+            "macro": name,
+            "executed": 1,
+            "skipped": 0,
+            "args_used": args,
+            "slowmo_ms": slowmo_ms or 0,
+        }
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args=args,
+        capture=False,
+        verify=False,
+    )
+
+    paths = [Path(result["paths"][name]) for name in ("result", "evidence", "summary", "manifest")]
+    persisted = b"\n".join(path.read_bytes() for path in paths)
+    raw_values = (
+        args["user"],
+        args["peer"],
+        args["payload"]["profile"]["subject"],
+    )
+    for raw in raw_values:
+        variants = {raw}
+        encoded = raw
+        for _ in range(3):
+            encoded = urllib.parse.quote(encoded, safe="")
+            variants.add(encoded)
+        for variant in variants:
+            assert variant.encode() not in persisted
+
+
+@pytest.mark.asyncio
+async def test_artifact_plan_run_and_verification_scrub_sensitive_value_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    _write_macro(storage, parameters=["password", "display"])
+    session = FakeSession(tmp_path)
+    raw = "A4-ARTIFACT-ALIAS-CANARY"
+    args = {"password": raw, "display": raw}
+
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+        return {
+            "macro": name,
+            "executed": 1,
+            "skipped": 0,
+            "args_used": args,
+            "slowmo_ms": slowmo_ms or 0,
+        }
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
+    planned = macro_artifacts.plan_macro_artifact("login", args=args)
+    assert raw not in repr(planned)
+    assert raw.encode() not in Path(planned["paths"]["manifest"]).read_bytes()
+
+    macro_artifacts.macro_artifact_critical_points_set(
+        "login",
+        [
+            {
+                "id": "cp1",
+                "description": "Replay completed",
+                "checks": [{"type": "result_status", "status": "ok"}],
+            }
+        ],
+    )
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args=args,
+        capture=False,
+        verify=True,
+        notes=f"review account {raw}",
+    )
+
+    assert raw not in repr(result)
+    persisted = b"\n".join(
+        Path(result["paths"][name]).read_bytes()
+        for name in ("result", "evidence", "summary", "verification", "manifest")
+    )
+    assert raw.encode() not in persisted
 
 
 @pytest.mark.asyncio

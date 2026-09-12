@@ -362,6 +362,32 @@ async def test_capture_false_takes_no_screenshot(monkeypatch: pytest.MonkeyPatch
     assert session.shots == []
 
 
+@pytest.mark.asyncio
+async def test_capture_true_never_writes_automatic_images_for_classified_args(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A page-rendered credential must not survive in before/after PNG bytes."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    session = _CapturingSession(tmp_path)
+    canary = "A4-AUTOMATIC-SCREENSHOT-CANARY"  # pragma: allowlist secret
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"password": canary},
+        capture=True,
+    )
+
+    assert result["ok"] is True
+    assert session.shots == []
+    assert list(Path(result["paths"]["run_dir"]).rglob("*.png")) == []
+    assert canary.encode() not in b"".join(
+        path.read_bytes() for path in Path(result["paths"]["run_dir"]).rglob("*") if path.is_file()
+    )
+
+
 # ---------------------------------------------------------------------------
 # Listing with more than one artifact
 # ---------------------------------------------------------------------------
