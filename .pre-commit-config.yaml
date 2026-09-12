@@ -53,7 +53,7 @@ repos:
     hooks:
       - id: spdx-headers
         name: spdx headers (presence + Apache-2.0 allowlist)
-        entry: uv run --active python scripts/check_spdx_headers.py
+        entry: uv run python scripts/check_spdx_headers.py
         language: system
         pass_filenames: false
         always_run: true
@@ -61,7 +61,7 @@ repos:
 
       - id: max-loc
         name: max loc (777 lines)
-        entry: uv run --active python scripts/check_max_loc.py
+        entry: uv run python scripts/check_max_loc.py
         language: system
         pass_filenames: false
         always_run: true
@@ -69,28 +69,28 @@ repos:
 
       - id: js-typecheck-coverage
         name: injected browser assets are type-checked
-        entry: uv run --active python scripts/check_js_typecheck_coverage.py
+        entry: uv run python scripts/check_js_typecheck_coverage.py
         language: system
         pass_filenames: false
         always_run: true
 
       - id: agent-docs-sync
         name: agent docs sync
-        entry: uv run --active python scripts/check_agent_docs_sync.py
+        entry: uv run python scripts/check_agent_docs_sync.py
         language: system
         pass_filenames: false
         always_run: true
 
       - id: plugin-versions
         name: plugin manifest versions match VERSION
-        entry: uv run --active python scripts/check_plugin_versions.py
+        entry: uv run python scripts/check_plugin_versions.py
         language: system
         pass_filenames: false
         always_run: true
 
       - id: vulture
         name: vulture (dead code, baseline-ratchet)
-        entry: uv run --active python scripts/check_vulture.py
+        entry: uv run python scripts/check_vulture.py
         language: system
         pass_filenames: false
         always_run: true
@@ -98,7 +98,7 @@ repos:
 
       - id: xenon
         name: xenon (complexity, baseline-ratchet)
-        entry: uv run --active python scripts/check_xenon.py
+        entry: uv run python scripts/check_xenon.py
         language: system
         pass_filenames: false
         always_run: true
@@ -106,13 +106,13 @@ repos:
 
       - id: detect-secrets
         name: detect-secrets (baseline-anchored)
-        entry: uv run --active detect-secrets-hook --baseline .secrets.baseline
+        entry: uv run detect-secrets-hook --baseline .secrets.baseline
         language: system
         exclude: ^(\.secrets\.baseline|uv\.lock)$
 
       - id: pytest-quick
         name: pytest (unit tests, no live browsers)
-        entry: uv run --active pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/
+        entry: uv run pytest -q --deselect tests/test_popup_listeners.py --deselect tests/test_scenarios_live.py tests/
         language: system
         pass_filenames: false
         always_run: true
