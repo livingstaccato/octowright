@@ -102,13 +102,15 @@ a section that is already tagged and on PyPI.
   sensitive.** Through 0.22.1 `artifacts.redaction` already knew `passphrase`,
   `authorization`, `pw`, `pwd` and `cookie` while the sink guard did not, so the
   same name could be scrubbed from an artifact and still expanded into a URL.
-  The guard, the redactor and the new macro argument classifier now share one
-  vocabulary -- the union of what every classifier matched before unification,
-  with a match mode declared per token: substring for long unambiguous tokens,
-  whole-token for short ones, so `auth` does not catch `author`. A frozen
-  baseline fixture asserts that no name an earlier runtime classifier called
-  sensitive became insensitive. `artifacts.redaction` is kept and held to the
-  union by test, because `lint_urls` imports from it.
+  The sink guard now delegates to the new macro argument classifier, so those
+  two share one vocabulary -- the union of what every classifier matched before
+  unification, with a match mode declared per token: substring for long
+  unambiguous tokens and for `pwd`, whole-token for other short ones, so `auth`
+  does not catch `author`. A frozen baseline fixture asserts that no name an
+  earlier runtime classifier called sensitive became insensitive.
+  `artifacts.redaction` itself is unchanged since 0.22.1 and keeps its own
+  table for artifact mappings and `lint_urls`; a test asserts it never drops a
+  name it already caught.
 - **`docs/env-vars.md` listed two of the four credential sink fields** and the
   guard's old private name table. It now names `verify_js` and
   `grabbed_predicate_js`, and states the shared vocabulary and its match modes.
@@ -120,8 +122,8 @@ a section that is already tagged and on PyPI.
 
 ### Changed
 - **More argument names are refused in a macro sink than in 0.22.1.** Because
-  the guard now uses the shared vocabulary, it refuses the six names above, and
-  their plurals, when a macro expands them into a `url`, `expression`,
+  the guard now uses the shared vocabulary, it refuses the six names above, their
+  plurals, and any name containing `pwd` such as `oldpwd`, when a macro expands them into a `url`, `expression`,
   `verify_js` or `grabbed_predicate_js`. A macro that put `{{access_key}}` in a
   query string worked in 0.22.1 and raises now, with no config change on the
   operator's side. The opt-out is named in the error text and exists for that
@@ -132,15 +134,16 @@ a section that is already tagged and on PyPI.
   `secret`, `email`, `username` -- and miss `api_key`, `authorization`,
   `passphrase`, `private_key`, `cookie`, `otp`, `bearer` and more. A regenerated
   script uses the shared vocabulary and is stamped
-  `ARG_PRIVACY_CLASSIFIER_VERSION = 3`. The trade: `password`, `passwd`,
-  `token` and `secret` stay substring-matched, but `pwd`, `email` and `username`
-  are now whole tokens, so a parameter that fuses one of those with no
-  separator -- `oldpwd`, `useremail`, `adminusername` -- is redacted by a 0.22.1
-  export and not by a regenerated one. `old_pwd` and `user_email` tokenise and
-  stay covered. Measured: 235 such fused names lost across a 2281-name corpus,
-  **none** among the 157 real parameters of a 340-macro corpus. Rename such
-  parameters with a separator before regenerating. There is no staleness
-  detection for exported scripts today.
+  `ARG_PRIVACY_CLASSIFIER_VERSION = 4`. The trade: `email` and `username` are
+  now whole tokens, so a parameter that fuses one with no separator --
+  `useremail`, `adminusername` -- is redacted by a 0.22.1 export and not by a
+  regenerated one, while `user_email` tokenises and stays covered. That is 156
+  fused names across a 2281-name corpus and **none** among the 157 real
+  parameters of a 340-macro corpus. Rename such parameters with a separator
+  before regenerating. `pwd` is kept substring-matched precisely so the same
+  trade does not apply to a credential: no dictionary word contains it, so
+  `oldpwd` stays caught. There is no staleness detection for exported scripts
+  today.
 - **`AGENTS.md` split into per-directory guides.** It had grown to the point
   where an agent reading it paid for the whole repo's conventions to learn
   about one directory. The directory-specific material now lives in `AGENTS.md`
