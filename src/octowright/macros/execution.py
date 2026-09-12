@@ -19,6 +19,7 @@ from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.descriptions import describe_action
 from octowright.macros.privacy import (
+    PrivacyLedger,
     install_sensitive_recorder,
 )
 from octowright.macros.privacy import (
@@ -238,6 +239,51 @@ async def _dispatch_classified_screenshot(
     return handled
 
 
+def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
+    return run_ledger.values if run_ledger is not None else ()
+
+
+def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], run_ledger: PrivacyLedger) -> None:
+    """Classify a nested call's own arguments where it executes.
+
+    Parent substitution has already run, so these are the values the child will
+    see, and a deeper call reaches ``_dispatch_one`` again with its own
+    substituted arguments, so every depth is covered. They join the run's set and
+    the session ledger the one recorder wrapper reads. A malformed ``args`` is
+    left for ``validate_macro_call_shape`` to report.
+    """
+    call_args = action.get("args")
+    if not isinstance(call_args, dict):
+        return
+    nested = _sensitive_arg_values(call_args)
+    run_ledger.add(nested)
+    install_sensitive_recorder(session, nested)
+
+
+async def _dispatch_nested_call(
+    session: SessionLike,
+    action: dict[str, Any],
+    *,
+    invocation_stack: list[str] | None,
+    max_depth: int,
+    slowmo_ms: int,
+    run_ledger: PrivacyLedger | None,
+) -> tuple[int, int]:
+    if invocation_stack is None:
+        raise RuntimeError("macro_call can only execute in a macro context with an invocation stack")
+    ledger = run_ledger if run_ledger is not None else PrivacyLedger()
+    _collect_nested_call_privacy(session, action, ledger)
+    return await dispatch_macro_call(
+        session,
+        action,
+        invocation_stack=invocation_stack,
+        max_depth=max_depth,
+        load_macro=load_macro,
+        substitute=substitute,
+        dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, **kw),
+    )
+
+
 async def _dispatch_one(
     session: SessionLike,
     action: dict[str, Any],
@@ -245,26 +291,18 @@ async def _dispatch_one(
     invocation_stack: list[str] | None = None,
     max_depth: int | None = None,
     slowmo_ms: int = 0,
-    sensitive_values: tuple[str, ...] = (),
+    run_ledger: PrivacyLedger | None = None,
 ) -> tuple[int, int]:
     resolved_max_depth = max_depth if max_depth is not None else MAX_MACRO_CALL_DEPTH
 
     if action.get("action") == "macro_call":
-        if invocation_stack is None:
-            raise RuntimeError("macro_call can only execute in a macro context with an invocation stack")
-        return await dispatch_macro_call(
+        return await _dispatch_nested_call(
             session,
             action,
             invocation_stack=invocation_stack,
             max_depth=resolved_max_depth,
-            load_macro=load_macro,
-            substitute=substitute,
-            dispatch_one=lambda *a, **kw: _dispatch_one(
-                *a,
-                slowmo_ms=slowmo_ms,
-                sensitive_values=sensitive_values,
-                **kw,
-            ),
+            slowmo_ms=slowmo_ms,
+            run_ledger=run_ledger,
         )
 
     # Push status before dispatch so the pill reflects the action that's
@@ -288,8 +326,9 @@ async def _dispatch_one(
             invocation_stack=tuple(invocation_stack or ()),
         )
 
-    if action.get("action") == "screenshot" and sensitive_values:
-        return await _dispatch_classified_screenshot(session, action, sensitive_values)
+    run_values = _run_values(run_ledger)
+    if action.get("action") == "screenshot" and run_values:
+        return await _dispatch_classified_screenshot(session, action, run_values)
 
     if action.get("action") in conditional.CONDITIONAL_ACTIONS:
 
@@ -300,7 +339,7 @@ async def _dispatch_one(
                 invocation_stack=invocation_stack,
                 max_depth=resolved_max_depth,
                 slowmo_ms=slowmo_ms,
-                sensitive_values=sensitive_values,
+                run_ledger=run_ledger,
             )
 
         return await conditional.dispatch_conditional(session, action, _recurse)
@@ -542,6 +581,10 @@ async def _run_macro_impl(
     effective_args = args or {}
     sensitive_values = _sensitive_arg_values(effective_args)
     install_sensitive_recorder(session, sensitive_values)
+    # What THIS run has classified: its own arguments plus every nested call's,
+    # appended as they execute. The failure payload and the classified-screenshot
+    # refusal read it; the recorder reads the session ledger instead.
+    run_ledger = PrivacyLedger(sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args)
 
     executed = 0
@@ -566,11 +609,12 @@ async def _run_macro_impl(
                     action,
                     invocation_stack=invocation_stack,
                     slowmo_ms=resolved_slowmo,
-                    sensitive_values=sensitive_values,
+                    run_ledger=run_ledger,
                 )
             except Exception as exc:
-                safe_original = str(_scrub_sensitive_values(repr(exc), sensitive_values))
-                if not sensitive_values:
+                run_values = run_ledger.values
+                safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
+                if not run_values:
                     failure_cause = exc
             if safe_original is not None:
                 # Leave the raw dispatch handler before asking any diagnostic
@@ -585,7 +629,7 @@ async def _run_macro_impl(
                     actions=actions,
                     executed=executed,
                     safe_original=safe_original,
-                    sensitive_values=sensitive_values,
+                    sensitive_values=run_ledger.values,
                 )
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
