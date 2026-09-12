@@ -99,6 +99,8 @@ a section that is already tagged and on PyPI.
   file whose name starts with `CHANGELOG.md`. Local design notes under
   `docs/superpowers/` and `docs/reviews/` are skipped, and both directories are
   gitignored, so a plan quoting an old tool count cannot fail `make lint`.
+- **Agent handoff and memory notes are no longer tracked.** `.provide/` and
+  `memory/` are gitignored and kept locally, like the design notes above.
 
 ## [0.23.0] - 2026-09-12
 

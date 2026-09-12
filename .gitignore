@@ -45,6 +45,9 @@ memray.bin
 # Where the superpowers skills write design notes by default; kept local too.
 docs/superpowers/
 docs/reviews/
+# Agent handoff and memory notes; kept local.
+.provide/
+memory/
 mutants/
 
 # Scratch test output and external tool artifacts (never commit these).
