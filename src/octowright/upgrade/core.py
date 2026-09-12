@@ -111,11 +111,55 @@ def _load_highlights() -> dict[str, list[Highlight]]:
 HIGHLIGHTS: dict[str, list[Highlight]] = _load_highlights()
 
 
+#: A banner is a banner: past this many titles the rest are counted, not listed.
+#: The notice itself is never capped -- octowright_status carries all of it.
+MAX_BANNER_TITLES = 12
+
+
+class ReleaseHighlights(TypedDict):
+    """One release's curated highlights, as carried by an upgrade notice."""
+
+    version: str
+    highlights: list[Highlight]
+
+
 class UpgradeNotice(TypedDict):
     kind: str  # "install" (no prior version) | "upgrade" (version changed)
     previous_version: str | None
     current_version: str
+    #: Every release in (previous_version, current_version], newest first.
+    releases: list[ReleaseHighlights]
+    #: The same highlights flattened in release order, for existing readers.
     highlights: list[Highlight]
+
+
+def _parse_version(version: str | None) -> tuple[int, ...] | None:
+    if version is None:
+        return None
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return None
+
+
+def _releases_since(current: str, last_seen: str | None) -> list[ReleaseHighlights]:
+    """Releases a user has not been told about, newest first.
+
+    Only a parseable, strictly older previous version widens the window. A fresh
+    install, a downgrade, or a previous version that does not parse (a dev
+    build) shows just the current release -- there is no history to catch up on
+    in any of those, and dumping every past release would be noise.
+    """
+    cur, prev = _parse_version(current), _parse_version(last_seen)
+    if cur is None or prev is None or prev >= cur:
+        entries = HIGHLIGHTS.get(current, [])
+        return [{"version": current, "highlights": entries}] if entries else []
+    releases: list[ReleaseHighlights] = []
+    for version, entries in HIGHLIGHTS.items():
+        parsed = _parse_version(version)
+        if entries and parsed is not None and prev < parsed <= cur:
+            releases.append({"version": version, "highlights": entries})
+    return releases
 
 
 def load_last_seen(path: Path | None = None) -> str | None:
@@ -140,15 +184,20 @@ def compute_upgrade(current: str, last_seen: str | None) -> UpgradeNotice | None
     """Return a notice when ``current`` differs from ``last_seen``, else None.
 
     ``last_seen is None`` (no marker yet) is treated as a fresh install; any other
-    mismatch is an upgrade carrying the prior version.
+    mismatch is an upgrade carrying the prior version. An upgrade that skipped
+    releases carries each skipped release's highlights too: reading only the
+    current version's dropped everything in between for exactly the users who
+    skipped the most.
     """
     if last_seen == current:
         return None
+    releases = _releases_since(current, last_seen)
     return {
         "kind": "install" if last_seen is None else "upgrade",
         "previous_version": last_seen,
         "current_version": current,
-        "highlights": HIGHLIGHTS.get(current, []),
+        "releases": releases,
+        "highlights": [entry for release in releases for entry in release["highlights"]],
     }
 
 
@@ -165,9 +214,28 @@ def render_banner(notice: UpgradeNotice) -> str:
     # daemon log is not a banner. The full text stays in the notice, which is
     # what octowright_status hands the agent, and the closing line already
     # points at both.
-    lines += [f"  - {h['title']}" for h in notice["highlights"]]
+    lines += _banner_title_lines(notice["releases"])
     lines.append("Full notes: CHANGELOG.md  -  call octowright_status for details.")
     return "\n".join(lines)
+
+
+def _banner_title_lines(releases: list[ReleaseHighlights]) -> list[str]:
+    """Titles grouped under their release when more than one was skipped, capped."""
+    grouped = len(releases) > 1
+    total = sum(len(release["highlights"]) for release in releases)
+    lines: list[str] = []
+    shown = 0
+    for release in releases:
+        if shown == MAX_BANNER_TITLES:
+            break
+        if grouped:
+            lines.append(f"  {release['version']}:")
+        for entry in release["highlights"][: MAX_BANNER_TITLES - shown]:
+            lines.append(f"{'    ' if grouped else '  '}- {entry['title']}")
+            shown += 1
+    if total > shown:
+        lines.append(f"  ... and {total - shown} more")
+    return lines
 
 
 def announce_upgrade_if_changed(

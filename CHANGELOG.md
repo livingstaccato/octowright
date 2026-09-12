@@ -12,6 +12,18 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Fixed
+- **An upgrade that skipped a release dropped that release's highlights**
+  (#240). `compute_upgrade` attached only the current version's entries, so a
+  user going from 0.21.0 straight to 0.23.0 never saw 0.22.0's or 0.22.1's. The
+  notice now carries every release in `(previous, current]`, newest first, as
+  a new `releases` field grouped by version; the existing flat `highlights` list
+  is kept, in the same order, for readers that already consume it. The banner
+  groups titles under each release when more than one was skipped and caps the
+  list at `MAX_BANNER_TITLES`, counting the rest -- the notice itself, which
+  `octowright_status` returns, is never capped. A fresh install, a downgrade, or
+  a previous version that does not parse still shows only the current release.
+
 ## [0.23.0] - 2026-09-12
 
 ### Added
