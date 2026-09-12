@@ -57,6 +57,19 @@ POLICY_NAME_RE = re.compile(r"(redact|scrub|sensitive|credential)", re.IGNORECAS
 # the recorder visible.
 WRITE_HELPERS = frozenset({"atomic_write_text", "_json_write", "write_text", "write_bytes", "dump"})
 HANDLE_WRITES = frozenset({"write", "writelines"})
+
+# A call that hands a destination path to somebody else's writer. Playwright's
+# page.screenshot(path=...) writes a file this process never opens, so neither
+# the helper set nor the handle set can see it -- and a screenshot is the one
+# artifact that can hold a RENDERED credential.
+# Writers this process does not own: the library writes the file and no helper,
+# handle or open() call appears here at all. A path-SHAPED rule cannot stand in
+# for this -- it matches every reader too (tail_log, _read_window, list_macros)
+# and turns a 15-row inventory into 46 rows of noise. So the list is explicit,
+# short, and stated in the design rather than left implicit: these are the
+# Playwright calls that write a file, found by grepping the tree for each.
+EXTERNAL_WRITERS = frozenset({"screenshot", "save_as", "pdf"})
+EXTERNAL_WRITER_ATTRS = frozenset({"stop"})  # tracing.stop(path=...)
 WRITE_MODE_RE = re.compile(r"[wax]")
 
 # Names whose presence in an enclosing scope means the site could thread a
@@ -87,6 +100,16 @@ def call_name(node: ast.Call) -> str:
     return ""
 
 
+def _is_delegated_write(node: ast.Call) -> bool:
+    """A call that hands a destination path to somebody else's writer."""
+    name = call_name(node)
+    if name in EXTERNAL_WRITERS:
+        return True
+    if name not in EXTERNAL_WRITER_ATTRS:
+        return False
+    return any(kw.arg == "path" for kw in node.keywords if kw.arg)
+
+
 def is_write_open(node: ast.Call) -> bool:
     """``open(path, "a")`` / ``path.open("a")`` -- a durable sink by mode."""
     if call_name(node) != "open":
@@ -95,10 +118,16 @@ def is_write_open(node: ast.Call) -> bool:
     return any(WRITE_MODE_RE.search(m.value) for m in modes)
 
 
-def derive_policy_surface() -> tuple[frozenset[str], dict[str, str], dict[str, str]]:
-    """Return the policy-surface callee names, why each qualified, and where."""
+def derive_policy_surface() -> tuple[frozenset[str], dict[str, str], dict[str, set[str]]]:
+    """Return the policy-surface callee names, why each qualified, and where.
+
+    ``defined_in`` maps a name to EVERY file defining it. Keying it by bare name
+    with a single value collides -- ``record``, ``routes`` and
+    ``redact_header_values`` are each defined in more than one module -- and a
+    collision silently mislabels a cross-module call as intra-module.
+    """
     surface: dict[str, str] = {}
-    defined_in: dict[str, str] = {}
+    defined_in: dict[str, set[str]] = {}
     for path in sorted(SRC.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         in_policy_module = path in POLICY_MODULES
@@ -112,14 +141,14 @@ def derive_policy_surface() -> tuple[frozenset[str], dict[str, str], dict[str, s
                 surface.setdefault(node.name, f"defined in {path}")
             elif POLICY_NAME_RE.search(node.name):
                 surface.setdefault(node.name, f"name matches /{POLICY_NAME_RE.pattern}/ in {path}")
-            defined_in.setdefault(node.name, str(path))
+            defined_in.setdefault(node.name, set()).add(str(path))
     return frozenset(surface), surface, defined_in
 
 
 class Scanner(ast.NodeVisitor):
     """Collect policy boundaries, durable writes and scrub-tuple branches."""
 
-    def __init__(self, path: Path, surface: frozenset[str], defined_in: dict[str, str]) -> None:
+    def __init__(self, path: Path, surface: frozenset[str], defined_in: dict[str, set[str]]) -> None:
         self.path = path
         self.surface = surface
         self.defined_in = defined_in
@@ -161,7 +190,7 @@ class Scanner(ast.NodeVisitor):
                 "call": name,
                 "in_scope": sorted(self.bound_names() & MACROISH),
                 "has_policy": sorted(self.bound_names() & POLICYISH),
-                "intra_module": self.defined_in.get(name) == str(self.path),
+                "intra_module": str(self.path) in self.defined_in.get(name, set()),
             }
         )
 
@@ -188,6 +217,8 @@ class Scanner(ast.NodeVisitor):
             self._record_write(node, name, "raw handle")
         elif is_write_open(node):
             self._record_write(node, name, "open for write")
+        elif _is_delegated_write(node):
+            self._record_write(node, name, "delegated")
         self.generic_visit(node)
 
     def visit_If(self, node: ast.If) -> None:
@@ -200,7 +231,7 @@ class Scanner(ast.NodeVisitor):
 
 
 def scan_tree(
-    surface: frozenset[str], defined_in: dict[str, str]
+    surface: frozenset[str], defined_in: dict[str, set[str]]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, str]]]:
     boundaries: list[dict[str, Any]] = []
     writes: list[dict[str, Any]] = []
@@ -222,11 +253,6 @@ def package_of(row: dict[str, Any]) -> str:
 
 def in_scope(row: dict[str, Any]) -> bool:
     return package_of(row) in IN_SCOPE_PACKAGES or Path(row["file"]).name in IN_SCOPE_MODULES
-
-
-def is_cross_module(row: dict[str, Any]) -> bool:
-    """A boundary whose callee is defined in another module."""
-    return not str(row["file"]).endswith(("privacy.py", "redaction.py")) or row["fn"] == "<module>"
 
 
 def substitution_facts() -> dict[str, Any]:
@@ -356,11 +382,11 @@ def _print_writes(writes: list[dict[str, Any]]) -> None:
     print("B. DURABLE WRITES -- enumerated independently of the policy surface")
     print("=" * 100)
     scoped = [r for r in writes if in_scope(r)]
-    print(f"{'file:line':<50}{'enclosing fn':<28}{'shape':<18}holds policy")
+    print(f"{'file:line':<50}{'enclosing fn':<32}{'shape':<20}holds policy")
     for row in scoped:
         loc = f"{row['file']}:{row['line']}"
         policy = ",".join(row["has_policy"]) or "-- NONE --"
-        print(f"{loc:<50}{row['fn']:<28}{row['shape']:<18}{policy}")
+        print(f"{loc:<50}{row['fn']:<32}{row['shape']:<20}{policy}")
     needs = [r for r in scoped if not r["has_policy"]]
     streaming = [r for r in scoped if r["streaming"]]
     print(f"\ntotal: {len(writes)}   in Part 0 scope: {len(scoped)}")
