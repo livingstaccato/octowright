@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 provide.io llc
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-Comment: Part of octowright.
+#
 
 """Versioned privacy rules shared by macro execution and generated exports."""
 
@@ -76,14 +77,24 @@ def is_field_name(key: object) -> bool:
     return bool(_FIELD_NAME_RE.fullmatch(str(key)))
 
 
+def _is_identity_key(key: object) -> bool:
+    """A key under a classified branch that reads as data rather than structure."""
+    return key not in (None, "") and not is_field_name(key)
+
+
+def _collect_from_mapping(value: Mapping[Any, Any], *, inherited: bool) -> set[str]:
+    values: set[str] = set()
+    for key, item in value.items():
+        if inherited and _is_identity_key(key):
+            values.add(str(key))
+        values.update(_collect_sensitive_values(item, inherited=inherited or is_sensitive_arg_key(key)))
+    return values
+
+
 def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
     values: set[str] = set()
     if isinstance(value, Mapping):
-        for key, item in value.items():
-            branch_sensitive = inherited or is_sensitive_arg_key(key)
-            if inherited and key not in (None, "") and not is_field_name(key):
-                values.add(str(key))
-            values.update(_collect_sensitive_values(item, inherited=branch_sensitive))
+        values.update(_collect_from_mapping(value, inherited=inherited))
     elif isinstance(value, (list, tuple, set, frozenset)):
         for item in value:
             values.update(_collect_sensitive_values(item, inherited=inherited))
@@ -112,29 +123,30 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
     return tuple(sorted((item for item in variants if item), key=len, reverse=True))
 
 
-def sensitive_value_variants(values: tuple[str, ...]) -> tuple[str, ...]:
-    """Return bounded raw/serialized spellings for an in-memory visual boundary."""
-    variants = {variant for value in values for variant in _serialized_variants(value)}
-    return tuple(sorted(variants, key=len, reverse=True))
+# Below this length a value is short enough to occur inside unrelated words, so
+# it only matches on an alphanumeric boundary. Longer values match anywhere:
+# a credential split across a word boundary must still be caught.
+_WORD_BOUNDED_BELOW = 4
+
+
+def _scrub_text(text: str, sensitive_values: tuple[str, ...], marker: str) -> str:
+    for sensitive in sensitive_values:
+        for variant in _serialized_variants(sensitive):
+            pattern = (
+                rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])"
+                if len(sensitive) < _WORD_BOUNDED_BELOW
+                else re.escape(variant)
+            )
+            # Percent-encoded spellings vary in hex case between producers.
+            flags = re.IGNORECASE if "%" in variant else 0
+            text = re.sub(pattern, marker, text, flags=flags)
+    return text
 
 
 def scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...], *, marker: str = REDACTED) -> Any:
     """Copy a diagnostic while scrubbing raw, escaped, and URL-encoded values."""
     if isinstance(value, str):
-        for sensitive in sensitive_values:
-            variants = _serialized_variants(sensitive)
-            for variant in variants:
-                flags = re.IGNORECASE if "%" in variant else 0
-                if len(sensitive) < 4:
-                    value = re.sub(
-                        rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])",
-                        marker,
-                        value,
-                        flags=flags,
-                    )
-                else:
-                    value = re.sub(re.escape(variant), marker, value, flags=flags)
-        return value
+        return _scrub_text(value, sensitive_values, marker)
     if isinstance(value, Mapping):
         return {
             str(scrub_sensitive_values(str(key), sensitive_values, marker=marker)): scrub_sensitive_values(
