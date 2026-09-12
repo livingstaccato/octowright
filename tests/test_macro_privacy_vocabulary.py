@@ -102,9 +102,22 @@ def test_depluralization_does_not_break_the_access_key_pair() -> None:
     assert is_sensitive_arg_key("access_keys") is True
 
 
-def test_redaction_classifier_stays_a_subset_of_the_unified_one(baseline: dict[str, Any]) -> None:
-    """`artifacts.redaction` keeps its own callers (`macros/lint_urls.py`), so it
-    must not drift below the union while it still exists."""
+def test_redaction_classifier_keeps_every_name_it_caught_at_baseline(baseline: dict[str, Any]) -> None:
+    """`artifacts.redaction` keeps its OWN table, for artifact mappings and
+    `macros/lint_urls.py`; it does not delegate to the unified vocabulary and is
+    not held to the union. What this guards is narrower: it must never stop
+    catching a name it caught when the baseline was measured."""
     lost = [name for name, flags in baseline["sensitive_to_any"] if "r" in flags and not is_sensitive_key(name)]
 
-    assert not lost, f"redaction classifier narrowed: {sorted(lost)[:12]}"
+    assert not lost, f"redaction classifier dropped names it used to catch: {sorted(lost)[:12]}"
+
+
+def test_redaction_classifier_catches_nothing_the_unified_one_misses(baseline: dict[str, Any]) -> None:
+    """The other direction: the redactor may lag the unified vocabulary, but it
+    must never be the only classifier that knows a name. A name added to the
+    redactor's table alone would be redacted from artifacts while still reaching
+    failure payloads, exports and URL sinks in cleartext."""
+    names = {name for name, _flags in baseline["sensitive_to_any"]} | set(baseline["insensitive"])
+    redactor_only = sorted(name for name in names if is_sensitive_key(name) and not is_sensitive_arg_key(name))
+
+    assert not redactor_only, f"known only to the redaction classifier: {redactor_only[:12]}"
