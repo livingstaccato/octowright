@@ -10,6 +10,8 @@ import os
 import re
 from typing import Any
 
+from octowright.macros.privacy import is_credential_key
+
 SEMANTIC_LOCATOR_KEYS = (
     "role",
     "role_name",
@@ -101,10 +103,13 @@ CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression", "verify_js", "grabbed_p
 #: matching on the name is what lets ``{{order_id}}`` keep working in a URL
 #: (the common parameterized-navigation pattern) while ``{{password}}`` does
 #: not.
-_CREDENTIAL_ARG_RE = re.compile(
-    r"(?:^|_)(?:password|passwd|secret|token|otp|api_key|apikey|credential|auth)(?:$|_)",
-    re.IGNORECASE,
-)
+#: Delegated to the shared vocabulary rather than owned here. This regex used
+#: to be a third, independently-maintained credential list, and it had drifted:
+#: it knew ``otp`` (which neither redactor did) while missing ``passphrase``,
+#: ``pw``, ``pwd``, ``authorization``, ``access_key`` and ``private_key`` -- so
+#: ``{{passphrase}}`` could expand into a URL while ``{{password}}`` was
+#: refused. The sink guard acts on the CREDENTIAL tier only, which is what
+#: keeps identity args working in a parameterized URL.
 
 _CREDENTIAL_SINKS_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled", "allow"})
 
@@ -122,7 +127,7 @@ def credential_sinks_blocked() -> bool:
 
 
 def is_credential_arg(name: str) -> bool:
-    return bool(_CREDENTIAL_ARG_RE.search(name))
+    return is_credential_key(name)
 
 
 def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = False) -> Any:

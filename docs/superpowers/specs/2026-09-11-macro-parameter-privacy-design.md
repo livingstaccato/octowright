@@ -116,10 +116,10 @@ A secret an author puts under `display` is never classified.
 ```python
 @dataclass(frozen=True)
 class ResolvedPrivacy:
-    verdicts: Mapping[str, bool]       # resolved, per arg name at this level
-    scrub_values: tuple[str, ...]      # values that cleared the shape guard
-    sink_blocked: frozenset[str]       # names the sink guard refuses
-    capture_blocked: bool              # a CREDENTIAL-tier value is present
+    verdicts: Mapping[str, bool]  # resolved, per arg name at this level
+    scrub_values: tuple[str, ...]  # values that cleared the shape guard
+    sink_blocked: frozenset[str]  # names the sink guard refuses
+    capture_blocked: bool  # a CREDENTIAL-tier value is present
     marker: str
     warnings: tuple[str, ...]
 
