@@ -12,6 +12,27 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Fixed
+- **Every macro run wrapped the session recorder again, and nothing unwrapped
+  it** (#234). An N-step `macro_run_sequence` left N nested `SensitiveRecorder`
+  wrappers on a long-lived session, each re-scrubbing every write, so recording
+  cost grew with the number of runs. The scrub set is now a
+  `SessionPrivacyLedger` owned by the session: exactly one wrapper reads it, a
+  repeat install appends to it instead of wrapping again, and a value appended
+  later is scrubbed from the very next write. It is deliberately never
+  uninstalled -- recorder rows are driven by page events that outlive the run,
+  so restoring at the run boundary would reopen cleartext for a credential
+  that keeps rendering in the next step. The wrapper is also installed when a
+  run classifies nothing yet, so a later append reaches a ledger something
+  reads.
+- **A credential passed only to a nested `macro_call` was never collected**
+  (#235). Collection ran once, over the outer macro's arguments. A nested call's
+  own arguments are now classified where it executes, at every depth, and join
+  both the session ledger and the run's own set, so the recording, the failure
+  payload and the classified-screenshot refusal all see them. Latent in the
+  measured corpus -- every nested credential there was fed by an identically
+  named outer argument -- but live the moment a macro passes a literal.
+
 ## [0.23.0] - 2026-09-12
 
 ### Added
