@@ -1,0 +1,18 @@
+[
+  {
+    "title": "A window-title tag no longer fights the page for its title",
+    "body": "The init script that appends a browser's label to its window title patched Document.prototype.title's setter and observed the <head> subtree its own write mutates. Against a page that re-asserts its own title -- a bot-challenge page showing status, say -- the two ping-ponged without bound: measured at roughly 1GB/s, reaching 20GB in 140 seconds, which OOM-killed every sibling browser in the pool and then the daemon's own sessions. Raw Playwright on the same page with no init scripts stayed flat at 0.54GB, so the page was never the cause. The page is now handed back its OWN value on read while the real <title> node keeps the tag, so a page comparing document.title against what it last set finds them equal and reverts nothing. The tag stays visible everywhere it is meant to be -- window chrome, tab, browser_list, page outlines -- and invisible only to the page's own scripts, the one reader it must not provoke."
+  },
+  {
+    "title": "A credential passed to a macro no longer reaches the failure payload",
+    "body": "A macro argument named like a credential (password, secret, token, api_key, auth and their variants) is now classified at run time, and its value is scrubbed out of every diagnostic surface a failure returns before that payload leaves the process: the diagnostic bundle, the healing suggestion, the failed-request tail, the executed-action descriptors, and the recorder, which writes to disk. Scrubbing covers raw, JSON-escaped and repeatedly URL-encoded spellings of the value, so a credential laundered through an encoding is caught too."
+  },
+  {
+    "title": "Screenshots taken under a classified macro argument are refused, not scrubbed",
+    "body": "A screenshot of a page a credential was typed into is a durable copy of that credential, and no text scrub can reach it. So the generic capture path is refused outright while classified arguments are in play: a composition root must install both an explicit authority flag and a handler that knows what evidence is safe to keep. The generic diagnostic producer is skipped for the same reason -- it persists raw HTML and a raw screenshot -- and the payload says so rather than silently omitting it."
+  },
+  {
+    "title": "Per-directory agent guides instead of one file to read in full",
+    "body": "AGENTS.md had grown to the point where an agent reading it paid for the whole repo's conventions to learn about one directory. The directory-specific material now lives in AGENTS.md files next to the code it describes (browser_pool, cli, macros, session, tests), and the two reference tables that were never directory-scoped -- every OCTOWRIGHT_* environment variable, and the telemetry spans and metrics -- moved into docs/env-vars.md and docs/telemetry.md."
+  }
+]
