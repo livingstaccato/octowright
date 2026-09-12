@@ -14,48 +14,107 @@ from itertools import pairwise
 from typing import Any
 from urllib.parse import quote, quote_plus
 
-ARG_PRIVACY_CLASSIFIER_VERSION = 2
+ARG_PRIVACY_CLASSIFIER_VERSION = 3
 REDACTED = "<redacted>"
 
-SENSITIVE_KEY_TOKENS = frozenset(
+# Three classifiers decided sensitivity independently -- this one,
+# ``artifacts.redaction.is_sensitive_key`` and
+# ``macros.substitution.is_credential_arg`` -- and disagreed on 1173 of 1916
+# sampled names. The disagreements were holes, not opinions: ``private_key``,
+# ``cookie`` and ``set_cookie`` reached args_used and generated exports in
+# cleartext because only the redaction classifier knew them, ``otp`` was known
+# only to the sink guard, and plural forms bypassed all three.
+#
+# The vocabulary below is the UNION of what all three matched at 0.23.0, frozen
+# in tests/fixtures/privacy_classifier_baseline.json and enforced by
+# tests/test_macro_privacy_vocabulary.py. Narrowing any entry re-opens a hole.
+#
+# Match mode is per token because the classifiers did not agree on that either:
+# redaction matched by substring (so ``secret`` caught ``supersecretkey``) while
+# this one matched by token. Substring is used only where the token is long and
+# unambiguous; ``user`` must stay token-matched because ``browser`` contains it,
+# and ``auth`` because ``author`` and ``authority`` do.
+CREDENTIAL_SUBSTRING_TOKENS = frozenset(
     {
+        "access_key",
+        "api_key",
         "apikey",
-        "auth",
-        "authentication",
         "authorization",
-        "bearer",
-        "contact",
         "credential",
-        "email",
         "passphrase",
         "passwd",
         "password",
-        "peer",
-        "phone",
-        "pwd",
-        "pw",
+        "private_key",
         "secret",
-        "session",
-        "subject",
         "token",
-        "user",
-        "username",
     }
 )
+CREDENTIAL_TOKEN_TOKENS = frozenset({"auth", "authentication", "bearer", "cookie", "cookies", "otp", "pw", "pwd"})
+IDENTITY_TOKEN_TOKENS = frozenset({"email", "phone", "username"})
+CONTEXTUAL_TOKEN_TOKENS = frozenset({"contact", "peer", "session", "subject", "user"})
+
+SUBSTRING_TOKENS = CREDENTIAL_SUBSTRING_TOKENS
+TOKEN_TOKENS = CREDENTIAL_TOKEN_TOKENS | IDENTITY_TOKEN_TOKENS | CONTEXTUAL_TOKEN_TOKENS
+#: Retained as the flat union so existing importers (notably the generated-script
+#: template) keep resolving; the match mode lives in the two sets above.
+SENSITIVE_KEY_TOKENS = SUBSTRING_TOKENS | TOKEN_TOKENS
 SENSITIVE_KEY_PAIRS = frozenset({("api", "key"), ("access", "key")})
+
+_CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+_NON_ALNUM = re.compile(r"[^A-Za-z0-9]+")
+#: Below this length a trailing ``s`` is far more likely to be part of the word
+#: than a plural marker, and the vocabulary's own short tokens (``pw``, ``pwd``)
+#: must never be rewritten.
+DEPLURALIZE_MIN_LENGTH = 5
 
 
 def key_tokens(key: object) -> tuple[str, ...]:
-    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
-    return tuple(part for part in re.split(r"[^A-Za-z0-9]+", text.lower()) if part)
+    text = _CAMEL_BOUNDARY.sub(r"\1_\2", str(key))
+    return tuple(part for part in _NON_ALNUM.split(text.lower()) if part)
+
+
+def _normalized_key(key: object) -> str:
+    return "_".join(key_tokens(key))
+
+
+def _depluralized(token: str) -> str:
+    if len(token) >= DEPLURALIZE_MIN_LENGTH and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
+def _token_candidates(tokens: tuple[str, ...]) -> set[str]:
+    """Both spellings, never a replacement.
+
+    Depluralizing destructively would mangle tokens that merely end in ``s``
+    without being plural -- ``access``, ``address``, ``pass``, ``process`` --
+    and for ``access`` that would break the ``access``/``key`` pair outright.
+    """
+    return set(tokens) | {_depluralized(token) for token in tokens}
+
+
+def _matches(key: object, substrings: frozenset[str], whole_tokens: frozenset[str]) -> bool:
+    normalized = _normalized_key(key)
+    if any(token in normalized for token in substrings):
+        return True
+    tokens = key_tokens(key)
+    if _token_candidates(tokens) & whole_tokens:
+        return True
+    return bool(set(pairwise(tokens)).intersection(SENSITIVE_KEY_PAIRS))
+
+
+def is_credential_key(key: object) -> bool:
+    """The tier that gates the credential sink guard, not merely redaction.
+
+    Identity is deliberately excluded: ``{{order_id}}`` and an email in a URL are
+    the ordinary parameterized-navigation case, while a password there is
+    exfiltration.
+    """
+    return _matches(key, CREDENTIAL_SUBSTRING_TOKENS, CREDENTIAL_TOKEN_TOKENS)
 
 
 def is_sensitive_arg_key(key: object) -> bool:
-    tokens = key_tokens(key)
-    return bool(
-        any(token in SENSITIVE_KEY_TOKENS for token in tokens)
-        or set(pairwise(tokens)).intersection(SENSITIVE_KEY_PAIRS)
-    )
+    return _matches(key, SUBSTRING_TOKENS, TOKEN_TOKENS)
 
 
 _MAX_ENCODING_DEPTH = 3
