@@ -130,8 +130,8 @@ This package is a `uv` workspace member of the octowright repo, but it lives in 
 
 ```bash
 uv sync --active --all-groups                      # or: --group terminal
-uv run --active --no-sync mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
-uv run --active --no-sync pytest packages/octowright-terminal/tests -v --no-cov
+uv run --no-sync mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
+uv run --no-sync pytest packages/octowright-terminal/tests -v --no-cov
 ```
 
 `make test-terminal` from the repo root runs `ci/run_terminal_plugin_tests.sh` — the same availability guard CI uses, then that suite, then the tool-surface check — rather than the bare pytest line, for the reason below.
