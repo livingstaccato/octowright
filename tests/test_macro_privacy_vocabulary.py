@@ -14,7 +14,8 @@ caught them, ``otp`` was known only to the sink guard, and plural forms bypassed
 all three.
 
 The invariant is measured, not asserted. ``tests/fixtures/privacy_classifier_baseline.json``
-freezes what every classifier decided at 0.23.0; no name sensitive to *any* of
+freezes what every classifier decided at c58a1461, the commit before they were
+unified; no name sensitive to *any* of
 them may become insensitive to the unified one.
 """
 
@@ -50,7 +51,7 @@ def baseline() -> dict[str, Any]:
     return json.loads(_BASELINE_PATH.read_text(encoding="utf-8"))
 
 
-def test_no_name_sensitive_at_0_23_0_becomes_insensitive(baseline: dict[str, Any]) -> None:
+def test_no_name_sensitive_before_the_union_becomes_insensitive(baseline: dict[str, Any]) -> None:
     """The union invariant. Unifying vocabularies must never narrow one."""
     lost = [name for name, _flags in baseline["sensitive_to_any"] if not is_sensitive_arg_key(name)]
 

@@ -1,5 +1,5 @@
 {
- "_comment": "Frozen classifier behaviour as of the version below, measured not asserted. sensitive_to_any holds [name, matched_by] pairs (a list, not an object, so no credential-shaped word is ever a JSON key): p=macros.privacy.is_sensitive_arg_key, r=artifacts.redaction.is_sensitive_key, s=macros.substitution.is_credential_arg. The union invariant: no name here may become insensitive to the unified classifier. insensitive lists names that must NOT become sensitive (over-tightening guard). Regenerate only with a recorded reason.",
+ "_comment": "Frozen classifier behaviour as of the commit below -- the last one before the three classifiers were unified, measured not asserted. sensitive_to_any holds [name, matched_by] pairs (a list, not an object, so no credential-shaped word is ever a JSON key): p=macros.privacy.is_sensitive_arg_key, r=artifacts.redaction.is_sensitive_key, s=macros.substitution.is_credential_arg. The union invariant: no name here may become insensitive to the unified classifier. insensitive lists names that must NOT become sensitive (over-tightening guard). Regenerate only with a recorded reason.",
  "insensitive": [
   "author",
   "authority",
@@ -20,7 +20,7 @@
   "url",
   "value"
  ],
- "measured_at_version": "0.23.0",
+ "measured_at_commit": "c58a1461",
  "sensitive_to_any": [
   [
    "access_key",
