@@ -80,6 +80,19 @@ def test_sink_guard_covers_the_whole_credential_tier(key: str) -> None:
     assert is_credential_arg(key) is True
 
 
+#: 0.22.1's export template matched ``pwd`` by substring, so a fused parameter
+#: name like ``oldpwd`` was redacted there. Token matching would silently stop
+#: redacting it on regeneration. No dictionary word contains ``pwd``, so the
+#: substring match costs no false positives.
+FUSED_PWD = ("oldpwd", "newpwd", "userpwd", "adminpwd", "dbpwd")
+
+
+@pytest.mark.parametrize("key", FUSED_PWD)
+def test_fused_pwd_names_are_credentials(key: str) -> None:
+    assert is_sensitive_arg_key(key)
+    assert is_credential_arg(key)
+
+
 def test_depluralization_does_not_break_the_access_key_pair() -> None:
     """`access` ends in `s` without being plural; a naive strip destroys the pair."""
     assert is_sensitive_arg_key("access_key") is True

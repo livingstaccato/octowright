@@ -292,7 +292,7 @@ async def test_exported_classified_macro_refuses_raw_screenshot(
 
 
 def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary() -> None:
-    assert ARG_PRIVACY_CLASSIFIER_VERSION == 3
+    assert ARG_PRIVACY_CLASSIFIER_VERSION == 4
     for key in (*SOCIAL_ARGS, "auth", "credential", "api_key", "apikey", "access_key", "passphrase"):
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")
