@@ -235,7 +235,7 @@ section in the getting-started guide for worked examples.
 3. If the same client handle still fails, run the fresh-client smoke proof:
 
    ```bash
-   uv run --active python scripts/bridge_reconnect_smoke.py
+   uv run python scripts/bridge_reconnect_smoke.py
    ```
 
    If this succeeds, the daemon and a new MCP client are healthy; the remaining

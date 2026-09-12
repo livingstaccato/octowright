@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from itertools import pairwise
 from typing import Any
 from urllib.parse import quote, quote_plus
@@ -180,6 +180,34 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
         frontier = {encoded for item in frontier for encoded in (quote(item, safe=""), quote_plus(item, safe=""))}
         variants.update(frontier)
     return tuple(sorted((item for item in variants if item), key=len, reverse=True))
+
+
+def sensitive_value_variants(values: Iterable[str]) -> tuple[str, ...]:
+    """Every spelling the given classified values can take in a rendered page.
+
+    The public, multi-value form of `_serialized_variants`. A caller redacting a
+    live DOM before a screenshot has to remove every encoding of every classified
+    value and then assert nothing remains, which needs one flat set rather than a
+    tuple per value.
+
+    Ordered longest first, like `sensitive_arg_values` and `_serialized_variants`.
+    That ordering is load-bearing for a replacing caller, not cosmetic: when one
+    variant is a substring of another -- which percent-encoding routinely produces,
+    since `quote` leaves short values unchanged -- replacing the shorter one first
+    consumes the characters the longer match needed and leaves the rest of the
+    longer spelling on the page.
+
+    Non-string entries are skipped rather than raising: the values reach this from
+    macro arguments, where a null field is ordinary, and `_serialized_variants`
+    raises TypeError on one. An empty string needs no guard here -- that function
+    already returns no variants for it, and an empty variant would match at every
+    position.
+    """
+    variants: set[str] = set()
+    for value in values:
+        if isinstance(value, str):
+            variants.update(_serialized_variants(value))
+    return tuple(sorted(variants, key=len, reverse=True))
 
 
 # Below this length a value is short enough to occur inside unrelated words, so
