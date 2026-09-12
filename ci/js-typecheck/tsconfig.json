@@ -1,0 +1,32 @@
+{
+  "//": [
+    "Type-checks the init scripts injected into every page.",
+    "",
+    "These are plain .js and deliberately stay that way: they are read from the",
+    "wheel at runtime, templated, and injected as strings, so compiling them",
+    "would add a build artifact that can drift from its source for files that",
+    "run inside every page octowright drives. checkJs gets the type safety with",
+    "no build step and nothing new to ship.",
+    "",
+    "noEmit is not merely set, it is the whole contract: this config must never",
+    "produce output next to the sources it reads."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": [],
+    "moduleDetection": "force",
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": [
+    "injected-globals.d.ts",
+    "../../src/octowright/browser_pool/_assets/*.js"
+  ]
+}

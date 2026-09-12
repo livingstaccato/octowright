@@ -138,6 +138,12 @@ jobs:
         run: npm audit --audit-level=high
       - name: Typecheck
         run: npm run typecheck --workspace=packages/octowright-frontend
+      # Type-checks the init scripts injected into every page. They are plain
+      # .js (read from the wheel and injected as strings, so compiling them
+      # would add a build artifact that can drift), checked in place via
+      # checkJs -- see ci/js-typecheck/tsconfig.json.
+      - name: Typecheck injected browser assets
+        run: npm run typecheck:assets
       - name: Lint
         run: npm run lint --workspace=packages/octowright-frontend
       - name: Tests (vitest with coverage)
