@@ -1,4 +1,4 @@
-.PHONY: help install test test-terminal test-frontend lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
+.PHONY: help install test test-terminal test-frontend typecheck-assets lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -30,6 +30,12 @@ test-terminal: ## Run the octowright-terminal plugin suite (needs the `terminal`
 test-frontend: ## Run TypeScript frontend tests with coverage gating
 	cd packages/octowright-frontend && npm test
 
+typecheck-assets: ## Type-check the JS init scripts injected into every page
+	# Separate from `lint` for the same reason the frontend targets are: `lint`
+	# is Python-only and runs with no node and no npm install. Wired into CI in
+	# the frontend job, which already has both.
+	npm run typecheck:assets
+
 lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
 	uv run --active ruff check .
 	uv run --active ruff format --check .
@@ -46,6 +52,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run --active codespell --skip="mutants/*,./mutants/*,src/octowright/server/frontend/*,./src/octowright/server/frontend/*,packages/octowright-terminal/src/octowright_terminal/assets/*,./packages/octowright-terminal/src/octowright_terminal/assets/*"
 	uv run --active python scripts/check_spdx_headers.py
 	uv run --active python scripts/check_max_loc.py
+	uv run --active python scripts/check_js_typecheck_coverage.py
 	uv run --active python scripts/check_operation_gate_architecture.py
 	uv run --active python scripts/check_agent_docs_sync.py
 	uv run --active python scripts/check_telemetry_docs.py
