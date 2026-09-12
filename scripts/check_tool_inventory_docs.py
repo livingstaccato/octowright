@@ -77,9 +77,9 @@ _README_TOTAL_RE = re.compile(r"every core-install tool registers\.\s*\|\s*(?P<t
 # The same sentence is retyped per document ("... is 131 tools on a core install").
 _PROSE_TOTAL_RE = re.compile(r"(?P<total>\d+) tools on a core install")
 # History records the counts that were true when it was written; dragging those
-# forward would falsify the record, so the changelog and the plan archive are
-# scanned past rather than corrected.
-_HISTORY = ("CHANGELOG.md", "docs/superpowers/")
+# forward would falsify the record, so the changelog is scanned past rather than
+# corrected.
+_HISTORY = ("CHANGELOG.md",)
 # Directory names that never hold canonical documentation, matched as path
 # SEGMENTS at any depth rather than as prefixes. Prefix matching skipped
 # `CHANGELOG.md` at the root and then scanned the identical file one directory
