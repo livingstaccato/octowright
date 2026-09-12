@@ -108,7 +108,9 @@
     };
 
     const setModalMessage = (text, ok) => {
-        const msg = document.querySelector(`#${MODAL_ID} [data-role="message"]`);
+        const msg = /** @type {HTMLElement | null} */ (
+            document.querySelector(`#${MODAL_ID} [data-role="message"]`)
+        );
         if (!msg) return;
         msg.textContent = text;
         msg.style.color = ok ? "rgba(134, 239, 172, 0.95)" : "rgba(252, 165, 165, 0.95)";
@@ -137,7 +139,9 @@
                 setModalMessage(result.new_instance_id || "fluid", true);
             }
         } catch (err) {
-            setModalMessage(String((err && err.message) || err || "Viewport action failed."), false);
+            const detail =
+                err && typeof err === "object" && "message" in err ? String(err.message) : String(err ?? "");
+            setModalMessage(detail || "Viewport action failed.", false);
         }
     };
 
