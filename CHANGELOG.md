@@ -12,6 +12,51 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.23.1] - 2026-09-11
+
+### Fixed
+- **The macro credential sink guard missed five credential spellings.**
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` defaults to `block`, so an operator is
+  entitled to believe a credential-named argument cannot expand into a
+  navigation or code sink. For `passphrase`, `pw`, `pwd`, `authorization`,
+  `access_key` and `private_key` it silently could: the guard matched on its own
+  name table, in which `auth` required an underscore or end-of-string boundary
+  (so `authorization` missed) and only `api_key`/`apikey` were listed (so
+  `access_key` and `private_key` missed). `{{password}}` in a `url` was refused
+  while `{{passphrase}}` expanded. Measured against a corpus of 340 macros and
+  147 distinct placeholder names, no macro used any affected name, so this was a
+  latent hole rather than live exposure -- one corpus, on one machine.
+- **Three classifiers disagreed about what is sensitive.** `macros.privacy`,
+  `artifacts.redaction` and the sink guard each carried a private vocabulary,
+  disagreeing 1173 times across a 1916-name corpus. `private_key`, `cookie`,
+  `cookies` and `set_cookie` were caught by the redactor and missed by the macro
+  classifier; `otp` was known only to the sink guard; plural forms bypassed all
+  three. They now share one vocabulary -- the union of what all three matched at
+  0.23.0, with a match mode declared per token. `artifacts.redaction` is kept and
+  held to that union by test, because `lint_urls` imports from it.
+
+### Changed
+- **More argument names are refused in a macro sink than at 0.23.0.** Because
+  `substitution.is_credential_arg` now delegates to the shared classifier, the
+  guard refuses the names listed above, and their plurals, when a macro expands
+  them into a `url`, `expression`, `verify_js` or `grabbed_predicate_js`. A macro
+  that put `{{access_key}}` in a query string worked at 0.23.0 and raises at
+  0.23.1 with no config change on the operator's side. The opt-out is named in
+  the error text and exists for that legitimate case:
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+- **`ARG_PRIVACY_CLASSIFIER_VERSION` 2 -> 3.** The matcher baked into an exported
+  script is a copy, not a reference, so a script exported before this release
+  keeps classifying by the old table and will miss `private_key`, `cookie`,
+  `set_cookie`, `otp` and every plural the runtime now catches. **Regenerate
+  exported scripts.** There is no staleness detection for this today; it is
+  recorded as deferred work in the design spec.
+
+### Added
+- 21 tests for the shared vocabulary, plus a frozen baseline fixture asserting
+  that no name any 0.23.0 classifier considered sensitive became insensitive.
+- The macro parameter privacy design spec, at revision 3. Parts 0 and B
+  (threading and `parameter_specs`) are specified but not implemented.
+
 ## [0.23.0] - 2026-09-11
 
 ### Added
@@ -181,7 +226,7 @@ a section that is already tagged and on PyPI.
   which is exactly why nothing ever noticed. Verified across 2,134 launches.
 - AGENTS.md's two now-stale crash claims are corrected: the real
   `CrBrowserMain` report is no longer described as "still-unexplained" (it is
-  still unfixed, but the close-time behaviour is measured), and
+  still unfixed, but the close-time behavior is measured), and
   `OCTOWRIGHT_DISABLE_GPU`'s "not a confirmed fix" scope now says *why* it was
   never proven either way — until this reproduction there was no baseline to
   A/B the knob against, which is a different statement from "it was tried and
@@ -608,7 +653,7 @@ a section that is already tagged and on PyPI.
   `server/web.py`, whose SSRF DNS-pinning transport subclasses `AsyncHTTPTransport`
   over an `httpcore` connection pool and reads the private `_config`; `httpx2`/
   `httpcore2` expose all of it with identical shapes. The pin was verified
-  behaviourally rather than assumed from passing (mocked) tests: a hostname with no
+  behaviorally rather than assumed from passing (mocked) tests: a hostname with no
   public DNS reached the daemon through its pin, and the same request through a
   transport pinning a different name was refused. `httpx`/`httpcore` 1.x are no longer
   dependencies.
@@ -726,7 +771,7 @@ a section that is already tagged and on PyPI.
   for 12.6 hours against a broken WebKit, with `page.on("crash")` silent because a
   target that merely stops replying never crashes. This is ON by default, unlike this
   project's other quotas, because it trades an unbounded hang for a bounded one rather
-  than trading away a working behaviour. An unparsable or non-positive value falls back
+  than trading away a working behavior. An unparsable or non-positive value falls back
   to the default rather than to disabled: a typo must not silently reintroduce the hang.
   Measured consequence of the setup half: launch used to wedge inside
   `expose_binding`, several steps *before* the `page.goto` whose own 30s timeout would
@@ -1152,7 +1197,7 @@ a section that is already tagged and on PyPI.
   client respawning it can.
 - `GET /api/health` gains an optional `installed_version`, present **only** when
   the on-disk package differs from the running one — the "restart to pick this
-  up" signal the old behaviour was reaching for, now named honestly instead of
+  up" signal the old behavior was reaching for, now named honestly instead of
   impersonating the running version. The ordinary response shape is unchanged.
 
 ## [0.16.1] - 2026-08-20
@@ -1235,7 +1280,7 @@ Every one was reproduced against running code before it was fixed.
   Enforcement additionally requires a credential to pair against: an inline
   (`--no-singleton`) leader has no lockfile and therefore no capability token, so
   under the default the gate degrades to unenforced there rather than shipping a
-  dashboard nobody can open; an explicit opt-in keeps fail-closed behaviour.
+  dashboard nobody can open; an explicit opt-in keeps fail-closed behavior.
   This does **not** defend against a same-user process, which can read the
   lockfile and mint its own code; it closes the different-user and
   sandboxed-process cases.
@@ -1821,10 +1866,10 @@ Every one was reproduced against running code before it was fixed.
 
 ### Added
 - **A persona's `default_url` is the browser context's `base_url`.** A macro is
-  the behaviour; the persona is the *where* — but browser contexts were the one
+  the behavior; the persona is the *where* — but browser contexts were the one
   place that did not honour that split, so a macro had to bake an origin into
   every navigate, and proving the same flow against a second deployment meant a
-  second copy of the same behaviour that then drifted from the first.
+  second copy of the same behavior that then drifted from the first.
   `default_url` now becomes Playwright's `base_url`, so
   `browser_navigate("/orders")` resolves per persona and the same macro replays
   against a local stack, a staging tier or production by launching it as a
@@ -2823,6 +2868,7 @@ history that led to the first published release.
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
 [Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.22.0...HEAD
+[0.23.1]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.23.1
 [0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/livingstaccato/octowright/compare/v0.20.0...v0.21.0
