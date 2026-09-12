@@ -40,6 +40,7 @@ _MD5 = "d41d8cd98f00b204e9800998ecf8427e"  # pragma: allowlist secret -- md5 of 
         (f"https://api.example.com/data?key={_MD5}", "hex API key under a secret-ish name"),
         ("https://h/x?accessToken=abc", "camelCase name that the old regex missed"),
         ("https://h/x?passphrase=abc", "spelling the old regex missed"),
+        ("https://h/x?otp=482913", "a one-time code: short, all digits, so only the NAME can flag it"),
         ("https://h/x?private_key=abc", "spelling the old regex missed"),
         ("https://admin:hunter2@host/x", "userinfo is a credential by construction"),
     ],

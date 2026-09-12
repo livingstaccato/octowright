@@ -14,7 +14,7 @@ from itertools import pairwise
 from typing import Any
 from urllib.parse import quote, quote_plus
 
-ARG_PRIVACY_CLASSIFIER_VERSION = 3
+ARG_PRIVACY_CLASSIFIER_VERSION = 4
 REDACTED = "<redacted>"
 
 # Three classifiers decided sensitivity independently -- this one,
@@ -25,7 +25,7 @@ REDACTED = "<redacted>"
 # cleartext because only the redaction classifier knew them, ``otp`` was known
 # only to the sink guard, and plural forms bypassed all three.
 #
-# The vocabulary below is the UNION of what all three matched at 0.23.0, frozen
+# The vocabulary below is the UNION of what all three matched before it (at c58a1461), frozen
 # in tests/fixtures/privacy_classifier_baseline.json and enforced by
 # tests/test_macro_privacy_vocabulary.py. Narrowing any entry re-opens a hole.
 #
@@ -34,6 +34,15 @@ REDACTED = "<redacted>"
 # this one matched by token. Substring is used only where the token is long and
 # unambiguous; ``user`` must stay token-matched because ``browser`` contains it,
 # and ``auth`` because ``author`` and ``authority`` do.
+# ``pwd`` is substring-matched
+# despite being short: 0.22.1's export template matched it that way, so token
+# matching would stop redacting a fused name like ``dbpwd`` on regeneration,
+# and no dictionary word contains it. ``pw`` stays token-matched -- it is inside
+# far too many words. Accepted false positive: the shell's ``PWD`` and
+# ``OLDPWD`` name a directory, not a password, and dictionary evidence cannot
+# see shell vocabulary. Bare ``pwd`` was already credential-tier, so a
+# parameter named ``oldpwd`` holding a path is refused in a sink by the same
+# choice; OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow is the opt-out.
 CREDENTIAL_SUBSTRING_TOKENS = frozenset(
     {
         "access_key",
@@ -44,12 +53,13 @@ CREDENTIAL_SUBSTRING_TOKENS = frozenset(
         "passphrase",
         "passwd",
         "password",
+        "pwd",
         "private_key",
         "secret",
         "token",
     }
 )
-CREDENTIAL_TOKEN_TOKENS = frozenset({"auth", "authentication", "bearer", "cookie", "cookies", "otp", "pw", "pwd"})
+CREDENTIAL_TOKEN_TOKENS = frozenset({"auth", "authentication", "bearer", "cookie", "cookies", "otp", "pw"})
 IDENTITY_TOKEN_TOKENS = frozenset({"email", "phone", "username"})
 CONTEXTUAL_TOKEN_TOKENS = frozenset({"contact", "peer", "session", "subject", "user"})
 

@@ -292,7 +292,7 @@ async def test_exported_classified_macro_refuses_raw_screenshot(
 
 
 def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary() -> None:
-    assert ARG_PRIVACY_CLASSIFIER_VERSION == 3
+    assert ARG_PRIVACY_CLASSIFIER_VERSION == 4
     for key in (*SOCIAL_ARGS, "auth", "credential", "api_key", "apikey", "access_key", "passphrase"):
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")
@@ -503,14 +503,20 @@ def test_exported_classifier_matches_nested_and_encoded_runtime_behavior(
     module: dict[str, Any] = {"__name__": "privacy_parity"}
     exec(compile(source, "<privacy-parity>", "exec"), module)
     raw = "xÿ/y"
-    args = {"payload": {"profile": {"password": raw}, "display": "public"}}
+    # A distinct value under a fused short token: ``pwd`` is the one short token
+    # matched by substring, and a shared value would be deduplicated into the
+    # ``password`` hit, so the template could skip this path and still agree.
+    fused = "q/ÿz"
+    args = {"payload": {"profile": {"password": raw}, "display": "public"}, "dbpwd": fused}
     mixed = urllib.parse.quote(raw, safe="").replace("%C3", "%c3", 1)
     repeated = urllib.parse.quote(mixed, safe="")
 
     assert module["_ARG_PRIVACY_CLASSIFIER_VERSION"] == ARG_PRIVACY_CLASSIFIER_VERSION
     assert module["_redact_args"](args) == redact_args(args)
+    assert module["_redact_args"](args)["dbpwd"] != fused
     exported_values = tuple(module["_sensitive_arg_values"](args))
     assert exported_values == sensitive_arg_values(args)
+    assert fused in exported_values
     assert module["_redact_value"](repeated, list(exported_values)) == scrub_sensitive_values(repeated, exported_values)
 
 
