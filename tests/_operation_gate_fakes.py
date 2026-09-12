@@ -13,9 +13,8 @@ should inherit from ``OperationAwareFake`` rather than hand-rolling its own
 stub. The gate here is real (not mocked) so admission/FIFO/close behavior in
 tests reflects the actual state machine, not a guess at its shape.
 
-This shape is locked by the design plan (Task 4) and referenced verbatim by
-later tasks' test code (e.g. Task 9 reaches ``session._test_operation_gate``
-directly) -- do not rename ``_test_operation_gate`` or drop the overridable
+Other test modules rely on this shape verbatim (several reach
+``session._test_operation_gate`` directly) -- do not rename ``_test_operation_gate`` or drop the overridable
 ``instance_id``/``kind`` class attributes without updating every consumer.
 """
 

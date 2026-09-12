@@ -104,10 +104,9 @@ async def test_external_close_identity_check_ignores_keep_id_replacement(
     """A late external-close signal captured against the OLD session object
     must not touch the registry once a keep-id rekey has moved that id to a
     NEW session -- ``expected_session`` identity is checked synchronously,
-    with no scheduling gap for a rekey to land in (Task 7 removed the
-    deferred-task shape this used to race: ``_accept_external_close_nowait``
-    is called directly from the sync Playwright callback, no ``create_task``
-    in between)."""
+    with no scheduling gap for a rekey to land in. There is no deferred task
+    left to race: ``_accept_external_close_nowait`` is called directly from
+    the sync Playwright callback, with no ``create_task`` in between."""
     from octowright.browser_pool import close_helpers
 
     pool = BrowserPool()

@@ -5,7 +5,7 @@
 
 """Idempotency wait window vs. the heartbeat ceiling, and abandoned-entry reclaim.
 
-Two review findings against the batch-B idempotency rework:
+Two defects in the idempotency wait logic:
 
 1. The in-progress wait window (95s) was far SHORTER than the longest call the
    progress heartbeat is designed to keep alive (``HEARTBEAT_MAX_SECONDS``,

@@ -222,7 +222,7 @@ async def test_release_drops_manager_when_final_stop_fails():
     await sc.release_viewer(new_manager, new_viewer)
 
 
-# ─── operation-gate serialization (Task 6) ──────────────────────────────────
+# ─── operation-gate serialization ───────────────────────────────────────────
 
 
 async def wait_for_queue_depth(sess, depth):

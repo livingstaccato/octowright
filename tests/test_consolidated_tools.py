@@ -37,7 +37,7 @@ def _patch_state(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
 
 def _gated_session(*, instance_id: str = "inst-1", kind: str = "chromium") -> MagicMock:
     """Session double carrying a REAL ``SessionOperationGate``: capture-and-
-    close/handoff/relaunch (Task 8) drive ``_operation_gate`` and
+    close/handoff/relaunch drive ``_operation_gate`` and
     ``session.operation(...)`` directly from inside the pool's close
     coordinator, so a bare unspecced MagicMock (auto-mocked, non-awaitable
     methods) cannot stand in for the session anymore."""
@@ -205,7 +205,7 @@ async def test_browser_launch_forwards_channel_executable_path_launch_args(
 @pytest.mark.anyio
 async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """browser_capture_and_close now routes through the REAL close
-    coordinator (Task 8: capture runs as a preparation callback inside the
+    coordinator (capture runs as a preparation callback inside the
     close ticket), so this needs a real BrowserPool + a session double with
     a real gate rather than a fully-mocked pool/session pair."""
     from octowright.browser_pool import close_helpers as _close_helpers

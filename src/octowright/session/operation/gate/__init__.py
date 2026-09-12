@@ -10,7 +10,7 @@ Split into a package (``core.py`` the gate class + queue-admission resolver
 error/state primitives, ``close.py`` the close-reservation mixin,
 ``ceiling.py`` the active-duration-ceiling mixin + its resolver) purely to
 keep each module under the repository's LOC ceiling -- ``operation_gate.py``
-alone would not fit Task 3's active-duration ceiling plus its hang-resilience
+alone would not fit the active-duration ceiling plus its cancellation-safety
 fix. This file holds ONLY re-exports and ``__all__``, never logic, so
 existing imports (``from octowright.session.operation.gate import
 SessionOperationGate``) keep working regardless of which submodule actually

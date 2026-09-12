@@ -342,7 +342,7 @@ def test_schedule_recovery_eligible_creates_tracked_task(monkeypatch: pytest.Mon
 
 
 # ---------------------------------------------------------------------------
-# operation-gate serialization (Task 6): crash_recovery as a durable system
+# operation-gate serialization: crash_recovery as a durable system
 # operation with no ordinary queue timeout, invalidated by external close.
 # ---------------------------------------------------------------------------
 

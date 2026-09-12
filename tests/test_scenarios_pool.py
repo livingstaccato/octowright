@@ -506,7 +506,7 @@ async def test_wait_for_sync_reports_terminal_as_unsupported() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task 10: the url= branch of wait_for_sync gates per-session, not scenario-wide
+# The url= branch of wait_for_sync gates per-session, not scenario-wide
 # ---------------------------------------------------------------------------
 
 

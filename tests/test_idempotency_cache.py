@@ -561,7 +561,7 @@ async def test_blocking_sync_tool_does_not_stall_event_loop() -> None:
     assert await call == "done"
 
 
-# ─── operation-gate integration (Task 13) ─────────────────────────────────
+# ─── operation-gate integration ───────────────────────────────────────────
 #
 # The follower bridge re-sends the SAME idempotency key after a cancelled/
 # reconnected request. If the first attempt's detached producer is still

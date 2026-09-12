@@ -11,7 +11,7 @@ around a whole MCP-tool call — a composite like ``browser_click(...,
 response_mode="outline")`` dispatches a click AND builds an outline
 response, and both must stay under ONE observable root operation instead of
 two separate gate acquisitions with a window between them where a
-concurrent caller could interleave. Reentrancy (same-task, Task 2) is what
+concurrent caller could interleave. Same-task reentrancy is what
 makes this safe: the composite's own nested ``session.click(...)`` /
 ``browser_page_outline(...)`` calls re-enter the SAME lease this context
 manager already holds rather than queueing behind it.

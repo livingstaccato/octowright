@@ -23,7 +23,7 @@ class _FakeSession(OperationAwareFake):
 def _patch_pool_lifecycle(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake_pool = MagicMock()
     monkeypatch.setattr(_lifecycle, "pool", fake_pool)
-    # browser_navigate/etc. live in lifecycle_navigate (Task 10 split, keeps
+    # browser_navigate/etc. live in lifecycle_navigate (split out to keep
     # lifecycle.py under the LOC ceiling) with their own `pool` reference.
     monkeypatch.setattr(_nav, "pool", fake_pool)
     return fake_pool
