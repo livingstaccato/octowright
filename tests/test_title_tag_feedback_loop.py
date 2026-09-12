@@ -84,3 +84,54 @@ async def test_title_tag_does_not_wedge_a_page_that_reasserts_its_title() -> Non
         assert "titleloop" in rendered, f"window title lost its tag on a contested page: {rendered!r}"
     finally:
         await pool.close_all()
+
+
+@pytest.mark.live_browser
+@pytest.mark.asyncio
+async def test_the_page_is_handed_back_its_own_title_while_the_node_keeps_the_tag() -> None:
+    """The masking IS the fix, so it is asserted directly rather than inferred.
+
+    The test above asserts the two outcomes -- renderer responsive, tag present
+    -- which a future implementation could satisfy by some other means while
+    silently dropping the mechanism that makes them hold. The page must read
+    back exactly what it last wrote: that equality is what stops it reverting
+    anything, and it is invisible in an outcome assertion.
+
+    ``page.title()`` is asserted alongside it because it must NOT be masked.
+    Playwright evaluates in an isolated world with its own ``Document``
+    prototype, so the main-world patch is not installed there and octowright's
+    own tooling still reads the real tagged value. That is a property of
+    Playwright rather than of this repo, so nothing else here would notice it
+    changing -- and if it ever did, every title octowright reports would
+    silently lose its tag.
+    """
+    pytest.importorskip("playwright")
+    from octowright.browser_pool import BrowserPool
+
+    pool = BrowserPool()
+    try:
+        result = await pool.launch(
+            kind="chromium",
+            url="data:text/html,<html><head><title>Origin</title></head><body></body></html>",
+            headed=False,
+            ephemeral=True,
+            label="titlemask",
+            badge=False,
+        )
+        page = pool.get(result["instance_id"]).page
+
+        # A page-side write, read back page-side: the page must see its own
+        # value, with no suffix appended.
+        page_visible = await page.evaluate("() => { document.title = 'PageChosen'; return document.title; }")
+        assert page_visible == "PageChosen", f"the page can see the tag, so it will fight it: {page_visible!r}"
+
+        # The same moment, the rendered node -- what the window and tab show --
+        # carries the tag.
+        rendered = await page.evaluate("() => document.querySelector('title').textContent")
+        assert rendered.startswith("PageChosen"), rendered
+        assert "titlemask" in rendered, f"window title lost its tag: {rendered!r}"
+
+        # And octowright's own reader is unaffected by the masking.
+        assert "titlemask" in await page.title()
+    finally:
+        await pool.close_all()
