@@ -81,10 +81,13 @@ def test_sink_guard_covers_the_whole_credential_tier(key: str) -> None:
 
 
 #: 0.22.1's export template matched ``pwd`` by substring, so a fused parameter
-#: name like ``oldpwd`` was redacted there. Token matching would silently stop
+#: name like ``dbpwd`` was redacted there. Token matching would silently stop
 #: redacting it on regeneration. No dictionary word contains ``pwd``, so the
 #: substring match costs no false positives.
-FUSED_PWD = ("oldpwd", "newpwd", "userpwd", "adminpwd", "dbpwd")
+#: ``oldpwd`` is deliberately absent: it is the shell's OLDPWD, a directory, and
+#: is classified anyway as an accepted false positive (see the vocabulary
+#: comment) -- pinning it here as a credential would read as intent.
+FUSED_PWD = ("rootpwd", "newpwd", "userpwd", "adminpwd", "dbpwd")
 
 
 @pytest.mark.parametrize("key", FUSED_PWD)

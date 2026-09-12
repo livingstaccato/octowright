@@ -36,9 +36,13 @@ REDACTED = "<redacted>"
 # and ``auth`` because ``author`` and ``authority`` do.
 # ``pwd`` is substring-matched
 # despite being short: 0.22.1's export template matched it that way, so token
-# matching would stop redacting a fused name like ``oldpwd`` on regeneration,
+# matching would stop redacting a fused name like ``dbpwd`` on regeneration,
 # and no dictionary word contains it. ``pw`` stays token-matched -- it is inside
-# far too many words.
+# far too many words. Accepted false positive: the shell's ``PWD`` and
+# ``OLDPWD`` name a directory, not a password, and dictionary evidence cannot
+# see shell vocabulary. Bare ``pwd`` was already credential-tier, so a
+# parameter named ``oldpwd`` holding a path is refused in a sink by the same
+# choice; OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow is the opt-out.
 CREDENTIAL_SUBSTRING_TOKENS = frozenset(
     {
         "access_key",

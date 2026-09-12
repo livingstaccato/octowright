@@ -123,11 +123,14 @@ a section that is already tagged and on PyPI.
 ### Changed
 - **More argument names are refused in a macro sink than in 0.22.1.** Because
   the guard now uses the shared vocabulary, it refuses the six names above, their
-  plurals, and any name containing `pwd` such as `oldpwd`, when a macro expands them into a `url`, `expression`,
+  plurals, and any name containing `pwd` such as `dbpwd`, when a macro expands them into a `url`, `expression`,
   `verify_js` or `grabbed_predicate_js`. A macro that put `{{access_key}}` in a
   query string worked in 0.22.1 and raises now, with no config change on the
   operator's side. The opt-out is named in the error text and exists for that
-  legitimate case: `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+  legitimate case: `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`. It also covers
+  the one known false positive: `pwd` matches the shell's `PWD`/`OLDPWD`
+  spelling, so a parameter named `oldpwd` that holds a directory path is
+  refused in a sink too. None appears in the measured corpus.
 - **Regenerate exported scripts, and know the one trade.** An exported script
   carries a copy of the argument matcher, not a reference. Scripts exported by
   0.22.1 use a narrow substring table -- `password`, `passwd`, `pwd`, `token`,
@@ -142,7 +145,7 @@ a section that is already tagged and on PyPI.
   parameters of a 340-macro corpus. Rename such parameters with a separator
   before regenerating. `pwd` is kept substring-matched precisely so the same
   trade does not apply to a credential: no dictionary word contains it, so
-  `oldpwd` stays caught. There is no staleness detection for exported scripts
+  `dbpwd` stays caught. There is no staleness detection for exported scripts
   today.
 - **`AGENTS.md` split into per-directory guides.** It had grown to the point
   where an agent reading it paid for the whole repo's conventions to learn
