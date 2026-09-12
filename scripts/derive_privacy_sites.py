@@ -24,7 +24,7 @@ Two rules matter more than the tables:
   and flushes per action through a raw file handle -- is exactly the sink that
   rule cannot see.
 
-Run: ``uv run --active python scripts/derive_privacy_sites.py``
+Run: ``uv run python scripts/derive_privacy_sites.py``
 """
 
 from __future__ import annotations

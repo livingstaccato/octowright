@@ -68,7 +68,7 @@ accordingly.
 `scripts/derive_privacy_sites.py`. One command reproduces every table below:
 
 ```bash
-uv run --active python scripts/derive_privacy_sites.py
+uv run python scripts/derive_privacy_sites.py
 ```
 
 r4 cited `scratchpad/derive_privacy_sites.py`, which was never in the
