@@ -205,6 +205,58 @@ Pass `write=true` to save the compiled JSON under the normal macro directory.
 The dashboard editor also edits the canonical JSON shape and shows branch
 summaries for conditionals.
 
+## Argument privacy
+
+A macro argument whose **name** reads like a credential is classified when the
+macro runs, and its value is kept out of everything a run writes or returns.
+Classification is by name, not by value. Credential names include `password`,
+`passwd`, `pwd`, `pw`, `passphrase`, `secret`, `token`, `api_key`, `access_key`,
+`private_key`, `authorization`, `auth`, `bearer`, `cookie`, `otp` and
+`credential`, including plural and camelCase spellings. Identity and contextual
+names such as `email`, `username`, `user`, `peer` and `session` are classified
+too. A value nested under a classified key inside an ordinary container
+(`{"profile": {"password": ...}}`) is classified as well.
+
+**Where a classified value is scrubbed.** When a run fails, its value is removed
+from the diagnostic payload before it leaves the process — the failure message,
+the healing suggestion, the failed-request tail and the executed-action
+descriptors — in its raw, JSON-escaped and repeatedly URL-encoded spellings.
+`args_used` in a run result shows the argument redacted. The session recording
+is scrubbed at write time, replacing each value with `<redacted>`.
+
+**What is refused rather than scrubbed.** A screenshot of a page a credential
+was typed into is a durable copy of it, which no text scrub can reach. While a
+run holds classified values, a `screenshot` action is refused unless the
+embedding application has installed both an explicit authority flag and a
+handler that decides what evidence is safe to keep. The generic diagnostic
+producer, which saves raw page HTML and a screenshot, is not called for such a
+run; the payload records `diagnostic_suppressed` instead.
+
+**Nested calls and later runs.** A `macro_call`'s own arguments are classified
+where the call executes, at every depth, so a credential passed only to a nested
+macro is covered like one passed to the outer run. Values collected on a
+session accumulate for that session's lifetime and are scrubbed from every
+later recording write, including in the next step of a `macro_run_sequence`,
+because a credential typed once can keep rendering in later page output.
+
+**Credential-named arguments in URLs and code.** A credential-named argument
+expanded into `url`, `expression`, `verify_js` or `grabbed_predicate_js` is
+refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+[env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
+
+**Exported scripts** carry their own copy of the classifier, stamped
+`ARG_PRIVACY_CLASSIFIER_VERSION = 4`. A script exported by an older
+octowright keeps the table it was generated with; regenerate it to pick up the
+current one.
+
+**Not covered.** These writers sit outside the recording and are not scrubbed:
+
+- the page HTML and screenshot the generic diagnostic producer saves when a run
+  with no classified values fails, which can still show a credential an earlier
+  run left on the page;
+- the websocket frame sidecar, which stores frame payloads as received;
+- a HAR file, when HAR recording is enabled at launch.
+
 ## Linting
 
 Before promoting a macro into shared workflows or CI, run:
