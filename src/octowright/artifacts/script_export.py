@@ -13,8 +13,15 @@ from typing import Any
 
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
-
-_SENSITIVE_DEFAULT_PARTS = ("password", "passwd", "pwd", "token", "secret", "email", "username")
+from octowright.macros.privacy import (
+    ARG_PRIVACY_CLASSIFIER_VERSION,
+    FIELD_NAME_PATTERN,
+    SENSITIVE_KEY_PAIRS,
+    SENSITIVE_KEY_TOKENS,
+    is_sensitive_arg_key,
+    scrub_sensitive_values,
+    sensitive_arg_values,
+)
 
 
 def render_macro_cli(
@@ -32,11 +39,11 @@ def render_macro_cli(
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
     placeholder_re = r"\{\{([^}]+)\}\}"
-    evidence_helpers, evidence_setup, evidence_close = _evidence_render_parts(include_evidence)
+    evidence_helpers, evidence_setup, _evidence_close = _evidence_render_parts(include_evidence)
     state_helpers = STATE_HELPERS
-    # 16 spaces: inside `for ... in enumerate(ACTIONS)` inside `try` inside
-    # `async with` inside the function body.
-    dispatch_chain = render_dispatch_chain(" " * 16)
+    # 20 spaces: inside `for ... in enumerate(ACTIONS)` inside the raw-action
+    # handler and cleanup `try`, then `async with`, then the function body.
+    dispatch_chain = render_dispatch_chain(" " * 20)
 
     return f"""\
 {doc!r}
@@ -52,45 +59,129 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, quote_plus
 
 from playwright.async_api import async_playwright
 
 ACTIONS_JSON = {action_json!r}
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
-_SENSITIVE_PARTS = {_SENSITIVE_DEFAULT_PARTS!r}
+_ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
+_SENSITIVE_KEY_TOKENS = {tuple(sorted(SENSITIVE_KEY_TOKENS))!r}
+_SENSITIVE_KEY_PAIRS = {tuple(sorted(SENSITIVE_KEY_PAIRS))!r}
+_MAX_ENCODING_DEPTH = 3
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {placeholder_re!r}
+_FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _key_tokens(key: object) -> tuple[str, ...]:
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(key))
+    return tuple(part for part in re.split(r"[^A-Za-z0-9]+", text.lower()) if part)
+
+
+def _is_sensitive_arg_key(key: object) -> bool:
+    tokens = _key_tokens(key)
+    adjacent = set(zip(tokens, tokens[1:]))
+    return any(token in _SENSITIVE_KEY_TOKENS for token in tokens) or bool(
+        adjacent.intersection(_SENSITIVE_KEY_PAIRS)
+    )
+
+
+def _redact_nested_args(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {{
+            str(key): "<redacted>"
+            if _is_sensitive_arg_key(key)
+            else _redact_nested_args(item)
+            for key, item in value.items()
+        }}
+    if isinstance(value, list):
+        return [_redact_nested_args(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_nested_args(item) for item in value)
+    return value
+
+
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {{}}
-    for key, value in args.items():
-        lowered = key.lower()
-        redacted[key] = "<redacted>" if any(part in lowered for part in _SENSITIVE_PARTS) else value
-    return redacted
+    redacted = {{
+        str(key): "<redacted>"
+        if _is_sensitive_arg_key(key)
+        else _redact_nested_args(value)
+        for key, value in args.items()
+    }}
+    return _redact_value(redacted, _sensitive_arg_values(args))
+
+
+def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
+    values: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            branch_sensitive = inherited or _is_sensitive_arg_key(key)
+            if inherited and key not in (None, "") and not _FIELD_NAME_RE.fullmatch(str(key)):
+                values.add(str(key))
+            values.update(_collect_sensitive_values(item, inherited=branch_sensitive))
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        for item in value:
+            values.update(_collect_sensitive_values(item, inherited=inherited))
+    elif inherited and value not in (None, ""):
+        values.add(str(value))
+    return values
 
 
 def _sensitive_arg_values(args: dict[str, Any]) -> list[str]:
-    values: list[str] = []
+    values: set[str] = set()
     for key, value in args.items():
-        lowered = key.lower()
-        if value and any(part in lowered for part in _SENSITIVE_PARTS):
-            values.append(str(value))
-    return values
+        values.update(
+            _collect_sensitive_values(value, inherited=_is_sensitive_arg_key(key))
+        )
+    return sorted(values, key=len, reverse=True)
+
+
+def _serialized_variants(value: str) -> list[str]:
+    variants: set[str] = {{
+        value,
+        json.dumps(value, ensure_ascii=True)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+    }}
+    frontier = set(variants)
+    for _ in range(_MAX_ENCODING_DEPTH):
+        frontier = {{
+            encoded
+            for item in frontier
+            for encoded in (quote(item, safe=""), quote_plus(item, safe=""))
+        }}
+        variants.update(frontier)
+    return sorted((item for item in variants if item), key=len, reverse=True)
 
 
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
     if isinstance(value, str):
         redacted = value
         for sensitive in sensitive_values:
-            redacted = redacted.replace(sensitive, "<redacted>")
+            variants = _serialized_variants(sensitive)
+            for variant in variants:
+                flags = re.IGNORECASE if "%" in variant else 0
+                if len(sensitive) < 4:
+                    redacted = re.sub(
+                        rf"(?<![A-Za-z0-9]){{re.escape(variant)}}(?![A-Za-z0-9])",
+                        "<redacted>",
+                        redacted,
+                        flags=flags,
+                    )
+                else:
+                    redacted = re.sub(
+                        re.escape(variant), "<redacted>", redacted, flags=flags
+                    )
         return redacted
     if isinstance(value, dict):
-        return {{key: _redact_value(item, sensitive_values) for key, item in value.items()}}
+        return {{
+            str(_redact_value(str(key), sensitive_values)): _redact_value(item, sensitive_values)
+            for key, item in value.items()
+        }}
     if isinstance(value, list):
         return [_redact_value(item, sensitive_values) for item in value]
     return value
@@ -148,7 +239,14 @@ async def {fn_name}({signature}) -> dict[str, int]:
 {evidence_setup}    print(json.dumps({{"event": "args", "args": _redact_args(args)}}, sort_keys=True))
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        try:
+            page = await browser.new_page()
+        except BaseException:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+            raise
         # Tabs, the active iframe, installed route mocks and the dialog policy
         # are session state live; in a standalone script they live here.
         state: dict[str, Any] = {{
@@ -163,25 +261,54 @@ async def {fn_name}({signature}) -> dict[str, int]:
         }}
         executed = 0
         skipped = 0
+        failure = None
+        safe_error = None
+        result = None
         try:
-            for index, raw_action in enumerate(ACTIONS):
-                action = _resolve(raw_action, args)
-                kind = action.get("action")
-                log_record = {{"event": "action", "index": index, "action": _redact_action(action, args)}}
-                print(json.dumps(log_record, sort_keys=True))
-                if evidence is not None:
-                    evidence.record(log_record)
-                if kind in _LIFECYCLE_SKIP:
-                    skipped += 1
+            try:
+                for index, raw_action in enumerate(ACTIONS):
+                    action = _resolve(raw_action, args)
+                    kind = action.get("action")
+                    log_record = {{"event": "action", "index": index, "action": _redact_action(action, args)}}
+                    print(json.dumps(log_record, sort_keys=True))
+                    if evidence is not None:
+                        evidence.record(log_record)
+                    if kind in _LIFECYCLE_SKIP:
+                        skipped += 1
 {dispatch_chain}
-            result = {{"executed": executed, "skipped": skipped}}
-{evidence_close}            return result
-        except Exception as exc:
-            if evidence is not None:
-                evidence.finish({{"status": "failed", "error": str(exc)}})
-            raise
+                result = {{"executed": executed, "skipped": skipped}}
+            except Exception as exc:
+                safe_error = str(_redact_value(str(exc), _sensitive_arg_values(args)))
+            if safe_error is None:
+                if evidence is not None:
+                    try:
+                        evidence.finish(result)
+                    except Exception as secondary:
+                        failure = RuntimeError(
+                            str(_redact_value(str(secondary), _sensitive_arg_values(args)))
+                        )
+            else:
+                if evidence is not None:
+                    try:
+                        evidence.finish({{"status": "failed", "error": safe_error}})
+                    except Exception as secondary:
+                        safe_error += "; evidence cleanup: " + str(
+                            _redact_value(str(secondary), _sensitive_arg_values(args))
+                        )
+                failure = RuntimeError(safe_error)
         finally:
-            await browser.close()
+            active_error = sys.exception()
+            try:
+                await browser.close()
+            except Exception as secondary:
+                if active_error is None:
+                    safe_close = str(_redact_value(str(secondary), _sensitive_arg_values(args)))
+                    failure = RuntimeError(
+                        safe_close if failure is None else f"{{failure}}; browser close: {{safe_close}}"
+                    )
+        if failure is not None:
+            raise failure from None
+        return result
 
 
 def main() -> None:
@@ -298,10 +425,12 @@ def _append_parser_line(existing: str, line: str) -> str:
 
 
 def _safe_default(param: str, args: dict[str, Any] | None) -> str:
-    if any(part in param.lower() for part in _SENSITIVE_DEFAULT_PARTS):
+    if is_sensitive_arg_key(param):
         return ""
     value = (args or {}).get(param, "")
-    return str(value) if value is not None else ""
+    rendered = str(value) if value is not None else ""
+    scrubbed = scrub_sensitive_values(rendered, sensitive_arg_values(args or {}))
+    return rendered if scrubbed == rendered else ""
 
 
 def _args_dict(parameters: list[tuple[str, str]]) -> str:

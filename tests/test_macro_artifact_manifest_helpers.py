@@ -209,7 +209,7 @@ def test_compact_reads_back_each_field_it_promises(tmp_path: Path, monkeypatch: 
     assert compact["exports"] == payload["exports"]
     assert compact["critical_points"] == payload["critical_points"]
     assert compact["metadata"] == payload["metadata"]
-    assert compact["parameters"] == {"user": "tanuki"}
+    assert compact["parameters"] == {"user": "<redacted>"}
 
 
 def test_compact_returns_none_for_unreadable_manifests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -286,6 +286,6 @@ def test_the_plan_records_the_three_directories_and_the_description(tmp_path: Pa
 
 def test_the_plan_carries_the_arguments_it_was_built_with(tmp_path: Path) -> None:
     manifest = _plan({"actions": []}, [], tmp_path)
-    assert manifest["parameters"] == {"user": "tanuki"}
+    assert manifest["parameters"] == {"user": "<redacted>"}
     assert manifest["source"]["type"] == "macro"
     assert manifest["source"]["path"].endswith(".json")
