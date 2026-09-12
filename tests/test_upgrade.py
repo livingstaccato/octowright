@@ -49,8 +49,11 @@ def test_known_version_carries_curated_highlights() -> None:
 
 
 def test_unknown_version_has_empty_highlights() -> None:
-    """A version with no curated highlights still produces a notice (empty list)."""
-    notice = upgrade.compute_upgrade("99.99.99", "0.7.0")
+    """A version with no curated highlights still produces a notice (empty list).
+
+    The previous version is the immediate neighbour: anything older would now,
+    correctly, sweep in every shipped release between the two."""
+    notice = upgrade.compute_upgrade("99.99.99", "99.99.98")
     assert notice is not None
     assert notice["highlights"] == []
 
@@ -80,6 +83,54 @@ def test_save_creates_parent_dir(tmp_path: Path) -> None:
     upgrade.save_last_seen("0.7.0", path=state)
     assert state.exists()
     assert upgrade.load_last_seen(path=state) == "0.7.0"
+
+
+# ─── skipped versions ───────────────────────────────────────────────────────
+
+
+def _versions(notice: upgrade.UpgradeNotice | None) -> list[str]:
+    assert notice is not None
+    return [release["version"] for release in notice["releases"]]
+
+
+def test_skipped_versions_carry_every_intermediate_release() -> None:
+    """A user who jumps a release must still be told what it contained.
+
+    0.22.0 -> 0.23.0 skips 0.22.1; its highlights belong in the notice, newest
+    first, and 0.22.0's own -- already seen -- do not."""
+    notice = upgrade.compute_upgrade("0.23.0", "0.22.0")
+    assert _versions(notice) == ["0.23.0", "0.22.1"]
+    assert notice is not None
+    assert notice["highlights"] == upgrade.HIGHLIGHTS["0.23.0"] + upgrade.HIGHLIGHTS["0.22.1"]
+
+
+def test_fresh_install_shows_only_the_current_release() -> None:
+    """No previous version means no history to catch up on, not all of it."""
+    assert _versions(upgrade.compute_upgrade("0.23.0", None)) == ["0.23.0"]
+
+
+def test_downgrade_or_unparseable_previous_shows_only_the_current_release() -> None:
+    assert _versions(upgrade.compute_upgrade("0.22.1", "0.23.0")) == ["0.22.1"]
+    assert _versions(upgrade.compute_upgrade("0.23.0", "dev")) == ["0.23.0"]
+
+
+def test_banner_groups_titles_by_release_when_versions_were_skipped() -> None:
+    notice = upgrade.compute_upgrade("0.23.0", "0.22.0")
+    assert notice is not None
+    banner = upgrade.render_banner(notice)
+    assert "  0.22.1:" in banner
+    assert upgrade.HIGHLIGHTS["0.22.1"][0]["title"] in banner
+
+
+def test_banner_caps_titles_but_the_notice_keeps_every_release() -> None:
+    """A banner is a banner. octowright_status still carries the whole notice."""
+    notice = upgrade.compute_upgrade("0.23.0", "0.7.0")
+    assert notice is not None
+    banner = upgrade.render_banner(notice)
+    title_lines = [line for line in banner.splitlines() if line.lstrip().startswith("- ")]
+    assert len(title_lines) == upgrade.MAX_BANNER_TITLES
+    assert "more" in banner
+    assert len(notice["releases"]) > 1
 
 
 # ─── render_banner ───────────────────────────────────────────────────────────

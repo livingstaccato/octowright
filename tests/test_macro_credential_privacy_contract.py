@@ -22,6 +22,7 @@ from octowright.artifacts.script_export import render_macro_cli
 from octowright.macros import execution
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
+    PrivacyLedger,
     is_sensitive_arg_key,
     redact_args,
     scrub_sensitive_values,
@@ -647,7 +648,7 @@ async def test_nested_classified_screenshot_cannot_bypass_privacy_handler(
             session,
             action,
             invocation_stack=["outer"],
-            sensitive_values=(PASSWORD,),
+            run_ledger=PrivacyLedger((PASSWORD,)),
         )
 
     session.screenshot.assert_not_awaited()
