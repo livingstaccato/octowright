@@ -108,12 +108,20 @@ a section that is already tagged and on PyPI.
   unambiguous tokens and for `pwd`, whole-token for other short ones, so `auth`
   does not catch `author`. A frozen baseline fixture asserts that no name an
   earlier runtime classifier called sensitive became insensitive.
-  `artifacts.redaction` itself is unchanged since 0.22.1 and keeps its own
-  table for artifact mappings and `lint_urls`; a test asserts it never drops a
-  name it already caught.
+  `artifacts.redaction` keeps its own table for artifact mappings and
+  `lint_urls`, now also knowing `otp`; tests assert it never drops a name it
+  already caught and never knows a name the shared vocabulary does not.
 - **`docs/env-vars.md` listed two of the four credential sink fields** and the
   guard's old private name table. It now names `verify_js` and
   `grabbed_predicate_js`, and states the shared vocabulary and its match modes.
+- **URL and code lint did not flag `otp`.** Lint takes parameter names from
+  `artifacts.redaction`, whose table never knew `otp`, and a six-digit code is
+  not token-shaped, so `?otp=482913` in a macro URL drew no warning. `otp` is
+  now in that table. Keying lint on the shared credential tier instead was
+  measured and rejected: it would newly flag 9 of 26 ordinary parameter names,
+  including `auth_url` and `cookie_consent`, where this change flags only
+  `otp` and changes nothing among the query keys real macros use. A fused name
+  such as `otp_code` holding a six-digit value is still not flagged.
 - **Pre-commit hooks ran `uv run --active`**, which resolves whatever
   `VIRTUAL_ENV` happens to be set rather than this project's environment; from a
   shell whose venv belongs to another project it rebuilt that project's venv
