@@ -400,6 +400,7 @@ source_paths = [
 pytest_add_cli_args_test_selection = [
     "tests/test_macro_listing.py",
     "tests/test_macro_privacy_vocabulary.py",
+    "tests/test_macro_save_authoring.py",
     "tests/test_macro_privacy_value_variants.py",
     "tests/test_macro_privacy_session_ledger.py",
     "tests/test_launch_page_selection.py",

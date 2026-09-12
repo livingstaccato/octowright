@@ -42,6 +42,29 @@ a section that is already tagged and on PyPI.
   payload and the classified-screenshot refusal all see them. Latent in the
   measured corpus -- every nested credential there was fed by an identically
   named outer argument -- but live the moment a macro passes a literal.
+- **A macro saved from a default-mode recording no longer types the literal
+  redaction marker into a password field.** `OCTOWRIGHT_REDACT_INPUTS` defaults to
+  `passwords`, so a value typed into a password field is recorded as
+  `<redacted:password>`. `macro_save` maps declared parameters by exact recorded
+  value, found nothing to replace, and wrote the marker into the macro -- which
+  then typed `<redacted:password>` into the field on every replay, with a normal
+  `macro.saved` log line and no warning. A redacted field is now bound to the
+  declared parameter when that is unambiguous: exactly one field was redacted
+  and exactly one credential-named parameter matched nothing else in the
+  recording.
+- **Two parameters that share a value no longer collapse into one placeholder.**
+  a username and a password that are both `admin` used to turn both fields into
+  `{{password}}` and drop `{{username}}` silently, because substitution is keyed
+  by value. `macro_save` now refuses, naming the parameters but never the value.
+
+  **Behaviour change -- these now refuse instead of saving.** Two redacted
+  fields, two unmatched credential-named parameters, a redacted field no
+  credential-named parameter can fill, or two parameters sharing a value each
+  raise `ValueError` naming the fields or parameters involved, and write
+  nothing. Each of those used to save a macro that could not replay correctly.
+  To record a form with several password fields, record with
+  `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment. Macros already saved
+  with the marker are not repaired by this change and need re-saving.
 
 ## [0.23.0] - 2026-09-12
 
