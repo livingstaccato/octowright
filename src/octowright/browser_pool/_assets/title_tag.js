@@ -13,6 +13,17 @@
     const SUFFIX_BASE = SUFFIX.replace(/^\s+/, "");
 
     const desc = Object.getOwnPropertyDescriptor(Document.prototype, "title");
+    // Bind the real accessors ONCE, and do nothing at all if they are not
+    // there. They were previously read from `desc` in three places, only one
+    // of which checked it -- the other two leaned on their own try/catch, so a
+    // missing descriptor meant throwing and swallowing twice per <head>
+    // mutation, forever, to accomplish nothing. Bailing is the honest
+    // degradation: with no setter there is no way to write the title, and
+    // without the getter there is nothing to mask. Found by type-checking this
+    // file; no test, lint rule or mutant covered it.
+    const realGetter = desc && desc.get;
+    const realSetter = desc && desc.set;
+    if (!realGetter || !realSetter) return;
     const tagged = (s) => s.endsWith(SUFFIX_BASE);
     const untag = (s) => {
         if (s.endsWith(SUFFIX)) return s.slice(0, s.length - SUFFIX.length);
@@ -55,32 +66,30 @@
 
     const realGet = () => {
         try {
-            return desc.get.call(document) || "";
+            return realGetter.call(document) || "";
         } catch (_) {
             return "";
         }
     };
 
-    if (desc && desc.get && desc.set) {
-        Object.defineProperty(Document.prototype, "title", {
-            configurable: true,
-            enumerable: desc.enumerable,
-            get() {
-                const real = desc.get.call(this);
-                // Only mask the exact value we produced from the page's own
-                // last write. Anything else (a title set through the <title>
-                // node directly, a value from before this ran) is returned
-                // verbatim rather than guessed at.
-                if (pageValue !== null && real === pageValue + SUFFIX) return pageValue;
-                return real;
-            },
-            set(v) {
-                const s = String(v == null ? "" : v);
-                pageValue = untag(s);
-                desc.set.call(this, tagged(s) ? s : s + SUFFIX);
-            },
-        });
-    }
+    Object.defineProperty(Document.prototype, "title", {
+        configurable: true,
+        enumerable: desc.enumerable,
+        get() {
+            const real = realGetter.call(this);
+            // Only mask the exact value we produced from the page's own last
+            // write. Anything else (a title set through the <title> node
+            // directly, a value from before this ran) is returned verbatim
+            // rather than guessed at.
+            if (pageValue !== null && real === pageValue + SUFFIX) return pageValue;
+            return real;
+        },
+        set(v) {
+            const s = String(v == null ? "" : v);
+            pageValue = untag(s);
+            realSetter.call(this, tagged(s) ? s : s + SUFFIX);
+        },
+    });
 
     // Backstop. The masking above removes the cause, but it can only cover
     // reads that go through `document.title`; a page could still drive a loop
@@ -119,7 +128,7 @@
                 return;
             }
             pageValue = untag(real);
-            desc.set.call(document, pageValue + SUFFIX);
+            realSetter.call(document, pageValue + SUFFIX);
         } catch (_) {}
     };
     apply();
