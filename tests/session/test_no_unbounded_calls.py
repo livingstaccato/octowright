@@ -93,7 +93,7 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
             # `timeout_ms` -- but it is deliberately NOT part of the
             # per-call-site fix. It is the gap the active-duration ceiling
             # (off by default) exists to backstop: "the ones nobody has
-            # found yet". See docs/superpowers/plans/2026-08-29-hang-resilience.md.
+            # found yet" -- see ``OCTOWRIGHT_OPERATION_ACTIVE_TIMEOUT_SECONDS`` in docs/env-vars.md.
             ("_evaluate_truthy", "target"),
         }
     ),

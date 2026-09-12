@@ -95,16 +95,14 @@ def test_every_live_doc_claiming_a_core_install_total_is_checked(guard) -> None:
     assert "docs/getting-started.md" in scanned
 
 
-def test_the_changelog_and_plan_records_are_not_rewritten(guard) -> None:
+def test_the_changelog_is_not_rewritten(guard) -> None:
     """History says what was true then, and must not be dragged forward.
 
-    CHANGELOG.md records a 129-tool surface for the release that had one, and
-    the plan documents quote the counts they were written against. Checking
-    them would demand edits that falsify the record.
+    CHANGELOG.md records a 129-tool surface for the release that had one.
+    Checking it would demand edits that falsify the record.
     """
     scanned = {p.relative_to(ROOT).as_posix() for p in guard.docs_claiming_a_total()}
     assert "CHANGELOG.md" not in scanned
-    assert not any(name.startswith("docs/superpowers/") for name in scanned), scanned
 
 
 def test_a_stale_prose_total_is_reported(guard) -> None:
@@ -148,8 +146,8 @@ def test_a_nested_worktree_is_not_scanned(guard) -> None:
     """A git worktree under ``.claude/worktrees/`` is a second copy of this repo.
 
     Every exclusion here was originally a prefix match on the repo-relative
-    path, so ``CHANGELOG.md`` and ``docs/superpowers/`` were skipped at the
-    root and scanned again one directory down. The moment an agent worktree
+    path, so ``CHANGELOG.md`` was skipped at the root and scanned again one
+    directory down. The moment an agent worktree
     existed, `make lint` failed with
     ``.claude/worktrees/agent-.../CHANGELOG.md: says 129 tools`` -- a real
     historical record, in a checkout nobody was editing, reported as drift.
@@ -169,7 +167,8 @@ def test_the_scan_skips_dot_directories_at_any_depth(guard) -> None:
     The test above only proves anything while a worktree happens to exist.
     """
     assert guard._is_skipped_doc_path("CHANGELOG.md")
-    assert guard._is_skipped_doc_path("docs/superpowers/plans/x.md")
+    # Design specs and plans are kept locally under `.superpowers/`, never committed.
+    assert guard._is_skipped_doc_path(".superpowers/docs/superpowers/plans/x.md")
     assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/CHANGELOG.md")
     assert guard._is_skipped_doc_path(".claude/worktrees/agent-1/README.md")
     assert guard._is_skipped_doc_path("mutants/README.md")
