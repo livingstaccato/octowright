@@ -101,6 +101,15 @@ a section that is already tagged and on PyPI.
   gitignored, so a plan quoting an old tool count cannot fail `make lint`.
 - **Agent handoff and memory notes are no longer tracked.** `.provide/` and
   `memory/` are gitignored and kept locally, like the design notes above.
+- **Repository history was rewritten on 2026-09-12.** Local design notes,
+  handoff and memory files, and assistant commit trailers were removed from
+  every commit, and every commit was re-signed. Every commit ID changed and all
+  release tags point at the rewritten commits; each tag's tree is unchanged
+  apart from the removed files. An existing clone should be re-cloned, or
+  fetched with `--force --prune-tags` and reset to `origin/main`.
+- **The privacy classifier baseline cites a commit on `main`.** It named
+  `c58a1461`, a pre-rebase commit from #232's branch that was never on `main`.
+  It now names `b3dafe83`, whose `src/` tree is identical to that commit's.
 
 ## [0.23.0] - 2026-09-12
 

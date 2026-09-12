@@ -14,7 +14,7 @@ caught them, ``otp`` was known only to the sink guard, and plural forms bypassed
 all three.
 
 The invariant is measured, not asserted. ``tests/fixtures/privacy_classifier_baseline.json``
-freezes what every classifier decided at c58a1461, the commit before they were
+freezes what every classifier decided at b3dafe83, the commit before they were
 unified; no name sensitive to *any* of
 them may become insensitive to the unified one.
 """
