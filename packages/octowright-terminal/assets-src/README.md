@@ -29,7 +29,7 @@ Then re-run both test suites and re-commit the rebuilt file alongside the
 source change:
 
 ```bash
-cd ../../.. && uv run --active --no-sync pytest packages/octowright-terminal/tests/test_frontend_asset.py -v --no-cov
+cd ../../.. && uv run --no-sync pytest packages/octowright-terminal/tests/test_frontend_asset.py -v --no-cov
 cd packages/octowright-frontend && npm test
 ```
 
