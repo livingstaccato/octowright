@@ -239,12 +239,115 @@ descriptors — in its raw, JSON-escaped and repeatedly URL-encoded spellings.
 `args_used` in a run result shows the argument redacted. The session recording
 is scrubbed at write time, replacing each value with `<redacted>`.
 
-**What is refused rather than scrubbed.** A screenshot of a page a credential
-was typed into is a durable copy of it, which no text scrub can reach. While a
-run holds classified values, a `screenshot` action is refused unless the
-embedding application has installed both an explicit authority flag and a
-handler that decides what evidence is safe to keep. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for such a
+**Screenshots of a classified run.** A screenshot of a page a credential was
+typed into is a durable copy of it, which no text scrub can reach. While a run
+holds classified values, a `screenshot` action is never taken the generic way.
+It is decided in this order:
+
+1. If the embedding application called
+   `octowright.macros.safe_screenshot.enable_redacted_screenshots(session, handler=...)`
+   with its own handler, that handler decides, and may call `redacted_screenshot`
+   itself.
+2. If it called `enable_redacted_screenshots(session)` without a handler, or
+   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
+   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
+   Chromium page:
+   - It pauses the page's animations for the whole capture and ends every running view
+     transition, on the document or on any element in it or in its open or closed
+     shadow roots, which would otherwise draw its raster of the old state from before
+     the redaction, and waits, reading DevTools rather than the page, until their
+     pseudo-elements are gone.
+   - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
+     classified values with `<redacted>` in text and attribute values across the
+     document and its open and closed shadow roots. Case, whitespace, Unicode
+     compatibility forms and invisible characters inside a value (zero-width spaces,
+     soft hyphens, joiners, bidi controls, control characters) are ignored. A value
+     made only of digits and number punctuation, such as a phone number, is also
+     matched by its digits, formatted differently or by an ending of at least seven
+     digits. A string that still holds a value after replacement is replaced whole.
+   - A text control holding a value keeps its value, caret and selection; its text is
+     masked with `-webkit-text-security` instead. Buttons and hidden inputs have their
+     value replaced.
+   - It hides canvases, media, embeds and frames, whose pixels it cannot read, and
+     any element whose `src`, `srcset`, `srcdoc`, `data` or `poster`, or whose link as
+     an SVG image, `use` or filter image, holds a value (for a `<picture>` source, the
+     picture's image). An SVG image or `use` that an `<animate>` or `<set>` targets
+     through its link is hidden too, whether or not the animation has begun, because
+     an animated link is drawn without being the attribute or changing the page; a
+     `use` whose link animation only names fragments of the same document is left
+     visible, because it draws page content the redaction already covers; a filter
+     image with an animated link refuses. Elements and attributes are judged by their
+     local names, so a namespace prefix (`svg:image`, `x:canvas`, `q:href`) changes
+     nothing; an animation's `attributeName`, `to`, `from`, `by` and `values` are read
+     without a namespace, as Chrome reads them. `to`, `from` and `by` are judged as
+     written, so a blank or space-led link counts as another document; each `values` item
+     has its ASCII whitespace stripped and an empty item is skipped. Only a link starting
+     with `#` names this document. Hidden elements get `visibility: hidden` and `opacity: 0`, which content
+     a `use` draws cannot undo, and lose their transitions, so they vanish at once.
+     A resource address is never rewritten, because a rewritten frame address would
+     navigate or reload.
+   - It has Chrome apply the page's pending style changes through DevTools, so a stylesheet
+     its own redaction rewrote is replaced before counting begins, not counted as a change.
+     If Chrome cannot apply them, because the page replaced its document, say, the screenshot
+     is refused.
+   - From then on it counts the page's changes. Chrome reports every DOM mutation
+     (closed shadow roots and same-process frames included), every stylesheet added,
+     removed or edited through any CSSOM route, and every new animation. The page
+     controller counts changes Chrome does not report: an inline style change on an
+     element the redaction styled or holding a value (any inline style change, if a
+     stylesheet holds a value), checked, indeterminate, selected and validity state,
+     focus, and the location hash. Inline style changes that could reveal nothing,
+     such as a spinner's transform, do not count.
+   - Before and after the capture, it refuses the screenshot and deletes any file if
+     it counted a change, if a view transition is running anywhere it redacted or Chrome
+     still draws one in any root (including a shadow root attached after the redaction
+     collected its roots), if the redacted page still
+     holds a value, or if Chrome's rendered surface does. The rendered surface is read with
+     `DOMSnapshot.captureSnapshot`: layout text and text boxes (generated content and
+     same-process frames included), drawn form values that are not masked, drawn
+     attributes (`placeholder`, `alt`, `label`), resource addresses and image styles
+     (`content: url()` included). Its text is matched joined, reversed, in visual
+     order, and with up to a few unrelated text boxes between the parts of a value.
+   - It captures through the same DevTools session (`Page.captureScreenshot`), not
+     Playwright's screenshot helper, which writes styles onto the page first.
+   - It then restores the page and keeps style changes the page itself made
+     meanwhile, putting each transition longhand back as it was. Hidden elements come back
+     with their transitions off until their style has settled, so a transition of their
+     own does not replay, even when their style attribute was also redacted, and neither
+     does one the page's own style change started from the hidden state (removing the style
+     attribute, say). Attributes are written back through their attribute nodes. A style
+     attribute redacted before its element was hidden comes back whole even if the page
+     removed or replaced it. An attribute node the page moved to another element is
+     restored there, unless the page changed its value. Any other attribute the page
+     removed stays removed, unless the page put back exactly what the redaction wrote under
+     the same namespace and local name, which then gets the original value; a value the
+     page changed stays. If the restore fails, the screenshot is deleted.
+3. Otherwise the screenshot is refused.
+
+The in-page state is held through octowright's own DevTools session, not on a page
+global, so page script cannot reach it.
+
+The limits are real and deliberate:
+- The page is assumed to be the application under test, not an adversary. Page script
+  keeps running during the capture. A script that kept its own references to the
+  form-state setters the controller counts can change that state without being counted.
+- Text matching covers the spellings and arrangements listed above, not every way a
+  page could draw a value: for example one glyph per absolutely positioned element
+  scattered across the page, a value only partly reversed by a bidi override, or a
+  number displayed in words.
+- A masked control still shows how many characters its value has.
+- The page's own mutation observers see the redaction while it lasts, so an application
+  that saves what it observes, such as an autosave, could save `<redacted>`.
+- Pixels of an ordinary image are not read; an image is hidden only when one of its
+  resource addresses holds a value.
+- Firefox and WebKit have no rendered-surface snapshot, so a redacted screenshot is
+  refused there.
+
+Automatic artifact screenshots follow the same rule, with one exception: they are
+never taken on a session whose application installed its own handler. A mistyped
+policy value suppresses them rather than failing the artifact run. When one is not
+taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
+producer, which saves raw page HTML and a screenshot, is not called for a classified
 run; the payload records `diagnostic_suppressed` instead.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified

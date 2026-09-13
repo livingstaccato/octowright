@@ -24,7 +24,7 @@ with the numbers recorded below -- but both are why the result is clean.
 
 Run via scripts/generate_image_assets.sh, or directly:
 
-    uv run --active python scripts/make_otto_mark.py
+    uv run python scripts/make_otto_mark.py
 """
 
 from __future__ import annotations

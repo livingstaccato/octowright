@@ -15,6 +15,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
+from octowright.macros import safe_screenshot
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
 from octowright.macros.descriptions import describe_action
@@ -222,21 +223,23 @@ async def _dispatch_classified_screenshot(
     action: dict[str, Any],
     sensitive_values: tuple[str, ...],
 ) -> tuple[int, int]:
-    """Route a screenshot taken under classified args through the privacy handler.
+    """Route a screenshot taken under classified args through the privacy boundary.
 
     A screenshot of a page a credential was typed into is a durable copy of
-    that credential, so the generic capture path is refused outright: a
-    composition root must install both the authority flag and a handler that
-    knows what evidence is safe to keep.
+    that credential, so the generic capture path is never used. In order: an
+    explicitly authorized handler decides; otherwise octowright's own redacted
+    screenshot runs when ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``;
+    otherwise the screenshot is refused.
     """
-    authorized = getattr(session, "_octowright_sensitive_screenshot_authority", None) is True
-    handler = getattr(session, "_octowright_sensitive_screenshot_handler", None)
-    if not authorized or not callable(handler):
-        raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
-    handled = await handler(action=action, sensitive_values=sensitive_values)
-    if handled is None:
-        raise RuntimeError("classified macro screenshot privacy handler refused the action")
-    return handled
+    handler = safe_screenshot.installed_handler(session)
+    if handler is not None:
+        handled = await handler(action=action, sensitive_values=sensitive_values)
+        if handled is None:
+            raise RuntimeError("classified macro screenshot privacy handler refused the action")
+        return handled
+    if safe_screenshot.classified_screenshot_policy() == "redact":
+        return await safe_screenshot.redacted_screenshot(session, action, sensitive_values)
+    raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
 
 
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:

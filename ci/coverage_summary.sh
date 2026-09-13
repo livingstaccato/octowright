@@ -13,7 +13,7 @@
 set -euo pipefail
 
 # Snapshot the total + per-file table from the existing .coverage data.
-TOTAL_LINE="$(uv run --active coverage report --format=total 2>/dev/null || echo 'n/a')"
+TOTAL_LINE="$(uv run coverage report --format=total 2>/dev/null || echo 'n/a')"
 
 {
     echo "## Coverage"
@@ -23,7 +23,7 @@ TOTAL_LINE="$(uv run --active coverage report --format=total 2>/dev/null || echo
     echo "<details><summary>Per-file report</summary>"
     echo ""
     echo '```'
-    uv run --active coverage report --skip-covered --sort=cover || true
+    uv run coverage report --skip-covered --sort=cover || true
     echo '```'
     echo ""
     echo "</details>"

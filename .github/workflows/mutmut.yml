@@ -46,7 +46,7 @@ jobs:
       # Install Playwright so any mutated paths that try to launch a browser
       # at import time don't crash before mutmut can score them.
       - name: Install Playwright browsers + Linux deps
-        run: uv run --active playwright install --with-deps webkit firefox chromium
+        run: uv run playwright install --with-deps webkit firefox chromium
       # Run mutation testing via the existing Makefile target so config stays
       # in one place (pyproject.toml [tool.mutmut]).
       - name: Run mutmut

@@ -33,14 +33,14 @@ which for correlating a crash to within a second or two does not matter.
 Usage::
 
     # in one shell, before starting the suite
-    uv run --active python scripts/watch_test_timeline.py
+    uv run python scripts/watch_test_timeline.py
 
     # afterwards, given a crash report (--newest-crash finds the latest one)
-    uv run --active python scripts/watch_test_timeline.py --correlate --newest-crash
+    uv run python scripts/watch_test_timeline.py --correlate --newest-crash
 
     # or an explicit report, or any timestamp the log covers
-    uv run --active python scripts/watch_test_timeline.py --correlate <path-to.ips>
-    uv run --active python scripts/watch_test_timeline.py --correlate 2026-09-07T10:42:17
+    uv run python scripts/watch_test_timeline.py --correlate <path-to.ips>
+    uv run python scripts/watch_test_timeline.py --correlate 2026-09-07T10:42:17
 """
 
 from __future__ import annotations

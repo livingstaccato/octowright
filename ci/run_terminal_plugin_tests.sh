@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-uv run --active python - <<'PY'
+uv run python - <<'PY'
 import sys
 
 FIX = (
@@ -43,7 +43,7 @@ PY
 # --no-cov: the root addopts measure coverage of src/octowright and the report
 # threshold in pyproject.toml is calibrated against core's full suite. Measuring
 # it from this suite alone would fail on a number that means nothing here.
-uv run --active pytest -q packages/octowright-terminal/tests --no-cov
+uv run pytest -q packages/octowright-terminal/tests --no-cov
 
 # "Unconfigured" below has to mean "no plugins.yaml anywhere", not "whatever this
 # machine happens to have". These are SUBPROCESSES, so they read ambient env and
@@ -72,10 +72,10 @@ export APPDATA="$isolated_config"
 # terminal_* tools, and leaving it disabled must add none. Asserted as a DELTA
 # rather than against a hardcoded 129/136 so that adding a browser tool tomorrow
 # does not fail this job for an unrelated reason.
-core_tools="$(uv run --active octowright selftest | grep -c '^  - ')"
-core_terminal_tools="$(uv run --active octowright selftest | grep -c '^  - terminal_' || true)"
-plugin_tools="$(OCTOWRIGHT_PLUGINS=terminal uv run --active octowright selftest | grep -c '^  - ')"
-plugin_terminal_tools="$(OCTOWRIGHT_PLUGINS=terminal uv run --active octowright selftest | grep -c '^  - terminal_' || true)"
+core_tools="$(uv run octowright selftest | grep -c '^  - ')"
+core_terminal_tools="$(uv run octowright selftest | grep -c '^  - terminal_' || true)"
+plugin_tools="$(OCTOWRIGHT_PLUGINS=terminal uv run octowright selftest | grep -c '^  - ')"
+plugin_terminal_tools="$(OCTOWRIGHT_PLUGINS=terminal uv run octowright selftest | grep -c '^  - terminal_' || true)"
 
 echo "tool surface: core=${core_tools} (terminal_*=${core_terminal_tools}), OCTOWRIGHT_PLUGINS=terminal -> ${plugin_tools} (terminal_*=${plugin_terminal_tools})"
 

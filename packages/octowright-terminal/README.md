@@ -129,7 +129,7 @@ Emitted only when `PROVIDE_TRACE_ENABLED=true` / `PROVIDE_METRICS_ENABLED=true` 
 This package is a `uv` workspace member of the octowright repo, but it lives in its own `terminal` dependency group rather than in `dev`. The group *is* the dependency boundary: core's CI legs sync `--all-groups --no-group terminal` to prove core builds, installs and passes with no uterm present anywhere (the dependency-layer twin of `tests/test_plugin_isolation.py`), and `make install` / `--all-groups` is how a dev working here opts in. `uv sync` on its own (default groups only) does **not** install it — and uninstalls it if it was there; ask for the group, or for every group:
 
 ```bash
-uv sync --active --all-groups                      # or: --group terminal
+uv sync --all-groups                      # or: --group terminal
 uv run --no-sync mypy src/octowright packages/octowright-terminal/src tests/plugins/reference
 uv run --no-sync pytest packages/octowright-terminal/tests -v --no-cov
 ```
