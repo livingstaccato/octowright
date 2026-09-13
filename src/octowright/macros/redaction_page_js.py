@@ -17,7 +17,7 @@ controller:
   and a string that still holds a value after replacement is replaced whole). A text
   control holding a value keeps its value and caret and has its text masked with
   ``-webkit-text-security`` instead; other controls have their value replaced.
-  Canvases, media, embeds and frames are hidden, and so is any element whose resource
+  Canvas, video, embed, object, frame and iframe elements are hidden, and so is any element whose resource
   address (``src``, ``srcset``, ``srcdoc``, ``data``, ``poster``, or the link of an image,
   ``use`` or filter image) holds a value; for a ``<picture>`` source that is the picture's
   image. A resource address is never rewritten, because that would navigate or reload.
@@ -34,9 +34,11 @@ controller:
   view transition is running on the document or on any element in the redacted roots
   (its raster of the old state cannot be redacted).
 - ``restore()`` stops counting and undoes every change in reverse order: text,
-  attributes, control values, and only the style properties it set. If the page itself
-  changed an element's style meanwhile, that change is kept, and each transition
-  longhand is put back as it was. Attributes are written and undone through their
+  attributes, control values, and only the style properties it set. Each is written back
+  only while it still holds what the redaction left, so a value the page changed meanwhile
+  is kept, as is any other style change the page made. A style attribute that held a value
+  comes back whole if the page changed it in place, because that change cannot be told
+  apart from the redaction's text. Attributes are written and undone through their
   attribute nodes: a node the page moved to another element is restored there unless
   the page changed its value, and a node the page removed comes back only when the page
   put back what the redaction wrote under the same namespace and local name. A hidden
@@ -163,7 +165,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   };
   const style = (element, declarations) => {
     if (!element.style) return;
-    const record = styled.get(element) || {before: element.getAttribute('style'), previous: [], at: changes.length};
+    const record = styled.get(element) || {before: element.getAttribute('style'), previous: [], written: new Map(), at: changes.length};
     for (const [declared] of declarations) {
       for (const name of recorded(declared)) {
         if (record.previous.some(([known]) => known === name)) continue;
@@ -171,6 +173,11 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       }
     }
     for (const [name, value] of declarations) element.style.setProperty(name, value, 'important');
+    for (const [declared] of declarations) {
+      for (const name of recorded(declared)) {
+        record.written.set(name, [element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+      }
+    }
     record.after = element.getAttribute('style');
     styled.set(element, record);
   };
@@ -205,7 +212,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       else element.style.removeProperty(name);
     }
   };
-  const unstyle = (element, {before, after, previous}) => {
+  const unstyle = (element, {before, after, previous, written}) => {
     const setBefore = () => (before === null ? element.removeAttribute('style') : element.setAttribute('style', before));
     if (element.getAttribute('style') === after) {
       setBefore();
@@ -215,26 +222,33 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       return;
     }
     const removed = element.getAttribute('style') === null;
-    putBack(element, previous.filter(([name]) => !TRANSITION.includes(name)));
+    // Only a property still holding what the redaction wrote is put back; the page's own value for one stays.
+    const owned = previous.filter(([name]) => {
+      const [value, priority] = written.get(name) || [];
+      return element.style.getPropertyValue(name) === value && element.style.getPropertyPriority(name) === priority;
+    });
+    putBack(element, owned.filter(([name]) => !TRANSITION.includes(name)));
     // The page's own style change may have dropped the hiding and started a transition from the hidden state, removing
     // the style attribute, say. Transitions are held off while the style settles, which cancels one already running.
     const held = TRANSITION.map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
     element.style.setProperty('transition', 'none', 'important');
     settle(element);
     putBack(element, held);
-    putBack(element, previous.filter(([name]) => TRANSITION.includes(name)));
+    putBack(element, owned.filter(([name]) => TRANSITION.includes(name)));
     // Holding transitions off wrote a style attribute onto an element whose style attribute the page had removed.
     if (removed && element.getAttribute('style') === '') element.removeAttribute('style');
   };
   const undo = (change, index) => {
     const [kind, node] = change;
+    // A text or control value comes back only while it still reads what the redaction left; one the page wrote since
+    // stays.
     if (kind === 'text') {
-      node.nodeValue = change[2];
+      if (node.nodeValue === change[3]) node.nodeValue = change[2];
       return;
     }
     // A control change holds its element.
     if (kind === 'value') {
-      node.value = change[2];
+      if (node.value === change[3]) node.value = change[2];
       return;
     }
     // An attribute change holds its attribute node, its element and the value the redaction wrote, because the page may
@@ -254,8 +268,10 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       record.after = element.getAttribute('style');
       return;
     }
+    // A style attribute comes back whole, rolled into the styling the restore then replaces, because a page change to
+    // it cannot be told apart from the redaction's text; any other value the page changed in place stays.
     if (node.ownerElement === element) {
-      node.value = change[2];
+      if (isStyle || node.value === redacted) node.value = change[2];
       return;
     }
     // The page moved the node to another element: it is written back there, unless the page changed its value.
@@ -318,8 +334,10 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
           if (tag(node.parentNode) === 'TEXTAREA') return;
           const safe = redact(node.nodeValue);
           if (safe !== node.nodeValue) {
-            changes.push(['text', node, node.nodeValue]);
+            // The change keeps what the text reads back, so the restore can tell it from a text the page wrote since.
+            const change = ['text', node, node.nodeValue];
             node.nodeValue = safe;
+            changes.push([...change, node.nodeValue]);
           }
           return;
         }
@@ -342,8 +360,10 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
           attribute.value = safe;
         }
         if (!maskedKind && EDITABLE.has(tag(node)) && node.type !== 'file' && holds(node.value)) {
-          changes.push(['value', node, node.value]);
+          // A control may sanitize what it is given (a date control reads back empty), so the change keeps what it reads.
+          const change = ['value', node, node.value];
           node.value = redact(node.value);
+          changes.push([...change, node.value]);
         }
       });
     },
