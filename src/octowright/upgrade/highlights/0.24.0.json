@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Classified macro runs can keep their screenshots, redacted",
+    "body": "A macro run holding a classified argument value -- a credential, or an identity value such as email -- refused every screenshot unless the embedding application wrote its own privacy handler, so nearly every signed-in macro lost its screenshots. A Chromium page can now be captured redacted instead: call octowright.macros.safe_screenshot.enable_redacted_screenshots(session), or set OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact. The run's values are replaced in the page's text and attributes, text controls are masked, and pixels octowright cannot read are hidden. The screenshot is refused and deleted if the page changes during the capture or Chrome still renders a value, and the page is restored afterwards. Refusal stays the default, an application's own handler still wins, and Firefox and WebKit refuse. docs/macros.md lists the limits."
+  },
+  {
+    "title": "An upgrade that skips a release still shows what that release changed",
+    "body": "The post-upgrade notice carried only the current version's highlights, so going from 0.21.0 straight to 0.23.0 never showed 0.22.0's or 0.22.1's. It now carries every release since the version last seen, newest first, in a new releases field grouped by version; the flat highlights list keeps the same entries in the same order for existing readers. The banner groups titles under each skipped release and caps them at MAX_BANNER_TITLES, counting the rest, while octowright_status still returns the whole notice."
+  },
+  {
+    "title": "Recording no longer slows down with every macro run on a session",
+    "body": "Every macro run wrapped the session recorder again and nothing unwrapped it, so an N-step macro_run_sequence left N nested wrappers on a long-lived session, each re-scrubbing every write. A session now owns one privacy ledger that exactly one wrapper reads; a later run appends its values instead of wrapping again, and a value appended later is scrubbed from the very next write. Values stay for the session's lifetime, because a credential typed once can keep rendering in later page output."
+  },
+  {
+    "title": "A credential passed only to a nested macro_call is now protected",
+    "body": "Arguments were classified once, over the outer macro's arguments, so a credential passed only to a nested macro_call was never collected: the recording, the failure payload and the classified-screenshot refusal all missed it. A nested call's own arguments are now classified where it executes, at every depth."
+  },
+  {
+    "title": "A saved macro no longer types <redacted:password> into a password field",
+    "body": "OCTOWRIGHT_REDACT_INPUTS defaults to passwords, so a password field is recorded as <redacted:password>. macro_save found no recorded value to replace with the declared parameter and saved the marker, which the macro then typed on every replay with no warning. A redacted field is now bound to the declared parameter when that is unambiguous: exactly one field was redacted and exactly one credential-named parameter matched nothing else in the recording. Macros already saved with the marker need re-saving."
+  },
+  {
+    "title": "Behavior change: macro_save refuses a recording it cannot replay correctly",
+    "body": "Two redacted fields, two unmatched credential-named parameters, a redacted field no credential-named parameter can fill, and two parameters that share a value -- a username and a password both admin used to become one {{password}} -- now raise ValueError naming the fields or parameters involved, never the value, and write nothing. Each used to save a macro that could not replay correctly. Record parameters with distinct values, or record a form with several password fields with OCTOWRIGHT_REDACT_INPUTS=off in a trusted environment."
+  }
+]
