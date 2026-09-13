@@ -179,12 +179,12 @@ Any A/B must compare episode counts over matched wall-clock and run for hours.
 Usage::
 
     # is it Chromium, or is it us?
-    uv run --active python scripts/characterize_headed_crash.py --launchers raw,pool
+    uv run python scripts/characterize_headed_crash.py --launchers raw,pool
     # the 2026-09-06 lead: sequential headed launch with the driver killed between
-    uv run --active python scripts/characterize_headed_crash.py \
+    uv run python scripts/characterize_headed_crash.py \
         --launchers pool,pool-sigterm --arms gpu-on --browsers 1 --rounds 4
     # does the GPU knob help, once something reproduces?
-    uv run --active python scripts/characterize_headed_crash.py --arms gpu-on,gpu-off --rounds 6
+    uv run python scripts/characterize_headed_crash.py --arms gpu-on,gpu-off --rounds 6
 """
 
 from __future__ import annotations

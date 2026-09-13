@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-RESULTS="$(PYTHONPATH=src uv run --active mutmut results 2>&1 || true)"
+RESULTS="$(PYTHONPATH=src uv run mutmut results 2>&1 || true)"
 
 # mutmut 3.x `results` prints no totals line -- it prints one
 # "    <mutant>: <status>" line per mutant that was NOT killed (killed ones are

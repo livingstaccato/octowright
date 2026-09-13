@@ -239,13 +239,32 @@ descriptors — in its raw, JSON-escaped and repeatedly URL-encoded spellings.
 `args_used` in a run result shows the argument redacted. The session recording
 is scrubbed at write time, replacing each value with `<redacted>`.
 
-**What is refused rather than scrubbed.** A screenshot of a page a credential
-was typed into is a durable copy of it, which no text scrub can reach. While a
-run holds classified values, a `screenshot` action is refused unless the
-embedding application has installed both an explicit authority flag and a
-handler that decides what evidence is safe to keep. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for such a
-run; the payload records `diagnostic_suppressed` instead.
+**Screenshots of a classified run.** A screenshot of a page a credential was
+typed into is a durable copy of it, which no text scrub can reach. While a run
+holds classified values, a `screenshot` action is never taken the generic way.
+It is decided in this order:
+
+1. If the embedding application called
+   `octowright.macros.safe_screenshot.enable_redacted_screenshots(session, handler=...)`
+   with its own handler, that handler decides, and may call `redacted_screenshot`
+   itself.
+2. If it called `enable_redacted_screenshots(session)` without a handler, or
+   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
+   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot**. It
+   replaces every raw, JSON-escaped and URL-encoded spelling of the run's
+   classified values with `<redacted>` in text, attribute values and form-control
+   values across the document and open shadow roots, and hides canvases, media,
+   embeds and frames, whose pixels it cannot read. It refuses if any value is still
+   in the serialized markup, then takes the screenshot and restores the page
+   exactly. If the restore fails, the screenshot is deleted.
+3. Otherwise the screenshot is refused.
+
+A value inside a closed shadow root cannot be read, so it is neither redacted nor
+counted. Automatic artifact screenshots follow the same rule, except that they are
+never taken on a session whose application installed its own handler; when not
+taken, the evidence manifest records `screenshot_suppressed`. The generic
+diagnostic producer, which saves raw page HTML and a screenshot, is not called for
+a classified run; the payload records `diagnostic_suppressed` instead.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified
 where the call executes, at every depth, so a credential passed only to a nested

@@ -18,8 +18,8 @@ the daemon serves) and asserts two regressions stay fixed:
 All on-disk state is isolated under a temp dir, so this never touches your real
 macros/recordings/goldens.
 
-Run:   uv run --active python scripts/frame_and_repair_smoke.py
-Watch: OCTOWRIGHT_HEADLESS=0 uv run --active python scripts/frame_and_repair_smoke.py
+Run:   uv run python scripts/frame_and_repair_smoke.py
+Watch: OCTOWRIGHT_HEADLESS=0 uv run python scripts/frame_and_repair_smoke.py
 Exit:  0 if every check passes, 1 otherwise (CI-friendly).
 """
 

@@ -56,6 +56,17 @@ class EvidenceBuilder:
             }
         )
 
+    def screenshot_suppressed(self, *, label: str) -> dict[str, Any]:
+        """Record that a screenshot was deliberately not taken, so its absence is not silent."""
+        return self.add(
+            {
+                "id": self._next_id(),
+                "type": "screenshot_suppressed",
+                "label": label,
+                "ts": now_iso(),
+            }
+        )
+
     def artifact(self, *, path: Path, kind: str, description: str) -> dict[str, Any]:
         return self.add(
             {

@@ -12,6 +12,23 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Added
+- **Redacted screenshots for classified macro runs.** A run holding classified
+  argument values (credentials, and identity values such as `email`) refused every
+  `screenshot` unless the embedding application wrote its own privacy handler, so
+  nearly every signed-in macro lost its screenshots. octowright now provides the
+  safe path itself: `macros.safe_screenshot.enable_redacted_screenshots(session)`
+  or `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` replaces every rendered
+  spelling of the run's classified values in the page, refuses if any remains,
+  screenshots, and restores the page. The default is still refusal, and an
+  application's own handler still wins. Related: #247, #248.
+
+### Changed
+- **An automatic artifact screenshot of a classified run** is taken redacted when
+  the session opts in, and otherwise the evidence manifest records
+  `screenshot_suppressed` instead of silently omitting it. It is never taken on a
+  session whose application installed its own handler.
+
 ### Fixed
 - **An upgrade that skipped a release dropped that release's highlights**
   (#240). `compute_upgrade` attached only the current version's entries, so a
@@ -65,6 +82,12 @@ a section that is already tagged and on PyPI.
   To record a form with several password fields, record with
   `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment. Macros already saved
   with the marker are not repaired by this change and need re-saving.
+- **Make targets and CI scripts still ran `uv run --active`.** The earlier fix
+  dropped the flag from the pre-commit hooks and the docs only, so `make lint`
+  or `make test` from a shell whose `VIRTUAL_ENV` belongs to another project
+  still rebuilt that project's venv against these requirements. The flag is
+  gone from the Makefile, the `ci/` scripts, both workflows, the terminal
+  plugin README, and the usage notes in `scripts/`.
 
 ### Documentation
 - **Macro argument privacy is documented** in `docs/macros.md`: which argument
