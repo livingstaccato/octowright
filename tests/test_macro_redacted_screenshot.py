@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -26,6 +26,7 @@ from octowright import defaults
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.macros import artifacts, execution, safe_screenshot
 from octowright.macros import redaction_page_js as page_js
+from octowright.macros.page_devtools import closed_shadow_roots
 from octowright.macros.privacy import PrivacyLedger
 from octowright.macros.redaction_text import JS_IGNORABLE_CLASS
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS
@@ -41,15 +42,17 @@ PNG = b"\x89PNG-redacted-canary-bytes"
 TAKEN = [
     "animations:0",
     "redact",
+    "watch",
     "verify",
     "snapshot",
     "screenshot",
     "verify",
     "snapshot",
+    "restore",
     "animations:1",
     "detach",
-    "restore",
 ]
+_QUIET_METHODS = {"Animation.enable", "Animation.disable", "DOM.enable", "DOM.disable", "CSS.enable", "CSS.disable"}
 
 
 def _refused(*steps: str) -> list[str]:
@@ -57,47 +60,28 @@ def _refused(*steps: str) -> list[str]:
     return ["animations:0", *steps, "restore", "animations:1", "detach"]
 
 
-class FakeController:
-    def __init__(self, page: FakePage) -> None:
-        self.page = page
-
-    async def evaluate(self, expression: str) -> Any:
-        page = self.page
-        if expression == page_js.REDACT_CALL:
-            page.calls.append("redact")
-            if page.redact_error is not None:
-                raise page.redact_error
-            return None
-        if expression == page_js.VERIFY_CALL:
-            page.calls.append("verify")
-            return page.reports.pop(0) if page.reports else dict(CLEAN)
-        if expression == page_js.RESTORE_CALL:
-            page.calls.append("restore")
-            if page.restore_error is not None:
-                raise page.restore_error
-            return None
-        raise AssertionError(f"unexpected controller call: {expression}")
-
-    async def dispose(self) -> None:
-        return None
-
-
 class FakeCDP:
+    """A DevTools session over a fake page: the controller's calls, DevTools events and captures."""
+
     def __init__(self, page: FakePage) -> None:
         self.page = page
+        self.handlers: dict[str, list[Callable[[dict[str, Any]], None]]] = {}
+
+    def on(self, method: str, handler: Callable[[dict[str, Any]], None]) -> None:
+        self.handlers.setdefault(method, []).append(handler)
+
+    def remove_listener(self, method: str, handler: Callable[[dict[str, Any]], None]) -> None:
+        self.handlers[method].remove(handler)
+
+    def emit(self, method: str, params: dict[str, Any]) -> None:
+        for handler in list(self.handlers.get(method, [])):
+            handler(params)
 
     async def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         page = self.page
-        if method == "DOMSnapshot.captureSnapshot":
-            assert params == SNAPSHOT_PARAMS
-            page.calls.append("snapshot")
-            return page.snapshots.pop(0) if page.snapshots else CLEAN_SNAPSHOT
-        if method == "Page.captureScreenshot":
-            assert params == {"format": page.image_format}
-            page.calls.append("screenshot")
-            if page.capture_error is not None:
-                raise page.capture_error
-            return {"data": base64.b64encode(PNG).decode()}
+        if method in _QUIET_METHODS:
+            assert params is None
+            return {}
         if method == "Animation.setPlaybackRate":
             assert params is not None
             rate = params["playbackRate"]
@@ -107,12 +91,77 @@ class FakeCDP:
             if rate == 1 and page.resume_error is not None:
                 raise page.resume_error
             return {}
-        assert method in {"Animation.enable", "Animation.disable"}, method
-        assert params is None
+        assert params is not None, method
+        handler = getattr(self, "_" + method.replace(".", "_"))
+        result: dict[str, Any] = await handler(params)
+        return result
+
+    async def _DOM_getDocument(self, params: dict[str, Any]) -> dict[str, Any]:
+        assert params == {"depth": -1, "pierce": True}
+        for sheet_id in self.page.sheets:
+            self.emit("CSS.styleSheetAdded", {"header": {"styleSheetId": sheet_id}})
+        return {"root": self.page.document}
+
+    async def _DOM_resolveNode(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.page.resolved.append(params["backendNodeId"])
+        return {"object": {"objectId": f"root-{params['backendNodeId']}"}}
+
+    async def _CSS_getStyleSheetText(self, params: dict[str, Any]) -> dict[str, Any]:
+        text = self.page.sheets[params["styleSheetId"]]
+        if text is None:
+            raise RuntimeError("No style sheet with given id found")
+        return {"text": text}
+
+    async def _Runtime_evaluate(self, params: dict[str, Any]) -> dict[str, Any]:
+        assert params["expression"] == "document"
+        return {"result": {"objectId": "document"}}
+
+    async def _Runtime_releaseObjectGroup(self, _params: dict[str, Any]) -> dict[str, Any]:
+        self.page.released = True
         return {}
+
+    async def _Runtime_callFunctionOn(self, params: dict[str, Any]) -> dict[str, Any]:
+        page = self.page
+        if params["functionDeclaration"] == page_js.CONTROLLER_JS:
+            argument = params["arguments"][0]["value"]
+            assert argument["ignorable"] == JS_IGNORABLE_CLASS
+            page.redacted_values = list(argument["values"])
+            return {"result": {"objectId": "controller"}}
+        assert params["objectId"] == "controller"
+        call = params["functionDeclaration"].split("this.", 1)[1].split("(", 1)[0]
+        page.calls.append(call)
+        for method, event in page.events.pop(call, ()):
+            self.emit(method, event)
+        if call == "redact":
+            page.redact_arguments = params["arguments"]
+            if page.redact_error is not None:
+                raise page.redact_error
+        elif call == "watch":
+            page.latent = params["arguments"][0]["value"]
+        elif call == "verify":
+            return {"result": {"value": page.reports.pop(0) if page.reports else dict(CLEAN)}}
+        elif call == "restore" and page.restore_error is not None:
+            raise page.restore_error
+        return {"result": {}}
+
+    async def _DOMSnapshot_captureSnapshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        assert params == SNAPSHOT_PARAMS
+        self.page.calls.append("snapshot")
+        return self.page.snapshots.pop(0) if self.page.snapshots else CLEAN_SNAPSHOT
+
+    async def _Page_captureScreenshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        page = self.page
+        assert params == {"format": page.image_format}
+        page.calls.append("screenshot")
+        for method, event in page.events.pop("screenshot", ()):
+            self.emit(method, event)
+        if page.capture_error is not None:
+            raise page.capture_error
+        return {"data": base64.b64encode(PNG).decode()}
 
     async def detach(self) -> None:
         self.page.calls.append("detach")
+        assert not any(self.handlers.values()), "every DevTools listener is removed before detaching"
 
 
 class FakeContext:
@@ -126,13 +175,16 @@ class FakeContext:
 
 
 class FakePage:
-    """Records the redaction protocol in order: redact, verify, snapshot, screenshot, ..., restore."""
+    """Records the redaction protocol in order: redact, watch, verify, snapshot, screenshot, ..., restore."""
 
     def __init__(
         self,
         *,
         reports: tuple[dict[str, Any], ...] = (),
         snapshots: tuple[dict[str, Any], ...] = (),
+        events: dict[str, tuple[tuple[str, dict[str, Any]], ...]] | None = None,
+        sheets: dict[str, str | None] | None = None,
+        document: dict[str, Any] | None = None,
         redact_error: BaseException | None = None,
         restore_error: Exception | None = None,
         capture_error: Exception | None = None,
@@ -144,6 +196,9 @@ class FakePage:
         self.calls: list[str] = []
         self.reports = list(reports)
         self.snapshots = list(snapshots)
+        self.events = dict(events or {})
+        self.sheets = dict(sheets or {})
+        self.document = document or {}
         self.redact_error = redact_error
         self.restore_error = restore_error
         self.capture_error = capture_error
@@ -152,13 +207,11 @@ class FakePage:
         self.chromium = chromium
         self.image_format = image_format
         self.redacted_values: list[str] | None = None
+        self.redact_arguments: list[dict[str, Any]] | None = None
+        self.resolved: list[int] = []
+        self.latent: bool | None = None
+        self.released = False
         self.context = FakeContext(self)
-
-    async def evaluate_handle(self, expression: str, arg: Any) -> FakeController:
-        assert expression == page_js.CONTROLLER_JS
-        assert arg["ignorable"] == JS_IGNORABLE_CLASS
-        self.redacted_values = list(arg["values"])
-        return FakeController(self)
 
 
 def _session(page: FakePage) -> MagicMock:
@@ -287,7 +340,7 @@ async def test_a_page_that_changed_before_the_capture_is_refused(tmp_path: Path)
     with pytest.raises(RuntimeError, match="page changed before"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused("redact", "verify")
+    assert page.calls == _refused("redact", "watch", "verify")
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -298,8 +351,98 @@ async def test_a_page_that_changed_during_the_capture_loses_its_screenshot(tmp_p
     with pytest.raises(RuntimeError, match="page changed after"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused("redact", "verify", "snapshot", "screenshot", "verify")
+    assert page.calls == _refused("redact", "watch", "verify", "snapshot", "screenshot", "verify")
     assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["verify", "screenshot"])
+async def test_a_change_devtools_reports_once_counting_began_refuses(stage: str, tmp_path: Path) -> None:
+    page = FakePage(events={stage: (("DOM.characterDataModified", {"nodeId": 7}),)})
+
+    with pytest.raises(RuntimeError, match="page changed before" if stage == "verify" else "page changed after"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_changes_before_counting_and_inline_style_attribute_events_are_not_counted(tmp_path: Path) -> None:
+    style_event = ("DOM.attributeModified", {"nodeId": 7, "name": "style", "value": "width: 3px"})
+    page = FakePage(
+        events={
+            "redact": (
+                ("DOM.childNodeInserted", {"parentNodeId": 1}),
+                ("CSS.styleSheetChanged", {"styleSheetId": "1"}),
+            ),
+            "verify": (style_event, ("DOM.attributeRemoved", {"nodeId": 7, "name": "style"})),
+        }
+    )
+
+    assert await _shoot(page, tmp_path / "shot.png") == (1, 0)
+
+    assert page.calls == TAKEN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sheets", "latent"),
+    [
+        ({}, False),
+        ({"a": "p{color:red}"}, False),
+        ({"a": "p{}", "b": f"p::after{{content:'{PASSWORD}'}}"}, True),
+        ({"a": None}, True),
+    ],
+    ids=["no-sheet", "clean-sheet", "sheet-holding-a-value", "unreadable-sheet"],
+)
+async def test_a_stylesheet_that_holds_a_value_makes_every_inline_style_change_count(
+    sheets: dict[str, str | None], latent: bool, tmp_path: Path
+) -> None:
+    page = FakePage(sheets=sheets)
+
+    assert await _shoot(page, tmp_path / "shot.png") == (1, 0)
+
+    assert page.latent is latent
+
+
+@pytest.mark.asyncio
+async def test_closed_shadow_roots_reach_the_redaction_but_frame_documents_do_not(tmp_path: Path) -> None:
+    frame_root = {"shadowRoots": [{"shadowRootType": "closed", "backendNodeId": 99}]}
+    document = {
+        "children": [
+            {
+                "shadowRoots": [
+                    {
+                        "shadowRootType": "closed",
+                        "backendNodeId": 5,
+                        "children": [
+                            {
+                                "shadowRoots": [
+                                    {
+                                        "shadowRootType": "open",
+                                        "backendNodeId": 6,
+                                        "children": [
+                                            {"shadowRoots": [{"shadowRootType": "closed", "backendNodeId": 8}]},
+                                        ],
+                                    }
+                                ]
+                            },
+                        ],
+                    }
+                ]
+            },
+            {"shadowRoots": [{"shadowRootType": "user-agent", "backendNodeId": 9}], "contentDocument": frame_root},
+        ]
+    }
+    page = FakePage(document=document)
+
+    assert await _shoot(page, tmp_path / "shot.png") == (1, 0)
+
+    assert sorted(page.resolved) == [5, 8]
+    assert page.redact_arguments is not None
+    assert sorted(argument["objectId"] for argument in page.redact_arguments) == ["root-5", "root-8"]
+    assert sorted(closed_shadow_roots(document)) == [5, 8]
+    assert page.released
 
 
 @pytest.mark.asyncio
@@ -309,7 +452,7 @@ async def test_values_still_in_the_page_refuse_the_screenshot(tmp_path: Path) ->
     with pytest.raises(RuntimeError, match="still in the page before"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused("redact", "verify")
+    assert page.calls == _refused("redact", "watch", "verify")
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -321,7 +464,7 @@ async def test_a_value_the_page_still_renders_refuses_without_naming_it(tmp_path
         await _shoot(page, tmp_path / "shot.png")
 
     assert PASSWORD not in str(raised.value)
-    assert page.calls == _refused("redact", "verify", "snapshot")
+    assert page.calls == _refused("redact", "watch", "verify", "snapshot")
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -332,7 +475,7 @@ async def test_a_value_rendered_during_the_capture_loses_its_screenshot(tmp_path
     with pytest.raises(RuntimeError, match="still rendered after the screenshot"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused(*TAKEN[1:7])
+    assert page.calls == _refused(*TAKEN[1:8])
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -369,7 +512,7 @@ async def test_a_failed_screenshot_still_restores_and_leaves_no_file(tmp_path: P
             session, {"action": "screenshot", "path": str(tmp_path / "shot.png")}, (PASSWORD,)
         )
 
-    assert page.calls == _refused("redact", "verify", "snapshot", "screenshot")
+    assert page.calls == _refused("redact", "watch", "verify", "snapshot", "screenshot")
     assert not (tmp_path / "shot.png").exists()
     session.recorder.record.assert_not_called()
 
@@ -438,7 +581,7 @@ async def test_a_failed_restore_after_a_refusal_reports_the_refusal(tmp_path: Pa
     with pytest.raises(RuntimeError, match="page changed before"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused("redact", "verify")
+    assert page.calls == _refused("redact", "watch", "verify")
 
 
 @pytest.mark.asyncio

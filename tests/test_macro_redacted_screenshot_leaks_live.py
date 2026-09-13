@@ -13,6 +13,7 @@ into the PNG. Refusing (no file written) is always an acceptable outcome.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import urllib.parse
@@ -21,6 +22,7 @@ from pathlib import Path
 
 import pytest
 
+from octowright.macros import safe_screenshot
 from octowright.macros.safe_screenshot import redacted_screenshot
 
 pytestmark = pytest.mark.live_browser
@@ -141,7 +143,9 @@ _CASES = {
     ),
     "input_value_set_by_script": (
         f"{STYLE}<input id=i style='font:40px monospace;width:880px'><script>document.getElementById('i').value={SECRET!r}</script>",
-        f"{STYLE}<input id=i style='font:40px monospace;width:880px'><script>document.getElementById('i').value='<redacted>'</script>",
+        # A masked control shows only as many mask characters as its value is long.
+        f"{STYLE}<input id=i style='font:40px monospace;width:880px;-webkit-text-security:disc'>"
+        f"<script>document.getElementById('i').value={'x' * len(SECRET)!r}</script>",
         SECRET,
     ),
     "html_special_characters": (
@@ -210,7 +214,7 @@ _CASES.update(
         ),
         "picture_source": (
             f'{STYLE}<picture><source srcset="{_svg(SECRET)}"><img src="{_svg("x")}"></picture>',
-            f'{STYLE}<picture><source srcset="{_svg("x")}"><img src="{_svg("x")}"></picture>',
+            f'{STYLE}<picture><source srcset="{_svg("x")}"><img src="{_svg("x")}" style="visibility:hidden"></picture>',
             SECRET,
         ),
         "adopted_background_image": (
@@ -243,6 +247,58 @@ _CASES.update(
     }
 )
 
+
+def _closed_with(inner: str, script: str) -> str:
+    """A closed shadow root holding ``inner``, and a script that can reach it as ``root``."""
+    return (
+        "<div id=h></div><script>const root=document.getElementById('h').attachShadow({mode:'closed'});"
+        f"root.innerHTML={json.dumps(inner)};{script}</script>"
+    )
+
+
+# Leaks a review of 87d192b8 found in kept screenshots.
+_CASES.update(
+    {
+        "svg_image_link_in_closed_shadow": (
+            STYLE + _closed(f"<svg width=880 height=60><image href='{_svg(SECRET)}' width=880 height=60 /></svg>"),
+            STYLE
+            + _closed(
+                f"<svg width=880 height=60><image href='{_svg('x')}' width=880 height=60 style='visibility:hidden' /></svg>"
+            ),
+            SECRET,
+        ),
+        "content_url_from_an_adopted_sheet": (
+            f"{STYLE}<p id=a style='margin:0'></p>" + _adopted(f'#a::before{{content:url("{_svg(SECRET)}")}}'),
+            f"{STYLE}<p id=a style='margin:0'></p>",
+            SECRET,
+        ),
+        "content_url_in_closed_shadow": (
+            STYLE + _closed(f'<style>p::before{{content:url("{_svg(SECRET)}")}}</style><p style=margin:0></p>'),
+            STYLE + _closed("<p style=margin:0></p>"),
+            SECRET,
+        ),
+        **{
+            f"control_character_u{ord(control):04x}_inside": (
+                f"{STYLE}<p id=t></p><script>document.getElementById('t').textContent="
+                f"{json.dumps(SECRET[:13] + control + SECRET[13:])}</script>",
+                f"{STYLE}<p>{_R}</p>",
+                SECRET,
+            )
+            for control in ("\u0001", "\u007f", "\u0081")
+        },
+        "phone_shown_formatted": (f"{STYLE}<p>+1 (555) 013-7788</p>", f"{STYLE}<p>+{_R}</p>", "+15550137788"),
+    }
+)
+
+_CANVAS_MARKUP = (
+    "<canvas id=c width=800 height=80></canvas><script>const x=document.getElementById('c').getContext('2d');"
+    f"x.font='40px monospace';x.fillText('{SECRET}',0,50)</script>"
+)
+_HIDDEN_CANVAS_MARKUP = "<style>canvas{visibility:hidden}</style>" + _CANVAS_MARKUP
+
+_OFF = f"{STYLE}<p id=a style='margin:0'></p>"
+_REVEAL = "#a::after{content:'" + SECRET + "'}"
+
 # Pages that change what they show on their own; every attempt must refuse or show nothing.
 _REPEATED = {
     "input_value_toggled_by_a_timer": (
@@ -258,6 +314,103 @@ _REPEATED = {
         ),
         f"{STYLE}<p id=a style='margin:0'>x</p>",
     ),
+    "closed_shadow_text_toggled_by_a_timer": (
+        STYLE
+        + _closed_with(
+            "<p id=s style=margin:0></p>",
+            f"const s=root.getElementById('s');setInterval(()=>{{s.textContent=s.textContent?'':{json.dumps(SECRET)}}},3)",
+        ),
+        STYLE + _closed_with("<p id=s style=margin:0></p>", ""),
+    ),
+    "closed_shadow_shown_for_each_frame": (
+        STYLE
+        + _closed_with(
+            f"<p id=s style='margin:0' hidden>{SECRET}</p>",
+            "const s=root.getElementById('s');"
+            "const f=()=>{s.hidden=false;setTimeout(()=>{s.hidden=true},0);requestAnimationFrame(f)};requestAnimationFrame(f)",
+        ),
+        STYLE + _closed_with(f"<p id=s style='margin:0' hidden>{SECRET}</p>", ""),
+    ),
+    "closed_shadow_canvas_added_and_removed": (
+        STYLE
+        + _closed_with(
+            "<div id=d></div>",
+            "const d=root.getElementById('d');setInterval(()=>{const c=document.createElement('canvas');"
+            f"c.width=880;c.height=80;const x=c.getContext('2d');x.font='40px monospace';x.fillText({json.dumps(SECRET)},0,50);"
+            "d.append(c);setTimeout(()=>c.remove(),2)},6)",
+        ),
+        STYLE + _closed_with("<div id=d></div>", ""),
+    ),
+    "selector_text_toggled": (
+        _OFF + f"<script>const st=new CSSStyleSheet();st.replaceSync({json.dumps(_REVEAL.replace('#a', '#zz'))});"
+        "document.adoptedStyleSheets=[st];const r=st.cssRules[0];"
+        "setInterval(()=>{r.selectorText=r.selectorText==='#a::after'?'#zz::after':'#a::after'},3)</script>",
+        _OFF,
+    ),
+    "grouping_rule_inserted_and_deleted": (
+        _OFF + "<script>const gs=new CSSStyleSheet();gs.replaceSync('@media all{}');document.adoptedStyleSheets=[gs];"
+        f"const m=gs.cssRules[0];setInterval(()=>{{if(m.cssRules.length)m.deleteRule(0);else m.insertRule({json.dumps(_REVEAL)})}},3)</script>",
+        _OFF,
+    ),
+    "adopted_sheet_pushed_and_popped": (
+        _OFF + f"<script>const rv=new CSSStyleSheet();rv.replaceSync({json.dumps(_REVEAL)});let on=false;"
+        "setInterval(()=>{if(on)document.adoptedStyleSheets.pop();else document.adoptedStyleSheets.push(rv);on=!on},3)</script>",
+        _OFF,
+    ),
+    "stylesheet_disabled_toggled": (
+        _OFF
+        + "<style id=hide>#a::after{display:none}</style>"
+        + _adopted(_REVEAL)
+        + "<script>const hs=document.getElementById('hide').sheet;setInterval(()=>{hs.disabled=!hs.disabled},3)</script>",
+        _OFF,
+    ),
+    "rule_style_toggled_by_property_name": (
+        _OFF + f"<script>const ns=new CSSStyleSheet();ns.replaceSync({json.dumps(_REVEAL[:-1] + ';display:none}')});"
+        "document.adoptedStyleSheets=[ns];const rr=ns.cssRules[0];"
+        "setInterval(()=>{rr.style.display=rr.style.display==='none'?'inline':'none'},3)</script>",
+        _OFF,
+    ),
+    "focus_toggle_reveals_generated_content": (
+        f"{STYLE}<input id=f style='width:1px;height:1px;border:0;padding:0;outline:none'><p id=a style='margin:0'></p>"
+        + _adopted("#f:focus ~ " + _REVEAL)
+        + "<script>const fi=document.getElementById('f');"
+        "setInterval(()=>{if(document.activeElement===fi)fi.blur();else fi.focus()},3)</script>",
+        f"{STYLE}<input id=f style='width:1px;height:1px;border:0;padding:0;outline:none'><p id=a style='margin:0'></p>",
+    ),
+    "script_animation_reveals_generated_content": (
+        _OFF
+        + _adopted(_REVEAL[:-1] + ";display:none}")
+        + "<script>const ae=document.getElementById('a');setInterval(()=>{const an=ae.animate("
+        "[{display:'inline'},{display:'inline'}],{duration:100000,pseudoElement:'::after'});setTimeout(()=>an.cancel(),2)},6)</script>",
+        _OFF,
+    ),
+}
+
+# Ordinary pages that keep writing to themselves; the screenshot must be taken, not refused.
+_BUSY = {
+    "custom_property_written_every_frame": (
+        f"{STYLE}<p>{SECRET}</p><div id=b></div><script>let n=0;"
+        "const f=()=>{document.getElementById('b').style.setProperty('--n',String(n++));requestAnimationFrame(f)};f()</script>",
+        f"{STYLE}<p>{_R}</p><div id=b></div>",
+    ),
+    "spinner_transform_written_every_frame": (
+        f"{STYLE}<p>{SECRET}</p><div id=b style='width:0;height:0'></div><script>let n=0;"
+        "const f=()=>{document.getElementById('b').style.transform='rotate('+(n++)+'deg)';requestAnimationFrame(f)};f()</script>",
+        f"{STYLE}<p>{_R}</p><div id=b style='width:0;height:0'></div>",
+    ),
+    "input_value_written_again_every_frame": (
+        f"{STYLE}<input id=i {_FIELD} value={json.dumps(SECRET)}><script>const i=document.getElementById('i');"
+        "const f=()=>{i.value=i.value;requestAnimationFrame(f)};f()</script>",
+        f"{STYLE}<input id=i style='font:40px monospace;width:880px;-webkit-text-security:disc' value={'x' * len(SECRET)}>",
+    ),
+    "stylesheet_text_holding_the_value": (
+        f"{STYLE}<style>#a::after{{content:'{SECRET}'}}</style><p id=a style='margin:0'></p>",
+        f"{STYLE}<style>#a::after{{content:'<redacted>'}}</style><p id=a style='margin:0'></p>",
+    ),
+    "picture_source": _CASES["picture_source"][:2],
+    "closed_shadow_root": _CASES["closed_shadow_root"][:2],
+    "phone_shown_formatted": _CASES["phone_shown_formatted"][:2],
+    "canvas_with_page_transitions": ("<style>*{transition:all 5s}</style>" + _CANVAS_MARKUP, _HIDDEN_CANVAS_MARKUP),
 }
 
 _CANVAS = (
@@ -344,3 +497,42 @@ async def test_a_page_that_changes_itself_never_keeps_a_screenshot_showing_the_v
         reference = await _render(browser, never_held, tmp_path / f"{name}.reference.png")
         outcomes = [await _redacted(browser, html, SECRET, tmp_path, f"{name}-{attempt}") for attempt in range(4)]
     assert all(outcome is None or outcome == reference for outcome in outcomes)
+
+
+@pytest.mark.parametrize("name", sorted(_BUSY))
+async def test_an_ordinary_page_that_keeps_writing_to_itself_is_still_screenshotted(name: str, tmp_path: Path) -> None:
+    html, never_held = _BUSY[name]
+    secret = "+15550137788" if name == "phone_shown_formatted" else SECRET
+    async with _browser() as browser:
+        reference = await _render(browser, never_held, tmp_path / f"{name}.reference.png")
+        redacted = await _redacted(browser, html, secret, tmp_path, name)
+    assert redacted == reference
+
+
+async def test_page_animations_hold_still_for_the_capture_and_resume_after(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    times: list[float] = []
+    capture = safe_screenshot._capture
+    read = {"expression": "document.getAnimations()[0].currentTime", "returnByValue": True}
+
+    async def capture_while_watching_the_clock(cdp: object, target: Path) -> None:
+        for _ in range(2):
+            reply = await cdp.send("Runtime.evaluate", read)  # type: ignore[attr-defined]
+            times.append(float(reply["result"]["value"]))
+            await asyncio.sleep(0.2)
+        await capture(cdp, target)
+
+    monkeypatch.setattr(safe_screenshot, "_capture", capture_while_watching_the_clock)
+    html = f"{STYLE}<style>@keyframes k{{to{{opacity:.5}}}}</style><div style='animation:k 10s linear infinite'>.</div><p>{SECRET}</p>"
+    async with _browser() as browser:
+        page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
+        await page.set_content(html)
+        await page.wait_for_timeout(100)
+        assert await redacted_screenshot(
+            _PageSession(page), {"path": str(tmp_path / "a.png")}, (SECRET,), root=tmp_path
+        ) == (1, 0)
+        assert len(times) == 2 and times[0] == times[1]
+        after = await page.evaluate("() => document.getAnimations()[0].currentTime")
+        await page.wait_for_timeout(200)
+        assert await page.evaluate("() => document.getAnimations()[0].currentTime") > after

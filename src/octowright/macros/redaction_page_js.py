@@ -5,97 +5,130 @@
 
 """The in-page half of a redacted screenshot.
 
-``CONTROLLER_JS`` builds a controller object that the Python side holds as a
-Playwright handle. Its state lives in that closure, never on a page global, so page
-script cannot reach or neutralise the restore. The controller:
+``CONTROLLER_JS`` builds a controller object that the Python side holds through its own
+DevTools session (:mod:`octowright.macros.page_devtools`). Its state lives in that closure,
+never on a page global, so page script cannot reach or neutralise the restore. The
+controller:
 
-- ``redact()`` replaces the classified values in text nodes, attribute values and
-  form-control values across the document and open shadow roots. Matching follows
-  :mod:`octowright.macros.redaction_text`: case, whitespace and invisible characters
-  inside a value are ignored, and a string that still holds a value after replacement
-  (a decomposed accent, say) is replaced whole. Canvases, media, embeds and frames are
-  hidden, and so is any element whose resource address (``src``, ``srcset``,
-  ``srcdoc``, ``data``, ``poster``) holds a value; for a ``<picture>`` source that is
-  the picture's image. A resource address is never rewritten, because that would
-  navigate or reload. Hiding also switches off transitions and animations on the
-  element. Once the page is redacted the controller starts counting page changes.
-- ``verify()`` reports how many page changes it counted since redaction and how many
-  classified spellings the open DOM still holds. A change is any DOM mutation, any
-  write to a form value or selection state, any stylesheet edit through the CSSOM
-  methods, any change to the set of shadow roots, and any edited form value that
-  drifted.
+- ``redact(...closedRoots)`` works through the document, every open shadow root, and the
+  closed shadow roots DevTools hands it. It replaces the classified values in text nodes
+  and attribute values, matching as :mod:`octowright.macros.redaction_text` defines
+  (case, whitespace, invisible characters and the punctuation of a number are ignored,
+  and a string that still holds a value after replacement is replaced whole). A text
+  control holding a value keeps its value and caret and has its text masked with
+  ``-webkit-text-security`` instead; other controls have their value replaced.
+  Canvases, media, embeds and frames are hidden, and so is any element whose resource
+  address (``src``, ``srcset``, ``srcdoc``, ``data``, ``poster``, or the link of an image,
+  ``use`` or filter image) holds a value; for a ``<picture>`` source that is the picture's
+  image. A resource address is never rewritten, because that would navigate or reload.
+  Hiding also switches off transitions and animations on the element.
+- ``watch(latent)`` starts counting the page changes DevTools does not report: a change to
+  the inline style of an element the redaction styled, or to a style that holds a value
+  (every inline style change when ``latent``, that is when a stylesheet holds a value a
+  style change could reveal); a change of checked, indeterminate, selected or custom
+  validity state; a focus change; and a change of the location hash. DevTools counts
+  every other DOM and stylesheet change.
+- ``verify()`` reports how many such changes it counted and how many classified
+  spellings the redacted roots still hold outside what it hid or masked.
 - ``restore()`` stops counting and undoes every change in reverse order: text,
-  attributes, form values, the selection of every control it touched, and only the
-  style properties it set.
-  If the page itself changed an element's style meanwhile, that change is kept. It is
-  idempotent.
+  attributes, control values, and only the style properties it set. If the page itself
+  changed an element's style meanwhile, that change is kept. It is idempotent.
+
+The page's own mutation observers see the redaction: an application that saves what it
+observes (an autosave, say) could save a redacted text or attribute.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from octowright.macros.redaction_text import JS_IGNORABLE_CLASS
+from octowright.macros.redaction_text import JS_DIGIT_SEPARATOR_CLASS, JS_IGNORABLE_CLASS, digit_needles
+from octowright.macros.rendered_surface import (
+    HREF_ATTRIBUTES,
+    HREF_LOADING_ELEMENTS,
+    LOADING_ATTRIBUTES,
+    OPAQUE_ELEMENTS,
+    UNMASKED_INPUT_TYPES,
+)
 
-CONTROLLER_JS = r"""({values, ignorable}) => {
+CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttributes, hrefLoading, opaque, unmaskedTypes}) => {
   const invisible = new RegExp(`[\\s${ignorable}]+`, 'gu');
+  const invisibleOrSeparator = new RegExp(`[\\s${ignorable}${separators}]+`, 'gu');
   const gap = `[\\s${ignorable}]*`;
+  const digitGap = `[\\s${ignorable}${separators}]*`;
   const normalize = (text) => String(text ?? '').normalize('NFKC').replace(invisible, '').toLowerCase();
+  const digitsForm = (text) => String(text ?? '').normalize('NFKC').replace(invisibleOrSeparator, '');
   const secrets = values.filter((value) => typeof value === 'string' && value.length > 0);
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const patterns = secrets.map((secret) => new RegExp(Array.from(secret).map(escapeRegex).join(gap), 'giu'));
+  const patterns = [
+    ...secrets.map((secret) => new RegExp(Array.from(secret).map(escapeRegex).join(gap), 'giu')),
+    ...digits.map((needle) => new RegExp(Array.from(needle).join(digitGap), 'gu')),
+  ];
   const needles = [...new Set(secrets.map(normalize).filter((needle) => needle.length > 0))];
   const holds = (value) => {
+    if (value === null || value === undefined) return false;
     const text = normalize(value);
-    return needles.some((needle) => text.includes(needle));
+    if (needles.some((needle) => text.includes(needle))) return true;
+    const numbers = digitsForm(value);
+    return digits.some((needle) => numbers.includes(needle));
   };
   const redact = (value) => {
     const safe = patterns.reduce((text, pattern) => text.replace(pattern, '<redacted>'), String(value ?? ''));
     return holds(safe) ? '<redacted>' : safe;
   };
-  const OPAQUE = new Set(['CANVAS', 'EMBED', 'FRAME', 'IFRAME', 'OBJECT', 'VIDEO']);
-  const LOADING = new Set(['src', 'srcset', 'srcdoc', 'data', 'poster']);
-  const HREF_LOADS = new Set(['BASE', 'IMAGE', 'LINK', 'USE']);
+  const OPAQUE = new Set(opaque);
+  const LOADING = new Set(loading);
+  const HREF = new Set(hrefAttributes);
+  const HREF_LOADS = new Set(hrefLoading);
+  const UNMASKED = new Set(unmaskedTypes);
   const EDITABLE = new Set(['INPUT', 'TEXTAREA']);
   const HIDDEN_STYLE = [['transition', 'none'], ['animation', 'none'], ['visibility', 'hidden']];
+  const MASK_STYLE = [['-webkit-text-security', 'disc']];
   const tag = (element) => String((element && element.tagName) || '').toUpperCase();
-  const loads = (element, name) => LOADING.has(name)
-    || ((name === 'href' || name === 'xlink:href') && HREF_LOADS.has(tag(element)));
+  const loads = (element, name) => LOADING.has(name) || (HREF.has(name) && HREF_LOADS.has(tag(element)));
+  const maskable = (element) => tag(element) === 'TEXTAREA'
+    || (tag(element) === 'INPUT' && !UNMASKED.has(String(element.getAttribute('type') ?? '').toLowerCase()));
   const changes = [];
   const styled = new Map();
   const shielded = new Set();
-  const edits = [];
+  const masked = new Set();
   const unhooks = [];
-  let rootCount = 0;
+  const listeners = [];
+  let roots = [document];
   let observer = null;
+  let latent = false;
   let changed = 0;
   let restored = false;
-  const collectRoots = () => {
-    const found = [document];
+  const collectRoots = (closedRoots) => {
+    const found = [document, ...closedRoots];
     for (let index = 0; index < found.length; index += 1) {
       for (const element of found[index].querySelectorAll('*')) {
-        if (element.shadowRoot) found.push(element.shadowRoot);
+        if (element.shadowRoot && !found.includes(element.shadowRoot)) found.push(element.shadowRoot);
       }
     }
     return found;
   };
   const scan = (visit) => {
-    for (const root of collectRoots()) {
+    for (const root of roots) {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       while (walker.nextNode()) visit('text', walker.currentNode);
       for (const element of root.querySelectorAll('*')) visit('element', element);
     }
   };
-  const hide = (element) => {
+  const style = (element, declarations) => {
     if (!element.style) return;
+    const record = styled.get(element) || {before: element.getAttribute('style'), previous: []};
+    for (const [name] of declarations) {
+      if (record.previous.some(([known]) => known === name)) continue;
+      record.previous.push([name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+    }
+    for (const [name, value] of declarations) element.style.setProperty(name, value, 'important');
+    record.after = element.getAttribute('style');
+    styled.set(element, record);
+  };
+  const hide = (element) => {
     shielded.add(element);
-    if (styled.has(element)) return;
-    const before = element.getAttribute('style');
-    const previous = HIDDEN_STYLE.map(([name]) => [
-      name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name),
-    ]);
-    for (const [name, value] of HIDDEN_STYLE) element.style.setProperty(name, value, 'important');
-    styled.set(element, {before, after: element.getAttribute('style'), previous});
+    style(element, HIDDEN_STYLE);
   };
   const shield = (element) => {
     const parent = element.parentElement;
@@ -106,7 +139,11 @@ CONTROLLER_JS = r"""({values, ignorable}) => {
     }
     hide(element);
   };
-  const unhide = (element, {before, after, previous}) => {
+  const mask = (element) => {
+    masked.add(element);
+    style(element, MASK_STYLE);
+  };
+  const unstyle = (element, {before, after, previous}) => {
     if (element.getAttribute('style') === after) {
       if (before === null) element.removeAttribute('style');
       else element.setAttribute('style', before);
@@ -117,57 +154,48 @@ CONTROLLER_JS = r"""({values, ignorable}) => {
       else element.style.removeProperty(name);
     }
   };
-  const selection = (element) => {
-    try {
-      return [element.selectionStart, element.selectionEnd, element.selectionDirection];
-    } catch (error) {
-      return [null, null, null];
-    }
-  };
   const undo = (change) => {
     const [kind, node] = change;
     if (kind === 'text') node.nodeValue = change[2];
     else if (kind === 'attribute') node.setAttribute(change[2], change[3]);
-    else if (kind === 'value') node.value = change[2];
-    else {
-      const [start, end, direction] = change[2];
-      if (start === null) return;
-      try {
-        node.setSelectionRange(start, end, direction || undefined);
-      } catch (error) {
-        // A control whose type has no selection keeps none.
-      }
+    else node.value = change[2];
+  };
+  const count = (records) => {
+    for (const record of records) {
+      if (latent || styled.has(record.target) || holds(record.target.getAttribute('style'))) changed += 1;
     }
   };
-  const hook = (prototype, name, kind) => {
+  const hookSetter = (prototype, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-    if (!descriptor || !descriptor.configurable) return;
-    const original = kind === 'set' ? descriptor.set : descriptor.value;
-    if (typeof original !== 'function') return;
-    const counted = function counted(...args) {
-      changed += 1;
-      return original.apply(this, args);
+    if (!descriptor || !descriptor.configurable || !descriptor.get || !descriptor.set) return;
+    const counted = function counted(value) {
+      const before = descriptor.get.call(this);
+      descriptor.set.call(this, value);
+      if (descriptor.get.call(this) !== before) changed += 1;
     };
-    Object.defineProperty(prototype, name, {...descriptor, [kind]: counted});
+    Object.defineProperty(prototype, name, {...descriptor, set: counted});
     unhooks.push(() => Object.defineProperty(prototype, name, descriptor));
   };
-  const HOOKED = [
-    [HTMLInputElement, 'set', ['value', 'checked']],
-    [HTMLInputElement, 'value', ['setRangeText', 'setSelectionRange']],
-    [HTMLTextAreaElement, 'set', ['value']],
-    [HTMLTextAreaElement, 'value', ['setRangeText', 'setSelectionRange']],
-    [HTMLSelectElement, 'set', ['value', 'selectedIndex']],
-    [HTMLOptionElement, 'set', ['selected']],
-    [CSSStyleDeclaration, 'set', ['cssText']],
-    [CSSStyleDeclaration, 'value', ['setProperty', 'removeProperty']],
-    [CSSStyleSheet, 'value', ['insertRule', 'deleteRule', 'addRule', 'removeRule', 'replace', 'replaceSync']],
-    [Document, 'set', ['adoptedStyleSheets']],
-    [ShadowRoot, 'set', ['adoptedStyleSheets']],
-  ];
+  const hookValidity = (prototype) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'setCustomValidity');
+    if (!descriptor || !descriptor.configurable || typeof descriptor.value !== 'function') return;
+    const original = descriptor.value;
+    const counted = function setCustomValidity(message) {
+      const before = this.validationMessage;
+      const result = original.call(this, message);
+      if (this.validationMessage !== before) changed += 1;
+      return result;
+    };
+    Object.defineProperty(prototype, 'setCustomValidity', {...descriptor, value: counted});
+    unhooks.push(() => Object.defineProperty(prototype, 'setCustomValidity', descriptor));
+  };
   return {
-    redact() {
+    redact(...closedRoots) {
+      roots = collectRoots(closedRoots);
       scan((kind, node) => {
         if (kind === 'text') {
+          // A textarea's text is its default value; the textarea is masked instead.
+          if (tag(node.parentNode) === 'TEXTAREA') return;
           const safe = redact(node.nodeValue);
           if (safe !== node.nodeValue) {
             changes.push(['text', node, node.nodeValue]);
@@ -176,72 +204,81 @@ CONTROLLER_JS = r"""({values, ignorable}) => {
           return;
         }
         if (OPAQUE.has(tag(node))) hide(node);
-        const editable = EDITABLE.has(tag(node));
-        const mark = changes.length;
-        const selected = editable ? selection(node) : null;
+        const maskedKind = maskable(node);
+        if (maskedKind && (holds(node.value) || holds(node.getAttribute('value')) || holds(node.textContent))) mask(node);
         for (const attribute of Array.from(node.attributes || [])) {
           if (!holds(attribute.value)) continue;
           if (loads(node, attribute.name)) {
             shield(node);
             continue;
           }
+          if (maskedKind && attribute.name === 'value') continue;
           changes.push(['attribute', node, attribute.name, attribute.value]);
           node.setAttribute(attribute.name, redact(attribute.value));
         }
-        if (editable && node.type !== 'file' && holds(node.value)) {
+        if (!maskedKind && EDITABLE.has(tag(node)) && node.type !== 'file' && holds(node.value)) {
           changes.push(['value', node, node.value]);
           node.value = redact(node.value);
         }
-        // Rewriting a control's value attribute or value resets its selection. Recording the
-        // selection before those changes makes the reverse undo put it back after them.
-        if (editable && changes.length > mark) changes.splice(mark, 0, ['selection', node, selected]);
       });
-      const roots = collectRoots();
-      rootCount = roots.length;
-      for (const root of roots) {
-        for (const element of root.querySelectorAll('input, textarea')) edits.push([element, element.value]);
+    },
+    watch(isLatent) {
+      latent = Boolean(isLatent);
+      observer = new MutationObserver(count);
+      for (const root of roots) observer.observe(root, {subtree: true, attributes: true, attributeFilter: ['style']});
+      for (const name of ['checked', 'indeterminate']) hookSetter(HTMLInputElement.prototype, name);
+      hookSetter(HTMLOptionElement.prototype, 'selected');
+      for (const type of [HTMLInputElement, HTMLTextAreaElement, HTMLSelectElement, HTMLButtonElement]) {
+        hookValidity(type.prototype);
       }
-      observer = new MutationObserver((records) => { changed += records.length; });
-      for (const root of roots) {
-        observer.observe(root, {subtree: true, childList: true, characterData: true, attributes: true});
-      }
-      for (const [prototype, kind, names] of HOOKED) {
-        for (const name of names) hook(prototype.prototype, name, kind);
+      for (const type of ['focusin', 'focusout', 'hashchange']) {
+        const listener = () => { changed += 1; };
+        window.addEventListener(type, listener, true);
+        listeners.push([type, listener]);
       }
     },
     verify() {
-      if (observer) changed += observer.takeRecords().length;
-      let drift = edits.filter(([element, value]) => element.value !== value).length;
-      if (collectRoots().length !== rootCount) drift += 1;
+      if (observer) count(observer.takeRecords());
       let remaining = 0;
       scan((kind, node) => {
         if (kind === 'text') {
-          if (holds(node.nodeValue)) remaining += 1;
+          if (holds(node.nodeValue) && !masked.has(node.parentNode)) remaining += 1;
           return;
         }
         for (const attribute of Array.from(node.attributes || [])) {
-          if (holds(attribute.value) && !(loads(node, attribute.name) && shielded.has(node))) remaining += 1;
+          if (!holds(attribute.value)) continue;
+          if (loads(node, attribute.name) && shielded.has(node)) continue;
+          if (attribute.name === 'value' && masked.has(node)) continue;
+          remaining += 1;
         }
-        if (EDITABLE.has(tag(node)) && holds(node.value)) remaining += 1;
+        if (EDITABLE.has(tag(node)) && !masked.has(node) && holds(node.value)) remaining += 1;
       });
-      return {changed: changed + drift, remaining};
+      return {changed, remaining};
     },
     restore() {
       if (restored) return;
       restored = true;
       if (observer) observer.disconnect();
+      for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);
       for (let index = unhooks.length - 1; index >= 0; index -= 1) unhooks[index]();
       for (let index = changes.length - 1; index >= 0; index -= 1) undo(changes[index]);
-      for (const [element, record] of styled) unhide(element, record);
+      for (const [element, record] of styled) unstyle(element, record);
     },
   };
 }"""
 
-REDACT_CALL = "(controller) => controller.redact()"
-VERIFY_CALL = "(controller) => controller.verify()"
-RESTORE_CALL = "(controller) => controller.restore()"
-
 
 def controller_argument(values: list[str]) -> dict[str, Any]:
-    """The argument ``CONTROLLER_JS`` takes: the value spellings and the shared ignorable class."""
-    return {"values": list(values), "ignorable": JS_IGNORABLE_CLASS}
+    """The argument ``CONTROLLER_JS`` takes: the value spellings and every shared matching table."""
+    digits = {needle for value in values if isinstance(value, str) for needle in digit_needles(value)}
+    return {
+        "values": list(values),
+        "digits": sorted(digits, key=lambda needle: (-len(needle), needle)),
+        "ignorable": JS_IGNORABLE_CLASS,
+        "separators": JS_DIGIT_SEPARATOR_CLASS,
+        "loading": sorted(LOADING_ATTRIBUTES),
+        "hrefAttributes": sorted(HREF_ATTRIBUTES),
+        "hrefLoading": sorted(HREF_LOADING_ELEMENTS),
+        "opaque": sorted(OPAQUE_ELEMENTS),
+        "unmaskedTypes": sorted(UNMASKED_INPUT_TYPES),
+    }

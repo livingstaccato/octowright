@@ -71,12 +71,50 @@ def test_a_value_split_across_layout_objects_still_matches() -> None:
     assert rendered_leaks(_snapshot(strings, _document(layout_text=[0, -1, 1])), [SECRET]) == ["rendered text"]
 
 
-def test_form_values_are_part_of_the_rendered_surface() -> None:
-    strings = [SECRET]
-    doc = _document(inputValue={"index": [0], "value": [0]})
-    assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == ["form value"]
-    doc = _document(textValue={"index": [0], "value": [0]})
-    assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == ["form value"]
+def _control(name: str, kind: str | None, visibility: str, security: str, key: str = "inputValue") -> dict[str, Any]:
+    """One form control holding the value, with its type attribute, visibility and text security."""
+    strings = [SECRET, name, "type", kind or "", visibility, security]
+    attributes = [[2, 3]] if kind is not None else [[]]
+    doc = _document(
+        names=[1],
+        types=[1],
+        parents=[-1],
+        attributes=attributes,
+        layout_nodes=[0],
+        layout_styles=[[4, 5]],
+        **{key: {"index": [0], "value": [0]}},
+    )
+    return _snapshot(strings, doc)
+
+
+@pytest.mark.parametrize(
+    ("name", "kind", "key"),
+    [
+        ("INPUT", None, "inputValue"),
+        ("INPUT", "email", "inputValue"),
+        ("INPUT", "TeL", "inputValue"),
+        ("INPUT", "no-such-type", "inputValue"),
+        ("TEXTAREA", None, "textValue"),
+    ],
+)
+def test_a_drawn_form_value_is_refused_unless_its_text_is_masked(name: str, kind: str | None, key: str) -> None:
+    assert rendered_leaks(_control(name, kind, "visible", "none", key), [SECRET]) == ["form value"]
+    assert rendered_leaks(_control(name, kind, "visible", "disc", key), [SECRET]) == []
+    assert rendered_leaks(_control(name, kind, "hidden", "none", key), [SECRET]) == []
+
+
+@pytest.mark.parametrize("kind", ["button", "submit", "reset", "hidden", "checkbox"])
+def test_masking_does_not_clear_a_control_that_does_not_draw_masked_text(kind: str) -> None:
+    assert rendered_leaks(_control("INPUT", kind, "visible", "disc"), [SECRET]) == ["form value"]
+
+
+def test_a_masked_select_is_not_a_masked_text_control() -> None:
+    assert rendered_leaks(_control("SELECT", None, "visible", "disc"), [SECRET]) == ["form value"]
+
+
+def test_a_form_value_without_a_layout_object_is_not_drawn() -> None:
+    doc = _document(names=[0], types=[1], parents=[-1], inputValue={"index": [0], "value": [1]})
+    assert rendered_leaks(_snapshot(["INPUT", SECRET], doc), [SECRET]) == []
 
 
 def test_option_text_is_part_of_the_rendered_surface() -> None:
@@ -168,8 +206,9 @@ def test_out_of_range_string_indexes_are_treated_as_empty() -> None:
     assert rendered_leaks(_snapshot([], doc), [SECRET]) == []
 
 
-def test_visibility_is_the_first_computed_style_read() -> None:
-    assert SNAPSHOT_PARAMS["computedStyles"][0] == "visibility"
+def test_visibility_then_text_security_are_the_first_computed_styles_read() -> None:
+    assert SNAPSHOT_PARAMS["computedStyles"][:2] == ["visibility", "-webkit-text-security"]
+    assert "content" in SNAPSHOT_PARAMS["computedStyles"][2:]
 
 
 @pytest.mark.parametrize(
@@ -275,15 +314,73 @@ def test_a_picture_source_holding_the_value_is_refused_while_its_image_shows() -
     assert rendered_leaks(_snapshot(strings, picture(7, 5)), [SECRET]) == []
 
 
-@pytest.mark.parametrize("position", [1, 2, 3, 4])
+@pytest.mark.parametrize("position", range(2, len(SNAPSHOT_PARAMS["computedStyles"])))
 def test_an_image_style_holding_the_value_is_refused_while_shown(position: int) -> None:
     strings = ["DIV", "visible", "hidden", "none", f'url("data:image/svg+xml,{SECRET}")']
-    styles = [3, 3, 3, 3, 3]
+    styles = [3] * len(SNAPSHOT_PARAMS["computedStyles"])
     styles[position] = 4
     shown = _document(names=[0], types=[1], parents=[-1], layout_nodes=[0], layout_styles=[[1, *styles[1:]]])
     hidden = _document(names=[0], types=[1], parents=[-1], layout_nodes=[0], layout_styles=[[2, *styles[1:]]])
     assert rendered_leaks(_snapshot(strings, shown), [SECRET]) == ["visible style image"]
     assert rendered_leaks(_snapshot(strings, hidden), [SECRET]) == []
+
+
+def test_text_security_is_not_an_image_style() -> None:
+    strings = ["DIV", "visible", f"data:image/svg+xml,{SECRET}", "none"]
+    doc = _document(names=[0], types=[1], parents=[-1], layout_nodes=[0], layout_styles=[[1, 2, 3]])
+    assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == []
+
+
+@pytest.mark.parametrize(("element", "attribute"), [("IMAGE", "href"), ("USE", "xlink:href"), ("IMAGE", "xlink:href")])
+def test_an_svg_image_link_holding_the_value_is_a_resource_address(element: str, attribute: str) -> None:
+    strings = [element, attribute, f"data:image/svg+xml,{SECRET}", "visible", "hidden", "A", "href"]
+    shown = _document(names=[0], types=[1], parents=[-1], attributes=[[1, 2]], layout_nodes=[0], layout_styles=[[3]])
+    hidden = _document(names=[0], types=[1], parents=[-1], attributes=[[1, 2]], layout_nodes=[0], layout_styles=[[4]])
+    anchor = _document(names=[5], types=[1], parents=[-1], attributes=[[6, 2]], layout_nodes=[0], layout_styles=[[3]])
+    assert rendered_leaks(_snapshot(strings, shown), [SECRET]) == ["visible resource address"]
+    assert rendered_leaks(_snapshot(strings, hidden), [SECRET]) == []
+    assert rendered_leaks(_snapshot(strings, anchor), [SECRET]) == []
+
+
+def test_a_filter_image_link_holding_the_value_is_refused_without_a_layout_object() -> None:
+    strings = ["FEIMAGE", "href", f"data:image/svg+xml,{SECRET}"]
+    doc = _document(names=[0], types=[1], parents=[-1], attributes=[[1, 2]])
+    assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == ["visible resource address"]
+
+
+def test_a_picture_source_with_its_own_layout_object_is_judged_by_the_picture_image() -> None:
+    """Chrome gives ``<source>`` a layout object; only the picture's image decides."""
+    strings = ["PICTURE", "SOURCE", "IMG", "srcset", f"data:image/svg+xml,{SECRET}", "visible", "hidden"]
+
+    def picture(image_style: int) -> dict[str, Any]:
+        return _document(
+            names=[0, 1, 2],
+            types=[1, 1, 1],
+            parents=[-1, 0, 0],
+            attributes=[[], [3, 4], []],
+            layout_nodes=[0, 1, 2],
+            layout_styles=[[5], [5], [image_style]],
+        )
+
+    assert rendered_leaks(_snapshot(strings, picture(5)), [SECRET]) == ["visible resource address"]
+    assert rendered_leaks(_snapshot(strings, picture(6)), [SECRET]) == []
+
+
+@pytest.mark.parametrize(
+    "shown",
+    ["+1 (555) 013-7788", "(555) 013-7788", "013-7788", "tel:+15550137788", "5550137788"[::-1]],
+    ids=["international", "national", "local", "link-text", "reversed"],
+)
+def test_a_numeric_value_matches_by_its_digits(shown: str) -> None:
+    assert rendered_leaks(_snapshot([shown], _document(layout_text=[0])), ["+15550137788"]) == ["rendered text"]
+
+
+def test_digits_split_across_boxes_match_and_too_few_digits_do_not() -> None:
+    strings = ["(555) ", "013-", "7788"]
+    split = _document(layout_text=[0, 1, 2], text_boxes=_line(*strings))
+    assert rendered_leaks(_snapshot(strings, split), ["+15550137788"]) == ["rendered text"]
+    assert rendered_leaks(_snapshot(["37788 and 013"], _document(layout_text=[0])), ["+15550137788"]) == []
+    assert rendered_leaks(_control("INPUT", "tel", "visible", "none"), ["x"]) == []
 
 
 def test_a_frame_document_address_is_a_resource_address() -> None:

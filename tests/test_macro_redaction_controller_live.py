@@ -3,19 +3,20 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""The in-page controller on a real page: what it counts as a change, what it matches, what it restores."""
+"""The page controller and the DevTools change count on a real page: what counts, what matches, what is restored."""
 
 from __future__ import annotations
 
 import contextlib
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
 
-from octowright.macros import redaction_page_js as page_js
+from octowright.macros.page_devtools import PageChanges, PageController
 from octowright.macros.privacy import sensitive_value_variants
-from octowright.macros.redaction_text import IGNORABLE_RANGES, JS_IGNORABLE_CLASS, normalize
+from octowright.macros.redaction_text import IGNORABLE_RANGES
 
 pytestmark = pytest.mark.live_browser
 
@@ -24,9 +25,15 @@ SECRET = "Controller-Canary-3b8d"  # pragma: allowlist secret
 _NO_ENGINE = ("executable doesn't exist", "missing x server", "no protocol specified", "playwright install")
 
 _PAGE = (
-    "<style>p{}</style><p id=t>hello</p><input id=i value=v>"
-    "<select id=s><option>a</option><option>b</option></select><div id=h></div>"
+    "<style id=st>#a::after{content:'x'} @media all { .m{color:red} }</style>"
+    "<p id=t>hello</p><p id=a></p><input id=i value=v><input id=c type=checkbox><div popover id=pop>p</div>"
+    "<select id=s><option>a</option><option>b</option></select><div id=h></div><div id=k></div>"
+    "<select id=ms multiple><option>a</option><option>b</option></select>"
+    "<script>window.__closed = document.getElementById('k').attachShadow({mode: 'closed'});"
+    "window.__closed.innerHTML = '<p id=ct>inside</p>';</script>"
 )
+
+_SETTLED = "() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
 
 
 @contextlib.asynccontextmanager
@@ -48,122 +55,276 @@ async def _page(html: str) -> AsyncIterator[Any]:
         raise
 
 
-async def _redacted(page: Any, values: tuple[str, ...] = (SECRET,)) -> Any:
-    argument = page_js.controller_argument(list(sensitive_value_variants(values)))
-    controller = await page.evaluate_handle(page_js.CONTROLLER_JS, argument)
-    await controller.evaluate(page_js.REDACT_CALL)
-    return controller
+@dataclass
+class _Watched:
+    page: Any
+    controller: PageController
+    changes: PageChanges
+
+    async def changed(self) -> int:
+        await self.page.evaluate(_SETTLED)
+        report = await self.controller.verify()
+        return int(report["changed"]) + self.changes.count
+
+    async def remaining(self) -> int:
+        return int((await self.controller.verify())["remaining"])
+
+    async def restore(self) -> None:
+        self.changes.end()
+        await self.controller.restore()
+
+
+@contextlib.asynccontextmanager
+async def _watched(page: Any, values: tuple[str, ...] = (SECRET,)) -> AsyncIterator[_Watched]:
+    """Redact as the screenshot does, then count; restore and release on the way out."""
+    cdp = await page.context.new_cdp_session(page)
+    await cdp.send("Animation.enable")
+    changes = PageChanges(cdp)
+    spellings = list(sensitive_value_variants(values))
+    closed_roots = await changes.start()
+    controller = await PageController.create(cdp, spellings)
+    try:
+        await controller.redact(closed_roots)
+        await controller.watch(await changes.sheets_hold(spellings))
+        changes.begin()
+        yield _Watched(page, controller, changes)
+    finally:
+        changes.end()
+        await controller.restore()
+        await controller.dispose()
+        await changes.close()
+        await cdp.detach()
 
 
 _CHANGES = {
     "child added": "() => document.body.append(document.createElement('i'))",
     "text edited": "() => { document.getElementById('t').firstChild.nodeValue = 'other'; }",
     "attribute set": "() => document.getElementById('t').setAttribute('data-x', '1')",
-    "inline style": "() => { document.getElementById('t').style.width = '10px'; }",
     "input value toggled back": "() => { const i = document.getElementById('i'); i.value = 'x'; i.value = 'v'; }",
     "selection toggled back": "() => { const s = document.getElementById('s'); s.selectedIndex = 1; s.selectedIndex = 0; }",
-    "stylesheet rule": "() => { document.styleSheets[0].insertRule('p{color:red}'); document.styleSheets[0].deleteRule(0); }",
-    "adopted stylesheets": "() => { document.adoptedStyleSheets = [new CSSStyleSheet()]; document.adoptedStyleSheets = []; }",
+    "stylesheet rule": "() => { const s = document.styleSheets[0]; s.insertRule('p{color:red}'); s.deleteRule(0); }",
+    # A sheet adopted and dropped before the next frame never renders and is not reported; one that
+    # lasts into a frame is.
+    "adopted stylesheets": (
+        "() => { const s = new CSSStyleSheet(); s.replaceSync('p{}'); document.adoptedStyleSheets = [s];"
+        " requestAnimationFrame(() => requestAnimationFrame(() => { document.adoptedStyleSheets = []; })); }"
+    ),
+    "adopted push and pop": (
+        "() => { const s = new CSSStyleSheet(); s.replaceSync('p{}'); document.adoptedStyleSheets.push(s);"
+        " requestAnimationFrame(() => requestAnimationFrame(() => document.adoptedStyleSheets.pop())); }"
+    ),
+    "selector text": "() => { document.getElementById('st').sheet.cssRules[0].selectorText = '#zz::after'; }",
+    "grouping rule insert": "() => { document.getElementById('st').sheet.cssRules[1].insertRule('.n{color:blue}', 0); }",
+    "rule style by property name": "() => { document.getElementById('st').sheet.cssRules[0].style.color = 'green'; }",
+    "stylesheet disabled": "() => { document.getElementById('st').sheet.disabled = true; }",
     "open shadow root": "() => document.getElementById('h').attachShadow({mode: 'open'})",
+    "closed shadow root": "() => { document.getElementById('h').attachShadow({mode: 'closed'}).innerHTML = '<b>x</b>'; }",
+    "closed shadow text": "() => { window.__closed.getElementById('ct').firstChild.nodeValue = 'x'; }",
+    "checked": "() => { document.getElementById('c').checked = true; }",
+    "option selected in a list box": "() => { document.getElementById('ms').options[1].selected = true; }",
+    "indeterminate": "() => { document.getElementById('c').indeterminate = true; }",
+    "custom validity": "() => document.getElementById('i').setCustomValidity('bad')",
+    "focus": "() => document.getElementById('i').focus()",
+    "popover": "() => document.getElementById('pop').showPopover()",
+    "script animation": "() => { document.getElementById('t').animate([{opacity: 0}, {opacity: 1}], 1000); }",
+}
+
+_HARMLESS = {
+    "inline style on an element the redaction did not touch": (
+        "() => { const t = document.getElementById('t').style; t.transform = 'rotate(2deg)'; t.setProperty('--n', '1'); }"
+    ),
+    "style attribute rewritten on an element the redaction did not touch": (
+        "() => document.getElementById('t').setAttribute('style', 'color: red')"
+    ),
+    "the same input value written again": "() => { const i = document.getElementById('i'); i.value = i.value; }",
+    "checked written unchanged": "() => { document.getElementById('c').checked = false; }",
+    "the same validity message": "() => document.getElementById('i').setCustomValidity('')",
 }
 
 
 async def test_an_untouched_page_reports_no_change() -> None:
-    async with _page(_PAGE) as page:
-        controller = await _redacted(page)
+    async with _page(_PAGE) as page, _watched(page) as watched:
         await page.evaluate("() => [document.getElementById('i').value, document.styleSheets.length]")
-        assert await controller.evaluate(page_js.VERIFY_CALL) == {"changed": 0, "remaining": 0}
+        assert await watched.changed() == 0
+        assert await watched.remaining() == 0
 
 
 @pytest.mark.parametrize("name", sorted(_CHANGES))
 async def test_every_kind_of_page_change_is_counted(name: str) -> None:
-    async with _page(_PAGE) as page:
-        controller = await _redacted(page)
+    async with _page(_PAGE) as page, _watched(page) as watched:
         await page.evaluate(_CHANGES[name])
-        report = await controller.evaluate(page_js.VERIFY_CALL)
-        assert report["changed"] >= 1
+        assert await watched.changed() >= 1
 
 
-async def test_restore_removes_every_hook_it_installed() -> None:
-    async with _page(_PAGE) as page:
-        await page.evaluate(
-            "() => { window.__native = [Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set,"
-            " CSSStyleSheet.prototype.insertRule, Object.getOwnPropertyDescriptor(Document.prototype,"
-            " 'adoptedStyleSheets').set]; }"
-        )
-        controller = await _redacted(page)
-        hooked = "() => { const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;"
-        assert await page.evaluate(hooked + " return d !== window.__native[0]; }") is True
-        await controller.evaluate(page_js.RESTORE_CALL)
-        assert await page.evaluate(
-            "() => Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set === window.__native[0]"
-            " && CSSStyleSheet.prototype.insertRule === window.__native[1]"
-            " && Object.getOwnPropertyDescriptor(Document.prototype, 'adoptedStyleSheets').set === window.__native[2]"
-        )
+@pytest.mark.parametrize("name", sorted(_HARMLESS))
+async def test_a_change_that_cannot_reveal_a_value_is_not_counted(name: str) -> None:
+    async with _page(_PAGE) as page, _watched(page) as watched:
+        await page.evaluate(_HARMLESS[name])
+        assert await watched.changed() == 0
 
 
 @pytest.mark.parametrize(
-    ("shown", "expected"),
+    ("html", "script"),
     [
-        (SECRET.lower(), "x <redacted> y"),
-        (SECRET[:11] + "\u200b" + SECRET[11:], "x <redacted> y"),
-        (SECRET[:11] + "\u00ad" + SECRET[11:], "x <redacted> y"),
-        (SECRET[:11] + " " + SECRET[11:], "x <redacted> y"),
+        ("<canvas id=x></canvas>", "() => { document.getElementById('x').style.width = '3px'; }"),
+        (
+            "<p id=x>.</p>",
+            f"() => {{ document.getElementById('x').style.backgroundImage = 'url(\"https://app.test/{SECRET}\")'; }}",
+        ),
+        (
+            "<p id=x>.</p><script>const s = new CSSStyleSheet();"
+            f"s.replaceSync('#x::after{{content:\"{SECRET}\";display:none}}'); document.adoptedStyleSheets = [s];</script>",
+            "() => { document.getElementById('x').style.transform = 'rotate(1deg)'; }",
+        ),
     ],
+    ids=["styled-element", "style-holding-the-value", "stylesheet-holding-the-value"],
+)
+async def test_an_inline_style_change_that_could_reveal_a_value_is_counted(html: str, script: str) -> None:
+    async with _page(html) as page, _watched(page) as watched:
+        await page.evaluate(script)
+        assert await watched.changed() >= 1
+
+
+async def test_restore_removes_every_hook_and_listener_it_installed() -> None:
+    native = (
+        "() => [Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked').set,"
+        " HTMLInputElement.prototype.setCustomValidity,"
+        " Object.getOwnPropertyDescriptor(HTMLOptionElement.prototype, 'selected').set]"
+    )
+    async with _page(_PAGE) as page:
+        await page.evaluate(f"() => {{ window.__native = ({native})(); }}")
+        async with _watched(page) as watched:
+            assert await page.evaluate(f"() => ({native})()[0] !== window.__native[0]") is True
+            await watched.restore()
+            assert await page.evaluate(f"() => ({native})().every((fn, index) => fn === window.__native[index])")
+            await page.evaluate(_CHANGES["focus"])
+            assert watched.changes.count == 0
+
+
+@pytest.mark.parametrize(
+    "shown",
+    [SECRET.lower(), SECRET[:11] + "​" + SECRET[11:], SECRET[:11] + "­" + SECRET[11:], SECRET[:11] + " " + SECRET[11:]],
     ids=["other-case", "zero-width-space", "soft-hyphen", "space"],
 )
-async def test_the_page_redacts_every_spelling_of_the_value(shown: str, expected: str) -> None:
+async def test_the_page_redacts_every_spelling_of_the_value(shown: str) -> None:
     async with _page("<p id=t></p>") as page:
         await page.evaluate("(text) => { document.getElementById('t').textContent = text; }", f"x {shown} y")
-        controller = await _redacted(page)
-        assert await page.evaluate("() => document.getElementById('t').textContent") == expected
-        assert (await controller.evaluate(page_js.VERIFY_CALL))["remaining"] == 0
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => document.getElementById('t').textContent") == "x <redacted> y"
+            assert await watched.remaining() == 0
 
 
-@pytest.mark.parametrize(
-    ("setup", "read"),
-    [
-        (
-            "(text) => { document.getElementById('f').setAttribute('placeholder', text); }",
-            "() => document.getElementById('f').getAttribute('placeholder')",
-        ),
-        (
-            "(text) => { document.getElementById('f').value = text; }",
-            "() => document.getElementById('f').value",
-        ),
-    ],
-    ids=["attribute", "field-value"],
-)
-async def test_an_attribute_or_field_spelled_with_invisible_characters_is_redacted(setup: str, read: str) -> None:
+async def test_every_invisible_character_inside_the_value_is_redacted_in_the_page() -> None:
+    characters = [chr(codepoint) for pair in IGNORABLE_RANGES for codepoint in pair]
+    async with _page("<main id=m></main>") as page:
+        await page.evaluate(
+            "([parts, characters]) => { const m = document.getElementById('m'); for (const c of characters) {"
+            " const p = document.createElement('p'); p.textContent = `x ${parts[0]}${c}${parts[1]} y`; m.append(p); } }",
+            [[SECRET[:11], SECRET[11:]], characters],
+        )
+        async with _watched(page) as watched:
+            texts = await page.evaluate("() => Array.from(document.querySelectorAll('p'), (p) => p.textContent)")
+            assert texts == ["x <redacted> y"] * len(characters)
+            assert await watched.remaining() == 0
+
+
+async def test_a_formatted_number_is_redacted_by_its_digits_and_restored() -> None:
+    async with _page("<p id=t>Call +1 (555) 013-7788 or 013-7788 now</p>") as page:
+        async with _watched(page, ("+15550137788",)) as watched:
+            assert (
+                await page.evaluate("() => document.getElementById('t').textContent")
+                == "Call +<redacted> or <redacted> now"
+            )
+            assert await watched.remaining() == 0
+        assert (
+            await page.evaluate("() => document.getElementById('t').textContent")
+            == "Call +1 (555) 013-7788 or 013-7788 now"
+        )
+
+
+async def test_a_placeholder_spelled_with_invisible_characters_is_redacted() -> None:
     async with _page("<input id=f>") as page:
-        await page.evaluate(setup, SECRET[:11] + "\u200b" + SECRET[11:])
-        controller = await _redacted(page)
-        assert await page.evaluate(read) == "<redacted>"
-        assert (await controller.evaluate(page_js.VERIFY_CALL))["remaining"] == 0
+        await page.evaluate(
+            "(text) => document.getElementById('f').setAttribute('placeholder', text)", SECRET[:11] + "​" + SECRET[11:]
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => document.getElementById('f').getAttribute('placeholder')") == "<redacted>"
+            assert await watched.remaining() == 0
 
 
-async def test_a_spelling_the_pattern_cannot_replace_is_redacted_whole() -> None:
-    async with _page("<p id=t>Jose\u0301-Controller-Canary</p>") as page:
-        controller = await _redacted(page, ("Jos\u00e9-Controller-Canary",))
-        assert await page.evaluate("() => document.getElementById('t').textContent") == "<redacted>"
-        assert (await controller.evaluate(page_js.VERIFY_CALL))["remaining"] == 0
-        await controller.evaluate(page_js.RESTORE_CALL)
-        assert await page.evaluate("() => document.getElementById('t').textContent") == "Jose\u0301-Controller-Canary"
+@pytest.mark.parametrize("kind", ["text", "email", "tel", "password", "search", "url", "no-such-type"])
+async def test_a_text_control_holding_the_value_is_masked_and_keeps_its_value(kind: str) -> None:
+    async with _page(f"<input id=f type={kind}>") as page:
+        await page.evaluate("(text) => { document.getElementById('f').value = text; }", SECRET[:11] + "​" + SECRET[11:])
+        async with _watched(page) as watched:
+            state = await page.evaluate(
+                "() => { const f = document.getElementById('f');"
+                " return [f.value, getComputedStyle(f).getPropertyValue('-webkit-text-security')]; }"
+            )
+            assert state == [SECRET[:11] + "​" + SECRET[11:], "disc"]
+            assert await watched.remaining() == 0
+        assert await page.evaluate("() => document.getElementById('f').getAttribute('style')") is None
 
 
-async def test_a_focused_input_keeps_its_value_and_selection() -> None:
+async def test_a_button_or_hidden_value_is_replaced_and_restored() -> None:
+    async with _page(f"<input id=b type=button value='{SECRET}'><input id=h type=hidden value='{SECRET}'>") as page:
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => [b.value, h.value]") == ["<redacted>", "<redacted>"]
+            assert await watched.remaining() == 0
+        assert await page.evaluate("() => [b.value, h.value, b.getAttribute('value')]") == [SECRET, SECRET, SECRET]
+
+
+async def test_a_focused_text_input_keeps_its_value_and_selection() -> None:
     async with _page(f"<input id=i value='x {SECRET} y'>") as page:
         await page.evaluate(
             "() => { const i = document.getElementById('i'); i.focus(); i.setSelectionRange(2, 5, 'backward'); }"
         )
-        controller = await _redacted(page)
-        assert await page.evaluate("() => document.getElementById('i').value") == "x <redacted> y"
-        await controller.evaluate(page_js.RESTORE_CALL)
+        async with _watched(page):
+            pass
         state = await page.evaluate(
             "() => { const i = document.getElementById('i');"
             " return [i.value, i.selectionStart, i.selectionEnd, i.selectionDirection, document.activeElement === i]; }"
         )
         assert state == [f"x {SECRET} y", 2, 5, "backward", True]
+
+
+async def test_a_focused_email_input_keeps_its_caret() -> None:
+    async with _page(f"<input id=e type=email value='a{SECRET}@example.test'>") as page:
+        await page.focus("#e")
+        await page.keyboard.press("Home")
+        for _ in range(3):
+            await page.keyboard.press("ArrowRight")
+        async with _watched(page) as watched:
+            assert await watched.remaining() == 0
+        await page.keyboard.insert_text("Z")
+        assert (
+            await page.evaluate("() => document.getElementById('e').value")
+            == f"a{SECRET[:2]}Z{SECRET[2:]}@example.test"
+        )
+
+
+async def test_a_pristine_textarea_keeps_its_selection_direction() -> None:
+    async with _page(f"<textarea id=t>x {SECRET} y</textarea>") as page:
+        await page.evaluate(
+            "() => { const t = document.getElementById('t'); t.focus(); t.setSelectionRange(2, 5, 'backward'); }"
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => getComputedStyle(t).getPropertyValue('-webkit-text-security')") == "disc"
+            assert await watched.remaining() == 0
+        state = await page.evaluate("() => [t.value, t.selectionStart, t.selectionEnd, t.selectionDirection]")
+        assert state == [f"x {SECRET} y", 2, 5, "backward"]
+
+
+async def test_a_closed_shadow_root_is_redacted_and_restored() -> None:
+    html = f"<div id=k></div><script>window.__r = k.attachShadow({{mode: 'closed'}}); __r.innerHTML = '<p title=\"{SECRET}\">{SECRET}</p>';</script>"
+    async with _page(html) as page:
+        async with _watched(page) as watched:
+            assert (
+                await page.evaluate("() => [__r.querySelector('p').textContent, __r.querySelector('p').title]")
+                == ["<redacted>"] * 2
+            )
+            assert await watched.remaining() == 0
+        assert await page.evaluate("() => __r.innerHTML") == f'<p title="{SECRET}">{SECRET}</p>'
 
 
 async def test_a_frame_document_holding_the_value_is_hidden_and_never_reloaded() -> None:
@@ -173,10 +334,9 @@ async def test_a_frame_document_holding_the_value_is_hidden_and_never_reloaded()
             "() => { const f = document.getElementById('f'); f.contentWindow.__marker = 42; window.__loads = 0;"
             " f.addEventListener('load', () => { window.__loads += 1; }); }"
         )
-        controller = await _redacted(page)
-        assert await page.evaluate("() => getComputedStyle(document.getElementById('f')).visibility") == "hidden"
-        assert (await controller.evaluate(page_js.VERIFY_CALL))["remaining"] == 0
-        await controller.evaluate(page_js.RESTORE_CALL)
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => getComputedStyle(document.getElementById('f')).visibility") == "hidden"
+            assert await watched.remaining() == 0
         await page.wait_for_timeout(300)
         state = await page.evaluate(
             "() => { const f = document.getElementById('f');"
@@ -187,9 +347,8 @@ async def test_a_frame_document_holding_the_value_is_hidden_and_never_reloaded()
 
 async def test_restore_keeps_a_style_change_the_page_made_meanwhile() -> None:
     async with _page("<canvas id=c style='width:100px'></canvas><canvas id=u></canvas>") as page:
-        controller = await _redacted(page)
-        await page.evaluate("() => { document.getElementById('c').style.width = '300px'; }")
-        await controller.evaluate(page_js.RESTORE_CALL)
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('c').style.width = '300px'; }")
         state = await page.evaluate(
             "() => { const c = document.getElementById('c').style;"
             " return [c.width, c.visibility, c.transition, c.animation, document.getElementById('u').getAttribute('style')]; }"
@@ -201,21 +360,8 @@ async def test_a_picture_source_holding_the_value_hides_the_picture_image() -> N
     svg = f"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'><text>{SECRET}</text></svg>"
     html = f'<picture><source srcset="{svg}"><img id=m src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></picture>'
     async with _page(html) as page:
-        controller = await _redacted(page)
-        assert await page.evaluate("() => getComputedStyle(document.getElementById('m')).visibility") == "hidden"
-        assert (await controller.evaluate(page_js.VERIFY_CALL))["remaining"] == 0
-        await controller.evaluate(page_js.RESTORE_CALL)
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => getComputedStyle(document.getElementById('m')).visibility") == "hidden"
+            assert await watched.remaining() == 0
         assert await page.evaluate("() => document.getElementById('m').getAttribute('style')") is None
         assert await page.evaluate("() => document.querySelector('source').getAttribute('srcset')") == svg
-
-
-async def test_the_page_and_python_normalize_identically() -> None:
-    samples = [f"a{chr(codepoint)}B" for pair in IGNORABLE_RANGES for codepoint in pair]
-    samples += ["Jose\u0301", "\uff30\uff32\uff2f\uff22\uff25", " x\ty\u00a0z "]
-    async with _page("<p></p>") as page:
-        in_page = await page.evaluate(
-            "([samples, ignorable]) => { const invisible = new RegExp(`[\\\\s${ignorable}]+`, 'gu');"
-            " return samples.map((text) => text.normalize('NFKC').replace(invisible, '').toLowerCase()); }",
-            [samples, JS_IGNORABLE_CLASS],
-        )
-    assert in_page == [normalize(sample) for sample in samples]

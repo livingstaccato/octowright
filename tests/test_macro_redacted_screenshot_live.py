@@ -107,12 +107,25 @@ async def test_every_rendered_spelling_is_redacted_and_the_page_is_restored(tmp_
         _skip_or_raise(exc)
 
 
-async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(tmp_path: Path) -> None:
+async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from playwright.async_api import async_playwright
 
-    from octowright.macros import redaction_page_js as page_js
-    from octowright.macros.privacy import sensitive_value_variants
+    from octowright.macros import safe_screenshot
 
+    seen: list[dict[str, object]] = []
+    capture = safe_screenshot._capture
+
+    async def capture_and_look(cdp: object, target: Path) -> None:
+        reply = await cdp.send(  # type: ignore[attr-defined]
+            "Runtime.evaluate",
+            {"expression": f"({_STATE_JS})()", "returnByValue": True},
+        )
+        seen.append(reply["result"]["value"])
+        await capture(cdp, target)
+
+    monkeypatch.setattr(safe_screenshot, "_capture", capture_and_look)
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
@@ -127,20 +140,20 @@ async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(tmp
                     }""",
                     EMAIL,
                 )
-                argument = page_js.controller_argument(list(sensitive_value_variants((EMAIL,))))
-                controller = await page.evaluate_handle(page_js.CONTROLLER_JS, argument)
-                await controller.evaluate(page_js.REDACT_CALL)
-                try:
-                    assert await controller.evaluate(page_js.VERIFY_CALL) == {"changed": 0, "remaining": 0}
-                    during = await page.evaluate(_STATE_JS)
-                    assert EMAIL not in during["html"]
-                    assert urllib.parse.quote(EMAIL, safe="") not in during["html"]
-                    assert EMAIL not in during["shadow"]
-                    assert "redacted" in during["shadow"]
-                    assert during["field"] == "<redacted>"
-                    assert "visibility: hidden" in (during["canvasStyle"] or "")
-                finally:
-                    await controller.evaluate(page_js.RESTORE_CALL)
+                target = tmp_path / "shots" / "redacted.png"
+                assert await redacted_screenshot(
+                    _PageSession(page), {"action": "screenshot", "path": str(target)}, (EMAIL,), root=tmp_path
+                ) == (1, 0)
+                [during] = seen
+                html = str(during["html"])
+                assert EMAIL not in html.replace(f'value="{EMAIL}"', "")
+                assert urllib.parse.quote(EMAIL, safe="") not in html
+                assert EMAIL not in str(during["shadow"])
+                assert "redacted" in str(during["shadow"])
+                # The field keeps its value; its text is masked instead.
+                assert during["field"] == EMAIL
+                assert "-webkit-text-security: disc" in html
+                assert "visibility: hidden" in str(during["canvasStyle"] or "")
                 assert EMAIL in await page.evaluate("() => document.querySelector('#host').shadowRoot.innerHTML")
             finally:
                 await browser.close()

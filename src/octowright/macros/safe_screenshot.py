@@ -9,16 +9,19 @@ A screenshot of a page a credential or identity was typed into is a durable copy
 it that no text scrub can reach, so a classified run refuses screenshots by default.
 This module is the safe path for a Chromium page. It pauses CSS animations, redacts the
 page, proves nothing classified is rendered, takes the screenshot, proves again, and
-restores the page:
+restores the page, all through one DevTools session:
 
 1. The in-page controller (:mod:`octowright.macros.redaction_page_js`) replaces every
-   spelling of the run's values in the open DOM and hides elements whose pixels or
-   resource addresses cannot be redacted.
-2. Before and after the capture, the controller must report no page change since
-   redaction and no remaining value, and Chrome's rendered surface
+   spelling of the run's values in the document and in open and closed shadow roots,
+   masks text controls holding one, and hides elements whose pixels or resource
+   addresses cannot be redacted.
+2. From then on the page's changes are counted, by Chrome for DOM and stylesheet changes
+   (:mod:`octowright.macros.page_devtools`) and by the controller for style, form state
+   and focus changes. Before and after the capture the count must be zero, the
+   controller must find no remaining value, and Chrome's rendered surface
    (:mod:`octowright.macros.rendered_surface`) must hold no value. Content redaction
-   cannot reach, such as closed shadow roots and generated content, is refused there
-   rather than redacted.
+   cannot reach, such as generated content from a stylesheet, is refused there rather
+   than redacted.
 3. The screenshot is captured through the same DevTools session
    (``Page.captureScreenshot``). Playwright's screenshot helper is not used, because it
    writes styles onto the page before capturing and a page can react to them.
@@ -30,14 +33,16 @@ Opt in per session with :func:`enable_redacted_screenshots`, or for every sessio
 wins and may wrap :func:`redacted_screenshot` with its own checks.
 
 Limits. A page is assumed to be the application under test, not an adversary: page
-script keeps running, and a script that kept its own references to the DOM and CSSOM
-setters, or changed a stylesheet rule through a named style property, could change the
-page without being counted. The text matching (see ``rendered_surface``) covers
-invisible characters, re-casing, normalization, reversal, reordering by position and a
-few interleaved text boxes, not every way a page could draw a value. Pixels of an
-ordinary image are not read; an image is hidden only when one of its resource addresses
-holds a value. Engines other than Chromium have no rendered-surface snapshot, so the
-screenshot is refused there.
+script keeps running, and a script that kept its own references to the form-state
+setters the controller counts could change that state without being counted. The text
+matching (see ``rendered_surface``) covers invisible characters, re-casing,
+normalization, whole reversal, digit punctuation, reordering by position and a few
+interleaved text boxes, not every way a page could draw a value; a value only partly
+reversed by a bidi override, or displayed in another format than its digits, is not
+matched. A masked control still shows how long its value is. Pixels of an ordinary
+image are not read; an image is hidden only when one of its resource addresses holds a
+value. The page's own mutation observers see the redaction while it lasts. Engines other
+than Chromium have no rendered-surface snapshot, so the screenshot is refused there.
 """
 
 from __future__ import annotations
@@ -53,7 +58,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
-from octowright.macros import redaction_page_js as page_js
+from octowright.macros.page_devtools import PageChanges, PageController
 from octowright.macros.privacy import sensitive_value_variants
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
 from octowright.session.timeouts import bounded
@@ -126,10 +131,12 @@ def built_in_redaction_applies(session: Any) -> bool:
     return classified_screenshot_policy() == "redact"
 
 
-async def _require_unrendered(controller: Any, cdp: Any, values: list[str], *, stage: str) -> None:
+async def _require_unrendered(
+    controller: PageController, changes: PageChanges, cdp: Any, values: list[str], *, stage: str
+) -> None:
     """Raise unless the page is unchanged since redaction and renders no classified value."""
-    report = await bounded(controller.evaluate(page_js.VERIFY_CALL), operation=_OPERATION)
-    if int(report.get("changed", 1)):
+    report = await bounded(controller.verify(), operation=_OPERATION)
+    if int(report.get("changed", 1)) or changes.count:
         raise RuntimeError(f"the page changed {stage} the redacted screenshot; {_REFUSED}")
     if int(report.get("remaining", 1)):
         raise RuntimeError(f"classified values are still in the page {stage} the screenshot; {_REFUSED}")
@@ -160,8 +167,10 @@ async def _pause_animations(cdp: Any) -> None:
     await bounded(cdp.send("Animation.setPlaybackRate", {"playbackRate": 0}), operation=_OPERATION)
 
 
-async def _release(cdp: Any) -> None:
-    """Resume animations and detach; each step is attempted even if an earlier one failed."""
+async def _release(cdp: Any, changes: PageChanges) -> None:
+    """Stop counting, resume animations and detach; each step is attempted even if an earlier one failed."""
+    with contextlib.suppress(Exception):
+        await bounded(changes.close(), operation=_OPERATION)
     for method, params in (("Animation.setPlaybackRate", {"playbackRate": 1}), ("Animation.disable", None)):
         with contextlib.suppress(Exception):
             await bounded(cdp.send(method, params) if params else cdp.send(method), operation=_OPERATION)
@@ -169,10 +178,10 @@ async def _release(cdp: Any) -> None:
         await cdp.detach()
 
 
-async def _restore(controller: Any, target: Path, *, quiet: bool) -> None:
+async def _restore(controller: PageController, target: Path, *, quiet: bool) -> None:
     """Undo the redaction. On failure the screenshot is deleted; ``quiet`` logs instead of raising."""
     try:
-        await bounded(controller.evaluate(page_js.RESTORE_CALL), operation=_OPERATION)
+        await bounded(controller.restore(), operation=_OPERATION)
     except Exception as exc:
         target.unlink(missing_ok=True)
         log.warning("octowright.macro.redacted_screenshot.restore_failed", error=type(exc).__name__)
@@ -180,7 +189,29 @@ async def _restore(controller: Any, target: Path, *, quiet: bool) -> None:
             raise
     finally:
         with contextlib.suppress(Exception):
-            await controller.dispose()
+            await bounded(controller.dispose(), operation=_OPERATION)
+
+
+async def _redact_and_capture(cdp: Any, changes: PageChanges, values: list[str], target: Path) -> PageController:
+    """Pause, redact, count, prove, capture and prove again; on any failure restore and re-raise."""
+    controller: PageController | None = None
+    try:
+        await _pause_animations(cdp)
+        closed_roots = await bounded(changes.start(), operation=_OPERATION)
+        controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
+        await bounded(controller.redact(closed_roots), operation=_OPERATION)
+        latent = await bounded(changes.sheets_hold(values), operation=_OPERATION)
+        await bounded(controller.watch(latent), operation=_OPERATION)
+        changes.begin()
+        await _require_unrendered(controller, changes, cdp, values, stage="before")
+        await _capture(cdp, target)
+        await _require_unrendered(controller, changes, cdp, values, stage="after")
+    except BaseException:
+        target.unlink(missing_ok=True)
+        if controller is not None:
+            await _restore(controller, target, quiet=True)
+        raise
+    return controller
 
 
 async def redacted_screenshot(
@@ -215,23 +246,12 @@ async def redacted_screenshot(
             raise RuntimeError(
                 f"a redacted screenshot needs a Chromium page to read what is rendered; {_REFUSED}"
             ) from exc
-        controller: Any = None
+        changes = PageChanges(cdp)
         try:
-            await _pause_animations(cdp)
-            argument = page_js.controller_argument(values)
-            controller = await bounded(page.evaluate_handle(page_js.CONTROLLER_JS, argument), operation=_OPERATION)
-            await bounded(controller.evaluate(page_js.REDACT_CALL), operation=_OPERATION)
-            await _require_unrendered(controller, cdp, values, stage="before")
-            await _capture(cdp, target)
-            await _require_unrendered(controller, cdp, values, stage="after")
-        except BaseException:
-            target.unlink(missing_ok=True)
-            if controller is not None:
-                await _restore(controller, target, quiet=True)
-            raise
+            controller = await _redact_and_capture(cdp, changes, values, target)
+            await _restore(controller, target, quiet=False)
         finally:
-            await _release(cdp)
-        await _restore(controller, target, quiet=False)
+            await _release(cdp, changes)
         recorder = getattr(session, "recorder", None)
         if recorder is not None:
             recorder.record("screenshot", path=str(target))

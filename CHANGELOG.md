@@ -20,15 +20,20 @@ a section that is already tagged and on PyPI.
   safe path for Chromium pages, turned on by
   `macros.safe_screenshot.enable_redacted_screenshots(session)` or
   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact`. It works in three steps:
-  - It pauses CSS animations, redacts every spelling of the run's values in the
-    page (ignoring case, whitespace, compatibility forms and invisible characters
-    inside a value), and hides pixels it cannot read.
-  - Before and after the capture, it refuses and deletes the file if the page
-    changed or if Chrome's rendered surface still holds a value. That surface
-    covers closed shadow roots, generated content, frames, drawn attributes, image
-    styles, and text that is split, reordered or reversed. It captures through
-    DevTools rather than Playwright's screenshot helper, which writes to the page.
-  - It restores the page, including control selection.
+  - It pauses animations and redacts every spelling of the run's values in the page,
+    closed shadow roots included (ignoring case, whitespace, compatibility forms,
+    control and invisible characters inside a value, and matching a phone-like
+    value by its digits). Text controls are masked rather than rewritten, so they
+    keep their value and caret. It hides pixels it cannot read.
+  - It counts page changes from then on, through Chrome's DevTools events for DOM,
+    stylesheet and animation changes and in the page for inline styles that could
+    reveal a value, form state and focus. Before and after the capture, it refuses
+    and deletes the file if a change was counted or if Chrome's rendered surface
+    still holds a value. That surface covers generated content, frames, unmasked
+    form values, drawn attributes, image styles and SVG image links, and text that
+    is split, reordered or reversed. It captures through DevTools rather than
+    Playwright's screenshot helper, which writes to the page.
+  - It restores the page.
 
   It trusts the page not to hide changes deliberately; `docs/macros.md` lists the
   limits.
