@@ -12,8 +12,12 @@ which trains people to wave past a failing gate. It already produced one bad
 "fix": the ``[0.11.0]`` link was repointed at ``...main`` to silence the error
 and is now permanently wrong.
 
+The ``[Unreleased]: .../compare/vX.Y.Z...HEAD`` link a release PR moves to the
+new tag 404s for the same reason.
+
 The exclusion these tests pin is deliberately narrow: only the compare link
-whose *target* tag equals the version in the VERSION file. A blanket
+whose *target* tag equals the version in the VERSION file, and the
+``[Unreleased]`` link starting from that tag. A blanket
 ``compare/`` exclusion would permanently stop catching a typo'd tag (a
 ``v0.19.44`` that will never exist), whereas the narrow one defers that check by
 exactly one release -- on the next version's PR the same link is no longer
@@ -86,6 +90,29 @@ def test_the_pending_version_on_the_from_side_is_still_checked() -> None:
     assert not pattern.search("https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.19.5")
 
 
+def test_the_unreleased_link_from_the_pending_tag_is_excluded() -> None:
+    """A release PR moves ``[Unreleased]`` to start at the tag it is about to create.
+
+    That tag does not exist until the PR merges, so the link 404s for the life of
+    the PR, exactly like the release's own compare link. Left checked, it fails
+    every release PR that keeps the link honest -- which is how it drifted to a
+    ``v0.22.0`` starting point two releases late.
+    """
+    pattern = re.compile(_load_script().pending_release_exclusion("0.19.4"))
+    assert pattern.search("https://github.com/livingstaccato/octowright/compare/v0.19.4...HEAD")
+
+
+def test_an_unreleased_link_from_any_other_tag_is_still_checked() -> None:
+    """Only the pending tag is deferred; an older or typo'd starting tag is a real link."""
+    pattern = re.compile(_load_script().pending_release_exclusion("0.19.4"))
+    for url in (
+        "https://github.com/livingstaccato/octowright/compare/v0.19.3...HEAD",
+        "https://github.com/livingstaccato/octowright/compare/v0.19.44...HEAD",
+        "https://github.com/livingstaccato/octowright/compare/v0.19.4...main",
+    ):
+        assert not pattern.search(url), url
+
+
 def test_non_compare_links_naming_the_version_are_still_checked() -> None:
     """A release/tag URL for the same version is not deferred by this.
 
@@ -128,7 +155,7 @@ def test_prerelease_versions_are_accepted() -> None:
     assert pattern.search("https://github.com/livingstaccato/octowright/compare/v0.19.4...v0.20.0rc1")
 
 
-def test_the_repositorys_own_changelog_yields_exactly_the_pending_link() -> None:
+def test_the_repositorys_own_changelog_yields_exactly_the_pending_links() -> None:
     """Run the real pattern over the real corpus, not just a fixture.
 
     The committed CHANGELOG carries 20+ compare links, which is the only place
@@ -142,7 +169,11 @@ def test_the_repositorys_own_changelog_yields_exactly_the_pending_link() -> None
     pattern = re.compile(_load_script().pending_release_exclusion(version))
 
     urls = _urls(changelog)
-    expected = [url for url in urls if "/compare/" in url and url.endswith(f"...v{version}")]
+    expected = [
+        url
+        for url in urls
+        if "/compare/" in url and (url.endswith(f"...v{version}") or url.endswith(f"/v{version}...HEAD"))
+    ]
     assert [url for url in urls if pattern.search(url)] == expected
 
 

@@ -10,7 +10,9 @@ but the ``vX.Y.Z`` tag is only pushed once the PR merges. The link is therefore
 unresolvable *by construction* for the whole life of the PR, and ``links.yml``
 red-Xes every release PR on it -- which teaches people that a failing gate is
 normal. It has already produced one bad "fix": the ``[0.11.0]`` link was
-repointed at ``...main`` to silence the error and is permanently wrong.
+repointed at ``...main`` to silence the error and is permanently wrong. The
+``[Unreleased]: .../compare/vX.Y.Z...HEAD`` link a release PR moves to the new
+tag is unresolvable for the same reason, and the same pattern skips it.
 
 **Why this is not a blanket ``compare/`` exclusion.** A blanket rule would also
 stop catching a typo'd tag (``v0.19.44``), forever. Anchoring on the version in
@@ -43,15 +45,17 @@ _VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+-]*\Z")
 
 
 def pending_release_exclusion(version: str) -> str:
-    """Return a lychee ``--exclude`` regex for the compare link *targeting* ``version``.
+    """Return a lychee ``--exclude`` regex for the compare links the pending tag breaks.
 
-    Only the target side is matched: ``vX.Y.Z...vNEXT`` names a different
-    unknown and stays checked, as does any non-``/compare/`` URL naming the
-    same version.
+    It matches the compare link *targeting* ``version`` and the ``[Unreleased]``
+    link comparing ``version`` with ``HEAD``. ``vX.Y.Z...vNEXT`` names a
+    different unknown and stays checked, as does any non-``/compare/`` URL
+    naming the same version.
     """
     if not _VERSION_RE.match(version):
         raise ValueError(f"refusing to build a lychee exclusion from a non-version-shaped VERSION: {version!r}")
-    return rf"^https://github\.com/[^/]+/[^/]+/compare/[^/]+\.\.\.v{re.escape(version)}$"
+    tag = re.escape(version)
+    return rf"^https://github\.com/[^/]+/[^/]+/compare/(?:[^/]+\.\.\.v{tag}|v{tag}\.\.\.HEAD)$"
 
 
 def main() -> int:
