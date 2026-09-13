@@ -20,7 +20,8 @@ a section that is already tagged and on PyPI.
   safe path for Chromium pages, turned on by
   `macros.safe_screenshot.enable_redacted_screenshots(session)` or
   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact`. It works in three steps:
-  - It pauses animations, ends a running view transition, and redacts every spelling
+  - It pauses animations, ends every running view transition (on the document or on
+    any element, closed shadow roots included), and redacts every spelling
     of the run's values in the page,
     closed shadow roots included (ignoring case, whitespace, compatibility forms,
     control and invisible characters inside a value, and matching a phone-like
@@ -31,13 +32,14 @@ a section that is already tagged and on PyPI.
   - It counts page changes from then on, through Chrome's DevTools events for DOM,
     stylesheet and animation changes and in the page for inline styles that could
     reveal a value, form state and focus. Before and after the capture, it refuses
-    and deletes the file if a change was counted, if a view transition is running, or if Chrome's rendered surface
+    and deletes the file if a change was counted, if a view transition is running on the
+    document or on any redacted element, or if Chrome's rendered surface
     still holds a value. That surface covers generated content, frames, unmasked
     form values, drawn attributes, image styles and SVG image links, and text that
     is split, reordered or reversed. It captures through DevTools rather than
     Playwright's screenshot helper, which writes to the page.
   - It restores the page, bringing hidden elements back without replaying their own
-    transitions.
+    transitions and with their transition longhands as they were.
 
   It trusts the page not to hide changes deliberately; `docs/macros.md` lists the
   limits.

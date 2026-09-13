@@ -114,10 +114,6 @@ class FakeCDP:
         return {"text": text}
 
     async def _Runtime_evaluate(self, params: dict[str, Any]) -> dict[str, Any]:
-        if params["expression"] == page_js.END_VIEW_TRANSITIONS_JS:
-            assert params["awaitPromise"] is True
-            self.page.calls.append("view_transitions")
-            return {"result": {"value": False}}
         assert params["expression"] == "document"
         return {"result": {"objectId": "document"}}
 
@@ -127,6 +123,11 @@ class FakeCDP:
 
     async def _Runtime_callFunctionOn(self, params: dict[str, Any]) -> dict[str, Any]:
         page = self.page
+        if params["functionDeclaration"] == page_js.END_VIEW_TRANSITIONS_JS:
+            assert params["objectId"] == "document" and params["awaitPromise"] is True
+            page.calls.append("view_transitions")
+            page.ended_roots = [argument["objectId"] for argument in params["arguments"]]
+            return {"result": {"value": False}}
         if params["functionDeclaration"] == page_js.CONTROLLER_JS:
             argument = params["arguments"][0]["value"]
             assert argument["ignorable"] == JS_IGNORABLE_CLASS
@@ -214,6 +215,7 @@ class FakePage:
         self.redacted_values: list[str] | None = None
         self.redact_arguments: list[dict[str, Any]] | None = None
         self.resolved: list[int] = []
+        self.ended_roots: list[str] | None = None
         self.latent: bool | None = None
         self.released = False
         self.context = FakeContext(self)
@@ -497,7 +499,9 @@ async def test_closed_shadow_roots_reach_the_redaction_but_frame_documents_do_no
 
     assert await _shoot(page, tmp_path / "shot.png") == (1, 0)
 
-    assert sorted(page.resolved) == [5, 8]
+    # Resolved once to end view transitions in them, and again to redact them.
+    assert sorted(page.resolved) == [5, 5, 8, 8]
+    assert sorted(page.ended_roots or []) == ["root-5", "root-8"]
     assert page.redact_arguments is not None
     assert sorted(argument["objectId"] for argument in page.redact_arguments) == ["root-5", "root-8"]
     assert sorted(closed_shadow_roots(document)) == [5, 8]

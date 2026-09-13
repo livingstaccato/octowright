@@ -79,13 +79,17 @@ async def _render(browser: object, html: str, target: Path) -> bytes:
     return target.read_bytes()
 
 
-async def _redacted(browser: object, html: str, secret: str, tmp_path: Path, name: str) -> bytes | None:
-    """The redacted PNG's bytes, or None when the screenshot was refused."""
+async def _redacted(
+    browser: object, html: str, secret: str, tmp_path: Path, name: str, before: str | None = None
+) -> bytes | None:
+    """The redacted PNG's bytes, or None when the screenshot was refused; ``before`` runs just before it."""
     page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
     target = tmp_path / f"{name}.redacted.png"
     try:
         await page.set_content(html)
         await page.wait_for_timeout(300)
+        if before is not None:
+            await page.evaluate(before)
         try:
             await redacted_screenshot(_PageSession(page), {"path": str(target)}, (secret,), root=tmp_path)
         except RuntimeError:
@@ -188,6 +192,59 @@ def _closed(inner: str) -> str:
         "<div id=h></div><script>document.getElementById('h')"
         f".attachShadow({{mode:'closed'}}).innerHTML={json.dumps(inner)}</script>"
     )
+
+
+# A view transition started on an element draws a raster of that element's old state.
+_MARGINLESS = "<style>p{margin:0}</style>"
+_SCOPED_LONG = "<style>*::view-transition-group(*),*::view-transition-old(*),*::view-transition-new(*){animation-duration:60s}</style>"
+_START_SCOPED = "r.getElementById('s').startViewTransition(()=>{r.getElementById('o').textContent='new'})"
+
+
+def _scoped(first: str, second: str) -> str:
+    return f"<div id=s style='width:880px;height:100px'><p id=t>{first}</p><p id=o>{second}</p></div>"
+
+
+def _in_shadow(mode: str, inner: str, script: str = "") -> str:
+    return (
+        f"<div id=h></div><script>const r=document.getElementById('h').attachShadow({{mode:'{mode}'}});"
+        f"r.innerHTML={json.dumps(inner)};{script}</script>"
+    )
+
+
+_SCOPED_CASES = {
+    "element": (
+        f"{STYLE}{_MARGINLESS}{_SCOPED_LONG}{_scoped(SECRET, 'old')}<script>const r=document;setTimeout(()=>{_START_SCOPED},50)</script>",
+        f"{STYLE}{_MARGINLESS}{_scoped(_R, 'new')}",
+        None,
+    ),
+    "element_from_its_old_state": (
+        f"{STYLE}{_MARGINLESS}{_SCOPED_LONG}{_scoped(SECRET, '')}<script>const r=document;setTimeout(()=>"
+        "r.getElementById('s').startViewTransition(()=>{r.getElementById('t').textContent='benign-new-state'}),50)</script>",
+        f"{STYLE}{_MARGINLESS}{_scoped('benign-new-state', '')}",
+        None,
+    ),
+    "element_in_an_open_shadow_root": (
+        STYLE
+        + _in_shadow(
+            "open", _MARGINLESS + _SCOPED_LONG + _scoped(SECRET, "old"), f"setTimeout(()=>{_START_SCOPED},50)"
+        ),
+        STYLE + _in_shadow("open", _MARGINLESS + _scoped(_R, "new")),
+        None,
+    ),
+    "element_in_a_closed_shadow_root": (
+        STYLE
+        + _in_shadow(
+            "closed", _MARGINLESS + _SCOPED_LONG + _scoped(SECRET, "old"), f"setTimeout(()=>{_START_SCOPED},50)"
+        ),
+        STYLE + _in_shadow("closed", _MARGINLESS + _scoped(_R, "new")),
+        None,
+    ),
+    "element_started_just_before_the_screenshot": (
+        f"{STYLE}{_MARGINLESS}{_scoped(SECRET, 'old')}",
+        f"{STYLE}{_MARGINLESS}{_scoped(_R, 'new')}",
+        f"() => {{ const r = document; {_START_SCOPED}; }}",
+    ),
+}
 
 
 def _adopted(css: str) -> str:
@@ -569,6 +626,17 @@ async def test_an_open_shadow_root_is_redacted_rather_than_refused(tmp_path: Pat
     async with _browser() as browser:
         reference = await _render(browser, never_held, tmp_path / "reference.png")
         redacted = await _redacted(browser, html, secret, tmp_path, "open_shadow")
+    assert redacted == reference
+
+
+@pytest.mark.parametrize("name", sorted(_SCOPED_CASES))
+async def test_a_view_transition_on_an_element_is_ended_before_the_screenshot(name: str, tmp_path: Path) -> None:
+    html, never_held, before = _SCOPED_CASES[name]
+    async with _browser() as browser:
+        reference = await _render(browser, never_held, tmp_path / f"{name}.reference.png")
+        raw = await _render(browser, html, tmp_path / f"{name}.raw.png")
+        assert raw != reference, "the case must render the value visibly, or it proves nothing"
+        redacted = await _redacted(browser, html, SECRET, tmp_path, name, before)
     assert redacted == reference
 
 

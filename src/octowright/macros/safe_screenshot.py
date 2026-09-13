@@ -58,9 +58,8 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
-from octowright.macros.page_devtools import PageChanges, PageController
+from octowright.macros.page_devtools import PageChanges, PageController, end_view_transitions
 from octowright.macros.privacy import sensitive_value_variants
-from octowright.macros.redaction_page_js import END_VIEW_TRANSITIONS_JS
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
 from octowright.session.timeouts import bounded
 
@@ -171,13 +170,8 @@ async def _pause_animations(cdp: Any) -> None:
 
 
 async def _end_view_transitions(cdp: Any) -> None:
-    """End a running view transition, which draws a raster of the page taken before the redaction."""
-    await bounded(
-        cdp.send(
-            "Runtime.evaluate", {"expression": END_VIEW_TRANSITIONS_JS, "awaitPromise": True, "returnByValue": True}
-        ),
-        operation=_OPERATION,
-    )
+    """End every running view transition, which draws a raster of its scope taken before the redaction."""
+    await bounded(end_view_transitions(cdp), operation=_OPERATION)
 
 
 async def _release(cdp: Any, changes: PageChanges) -> None:

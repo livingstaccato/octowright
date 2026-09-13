@@ -31,12 +31,15 @@ controller:
   every other DOM and stylesheet change.
 - ``verify()`` reports how many such changes it counted, how many classified
   spellings the redacted roots still hold outside what it hid or masked, and whether a
-  view transition is running (its raster of the old page cannot be redacted).
+  view transition is running on the document or on any element in the redacted roots
+  (its raster of the old state cannot be redacted).
 - ``restore()`` stops counting and undoes every change in reverse order: text,
   attributes, control values, and only the style properties it set. If the page itself
-  changed an element's style meanwhile, that change is kept. Attributes are written and
-  undone through their attribute nodes, and a hidden element's transitions stay off until
-  its style has settled, so its own transition does not replay. It is idempotent.
+  changed an element's style meanwhile, that change is kept, and each transition
+  longhand is put back as it was. Attributes are written and undone through their
+  attribute nodes, and a hidden element's transitions stay off until its style has
+  settled, so its own transition does not replay; a style attribute that was redacted
+  before its element was hidden comes back with the hiding. It is idempotent.
 
 The page's own mutation observers see the redaction: an application that saves what it
 observes (an autosave, say) could save a redacted text or attribute.
@@ -91,6 +94,9 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   // transition outranks even an !important declaration while it runs.
   const HIDDEN_STYLE = [['transition', 'none'], ['visibility', 'hidden'], ['opacity', '0']];
   const MASK_STYLE = [['-webkit-text-security', 'disc']];
+  // The transition shorthand reads empty while only some of its longhands are set, so each longhand is recorded.
+  const TRANSITION = ['transition-property', 'transition-duration', 'transition-timing-function', 'transition-delay', 'transition-behavior'];
+  const recorded = (name) => (name === 'transition' ? TRANSITION : [name]);
   // Names are judged by their local part: a prefix (svg:image, x:canvas, q:href) changes nothing Chrome draws.
   const tag = (element) => {
     const name = String((element && (element.localName || element.tagName)) || '');
@@ -105,12 +111,14 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   // Chrome animates from the attributes with no namespace; a namespaced one of the same name is a decoy.
   const own = (element, name) => element.getAttributeNS(null, name);
   // A <use> whose link animation only names fragments of this document draws page content, which is redacted.
-  // A link names this document only when it starts with '#': ' #t' resolves against the base address.
+  // A link names this document only when it starts with '#'. Chrome reads to, from and by as written, so ' #t', ' '
+  // and '' resolve against the base address; it strips ASCII whitespace from each values item and skips an empty one.
+  const listItem = (value) => value.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
   const fragmentsOnly = (animation) => {
     const links = ['to', 'from', 'by'].map((name) => own(animation, name)).filter((value) => value !== null);
-    links.push(...String(own(animation, 'values') ?? '').split(';'));
-    const named = links.map((value) => String(value)).filter((value) => value.trim().length > 0);
-    return named.length > 0 && named.every((value) => value.startsWith('#'));
+    const values = own(animation, 'values');
+    if (values !== null) links.push(...values.split(';').map(listItem).filter((value) => value.length > 0));
+    return links.length > 0 && links.every((value) => value.startsWith('#'));
   };
   // An <animate> or <set> can change the link an SVG image draws without changing the page, and the
   // animated value is not the attribute, so the image an SVG link animation targets is judged unseen.
@@ -152,9 +160,11 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   const style = (element, declarations) => {
     if (!element.style) return;
     const record = styled.get(element) || {before: element.getAttribute('style'), previous: []};
-    for (const [name] of declarations) {
-      if (record.previous.some(([known]) => known === name)) continue;
-      record.previous.push([name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+    for (const [declared] of declarations) {
+      for (const name of recorded(declared)) {
+        if (record.previous.some(([known]) => known === name)) continue;
+        record.previous.push([name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+      }
     }
     for (const [name, value] of declarations) element.style.setProperty(name, value, 'important');
     record.after = element.getAttribute('style');
@@ -200,15 +210,26 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       setBefore();
       return;
     }
-    putBack(element, previous.filter(([name]) => name !== 'transition'));
+    putBack(element, previous.filter(([name]) => !TRANSITION.includes(name)));
     settle(element);
-    putBack(element, previous.filter(([name]) => name === 'transition'));
+    putBack(element, previous.filter(([name]) => TRANSITION.includes(name)));
   };
   const undo = (change) => {
     const [kind, node] = change;
+    if (kind === 'text') {
+      node.nodeValue = change[2];
+      return;
+    }
+    // A style attribute redacted before its element was hidden or masked comes back with that styling, so the
+    // element's transitions stay off until its style has settled.
+    const isStyle = kind === 'attribute' && node.namespaceURI === null && node.localName === 'style';
+    const record = isStyle ? styled.get(node.ownerElement) : undefined;
+    if (record && node.value === record.after) {
+      record.before = change[2];
+      return;
+    }
     // An attribute change holds its attribute node, and a control change its element: both undo through value.
-    if (kind === 'text') node.nodeValue = change[2];
-    else node.value = change[2];
+    node.value = change[2];
   };
   const count = (records) => {
     for (const record of records) {
@@ -239,10 +260,12 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     Object.defineProperty(prototype, 'setCustomValidity', {...descriptor, value: counted});
     unhooks.push(() => Object.defineProperty(prototype, 'setCustomValidity', descriptor));
   };
-  // A view transition draws a raster of the page taken before it began, which no redaction reaches.
+  // A view transition draws a raster of its scope taken before it began, which no redaction reaches. It runs on the
+  // document or on any element.
+  const onElement = (root) => Array.from(root.querySelectorAll('*')).some((element) => element.activeViewTransition);
   const viewTransitionRunning = () => {
     if (typeof document.startViewTransition !== 'function') return 0;
-    if ('activeViewTransition' in document) return document.activeViewTransition ? 1 : 0;
+    if ('activeViewTransition' in document) return document.activeViewTransition || roots.some(onElement) ? 1 : 0;
     try {
       return document.documentElement.matches(':active-view-transition') ? 1 : 0;
     } catch (error) {
@@ -334,13 +357,27 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
 }"""
 
 
-#: Ends the document's running view transition, whose raster of the old page no redaction reaches, and
-#: waits for it to finish. Frames are hidden, so only the top document's transition can be drawn.
-END_VIEW_TRANSITIONS_JS = (
-    "(async () => { const transition = document.activeViewTransition;"
-    " if (!transition) return false; transition.skipTransition();"
-    " await transition.finished.catch(() => undefined); return true; })()"
-)
+#: Ends every running view transition, whose raster of its scope's old state no redaction reaches, and waits
+#: for each to finish. One runs on the document or on any element in it or in a shadow root; the caller passes
+#: the closed shadow roots. Frames are hidden, so a transition inside one is never drawn.
+END_VIEW_TRANSITIONS_JS = r"""async function endViewTransitions(...closedRoots) {
+  const running = new Set();
+  if (document.activeViewTransition) running.add(document.activeViewTransition);
+  const roots = [document, ...closedRoots];
+  for (let index = 0; index < roots.length; index += 1) {
+    for (const element of roots[index].querySelectorAll('*')) {
+      if (element.shadowRoot && !roots.includes(element.shadowRoot)) roots.push(element.shadowRoot);
+      if (element.activeViewTransition) running.add(element.activeViewTransition);
+    }
+  }
+  for (const transition of running) transition.skipTransition();
+  await Promise.all(Array.from(running, (transition) => transition.finished.catch(() => undefined)));
+  if (running.size === 0) return false;
+  // A finished transition's pseudo-elements are removed at the next rendering update, which DevTools reports as a
+  // page change; two frames later it has happened, before anything is counted.
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return true;
+}"""
 
 
 def controller_argument(values: list[str]) -> dict[str, Any]:

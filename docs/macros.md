@@ -252,9 +252,10 @@ It is decided in this order:
    `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
    [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
    Chromium page:
-   - It pauses the page's animations for the whole capture and ends a running view
-     transition, which would otherwise draw its raster of the page from before the
-     redaction.
+   - It pauses the page's animations for the whole capture and ends every running view
+     transition, on the document or on any element in it or in its open or closed
+     shadow roots, which would otherwise draw its raster of the old state from before
+     the redaction.
    - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
      classified values with `<redacted>` in text and attribute values across the
      document and its open and closed shadow roots. Case, whitespace, Unicode
@@ -277,8 +278,10 @@ It is decided in this order:
      image with an animated link refuses. Elements and attributes are judged by their
      local names, so a namespace prefix (`svg:image`, `x:canvas`, `q:href`) changes
      nothing; an animation's `attributeName`, `to`, `from`, `by` and `values` are read
-     without a namespace, as Chrome reads them, and only a link starting with `#` names
-     this document. Hidden elements get `visibility: hidden` and `opacity: 0`, which content
+     without a namespace, as Chrome reads them. `to`, `from` and `by` are judged as
+     written, so a blank or space-led link counts as another document; each `values` item
+     has its ASCII whitespace stripped and an empty item is skipped. Only a link starting
+     with `#` names this document. Hidden elements get `visibility: hidden` and `opacity: 0`, which content
      a `use` draws cannot undo, and lose their transitions, so they vanish at once.
      A resource address is never rewritten, because a rewritten frame address would
      navigate or reload.
@@ -291,7 +294,7 @@ It is decided in this order:
      focus, and the location hash. Inline style changes that could reveal nothing,
      such as a spinner's transform, do not count.
    - Before and after the capture, it refuses the screenshot and deletes any file if
-     it counted a change, if a view transition is running, if the redacted page still
+     it counted a change, if a view transition is running anywhere it redacted, if the redacted page still
      holds a value, or if Chrome's rendered surface does. The rendered surface is read with
      `DOMSnapshot.captureSnapshot`: layout text and text boxes (generated content and
      same-process frames included), drawn form values that are not masked, drawn
@@ -301,9 +304,10 @@ It is decided in this order:
    - It captures through the same DevTools session (`Page.captureScreenshot`), not
      Playwright's screenshot helper, which writes styles onto the page first.
    - It then restores the page and keeps style changes the page itself made
-     meanwhile. Hidden elements come back with their transitions off until their style
-     has settled, so a transition of their own does not replay, and attributes are
-     written back through their attribute nodes. If the restore fails, the screenshot is
+     meanwhile, putting each transition longhand back as it was. Hidden elements come back
+     with their transitions off until their style has settled, so a transition of their
+     own does not replay, even when their style attribute was also redacted, and
+     attributes are written back through their attribute nodes. If the restore fails, the screenshot is
      deleted.
 3. Otherwise the screenshot is refused.
 

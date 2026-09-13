@@ -141,6 +141,38 @@ class PageChanges:
                 await self._cdp.send(method)
 
 
+async def _resolved(cdp: Any, backend_node_ids: list[int]) -> list[dict[str, Any]]:
+    """Call arguments naming the nodes DevTools identifies by backend node id."""
+    arguments = []
+    for backend_node_id in backend_node_ids:
+        resolved = await cdp.send("DOM.resolveNode", {"backendNodeId": backend_node_id, "objectGroup": _OBJECT_GROUP})
+        arguments.append({"objectId": resolved["object"]["objectId"]})
+    return arguments
+
+
+async def end_view_transitions(cdp: Any) -> bool:
+    """End every running view transition and wait for each to finish; whether any was running.
+
+    A view transition draws a raster of its scope's old state, which no redaction reaches. It runs on the
+    document or on any element, including one in a closed shadow root, which only DevTools can hand the page.
+    """
+    tree = await cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
+    roots = await _resolved(cdp, closed_shadow_roots(tree.get("root", {})))
+    document = await cdp.send("Runtime.evaluate", {"expression": "document", "objectGroup": _OBJECT_GROUP})
+    reply = await cdp.send(
+        "Runtime.callFunctionOn",
+        {
+            "objectId": document["result"]["objectId"],
+            "functionDeclaration": page_js.END_VIEW_TRANSITIONS_JS,
+            "arguments": roots,
+            "awaitPromise": True,
+            "returnByValue": True,
+            "objectGroup": _OBJECT_GROUP,
+        },
+    )
+    return reply.get("result", {}).get("value") is True
+
+
 class PageController:
     """The in-page controller, held and called through a DevTools session."""
 
@@ -182,13 +214,7 @@ class PageController:
 
     async def redact(self, closed_roots: list[int]) -> None:
         """Redact the document, its open shadow roots and the given closed ones."""
-        arguments = []
-        for backend_node_id in closed_roots:
-            resolved = await self._cdp.send(
-                "DOM.resolveNode", {"backendNodeId": backend_node_id, "objectGroup": _OBJECT_GROUP}
-            )
-            arguments.append({"objectId": resolved["object"]["objectId"]})
-        await self._call("redact", arguments)
+        await self._call("redact", await _resolved(self._cdp, closed_roots))
 
     async def watch(self, latent: bool) -> None:
         await self._call("watch", [{"value": latent}])
