@@ -172,6 +172,11 @@ a section that is already tagged and on PyPI.
 - **The privacy classifier baseline cites a commit on `main`.** It named
   `c58a1461`, a pre-rebase commit from #232's branch that was never on `main`.
   It now names `b3dafe83`, whose `src/` tree is identical to that commit's.
+- **A release PR's link check no longer fails on the `[Unreleased]` link.** A
+  release moves that link to compare the tag it is about to create with `HEAD`,
+  and the tag exists only once the PR merges. The pending-release exclusion now
+  skips it as well as the release's own compare link, and still checks an
+  `[Unreleased]` link starting from any other tag.
 
 ## [0.23.0] - 2026-09-12
 
