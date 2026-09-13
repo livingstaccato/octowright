@@ -305,7 +305,14 @@ async def _capture_screenshot(
             # installed a handler of its own (that handler's checks would be
             # bypassed). Otherwise the manifest says it was suppressed.
             path.unlink(missing_ok=True)
-            if not safe_screenshot.built_in_redaction_applies(session):
+            try:
+                built_in = safe_screenshot.built_in_redaction_applies(session)
+            except ValueError:
+                # A mistyped policy must not take down the whole artifact run; the
+                # macro's own screenshot action still raises on it.
+                log.warning("octowright.artifacts.screenshot_policy_invalid", env=safe_screenshot.POLICY_ENV)
+                built_in = False
+            if not built_in:
                 evidence.screenshot_suppressed(label=label)
                 return
             try:

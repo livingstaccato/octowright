@@ -5,33 +5,50 @@
 
 """Redacted screenshots for macro runs that hold classified values.
 
-A screenshot of a page a credential or identity was typed into is a durable copy
-of it that no text scrub can reach, so a classified run refuses screenshots by
-default. This module is the safe path: it removes every rendered spelling of the
-run's classified values from the live DOM, proves none remain in the serialized
-markup, takes the screenshot, and restores the page exactly.
+A screenshot of a page a credential or identity was typed into is a durable copy of
+it that no text scrub can reach, so a classified run refuses screenshots by default.
+This module is the safe path for a Chromium page. It redacts the page, proves nothing
+classified is rendered, takes the screenshot, proves again, and restores the page:
 
-Opt in per session with :func:`enable_redacted_screenshots`, or for every session
-with ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``. A caller-installed handler
-still wins and may wrap :func:`redacted_screenshot` with its own checks.
+1. The in-page controller (:mod:`octowright.macros.redaction_page_js`) replaces every
+   spelling of the run's values in the open DOM and hides elements whose pixels or
+   resource addresses cannot be redacted.
+2. Before and after the capture, the controller must report no page change since
+   redaction and no remaining value, and Chrome's rendered surface
+   (:mod:`octowright.macros.rendered_surface`) must hold no value. Closed shadow roots,
+   generated content, split or re-cased text, and pages that re-render are refused
+   here rather than redacted.
+3. The page is restored whatever happened. A refused or unrestorable screenshot leaves
+   no file.
 
-What redaction covers: text nodes, attribute values and form-control values in the
-document and every open shadow root. What it cannot read: pixels drawn on a canvas,
-media, embeds and cross-origin frames, which are hidden for the duration of the
-screenshot instead, and closed shadow roots.
+Opt in per session with :func:`enable_redacted_screenshots`, or for every session with
+``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``. A caller-installed handler still
+wins and may wrap :func:`redacted_screenshot` with its own checks.
+
+Limits: a page is assumed to be the application under test, not an adversary that
+patches DOM prototypes to hide from the scan. Pixels of an ordinary image are not read;
+an image is hidden only when one of its resource addresses holds a value. Engines other
+than Chromium have no rendered-surface snapshot, so the screenshot is refused there.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from provide.telemetry import get_logger
+
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
+from octowright.macros import redaction_page_js as page_js
 from octowright.macros.privacy import sensitive_value_variants
+from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
 from octowright.session.timeouts import bounded
+
+log = get_logger(__name__)
 
 POLICY_ENV = "OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS"
 AUTHORITY_ATTR = "_octowright_sensitive_screenshot_authority"
@@ -41,102 +58,8 @@ BUILT_IN_ATTR = "_octowright_redacted_screenshot_built_in"
 ClassifiedScreenshotPolicy = Literal["refuse", "redact"]
 ScreenshotHandler = Callable[..., Awaitable[tuple[int, int] | None]]
 
-REDACT_RENDERED_JS = r"""(values) => {
-  const stateKey = '__octowrightRedactedScreenshotState';
-  if (globalThis[stateKey]) throw new Error('a redacted screenshot is already in progress');
-  const secrets = values.filter((value) => typeof value === 'string' && value.length > 0);
-  const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const redact = (value) => {
-    let result = String(value ?? '');
-    for (const secret of secrets) {
-      result = secret.includes('%')
-        ? result.replace(new RegExp(escapeRegex(secret), 'gi'), '<redacted>')
-        : result.split(secret).join('<redacted>');
-    }
-    return result;
-  };
-  const contains = (value, secret) => secret.includes('%')
-    ? new RegExp(escapeRegex(secret), 'i').test(value)
-    : value.includes(secret);
-  const state = [];
-  globalThis[stateKey] = state;
-  const restore = () => {
-    for (let index = state.length - 1; index >= 0; index -= 1) {
-      const change = state[index];
-      if (change[0] === 'text') change[1].nodeValue = change[2];
-      else if (change[0] === 'attribute') change[1].setAttribute(change[2], change[3]);
-      else if (change[0] === 'value') change[1].value = change[2];
-      else if (change[0] === 'style') {
-        if (change[2]) change[1].setAttribute('style', change[3]);
-        else change[1].removeAttribute('style');
-      }
-    }
-    delete globalThis[stateKey];
-  };
-  try {
-    const roots = [document];
-    for (let index = 0; index < roots.length; index += 1) {
-      const root = roots[index];
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      while (walker.nextNode()) {
-        const node = walker.currentNode;
-        const safe = redact(node.nodeValue);
-        if (safe !== node.nodeValue) {
-          state.push(['text', node, node.nodeValue]);
-          node.nodeValue = safe;
-        }
-      }
-      for (const element of root.querySelectorAll('*')) {
-        const opaque = ['CANVAS', 'EMBED', 'IFRAME', 'OBJECT', 'VIDEO'].includes(element.tagName)
-          || (element.tagName.includes('-') && !element.shadowRoot);
-        if (opaque) {
-          state.push(['style', element, element.hasAttribute('style'), element.getAttribute('style')]);
-          element.style.setProperty('visibility', 'hidden', 'important');
-        }
-        for (const attribute of Array.from(element.attributes || [])) {
-          const safe = redact(attribute.value);
-          if (safe !== attribute.value) {
-            state.push(['attribute', element, attribute.name, attribute.value]);
-            element.setAttribute(attribute.name, safe);
-          }
-        }
-        if ('value' in element && typeof element.value === 'string') {
-          const safe = redact(element.value);
-          if (safe !== element.value) {
-            state.push(['value', element, element.value]);
-            element.value = safe;
-          }
-        }
-        if (element.shadowRoot) roots.push(element.shadowRoot);
-      }
-    }
-    let remaining = 0;
-    for (const root of roots) {
-      const markup = root instanceof Document ? root.documentElement.outerHTML : root.innerHTML;
-      for (const secret of secrets) if (contains(markup, secret)) remaining += 1;
-    }
-    return remaining;
-  } catch (error) {
-    restore();
-    throw error;
-  }
-}"""
-
-RESTORE_RENDERED_JS = r"""() => {
-  const stateKey = '__octowrightRedactedScreenshotState';
-  const state = globalThis[stateKey] || [];
-  for (let index = state.length - 1; index >= 0; index -= 1) {
-    const change = state[index];
-    if (change[0] === 'text') change[1].nodeValue = change[2];
-    else if (change[0] === 'attribute') change[1].setAttribute(change[2], change[3]);
-    else if (change[0] === 'value') change[1].value = change[2];
-    else if (change[0] === 'style') {
-      if (change[2]) change[1].setAttribute('style', change[3]);
-      else change[1].removeAttribute('style');
-    }
-  }
-  delete globalThis[stateKey];
-}"""
+_OPERATION = "macro_redacted_screenshot"
+_REFUSED = "screenshot refused"
 
 
 def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
@@ -193,6 +116,35 @@ def built_in_redaction_applies(session: Any) -> bool:
     return classified_screenshot_policy() == "redact"
 
 
+async def _require_unrendered(controller: Any, cdp: Any, values: list[str], *, stage: str) -> None:
+    """Raise unless the page is unchanged since redaction and renders no classified value."""
+    report = await bounded(controller.evaluate(page_js.VERIFY_CALL), operation=_OPERATION)
+    if int(report.get("changed", 1)):
+        raise RuntimeError(f"the page changed {stage} the redacted screenshot; {_REFUSED}")
+    if int(report.get("remaining", 1)):
+        raise RuntimeError(f"classified values are still in the page {stage} the screenshot; {_REFUSED}")
+    snapshot = await bounded(cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS), operation=_OPERATION)
+    leaks = rendered_leaks(snapshot, values)
+    if leaks:
+        raise RuntimeError(
+            f"classified values are still rendered {stage} the screenshot ({', '.join(leaks)}); {_REFUSED}"
+        )
+
+
+async def _restore(controller: Any, target: Path, *, quiet: bool) -> None:
+    """Undo the redaction. On failure the screenshot is deleted; ``quiet`` logs instead of raising."""
+    try:
+        await bounded(controller.evaluate(page_js.RESTORE_CALL), operation=_OPERATION)
+    except Exception as exc:
+        target.unlink(missing_ok=True)
+        log.warning("octowright.macro.redacted_screenshot.restore_failed", error=type(exc).__name__)
+        if not quiet:
+            raise
+    finally:
+        with contextlib.suppress(Exception):
+            await controller.dispose()
+
+
 async def redacted_screenshot(
     session: Any,
     action: dict[str, Any],
@@ -200,12 +152,11 @@ async def redacted_screenshot(
     *,
     root: Path | None = None,
 ) -> tuple[int, int]:
-    """Redact, prove clean, screenshot, restore. Returns ``(executed, skipped)``.
+    """Redact, prove nothing is rendered, screenshot, prove again, restore.
 
-    No bytes are written unless redaction left no classified value in the markup.
-    The page is restored whatever happens after redaction starts; if the restore
-    itself fails, the screenshot is deleted, because a page that could not be
-    restored is not evidence of the page the run saw.
+    Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
+    page was restored. Refusals raise ``RuntimeError`` naming what was found, never the
+    value.
     """
     path_value = action.get("path")
     if not path_value:
@@ -217,25 +168,29 @@ async def redacted_screenshot(
     )
     values = list(sensitive_value_variants(sensitive_values))
     # Re-enters the caller's lease (the macro run, or an artifact run) in the same
-    # task, so the redact, screenshot and restore never interleave with another
-    # operation on this page.
+    # task, so no other operation on this page interleaves with redact .. restore.
     async with session.operation("macro_run"):
         page = session.page
-        remaining = await bounded(page.evaluate(REDACT_RENDERED_JS, values), operation="macro_redacted_screenshot")
         try:
-            if remaining != 0:
-                raise RuntimeError("classified values are still rendered after redaction; screenshot refused")
+            cdp = await bounded(page.context.new_cdp_session(page), operation=_OPERATION)
+        except Exception as exc:
+            raise RuntimeError(
+                f"a redacted screenshot needs a Chromium page to read what is rendered; {_REFUSED}"
+            ) from exc
+        controller: Any = None
+        try:
+            controller = await bounded(page.evaluate_handle(page_js.CONTROLLER_JS, values), operation=_OPERATION)
+            await bounded(controller.evaluate(page_js.REDACT_CALL), operation=_OPERATION)
+            await _require_unrendered(controller, cdp, values, stage="before")
             await session.screenshot(target)
+            await _require_unrendered(controller, cdp, values, stage="after")
         except BaseException:
             target.unlink(missing_ok=True)
-            try:
-                await bounded(page.evaluate(RESTORE_RENDERED_JS), operation="macro_redacted_screenshot")
-            except Exception:
-                pass
+            if controller is not None:
+                await _restore(controller, target, quiet=True)
             raise
-        try:
-            await bounded(page.evaluate(RESTORE_RENDERED_JS), operation="macro_redacted_screenshot")
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        finally:
+            with contextlib.suppress(Exception):
+                await cdp.detach()
+        await _restore(controller, target, quiet=False)
     return 1, 0

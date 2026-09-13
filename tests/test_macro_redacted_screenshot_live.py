@@ -116,8 +116,8 @@ async def test_every_rendered_spelling_is_redacted_and_the_page_is_restored(tmp_
 async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(tmp_path: Path) -> None:
     from playwright.async_api import async_playwright
 
+    from octowright.macros import redaction_page_js as page_js
     from octowright.macros.privacy import sensitive_value_variants
-    from octowright.macros.safe_screenshot import REDACT_RENDERED_JS, RESTORE_RENDERED_JS
 
     try:
         async with async_playwright() as p:
@@ -125,18 +125,28 @@ async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(tmp
             try:
                 page = await browser.new_page()
                 await page.set_content(_CONTENT)
-                await page.evaluate("(email) => { document.querySelector('#field').value = email; }", EMAIL)
-                await page.evaluate("() => { document.querySelector('#host').attachShadow({mode: 'open'}); }")
-                remaining = await page.evaluate(REDACT_RENDERED_JS, list(sensitive_value_variants((EMAIL,))))
+                await page.evaluate(
+                    """(email) => {
+                      document.querySelector('#field').value = email;
+                      const root = document.querySelector('#host').attachShadow({mode: 'open'});
+                      root.innerHTML = `<b title="${email}">${email}</b>`;
+                    }""",
+                    EMAIL,
+                )
+                controller = await page.evaluate_handle(page_js.CONTROLLER_JS, list(sensitive_value_variants((EMAIL,))))
+                await controller.evaluate(page_js.REDACT_CALL)
                 try:
-                    assert remaining == 0
+                    assert await controller.evaluate(page_js.VERIFY_CALL) == {"changed": 0, "remaining": 0}
                     during = await page.evaluate(_STATE_JS)
                     assert EMAIL not in during["html"]
                     assert urllib.parse.quote(EMAIL, safe="") not in during["html"]
+                    assert EMAIL not in during["shadow"]
+                    assert "redacted" in during["shadow"]
                     assert during["field"] == "<redacted>"
                     assert "visibility: hidden" in (during["canvasStyle"] or "")
                 finally:
-                    await page.evaluate(RESTORE_RENDERED_JS)
+                    await controller.evaluate(page_js.RESTORE_CALL)
+                assert EMAIL in await page.evaluate("() => document.querySelector('#host').shadowRoot.innerHTML")
             finally:
                 await browser.close()
     except Exception as exc:

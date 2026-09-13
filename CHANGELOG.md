@@ -17,11 +17,18 @@ a section that is already tagged and on PyPI.
   argument values (credentials, and identity values such as `email`) refused every
   `screenshot` unless the embedding application wrote its own privacy handler, so
   nearly every signed-in macro lost its screenshots. octowright now provides the
-  safe path itself: `macros.safe_screenshot.enable_redacted_screenshots(session)`
-  or `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` replaces every rendered
-  spelling of the run's classified values in the page, refuses if any remains,
-  screenshots, and restores the page. The default is still refusal, and an
-  application's own handler still wins. Related: #247, #248.
+  safe path for Chromium pages, turned on by
+  `macros.safe_screenshot.enable_redacted_screenshots(session)` or
+  `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact`. It works in three steps:
+  - It redacts every spelling of the run's values in the page, ignoring case, and
+    hides pixels it cannot read.
+  - Before and after the capture, it refuses and deletes the file if the page
+    changed or if Chrome's rendered surface still holds a value. That surface
+    covers closed shadow roots, generated content, split text and frames.
+  - It restores the page.
+
+  The default is still refusal. An application's own handler still wins. Firefox
+  and WebKit refuse. Related: #247, #248.
 
 ### Changed
 - **An automatic artifact screenshot of a classified run** is taken redacted when

@@ -6,8 +6,9 @@
 """Redacted screenshots for classified macro runs.
 
 A run that holds classified values may take a screenshot only after octowright has
-removed every rendered spelling of those values and proved none remain. The
-default stays refusal; the embedding app or the operator opts in.
+redacted the page and proved, before and after the capture, that the page did not change
+and renders no classified value. The default stays refusal; the embedding app or the
+operator opts in.
 """
 
 from __future__ import annotations
@@ -23,33 +24,93 @@ import pytest
 from octowright import defaults
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.macros import artifacts, execution, safe_screenshot
+from octowright.macros import redaction_page_js as page_js
 from octowright.macros.privacy import PrivacyLedger
 
 PASSWORD = "B7-REDACT-PASSWORD-CANARY-4c2e"  # pragma: allowlist secret
 EMAIL = "b7-redact-canary@example.test"
 POLICY_ENV = "OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS"
 
+CLEAN: dict[str, Any] = {"changed": 0, "remaining": 0}
+CLEAN_SNAPSHOT: dict[str, Any] = {"strings": [], "documents": []}
+LEAKING_SNAPSHOT: dict[str, Any] = {"strings": [PASSWORD], "documents": [{"nodes": {}, "layout": {"text": [0]}}]}
+TAKEN = ["redact", "verify", "snapshot", "screenshot", "verify", "snapshot", "detach", "restore"]
+
+
+class FakeController:
+    def __init__(self, page: FakePage) -> None:
+        self.page = page
+
+    async def evaluate(self, expression: str) -> Any:
+        page = self.page
+        if expression == page_js.REDACT_CALL:
+            page.calls.append("redact")
+            if page.redact_error is not None:
+                raise page.redact_error
+            return None
+        if expression == page_js.VERIFY_CALL:
+            page.calls.append("verify")
+            return page.reports.pop(0) if page.reports else dict(CLEAN)
+        if expression == page_js.RESTORE_CALL:
+            page.calls.append("restore")
+            if page.restore_error is not None:
+                raise page.restore_error
+            return None
+        raise AssertionError(f"unexpected controller call: {expression}")
+
+    async def dispose(self) -> None:
+        return None
+
+
+class FakeCDP:
+    def __init__(self, page: FakePage) -> None:
+        self.page = page
+
+    async def send(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert method == "DOMSnapshot.captureSnapshot"
+        assert params == {"computedStyles": ["visibility"]}
+        self.page.calls.append("snapshot")
+        return self.page.snapshots.pop(0) if self.page.snapshots else CLEAN_SNAPSHOT
+
+    async def detach(self) -> None:
+        self.page.calls.append("detach")
+
+
+class FakeContext:
+    def __init__(self, page: FakePage) -> None:
+        self.page = page
+
+    async def new_cdp_session(self, _page: object) -> FakeCDP:
+        if not self.page.chromium:
+            raise RuntimeError("CDP session is only available in Chromium")
+        return FakeCDP(self.page)
+
 
 class FakePage:
-    """Records the redaction protocol: redact, then restore, in that order."""
+    """Records the redaction protocol in order: redact, verify, snapshot, screenshot, ..., restore."""
 
-    def __init__(self, *, remaining: int = 0, restore_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        reports: tuple[dict[str, Any], ...] = (),
+        snapshots: tuple[dict[str, Any], ...] = (),
+        redact_error: BaseException | None = None,
+        restore_error: Exception | None = None,
+        chromium: bool = True,
+    ) -> None:
         self.calls: list[str] = []
-        self.remaining = remaining
+        self.reports = list(reports)
+        self.snapshots = list(snapshots)
+        self.redact_error = redact_error
         self.restore_error = restore_error
+        self.chromium = chromium
         self.redacted_values: list[str] | None = None
+        self.context = FakeContext(self)
 
-    async def evaluate(self, expression: str, arg: Any = None) -> Any:
-        if expression == safe_screenshot.REDACT_RENDERED_JS:
-            self.calls.append("redact")
-            self.redacted_values = list(arg)
-            return self.remaining
-        if expression == safe_screenshot.RESTORE_RENDERED_JS:
-            self.calls.append("restore")
-            if self.restore_error is not None:
-                raise self.restore_error
-            return None
-        raise AssertionError(f"unexpected evaluate: {expression[:40]}")
+    async def evaluate_handle(self, expression: str, arg: Any) -> FakeController:
+        assert expression == page_js.CONTROLLER_JS
+        self.redacted_values = list(arg)
+        return FakeController(self)
 
 
 def _session(page: FakePage) -> MagicMock:
@@ -76,6 +137,12 @@ def _session(page: FakePage) -> MagicMock:
     session._octowright_sensitive_screenshot_authority = None
     session._octowright_sensitive_screenshot_handler = None
     return session
+
+
+async def _shoot(page: FakePage, path: Path) -> tuple[int, int]:
+    return await safe_screenshot.redacted_screenshot(
+        _session(page), {"action": "screenshot", "path": str(path)}, (PASSWORD,)
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -130,7 +197,7 @@ async def test_opt_in_redacts_then_screenshots_then_restores(monkeypatch: pytest
     result = await execution._run_macro_impl(session, "private", {"password": PASSWORD, "email": EMAIL}, slowmo_ms=0)
 
     assert result["executed"] == 1
-    assert page.calls == ["redact", "screenshot", "restore"]
+    assert page.calls == TAKEN
     assert page.redacted_values is not None
     assert PASSWORD in page.redacted_values and EMAIL in page.redacted_values
     assert session.written == [(tmp_path / "shot.png").resolve()]
@@ -148,7 +215,7 @@ async def test_the_operator_policy_redacts_without_an_installed_handler(
     result = await execution._run_macro_impl(session, "private", {"password": PASSWORD}, slowmo_ms=0)
 
     assert result["executed"] == 1
-    assert page.calls == ["redact", "screenshot", "restore"]
+    assert page.calls == TAKEN
 
 
 @pytest.mark.asyncio
@@ -175,16 +242,81 @@ async def test_an_installed_handler_takes_precedence_over_the_policy(
 
 
 @pytest.mark.asyncio
-async def test_values_still_rendered_after_redaction_refuse_the_screenshot(tmp_path: Path) -> None:
-    page = FakePage(remaining=1)
-    session = _session(page)
+async def test_a_page_that_changed_before_the_capture_is_refused(tmp_path: Path) -> None:
+    page = FakePage(reports=({"changed": 1, "remaining": 0},))
 
-    with pytest.raises(RuntimeError, match="still rendered"):
-        await safe_screenshot.redacted_screenshot(
-            session, {"action": "screenshot", "path": str(tmp_path / "shot.png")}, (PASSWORD,)
-        )
+    with pytest.raises(RuntimeError, match="page changed before"):
+        await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == ["redact", "restore"]
+    assert page.calls == ["redact", "verify", "restore", "detach"]
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_page_that_changed_during_the_capture_loses_its_screenshot(tmp_path: Path) -> None:
+    page = FakePage(reports=(CLEAN, {"changed": 2, "remaining": 0}))
+
+    with pytest.raises(RuntimeError, match="page changed after"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == ["redact", "verify", "snapshot", "screenshot", "verify", "restore", "detach"]
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_values_still_in_the_page_refuse_the_screenshot(tmp_path: Path) -> None:
+    page = FakePage(reports=({"changed": 0, "remaining": 1},))
+
+    with pytest.raises(RuntimeError, match="still in the page before"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == ["redact", "verify", "restore", "detach"]
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_value_the_page_still_renders_refuses_without_naming_it(tmp_path: Path) -> None:
+    page = FakePage(snapshots=(LEAKING_SNAPSHOT,))
+
+    with pytest.raises(RuntimeError, match=r"still rendered before the screenshot \(rendered text\)") as raised:
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert PASSWORD not in str(raised.value)
+    assert page.calls == ["redact", "verify", "snapshot", "restore", "detach"]
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_value_rendered_during_the_capture_loses_its_screenshot(tmp_path: Path) -> None:
+    page = FakePage(snapshots=(CLEAN_SNAPSHOT, LEAKING_SNAPSHOT))
+
+    with pytest.raises(RuntimeError, match="still rendered after the screenshot"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == [*TAKEN[:-2], "restore", "detach"]
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_page_without_a_rendered_surface_snapshot_is_refused_untouched(tmp_path: Path) -> None:
+    page = FakePage(chromium=False)
+
+    with pytest.raises(RuntimeError, match="Chromium"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == []
+    assert page.redacted_values is None
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_redaction_that_fails_midway_is_still_restored(tmp_path: Path) -> None:
+    page = FakePage(redact_error=RuntimeError("page script threw"))
+
+    with pytest.raises(RuntimeError, match="page script threw"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == ["redact", "restore", "detach"]
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -205,22 +337,29 @@ async def test_a_failed_screenshot_still_restores_and_leaves_no_file(tmp_path: P
             session, {"action": "screenshot", "path": str(tmp_path / "shot.png")}, (PASSWORD,)
         )
 
-    assert page.calls == ["redact", "screenshot", "restore"]
+    assert page.calls == ["redact", "verify", "snapshot", "screenshot", "restore", "detach"]
     assert not (tmp_path / "shot.png").exists()
 
 
 @pytest.mark.asyncio
 async def test_a_failed_restore_deletes_the_screenshot(tmp_path: Path) -> None:
     page = FakePage(restore_error=RuntimeError("page navigated"))
-    session = _session(page)
 
     with pytest.raises(RuntimeError, match="page navigated"):
-        await safe_screenshot.redacted_screenshot(
-            session, {"action": "screenshot", "path": str(tmp_path / "shot.png")}, (PASSWORD,)
-        )
+        await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == ["redact", "screenshot", "restore"]
+    assert page.calls == TAKEN
     assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_restore_after_a_refusal_reports_the_refusal(tmp_path: Path) -> None:
+    page = FakePage(reports=({"changed": 1, "remaining": 0},), restore_error=RuntimeError("page navigated"))
+
+    with pytest.raises(RuntimeError, match="page changed before"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == ["redact", "verify", "restore", "detach"]
 
 
 @pytest.mark.asyncio
@@ -277,7 +416,7 @@ async def test_an_automatic_screenshot_is_redacted_under_opt_in(tmp_path: Path) 
         sensitive_values=(PASSWORD,),
     )
 
-    assert page.calls == ["redact", "screenshot", "restore"]
+    assert page.calls == TAKEN
     assert [record["type"] for record in evidence.records] == ["screenshot"]
 
 
@@ -310,6 +449,28 @@ async def test_an_automatic_screenshot_never_bypasses_a_custom_handler(tmp_path:
         return 1, 0
 
     safe_screenshot.enable_redacted_screenshots(session, handler=handler)
+    evidence = EvidenceBuilder()
+
+    await artifacts._capture_screenshot(
+        session=session,
+        run_dir=tmp_path,
+        evidence=evidence,
+        label="after",
+        enabled=True,
+        sensitive_values=(PASSWORD,),
+    )
+
+    assert page.calls == []
+    assert [record["type"] for record in evidence.records] == ["screenshot_suppressed"]
+
+
+@pytest.mark.asyncio
+async def test_a_mistyped_policy_suppresses_an_automatic_screenshot_instead_of_failing_the_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(POLICY_ENV, "sometimes")
+    page = FakePage()
+    session = _session(page)
     evidence = EvidenceBuilder()
 
     await artifacts._capture_screenshot(

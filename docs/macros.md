@@ -250,21 +250,36 @@ It is decided in this order:
    itself.
 2. If it called `enable_redacted_screenshots(session)` without a handler, or
    `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
-   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot**. It
-   replaces every raw, JSON-escaped and URL-encoded spelling of the run's
-   classified values with `<redacted>` in text, attribute values and form-control
-   values across the document and open shadow roots, and hides canvases, media,
-   embeds and frames, whose pixels it cannot read. It refuses if any value is still
-   in the serialized markup, then takes the screenshot and restores the page
-   exactly. If the restore fails, the screenshot is deleted.
+   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
+   Chromium page:
+   - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
+     classified values with `<redacted>`, ignoring case, in text, attribute values
+     and form-control values across the document and open shadow roots.
+   - It hides canvases, media, embeds and frames, whose pixels it cannot read, and
+     any element whose `src`, `srcset`, `data` or `poster` holds a value. Hidden
+     elements lose their transitions, so they vanish at once. A resource address
+     is never rewritten, because a rewritten frame `src` would navigate.
+   - Before and after the capture, it refuses the screenshot and deletes any file
+     if the page changed since redaction (a timer, animation frame or observer
+     putting text back), if the open DOM still holds a value, or if Chrome's
+     rendered surface does. That surface is read with `DOMSnapshot.captureSnapshot`
+     and includes closed shadow roots, CSS generated content, text split across
+     elements and same-process frames, none of which redaction can reach.
+   - It then restores the page. If the restore fails, the screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
-A value inside a closed shadow root cannot be read, so it is neither redacted nor
-counted. Automatic artifact screenshots follow the same rule, except that they are
-never taken on a session whose application installed its own handler; when not
-taken, the evidence manifest records `screenshot_suppressed`. The generic
-diagnostic producer, which saves raw page HTML and a screenshot, is not called for
-a classified run; the payload records `diagnostic_suppressed` instead.
+The in-page state lives in a Playwright handle, not on a page global, so page script
+cannot reach it. The page is assumed to be the application under test, not an
+adversary patching DOM prototypes. Pixels of an ordinary image are not read. Firefox
+and WebKit have no rendered-surface snapshot, so a redacted screenshot is refused
+there.
+
+Automatic artifact screenshots follow the same rule, with one exception: they are
+never taken on a session whose application installed its own handler. A mistyped
+policy value suppresses them rather than failing the artifact run. When one is not
+taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
+producer, which saves raw page HTML and a screenshot, is not called for a classified
+run; the payload records `diagnostic_suppressed` instead.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified
 where the call executes, at every depth, so a credential passed only to a nested
