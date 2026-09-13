@@ -265,6 +265,95 @@ _CASES.update(
 )
 
 
+# Prefixed names Chrome resolves through their namespace (review of c7b4f6d5).
+_SVG_NS = "http://www.w3.org/2000/svg"
+_XLINK_NS = "http://www.w3.org/1999/xlink"
+_HIDDEN_IMAGE = (
+    f"{STYLE}<svg {_SVG_BOX}><image href='{_svg('benign')}' {_SVG_BOX} style='visibility:hidden'></image></svg>"
+)
+
+
+def _after_image(script: str) -> str:
+    return (
+        f"{STYLE}<svg {_SVG_BOX}><image id=im href='{_svg('benign')}' {_SVG_BOX}></image></svg>"
+        f"<script>const svg=document.querySelector('svg');const im=document.getElementById('im');{script}</script>"
+    )
+
+
+_SET_SECRET = f"a.setAttribute('to',{json.dumps(_svg(SECRET))});a.setAttribute('begin','0s');a.setAttribute('fill','freeze');im.append(a);"
+_CASES.update(
+    {
+        "svg_image_link_prefixed_set_element": (
+            _after_image(
+                f"const a=document.createElementNS('{_SVG_NS}','x:set');a.setAttribute('attributeName','href');{_SET_SECRET}"
+            ),
+            _HIDDEN_IMAGE,
+            SECRET,
+        ),
+        "svg_image_link_custom_xlink_prefix": (
+            _after_image(
+                f"svg.setAttributeNS('http://www.w3.org/2000/xmlns/','xmlns:q','{_XLINK_NS}');"
+                f"const a=document.createElementNS('{_SVG_NS}','set');a.setAttribute('attributeName','q:href');{_SET_SECRET}"
+            ),
+            _HIDDEN_IMAGE,
+            SECRET,
+        ),
+        "prefixed_canvas": (
+            f"{STYLE}<div id=h></div><script>const c=document.createElementNS('http://www.w3.org/1999/xhtml','x:canvas');"
+            "c.width=880;c.height=80;document.getElementById('h').append(c);const x=c.getContext('2d');"
+            f"x.font='40px monospace';x.fillText({json.dumps(SECRET)},0,50);</script>",
+            f"{STYLE}<div id=h><canvas width=880 height=80 style='visibility:hidden'></canvas></div>",
+            SECRET,
+        ),
+    }
+)
+
+#: A same-origin address the XHTML cases are served at, through a route; nothing is fetched from it.
+_XHTML_ADDRESS = "https://octowright.test/page.xhtml"
+
+
+def _xhtml(image_style: str, animation: str) -> str:
+    return (
+        f"<html xmlns='http://www.w3.org/1999/xhtml' xmlns:svg='{_SVG_NS}'><head><style>body{{margin:0}}</style></head>"
+        f"<body><svg:svg width='880' height='60'><svg:image href='{_svg('benign')}' width='880' height='60' {image_style}>"
+        f"{animation}</svg:image></svg:svg></body></html>"
+    )
+
+
+async def _load_xhtml(page: object, body: str) -> None:
+    await page.route(_XHTML_ADDRESS, lambda route: route.fulfill(body=body, content_type="application/xhtml+xml"))  # type: ignore[attr-defined]
+    await page.goto(_XHTML_ADDRESS)  # type: ignore[attr-defined]
+    await page.wait_for_timeout(300)  # type: ignore[attr-defined]
+
+
+async def test_an_xhtml_page_with_prefixed_svg_elements_never_keeps_the_value(tmp_path: Path) -> None:
+    leaking = _xhtml("", f"<svg:set attributeName='href' to='{_svg(SECRET)}' begin='0s' fill='freeze'/>")
+    never_held = _xhtml("style='visibility:hidden'", "")
+    async with _browser() as browser:
+        shots = {}
+        for name, body in (("reference", never_held), ("raw", leaking)):
+            page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
+            try:
+                await _load_xhtml(page, body)
+                await page.screenshot(path=str(tmp_path / f"{name}.png"))
+                shots[name] = (tmp_path / f"{name}.png").read_bytes()
+            finally:
+                await page.close()
+        assert shots["raw"] != shots["reference"], "the case must render the value visibly, or it proves nothing"
+        page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
+        target = tmp_path / "redacted.png"
+        try:
+            await _load_xhtml(page, leaking)
+            try:
+                await redacted_screenshot(_PageSession(page), {"path": str(target)}, (SECRET,), root=tmp_path)
+            except RuntimeError:
+                assert not target.exists()
+                return
+        finally:
+            await page.close()
+    assert target.read_bytes() == shots["reference"]
+
+
 def _closed_with(inner: str, script: str) -> str:
     """A closed shadow root holding ``inner``, and a script that can reach it as ``root``."""
     return (

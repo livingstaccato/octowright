@@ -44,7 +44,6 @@ from typing import Any
 
 from octowright.macros.redaction_text import JS_DIGIT_SEPARATOR_CLASS, JS_IGNORABLE_CLASS, digit_needles
 from octowright.macros.rendered_surface import (
-    HREF_ATTRIBUTES,
     HREF_DRAWN_ELEMENTS,
     HREF_LOADING_ELEMENTS,
     LOADING_ATTRIBUTES,
@@ -52,7 +51,7 @@ from octowright.macros.rendered_surface import (
     UNMASKED_INPUT_TYPES,
 )
 
-CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttributes, hrefLoading, hrefDrawn, opaque, unmaskedTypes}) => {
+CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoading, hrefDrawn, opaque, unmaskedTypes}) => {
   const invisible = new RegExp(`[\\s${ignorable}]+`, 'gu');
   const invisibleOrSeparator = new RegExp(`[\\s${ignorable}${separators}]+`, 'gu');
   const gap = `[\\s${ignorable}]*`;
@@ -79,22 +78,37 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttrib
   };
   const OPAQUE = new Set(opaque);
   const LOADING = new Set(loading);
-  const HREF = new Set(hrefAttributes);
   const HREF_LOADS = new Set(hrefLoading);
   const HREF_DRAWN = new Set(hrefDrawn);
   const LINK_ANIMATIONS = new Set(['ANIMATE', 'SET']);
   const UNMASKED = new Set(unmaskedTypes);
   const EDITABLE = new Set(['INPUT', 'TEXTAREA']);
-  const HIDDEN_STYLE = [['transition', 'none'], ['animation', 'none'], ['visibility', 'hidden']];
+  // Opacity, because content a <use> draws can set its own visibility; no transition, because a
+  // transition outranks even an !important declaration while it runs.
+  const HIDDEN_STYLE = [['transition', 'none'], ['visibility', 'hidden'], ['opacity', '0']];
   const MASK_STYLE = [['-webkit-text-security', 'disc']];
-  const tag = (element) => String((element && element.tagName) || '').toUpperCase();
-  const loads = (element, name) => LOADING.has(name) || (HREF.has(name) && HREF_LOADS.has(tag(element)));
+  // Names are judged by their local part: a prefix (svg:image, x:canvas, q:href) changes nothing Chrome draws.
+  const tag = (element) => String((element && (element.localName || element.tagName)) || '').toUpperCase();
+  const localName = (name) => {
+    const text = String(name ?? '');
+    return text.slice(text.indexOf(':') + 1).toLowerCase();
+  };
+  const isLink = (name) => localName(name) === 'href';
+  const loads = (element, name) => LOADING.has(localName(name)) || (isLink(name) && HREF_LOADS.has(tag(element)));
+  // A <use> whose link animation only names fragments of this document draws page content, which is redacted.
+  const fragmentsOnly = (animation) => {
+    const links = ['to', 'from', 'by'].map((name) => animation.getAttribute(name)).filter((value) => value !== null);
+    links.push(...String(animation.getAttribute('values') ?? '').split(';'));
+    const named = links.map((value) => String(value).trim()).filter((value) => value.length > 0);
+    return named.length > 0 && named.every((value) => value.startsWith('#'));
+  };
   // An <animate> or <set> can change the link an SVG image draws without changing the page, and the
   // animated value is not the attribute, so the image an SVG link animation targets is judged unseen.
   const animatedLinkTarget = (element) => {
-    if (!LINK_ANIMATIONS.has(tag(element)) || !HREF.has(String(element.getAttribute('attributeName') ?? ''))) return null;
+    if (!LINK_ANIMATIONS.has(tag(element)) || !isLink(element.getAttribute('attributeName'))) return null;
     const target = element.targetElement;
-    return target && HREF_DRAWN.has(tag(target)) ? target : null;
+    if (!target || !HREF_DRAWN.has(tag(target))) return null;
+    return tag(target) === 'USE' && fragmentsOnly(element) ? null : target;
   };
   const maskable = (element) => tag(element) === 'TEXTAREA'
     || (tag(element) === 'INPUT' && !UNMASKED.has(String(element.getAttribute('type') ?? '').toLowerCase()));
@@ -292,7 +306,6 @@ def controller_argument(values: list[str]) -> dict[str, Any]:
         "ignorable": JS_IGNORABLE_CLASS,
         "separators": JS_DIGIT_SEPARATOR_CLASS,
         "loading": sorted(LOADING_ATTRIBUTES),
-        "hrefAttributes": sorted(HREF_ATTRIBUTES),
         "hrefLoading": sorted(HREF_LOADING_ELEMENTS),
         "hrefDrawn": sorted(HREF_DRAWN_ELEMENTS),
         "opaque": sorted(OPAQUE_ELEMENTS),

@@ -248,6 +248,12 @@ def test_a_box_whose_middle_is_exactly_half_a_line_away_is_on_the_same_line() ->
     assert rendered_leaks(_snapshot(strings, next_line), [SECRET]) == []
 
 
+def test_a_prefixed_canvas_is_opaque() -> None:
+    strings = ["x:canvas", "visible"]
+    doc = _document(names=[0], types=[1], parents=[-1], layout_nodes=[0], layout_styles=[[1]])
+    assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == ["visible canvas"]
+
+
 def test_a_few_unrelated_boxes_between_parts_still_match() -> None:
     strings = [SECRET[:8], "at", "x", SECRET[8:]]
     gapped = _document(layout_text=[0, 1, 2, 3], text_boxes=_line(*strings, top=10.0))
@@ -342,7 +348,10 @@ def test_text_security_is_not_an_image_style() -> None:
     assert rendered_leaks(_snapshot(strings, doc), [SECRET]) == []
 
 
-@pytest.mark.parametrize(("element", "attribute"), [("IMAGE", "href"), ("USE", "xlink:href"), ("IMAGE", "xlink:href")])
+@pytest.mark.parametrize(
+    ("element", "attribute"),
+    [("IMAGE", "href"), ("USE", "xlink:href"), ("IMAGE", "xlink:href"), ("IMAGE", "q:href"), ("svg:image", "href")],
+)
 def test_an_svg_image_link_holding_the_value_is_a_resource_address(element: str, attribute: str) -> None:
     strings = [element, attribute, f"data:image/svg+xml,{SECRET}", "visible", "hidden", "A", "href"]
     shown = _document(names=[0], types=[1], parents=[-1], attributes=[[1, 2]], layout_nodes=[0], layout_styles=[[3]])

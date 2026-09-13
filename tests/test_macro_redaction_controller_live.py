@@ -305,6 +305,116 @@ async def test_a_filter_image_whose_link_is_animated_is_refused() -> None:
         assert await watched.remaining() >= 1
 
 
+_SVG_NS = "http://www.w3.org/2000/svg"
+_XLINK_NS = "http://www.w3.org/1999/xlink"
+_XMLNS_NS = "http://www.w3.org/2000/xmlns/"
+_XHTML_NS = "http://www.w3.org/1999/xhtml"
+_HIDDEN = "(id) => { const e = document.getElementById(id); const s = getComputedStyle(e); return [s.visibility, s.opacity]; }"
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        f"() => {{ const a = document.createElementNS('{_SVG_NS}', 'x:set'); a.setAttribute('attributeName', 'href');"
+        f" a.setAttribute('to', 'data:image/svg+xml,{SECRET}'); a.setAttribute('begin', '0s'); a.setAttribute('fill', 'freeze');"
+        " document.getElementById('im').append(a); }",
+        f"() => {{ document.querySelector('svg').setAttributeNS('{_XMLNS_NS}', 'xmlns:q', '{_XLINK_NS}');"
+        f" const a = document.createElementNS('{_SVG_NS}', 'set'); a.setAttribute('attributeName', 'q:href');"
+        f" a.setAttribute('to', 'data:image/svg+xml,{SECRET}'); a.setAttribute('begin', '0s'); a.setAttribute('fill', 'freeze');"
+        " document.getElementById('im').append(a); }",
+    ],
+    ids=["prefixed-set-element", "custom-xlink-prefix"],
+)
+async def test_a_prefixed_svg_link_animation_hides_its_image(build: str) -> None:
+    async with _page(_svg_image("")) as page:
+        await page.evaluate(build)
+        async with _watched(page) as watched:
+            assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+            assert await watched.remaining() == 0
+
+
+async def test_a_prefixed_image_and_canvas_are_judged_by_their_local_names() -> None:
+    async with _page("<svg width=100 height=20></svg><div id=h></div>") as page:
+        await page.evaluate(
+            f"() => {{ const i = document.createElementNS('{_SVG_NS}', 'x:image'); i.id = 'xi';"
+            f" i.setAttribute('href', 'data:image/svg+xml,{SECRET}'); document.querySelector('svg').append(i);"
+            f" const c = document.createElementNS('{_XHTML_NS}', 'x:canvas'); c.id = 'xc';"
+            " document.getElementById('h').append(c); }"
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate(_HIDDEN, "xi") == ["hidden", "0"]
+            assert await page.evaluate(_HIDDEN, "xc") == ["hidden", "0"]
+            assert SECRET in await page.evaluate("() => document.getElementById('xi').getAttribute('href')")
+            assert await watched.remaining() == 0
+
+
+async def test_a_link_animation_in_a_shadow_root_hides_its_image() -> None:
+    inner = _svg_image(f"<set attributeName='href' to='data:image/svg+xml,{SECRET}' begin='0s' fill='freeze'/>")
+    async with _page("<div id=h></div>") as page:
+        await page.evaluate(
+            "(html) => { document.getElementById('h').attachShadow({mode: 'open'}).innerHTML = html; }", inner
+        )
+        async with _watched(page) as watched:
+            visibility = (
+                "() => getComputedStyle(document.getElementById('h').shadowRoot.getElementById('im')).visibility"
+            )
+            assert await page.evaluate(visibility) == "hidden"
+            assert await watched.remaining() == 0
+
+
+async def test_a_sibling_animation_naming_its_target_hides_that_image() -> None:
+    html = (
+        "<svg width=100 height=20><image id=im href='data:image/svg+xml,benign' width=100 height=20/>"
+        f"<set href='#im' attributeName='href' to='data:image/svg+xml,{SECRET}' begin='0s' fill='freeze'/></svg>"
+    )
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+        assert await watched.remaining() == 0
+
+
+def _svg_use(animation: str) -> str:
+    return (
+        "<svg width=100 height=20><defs><rect id=a width=10 height=10/><circle id=b r=5/></defs>"
+        f"<use id=u href='#a'>{animation}</use></svg>"
+    )
+
+
+async def test_a_use_whose_link_animation_names_another_document_is_hidden() -> None:
+    html = _svg_use("<set attributeName='href' to='data:image/svg+xml,benign#t' begin='indefinite'/>")
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+        assert await watched.remaining() == 0
+
+
+async def test_a_use_that_only_swaps_fragments_of_this_document_stays_visible() -> None:
+    html = _svg_use("<set attributeName='href' to='#b' begin='0s' dur='1s' repeatCount='indefinite'/>")
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_HIDDEN, "u") == ["visible", "1"]
+        assert await watched.remaining() == 0
+
+
+async def test_a_link_animation_added_to_an_unhidden_use_is_left_in_the_page() -> None:
+    async with _page(_svg_use("")) as page, _watched(page) as watched:
+        await page.evaluate(
+            f"() => {{ const a = document.createElementNS('{_SVG_NS}', 'set'); a.setAttribute('attributeName', 'href');"
+            " a.setAttribute('to', 'data:image/svg+xml,x#t'); document.getElementById('u').append(a); }"
+        )
+        assert await watched.remaining() >= 1
+
+
+async def test_a_media_query_change_is_counted() -> None:
+    html = "<style>@media (prefers-color-scheme: dark) { p { color: red } }</style><p>x</p>"
+    async with _page(html) as page, _watched(page) as watched:
+        emulation = await page.context.new_cdp_session(page)
+        try:
+            await emulation.send(
+                "Emulation.setEmulatedMedia", {"features": [{"name": "prefers-color-scheme", "value": "dark"}]}
+            )
+            assert await watched.changed() >= 1
+        finally:
+            await emulation.detach()
+
+
 async def test_a_formatted_number_is_redacted_by_its_digits_and_restored() -> None:
     async with _page("<p id=t>Call +1 (555) 013-7788 or 013-7788 now</p>") as page:
         async with _watched(page, ("+15550137788",)) as watched:

@@ -270,8 +270,12 @@ It is decided in this order:
      picture's image). An SVG image or `use` that an `<animate>` or `<set>` targets
      through its link is hidden too, whether or not the animation has begun, because
      an animated link is drawn without being the attribute or changing the page; a
-     filter image with an animated link refuses. Hidden elements lose their
-     transitions, so they vanish at once.
+     `use` whose link animation only names fragments of the same document is left
+     visible, because it draws page content the redaction already covers; a filter
+     image with an animated link refuses. Elements and attributes are judged by their
+     local names, so a namespace prefix (`svg:image`, `x:canvas`, `q:href`) changes
+     nothing. Hidden elements get `visibility: hidden` and `opacity: 0`, which content
+     a `use` draws cannot undo, and lose their transitions, so they vanish at once.
      A resource address is never rewritten, because a rewritten frame address would
      navigate or reload.
    - From then on it counts the page's changes. Chrome reports every DOM mutation

@@ -58,8 +58,8 @@ LOADING_ATTRIBUTES = frozenset({"src", "srcset", "srcdoc", "data", "poster"})
 #: Attributes whose text the browser draws itself, outside the layout text.
 DRAWN_ATTRIBUTES = frozenset({"alt", "label", "placeholder"})
 
-#: Link attributes that load a resource on some elements.
-HREF_ATTRIBUTES = frozenset({"href", "xlink:href"})
+#: Link attributes, by local name, that load a resource on some elements; any prefix (xlink:, q:) is dropped first.
+HREF_ATTRIBUTES = frozenset({"href"})
 
 #: Elements that draw the resource their link attribute loads.
 HREF_DRAWN_ELEMENTS = frozenset({"FEIMAGE", "IMAGE", "USE"})
@@ -263,12 +263,17 @@ def _form_value_reasons(snap: _Snapshot, nodes: Mapping[str, Any], styles: Mappi
 def _attributes(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> list[tuple[str, str]]:
     attributes = nodes.get("attributes", [])
     pairs = attributes[node] if node < len(attributes) else []
-    return [(snap.text(key).lower(), snap.text(value)) for key, value in zip(pairs[::2], pairs[1::2], strict=False)]
+    # Attribute names by local part, so a prefixed link (xlink:href, q:href) is judged as a link.
+    return [
+        (snap.text(key).lower().rsplit(":", 1)[-1], snap.text(value))
+        for key, value in zip(pairs[::2], pairs[1::2], strict=False)
+    ]
 
 
 def _name(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> str:
     names = nodes.get("nodeName", [])
-    return snap.text(names[node]).upper() if 0 <= node < len(names) else ""
+    # Element names by local part: a prefixed <x:canvas> is a canvas.
+    return snap.text(names[node]).rsplit(":", 1)[-1].upper() if 0 <= node < len(names) else ""
 
 
 def _visible_element_reasons(snap: _Snapshot, nodes: Mapping[str, Any], node: int, styles: Sequence[str]) -> set[str]:
