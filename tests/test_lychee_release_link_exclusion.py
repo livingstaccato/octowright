@@ -95,8 +95,7 @@ def test_the_unreleased_link_from_the_pending_tag_is_excluded() -> None:
 
     That tag does not exist until the PR merges, so the link 404s for the life of
     the PR, exactly like the release's own compare link. Left checked, it fails
-    every release PR that keeps the link honest -- which is how it drifted to a
-    ``v0.22.0`` starting point two releases late.
+    every release PR that keeps the link honest.
     """
     pattern = re.compile(_load_script().pending_release_exclusion("0.19.4"))
     assert pattern.search("https://github.com/livingstaccato/octowright/compare/v0.19.4...HEAD")
