@@ -13,6 +13,7 @@ operator opts in.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 from collections.abc import AsyncIterator, Callable
@@ -205,7 +206,7 @@ class FakePage:
         sheets: dict[str, str | None] | None = None,
         document: dict[str, Any] | None = None,
         redact_error: BaseException | None = None,
-        restore_error: Exception | None = None,
+        restore_error: BaseException | None = None,
         style_error: Exception | None = None,
         capture_error: Exception | None = None,
         pause_error: Exception | None = None,
@@ -662,6 +663,28 @@ async def test_a_failed_restore_after_a_refusal_reports_the_refusal(tmp_path: Pa
         await _shoot(page, tmp_path / "shot.png")
 
     assert page.calls == _refused("redact", "watch", "verify")
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_restore_still_deletes_the_screenshot(tmp_path: Path) -> None:
+    page = FakePage(restore_error=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == TAKEN
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_restore_after_a_refusal_propagates_the_cancellation(tmp_path: Path) -> None:
+    page = FakePage(reports=({"changed": 1, "remaining": 0},), restore_error=asyncio.CancelledError())
+
+    with pytest.raises(asyncio.CancelledError):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert page.calls == _refused("redact", "watch", "verify")
+    assert not (tmp_path / "shot.png").exists()
 
 
 @pytest.mark.asyncio

@@ -944,3 +944,84 @@ async def test_a_picture_source_holding_the_value_hides_the_picture_image() -> N
             assert await watched.remaining() == 0
         assert await page.evaluate("() => document.getElementById('m').getAttribute('style')") is None
         assert await page.evaluate("() => document.querySelector('source').getAttribute('srcset')") == svg
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("() => { document.getElementById('p').firstChild.nodeValue = 'page'; }", "page"),
+        ("() => { const t = document.getElementById('p').firstChild; t.nodeValue = String(t.nodeValue); }", SECRET),
+    ],
+    ids=["changed", "rewritten-unchanged"],
+)
+async def test_a_text_the_page_changed_meanwhile_keeps_the_pages_text(change: str, expected: str) -> None:
+    # A text is written back only while it still reads what the redaction wrote.
+    async with _page(f"<p id=p>{SECRET}</p>") as page:
+        async with _watched(page):
+            await page.evaluate(change)
+        assert await page.evaluate("() => document.getElementById('p').textContent") == expected
+
+
+_DATE = "2026-09-13"
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [("() => {}", _DATE), ("() => { document.getElementById('d').value = '2027-01-01'; }", "2027-01-01")],
+    ids=["unchanged", "changed"],
+)
+async def test_a_control_value_the_page_changed_meanwhile_keeps_the_pages_value(change: str, expected: str) -> None:
+    # A date control's redacted value reads back empty, so the restore compares with what it reads, not what it wrote.
+    html = f"<input id=d type=date><script>document.getElementById('d').value = '{_DATE}';</script>"
+    async with _page(html) as page:
+        async with _watched(page, (_DATE,)) as watched:
+            assert await page.evaluate("() => document.getElementById('d').value") == ""
+            assert await watched.remaining() == 0
+            await page.evaluate(change)
+        assert await page.evaluate("() => document.getElementById('d').value") == expected
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("() => document.getElementById('p').setAttribute('title', 'page')", "page"),
+        ("() => { const e = document.getElementById('p'); e.setAttribute('title', e.getAttribute('title')); }", SECRET),
+    ],
+    ids=["changed", "rewritten-unchanged"],
+)
+async def test_an_attribute_the_page_changed_in_place_keeps_the_pages_value(change: str, expected: str) -> None:
+    async with _page(f"<p id=p title='{SECRET}'>text</p>") as page:
+        async with _watched(page):
+            await page.evaluate(change)
+        assert await page.evaluate("() => document.getElementById('p').getAttribute('title')") == expected
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("() => { document.getElementById('c').style.opacity = '0.7'; }", ["visible", "0.7", "2s", 0]),
+        ("() => { document.getElementById('c').style.transitionDuration = '3s'; }", ["visible", "0.4", "3s", 0]),
+    ],
+    ids=["opacity", "transition-duration"],
+)
+async def test_a_hidden_element_property_the_page_changed_meanwhile_keeps_the_pages_value(
+    change: str, expected: list[Any]
+) -> None:
+    # Only a property still holding what the hiding wrote is put back; the page's own value for one stays.
+    state = (
+        "() => { const e = document.getElementById('c'); const s = getComputedStyle(e);"
+        " return [s.visibility, s.opacity, s.transitionDuration, e.getAnimations().length]; }"
+    )
+    async with _page("<canvas id=c width=80 height=20 style='opacity:0.4;transition:opacity 2s'></canvas>") as page:
+        async with _watched(page):
+            assert await page.evaluate(_HIDDEN, "c") == ["hidden", "0"]
+            await page.evaluate(change)
+        assert await page.evaluate(state) == expected
+
+
+async def test_a_style_attribute_the_page_changed_in_place_comes_back_whole() -> None:
+    # A page change to a redacted style attribute cannot be told apart from the redaction's text, so it is rolled back.
+    async with _page(f"<p id=p style='--x:{SECRET}'>text</p>") as page:
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('p').style.color = 'red'; }")
+        assert await page.evaluate("() => document.getElementById('p').getAttribute('style')") == f"--x:{SECRET}"
