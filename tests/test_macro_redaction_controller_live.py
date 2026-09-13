@@ -275,6 +275,16 @@ async def test_an_svg_image_animated_in_another_attribute_stays_visible() -> Non
         assert await watched.remaining() == 0
 
 
+async def test_a_link_animation_on_an_svg_element_that_draws_no_resource_hides_nothing() -> None:
+    html = (
+        "<svg width=100 height=20><a id=lk href='#one'><text y=15>link</text>"
+        "<animate attributeName='href' to='#two' begin='indefinite' dur='1s'/></a></svg>"
+    )
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate("() => getComputedStyle(document.getElementById('lk')).visibility") == "visible"
+        assert await watched.remaining() == 0
+
+
 async def test_an_svg_link_animation_added_after_redaction_is_left_in_the_page() -> None:
     async with _page(_svg_image("")) as page, _watched(page) as watched:
         await page.evaluate(
