@@ -60,6 +60,7 @@ from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
 from octowright.macros.page_devtools import PageChanges, PageController
 from octowright.macros.privacy import sensitive_value_variants
+from octowright.macros.redaction_page_js import END_VIEW_TRANSITIONS_JS
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
 from octowright.session.timeouts import bounded
 
@@ -140,6 +141,8 @@ async def _require_unrendered(
         raise RuntimeError(f"the page changed {stage} the redacted screenshot; {_REFUSED}")
     if int(report.get("remaining", 1)):
         raise RuntimeError(f"classified values are still in the page {stage} the screenshot; {_REFUSED}")
+    if int(report.get("transitioning", 1)):
+        raise RuntimeError(f"a view transition is running {stage} the screenshot; {_REFUSED}")
     snapshot = await bounded(cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS), operation=_OPERATION)
     leaks = rendered_leaks(snapshot, values)
     if leaks:
@@ -165,6 +168,16 @@ async def _pause_animations(cdp: Any) -> None:
     """Stop the page's CSS animations and transitions, so the scans and the capture see one frame."""
     await bounded(cdp.send("Animation.enable"), operation=_OPERATION)
     await bounded(cdp.send("Animation.setPlaybackRate", {"playbackRate": 0}), operation=_OPERATION)
+
+
+async def _end_view_transitions(cdp: Any) -> None:
+    """End a running view transition, which draws a raster of the page taken before the redaction."""
+    await bounded(
+        cdp.send(
+            "Runtime.evaluate", {"expression": END_VIEW_TRANSITIONS_JS, "awaitPromise": True, "returnByValue": True}
+        ),
+        operation=_OPERATION,
+    )
 
 
 async def _release(cdp: Any, changes: PageChanges) -> None:
@@ -197,6 +210,7 @@ async def _redact_and_capture(cdp: Any, changes: PageChanges, values: list[str],
     controller: PageController | None = None
     try:
         await _pause_animations(cdp)
+        await _end_view_transitions(cdp)
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
         await bounded(controller.redact(closed_roots), operation=_OPERATION)
@@ -221,7 +235,7 @@ async def redacted_screenshot(
     *,
     root: Path | None = None,
 ) -> tuple[int, int]:
-    """Pause animations, redact, prove nothing is rendered, screenshot, prove again, restore.
+    """Pause animations, end a view transition, redact, prove nothing is rendered, screenshot, prove again, restore.
 
     Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
     page was restored. Refusals raise ``RuntimeError`` naming what was found, never the

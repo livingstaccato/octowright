@@ -160,6 +160,24 @@ _CASES = {
         f".attachShadow({{mode:'open'}}).innerHTML='<p>&lt;redacted&gt;</p>'</script>",
         SECRET,
     ),
+    # A view transition draws a raster of the page taken before the redaction.
+    "view_transition_running_from_the_old_state": (
+        f"{STYLE}<style>::view-transition-group(root),::view-transition-old(root),::view-transition-new(root){{animation-duration:60s}}</style><p id=t>{SECRET}</p><script>setTimeout(()=>document.startViewTransition(()=>"
+        "{document.getElementById('t').textContent='benign-new-state'}),50)</script>",
+        f"{STYLE}<p id=t>benign-new-state</p>",
+        SECRET,
+    ),
+    "view_transition_running_with_the_value_still_in_the_page": (
+        f"{STYLE}<style>::view-transition-group(root),::view-transition-old(root),::view-transition-new(root){{animation-duration:60s}}</style><p id=t>{SECRET}</p><p id=o>old</p><script>setTimeout(()=>"
+        "document.startViewTransition(()=>{document.getElementById('o').textContent='new'}),50)</script>",
+        f"{STYLE}<p id=t>&lt;redacted&gt;</p><p id=o>new</p>",
+        SECRET,
+    ),
+    "view_transition_started_again_during_the_capture": (
+        f"{STYLE}<style>::view-transition-group(root),::view-transition-old(root),::view-transition-new(root){{animation-duration:60s}}</style><p id=t>{SECRET}</p><script>setInterval(()=>document.startViewTransition(()=>{{}}),20)</script>",
+        f"{STYLE}<p id=t>&lt;redacted&gt;</p>",
+        SECRET,
+    ),
 }
 
 _R = "&lt;redacted&gt;"
@@ -642,3 +660,12 @@ async def test_page_animations_hold_still_for_the_capture_and_resume_after(
         after = await page.evaluate("() => document.getAnimations()[0].currentTime")
         await page.wait_for_timeout(200)
         assert await page.evaluate("() => document.getAnimations()[0].currentTime") > after
+
+
+async def test_an_html_page_with_prefixed_office_tags_is_still_screenshotted(tmp_path: Path) -> None:
+    html = f"{STYLE}<p>{SECRET}</p><w:frame>frame-text</w:frame>"
+    never_held = f"{STYLE}<p>{_R}</p><w:frame style='visibility:hidden;opacity:0'>frame-text</w:frame>"
+    async with _browser() as browser:
+        reference = await _render(browser, never_held, tmp_path / "office.reference.png")
+        redacted = await _redacted(browser, html, SECRET, tmp_path, "office")
+    assert redacted == reference

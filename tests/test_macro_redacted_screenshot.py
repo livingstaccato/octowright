@@ -35,12 +35,13 @@ PASSWORD = "B7-REDACT-PASSWORD-CANARY-4c2e"  # pragma: allowlist secret
 EMAIL = "b7-redact-canary@example.test"
 POLICY_ENV = "OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS"
 
-CLEAN: dict[str, Any] = {"changed": 0, "remaining": 0}
+CLEAN: dict[str, Any] = {"changed": 0, "remaining": 0, "transitioning": 0}
 CLEAN_SNAPSHOT: dict[str, Any] = {"strings": [], "documents": []}
 LEAKING_SNAPSHOT: dict[str, Any] = {"strings": [PASSWORD], "documents": [{"nodes": {}, "layout": {"text": [0]}}]}
 PNG = b"\x89PNG-redacted-canary-bytes"
 TAKEN = [
     "animations:0",
+    "view_transitions",
     "redact",
     "watch",
     "verify",
@@ -56,8 +57,8 @@ _QUIET_METHODS = {"Animation.enable", "Animation.disable", "DOM.enable", "DOM.di
 
 
 def _refused(*steps: str) -> list[str]:
-    """The protocol of a refusal: animations paused, the steps taken, then restore and release."""
-    return ["animations:0", *steps, "restore", "animations:1", "detach"]
+    """The protocol of a refusal: animations paused, view transitions ended, the steps taken, then restore and release."""
+    return ["animations:0", "view_transitions", *steps, "restore", "animations:1", "detach"]
 
 
 class FakeCDP:
@@ -113,6 +114,10 @@ class FakeCDP:
         return {"text": text}
 
     async def _Runtime_evaluate(self, params: dict[str, Any]) -> dict[str, Any]:
+        if params["expression"] == page_js.END_VIEW_TRANSITIONS_JS:
+            assert params["awaitPromise"] is True
+            self.page.calls.append("view_transitions")
+            return {"result": {"value": False}}
         assert params["expression"] == "document"
         return {"result": {"objectId": "document"}}
 
@@ -356,6 +361,26 @@ async def test_a_page_that_changed_during_the_capture_loses_its_screenshot(tmp_p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reports", "stage"),
+    [(({**CLEAN, "transitioning": 1},), "before"), ((CLEAN, {**CLEAN, "transitioning": 1}), "after")],
+)
+async def test_a_running_view_transition_refuses_the_screenshot(
+    reports: tuple[dict[str, Any], ...], stage: str, tmp_path: Path
+) -> None:
+    with pytest.raises(RuntimeError, match=f"view transition is running {stage}"):
+        await _shoot(FakePage(reports=reports), tmp_path / "shot.png")
+
+    assert not (tmp_path / "shot.png").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_report_without_a_view_transition_count_refuses(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="view transition is running before"):
+        await _shoot(FakePage(reports=({"changed": 0, "remaining": 0},)), tmp_path / "shot.png")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["verify", "screenshot"])
 async def test_a_change_devtools_reports_once_counting_began_refuses(stage: str, tmp_path: Path) -> None:
     page = FakePage(events={stage: (("DOM.characterDataModified", {"nodeId": 7}),)})
@@ -509,7 +534,7 @@ async def test_a_value_rendered_during_the_capture_loses_its_screenshot(tmp_path
     with pytest.raises(RuntimeError, match="still rendered after the screenshot"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused(*TAKEN[1:8])
+    assert page.calls == _refused(*TAKEN[2:9])
     assert not (tmp_path / "shot.png").exists()
 
 

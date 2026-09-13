@@ -21,18 +21,22 @@ controller:
   address (``src``, ``srcset``, ``srcdoc``, ``data``, ``poster``, or the link of an image,
   ``use`` or filter image) holds a value; for a ``<picture>`` source that is the picture's
   image. A resource address is never rewritten, because that would navigate or reload.
-  Hiding also switches off transitions and animations on the element.
+  Hiding also turns the element's transitions off; the page's animations are paused through
+  DevTools for the whole capture.
 - ``watch(latent)`` starts counting the page changes DevTools does not report: a change to
   the inline style of an element the redaction styled, or to a style that holds a value
   (every inline style change when ``latent``, that is when a stylesheet holds a value a
   style change could reveal); a change of checked, indeterminate, selected or custom
   validity state; a focus change; and a change of the location hash. DevTools counts
   every other DOM and stylesheet change.
-- ``verify()`` reports how many such changes it counted and how many classified
-  spellings the redacted roots still hold outside what it hid or masked.
+- ``verify()`` reports how many such changes it counted, how many classified
+  spellings the redacted roots still hold outside what it hid or masked, and whether a
+  view transition is running (its raster of the old page cannot be redacted).
 - ``restore()`` stops counting and undoes every change in reverse order: text,
   attributes, control values, and only the style properties it set. If the page itself
-  changed an element's style meanwhile, that change is kept. It is idempotent.
+  changed an element's style meanwhile, that change is kept. Attributes are written and
+  undone through their attribute nodes, and a hidden element's transitions stay off until
+  its style has settled, so its own transition does not replay. It is idempotent.
 
 The page's own mutation observers see the redaction: an application that saves what it
 observes (an autosave, say) could save a redacted text or attribute.
@@ -88,24 +92,30 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   const HIDDEN_STYLE = [['transition', 'none'], ['visibility', 'hidden'], ['opacity', '0']];
   const MASK_STYLE = [['-webkit-text-security', 'disc']];
   // Names are judged by their local part: a prefix (svg:image, x:canvas, q:href) changes nothing Chrome draws.
-  const tag = (element) => String((element && (element.localName || element.tagName)) || '').toUpperCase();
+  const tag = (element) => {
+    const name = String((element && (element.localName || element.tagName)) || '');
+    return name.slice(name.indexOf(':') + 1).toUpperCase();
+  };
   const localName = (name) => {
     const text = String(name ?? '');
     return text.slice(text.indexOf(':') + 1).toLowerCase();
   };
   const isLink = (name) => localName(name) === 'href';
   const loads = (element, name) => LOADING.has(String(name ?? '').toLowerCase()) || (isLink(name) && HREF_LOADS.has(tag(element)));
+  // Chrome animates from the attributes with no namespace; a namespaced one of the same name is a decoy.
+  const own = (element, name) => element.getAttributeNS(null, name);
   // A <use> whose link animation only names fragments of this document draws page content, which is redacted.
+  // A link names this document only when it starts with '#': ' #t' resolves against the base address.
   const fragmentsOnly = (animation) => {
-    const links = ['to', 'from', 'by'].map((name) => animation.getAttribute(name)).filter((value) => value !== null);
-    links.push(...String(animation.getAttribute('values') ?? '').split(';'));
-    const named = links.map((value) => String(value).trim()).filter((value) => value.length > 0);
+    const links = ['to', 'from', 'by'].map((name) => own(animation, name)).filter((value) => value !== null);
+    links.push(...String(own(animation, 'values') ?? '').split(';'));
+    const named = links.map((value) => String(value)).filter((value) => value.trim().length > 0);
     return named.length > 0 && named.every((value) => value.startsWith('#'));
   };
   // An <animate> or <set> can change the link an SVG image draws without changing the page, and the
   // animated value is not the attribute, so the image an SVG link animation targets is judged unseen.
   const animatedLinkTarget = (element) => {
-    if (!LINK_ANIMATIONS.has(tag(element)) || !isLink(element.getAttribute('attributeName'))) return null;
+    if (!LINK_ANIMATIONS.has(tag(element)) || !isLink(own(element, 'attributeName'))) return null;
     const target = element.targetElement;
     if (!target || !HREF_DRAWN.has(tag(target))) return null;
     return tag(target) === 'USE' && fragmentsOnly(element) ? null : target;
@@ -167,21 +177,37 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     masked.add(element);
     style(element, MASK_STYLE);
   };
-  const unstyle = (element, {before, after, previous}) => {
-    if (element.getAttribute('style') === after) {
-      if (before === null) element.removeAttribute('style');
-      else element.setAttribute('style', before);
-      return;
-    }
-    for (const [name, value, priority] of previous) {
+  // Transitions come back last, once the element's style has settled, so a transition of its own
+  // does not replay from the hidden state.
+  // Reading the attribute first writes a style changed through CSSOM back to it; otherwise Chrome writes it back
+  // later, as an empty style attribute, after the restore has removed the attribute.
+  const settle = (element) => {
+    element.getAttribute('style');
+    return getComputedStyle(element).opacity;
+  };
+  const putBack = (element, entries) => {
+    for (const [name, value, priority] of entries) {
       if (value) element.style.setProperty(name, value, priority);
       else element.style.removeProperty(name);
     }
   };
+  const unstyle = (element, {before, after, previous}) => {
+    const setBefore = () => (before === null ? element.removeAttribute('style') : element.setAttribute('style', before));
+    if (element.getAttribute('style') === after) {
+      setBefore();
+      element.style.setProperty('transition', 'none', 'important');
+      settle(element);
+      setBefore();
+      return;
+    }
+    putBack(element, previous.filter(([name]) => name !== 'transition'));
+    settle(element);
+    putBack(element, previous.filter(([name]) => name === 'transition'));
+  };
   const undo = (change) => {
     const [kind, node] = change;
+    // An attribute change holds its attribute node, and a control change its element: both undo through value.
     if (kind === 'text') node.nodeValue = change[2];
-    else if (kind === 'attribute') node.setAttribute(change[2], change[3]);
     else node.value = change[2];
   };
   const count = (records) => {
@@ -213,6 +239,16 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     Object.defineProperty(prototype, 'setCustomValidity', {...descriptor, value: counted});
     unhooks.push(() => Object.defineProperty(prototype, 'setCustomValidity', descriptor));
   };
+  // A view transition draws a raster of the page taken before it began, which no redaction reaches.
+  const viewTransitionRunning = () => {
+    if (typeof document.startViewTransition !== 'function') return 0;
+    if ('activeViewTransition' in document) return document.activeViewTransition ? 1 : 0;
+    try {
+      return document.documentElement.matches(':active-view-transition') ? 1 : 0;
+    } catch (error) {
+      return 1;
+    }
+  };
   return {
     redact(...closedRoots) {
       roots = collectRoots(closedRoots);
@@ -239,8 +275,9 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
             continue;
           }
           if (maskedKind && attribute.name === 'value') continue;
-          changes.push(['attribute', node, attribute.name, attribute.value]);
-          node.setAttribute(attribute.name, redact(attribute.value));
+          // Through the attribute node: setAttribute lowercases an HTML name and picks the first attribute of that name.
+          changes.push(['attribute', attribute, attribute.value]);
+          attribute.value = redact(attribute.value);
         }
         if (!maskedKind && EDITABLE.has(tag(node)) && node.type !== 'file' && holds(node.value)) {
           changes.push(['value', node, node.value]);
@@ -282,7 +319,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
         }
         if (EDITABLE.has(tag(node)) && !masked.has(node) && holds(node.value)) remaining += 1;
       });
-      return {changed, remaining};
+      return {changed, remaining, transitioning: viewTransitionRunning()};
     },
     restore() {
       if (restored) return;
@@ -295,6 +332,15 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     },
   };
 }"""
+
+
+#: Ends the document's running view transition, whose raster of the old page no redaction reaches, and
+#: waits for it to finish. Frames are hidden, so only the top document's transition can be drawn.
+END_VIEW_TRANSITIONS_JS = (
+    "(async () => { const transition = document.activeViewTransition;"
+    " if (!transition) return false; transition.skipTransition();"
+    " await transition.finished.catch(() => undefined); return true; })()"
+)
 
 
 def controller_argument(values: list[str]) -> dict[str, Any]:

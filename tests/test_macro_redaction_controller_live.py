@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from octowright.macros import redaction_page_js as page_js
 from octowright.macros.page_devtools import PageChanges, PageController
 from octowright.macros.privacy import sensitive_value_variants
 from octowright.macros.redaction_text import IGNORABLE_RANGES
@@ -389,7 +390,8 @@ async def test_a_use_whose_link_animation_names_another_document_is_hidden() -> 
 
 async def test_a_use_whose_values_list_names_another_document_is_hidden() -> None:
     html = _svg_use(
-        "<animate attributeName='href' values='#b;data:image/svg+xml,benign#t' calcMode='discrete' dur='1s'/>"
+        # A comma-free address, so splitting the list on commas would judge it all one fragment (mutant n06).
+        "<animate attributeName='href' values='#b;/ext.svg#t' calcMode='discrete' dur='1s'/>"
     )
     async with _page(html) as page, _watched(page) as watched:
         assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
@@ -420,6 +422,142 @@ async def test_a_link_animation_added_to_an_unhidden_use_is_left_in_the_page() -
             " a.setAttribute('to', 'data:image/svg+xml,x#t'); document.getElementById('u').append(a); }"
         )
         assert await watched.remaining() >= 1
+
+
+_VIEW_TRANSITION = (
+    "<style>::view-transition-group(root),::view-transition-old(root),::view-transition-new(root)"
+    "{animation-duration:60s}</style><p id=t>old</p>"
+)
+_START_VIEW_TRANSITION = (
+    "() => { window.__vt = document.startViewTransition(() => { document.getElementById('t').textContent = 'new'; }); }"
+)
+
+
+async def test_a_running_view_transition_is_reported_until_it_ends() -> None:
+    async with _page(_VIEW_TRANSITION) as page:
+        await page.evaluate(_START_VIEW_TRANSITION)
+        await page.wait_for_timeout(100)
+        async with _watched(page) as watched:
+            assert (await watched.controller.verify())["transitioning"] == 1
+            await page.evaluate("async () => { window.__vt.skipTransition(); await window.__vt.finished; }")
+            assert (await watched.controller.verify())["transitioning"] == 0
+
+
+async def test_ending_view_transitions_skips_a_running_one_while_animations_are_paused() -> None:
+    async with _page(_VIEW_TRANSITION) as page:
+        await page.evaluate(_START_VIEW_TRANSITION)
+        await page.wait_for_timeout(100)
+        cdp = await page.context.new_cdp_session(page)
+        await cdp.send("Animation.enable")
+        await cdp.send("Animation.setPlaybackRate", {"playbackRate": 0})
+        reply = await cdp.send(
+            "Runtime.evaluate",
+            {"expression": page_js.END_VIEW_TRANSITIONS_JS, "awaitPromise": True, "returnByValue": True},
+        )
+        assert reply["result"]["value"] is True
+        assert await page.evaluate(
+            "() => [!!document.activeViewTransition, document.getElementById('t').textContent]"
+        ) == [
+            False,
+            "new",
+        ]
+        await cdp.detach()
+
+
+async def test_an_svg_link_animation_named_behind_a_namespaced_decoy_hides_its_image() -> None:
+    async with _page(_svg_image("")) as page:
+        await page.evaluate(
+            f"() => {{ const a = document.createElementNS('{_SVG_NS}', 'set');"
+            " a.setAttributeNS('urn:x', 'attributeName', 'fill'); a.setAttributeNS(null, 'attributeName', 'href');"
+            f" a.setAttribute('to', 'data:image/svg+xml,{SECRET}'); a.setAttribute('begin', 'indefinite');"
+            " document.getElementById('im').append(a); }"
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate(_VISIBILITY) == "hidden"
+            assert await watched.remaining() == 0
+
+
+async def test_a_use_whose_link_animation_hides_another_document_behind_a_namespaced_decoy_is_hidden() -> None:
+    async with _page(_svg_use("")) as page:
+        await page.evaluate(
+            f"() => {{ const a = document.createElementNS('{_SVG_NS}', 'set'); a.setAttribute('attributeName', 'href');"
+            " a.setAttributeNS('urn:x', 'to', '#b'); a.setAttributeNS(null, 'to', '/ext.svg#t');"
+            " a.setAttribute('begin', 'indefinite'); document.getElementById('u').append(a); }"
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+            assert await watched.remaining() == 0
+
+
+async def test_a_use_whose_link_animation_names_a_fragment_after_a_space_is_hidden() -> None:
+    # Chrome resolves ' #b' against the document's base address, so only an unspaced '#' names this document.
+    async with _page(_svg_use("<set attributeName='href' to=' #b' begin='indefinite'/>")) as page, _watched(page):
+        assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+
+
+async def test_a_use_whose_link_animation_starts_from_another_document_is_hidden() -> None:
+    html = _svg_use("<animate attributeName='href' from='/ext.svg#t' to='#b' calcMode='discrete' dur='600s'/>")
+    async with _page(html) as page, _watched(page):
+        assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+
+
+async def test_an_svg_image_whose_link_animation_names_a_fragment_is_hidden() -> None:
+    async with _page(_svg_image("<set attributeName='href' to='#frag' begin='indefinite'/>")) as page, _watched(page):
+        assert await page.evaluate(_VISIBILITY) == "hidden"
+
+
+async def test_an_svg_image_whose_prefixed_link_holds_the_value_is_hidden_not_rewritten() -> None:
+    async with _page("<svg width=100 height=20></svg>") as page:
+        await page.evaluate(
+            f"() => {{ const i = document.createElementNS('{_SVG_NS}', 'image'); i.id = 'im';"
+            f" i.setAttributeNS('{_XLINK_NS}', 'zz:href', 'data:image/svg+xml,{SECRET}');"
+            " i.setAttribute('width', '100'); i.setAttribute('height', '20'); document.querySelector('svg').append(i); }"
+        )
+        async with _watched(page) as watched:
+            assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+            assert SECRET in await page.evaluate("() => document.getElementById('im').getAttribute('zz:href')")
+            assert await watched.remaining() == 0
+
+
+async def test_an_html_element_with_a_prefixed_frame_name_is_hidden_like_a_frame() -> None:
+    async with _page("<w:frame id=w>frame-text</w:frame>") as page, _watched(page):
+        assert await page.evaluate(_HIDDEN, "w") == ["hidden", "0"]
+
+
+async def test_restore_writes_back_through_each_attribute_node() -> None:
+    html = (
+        f"<input id=f><p id=p>text</p><script>document.getElementById('f').setAttributeNS(null, 'PLACEHOLDER', '{SECRET}');"
+        f"const p = document.getElementById('p'); p.setAttributeNS('urn:x', 'title', 'benign');"
+        f" p.setAttributeNS(null, 'title', '{SECRET}');</script>"
+    )
+    listed = "(id) => Array.from(document.getElementById(id).attributes, (a) => [a.namespaceURI, a.name, a.value])"
+    async with _page(html) as page:
+        before = {key: await page.evaluate(listed, key) for key in ("f", "p")}
+        async with _watched(page) as watched:
+            assert await watched.remaining() == 0
+        assert {key: await page.evaluate(listed, key) for key in ("f", "p")} == before
+
+
+@pytest.mark.parametrize(
+    ("style", "opacity"),
+    [
+        ("opacity:0.4 !important;visibility:visible;transition:opacity 2s", "0.4"),
+        ("visibility:visible;transition:opacity 1s", "1"),
+    ],
+)
+async def test_a_hidden_element_comes_back_without_replaying_its_own_transition(style: str, opacity: str) -> None:
+    async with _page(f"<canvas id=c width=80 height=20 style='{style}'></canvas>") as page:
+        async with _watched(page):
+            assert await page.evaluate(_HIDDEN, "c") == ["hidden", "0"]
+        assert await page.evaluate(_HIDDEN, "c") == ["visible", opacity]
+
+
+async def test_an_element_whose_style_the_page_changed_comes_back_without_replaying_its_transition() -> None:
+    # The page's own style change sends restore down the property-by-property path (mutant m11).
+    async with _page("<canvas id=c width=80 height=20 style='opacity:0.4;transition:opacity 2s'></canvas>") as page:
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('c').style.width = '90px'; }")
+        assert await page.evaluate(_HIDDEN, "c") == ["visible", "0.4"]
 
 
 async def test_a_media_query_change_is_counted() -> None:
