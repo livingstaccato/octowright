@@ -220,20 +220,34 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       node.nodeValue = change[2];
       return;
     }
-    // A style attribute redacted before its element was hidden or masked comes back with that styling, so the
-    // element's transitions stay off until its style has settled.
-    const isStyle = kind === 'attribute' && node.namespaceURI === null && node.localName === 'style';
-    const record = isStyle ? styled.get(node.ownerElement) : undefined;
-    if (record && index < record.at) {
-      // Redacted before its element was styled: the restore puts this value back whole with transitions held off, and a
-      // restyle by the page meanwhile is lost. A value redacted after the styling rolls back into the styled attribute
-      // below, which the restore then replaces with the style from before it.
-      record.before = change[2];
-      record.after = node.value;
+    // A control change holds its element.
+    if (kind === 'value') {
+      node.value = change[2];
       return;
     }
-    // An attribute change holds its attribute node, and a control change its element: both undo through value.
-    node.value = change[2];
+    // An attribute change holds its attribute node and its element, because the page may have removed that node during
+    // the capture, or put a new one of the same name in its place.
+    const element = change[3];
+    // A style attribute redacted before its element was hidden or masked comes back with that styling, so the
+    // element's transitions stay off until its style has settled.
+    const isStyle = node.namespaceURI === null && node.localName === 'style';
+    const record = isStyle ? styled.get(element) : undefined;
+    if (record && index < record.at) {
+      // Redacted before its element was styled: the restore puts this value back whole with transitions held off, and a
+      // change by the page meanwhile, removing the attribute included, is lost. A value redacted after the styling rolls
+      // back into the styled attribute below, which the restore then replaces with the style from before it.
+      record.before = change[2];
+      record.after = element.getAttribute('style');
+      return;
+    }
+    if (node.ownerElement === element) {
+      node.value = change[2];
+      return;
+    }
+    // The page removed the node: its value comes back only if the page put the same value back under the same name.
+    // Otherwise the page's own change stands.
+    const current = element.getAttributeNodeNS(node.namespaceURI, node.localName);
+    if (current && current.value === node.value) current.value = change[2];
   };
   const count = (records) => {
     for (const record of records) {
@@ -303,7 +317,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
           }
           if (maskedKind && attribute.name === 'value') continue;
           // Through the attribute node: setAttribute lowercases an HTML name and picks the first attribute of that name.
-          changes.push(['attribute', attribute, attribute.value]);
+          changes.push(['attribute', attribute, attribute.value, node]);
           attribute.value = redact(attribute.value);
         }
         if (!maskedKind && EDITABLE.has(tag(node)) && node.type !== 'file' && holds(node.value)) {

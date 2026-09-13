@@ -54,7 +54,7 @@ async def test_a_drawn_view_transition_refuses_the_screenshot(tmp_path: Path) ->
 
 async def test_a_view_transition_that_cannot_be_ended_refuses_with_a_runtime_error(tmp_path: Path) -> None:
     page = FakePage()
-    page.end_error = TimeoutError("the page never finished its transition")  # type: ignore[attr-defined]
+    page.end_error = Exception("the page never finished its transition")  # type: ignore[attr-defined]
     with pytest.raises(RuntimeError, match="view transition could not be ended"):
         await _shoot(page, tmp_path / "shot.png")
     assert not (tmp_path / "shot.png").exists()

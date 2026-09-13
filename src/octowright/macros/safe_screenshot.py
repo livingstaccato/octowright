@@ -220,6 +220,7 @@ async def _redact_and_capture(cdp: Any, changes: PageChanges, values: list[str],
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
         await bounded(controller.redact(closed_roots), operation=_OPERATION)
+        await bounded(changes.apply_styles(), operation=_OPERATION)
         latent = await bounded(changes.sheets_hold(values), operation=_OPERATION)
         await bounded(controller.watch(latent), operation=_OPERATION)
         changes.begin()

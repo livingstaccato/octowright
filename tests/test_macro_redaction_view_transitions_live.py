@@ -169,19 +169,27 @@ class _Session:
         yield
 
 
+# A closed root inside an open one is reached through neither the open roots the redaction collects nor the closed
+# roots DevTools named before the redaction.
 _LATE_ROOT = (
-    "(mode) => {{ const r = document.getElementById('h2').attachShadow({{mode}});"
+    "(mode) => {{ const outer = document.getElementById('h2');"
+    " const host = mode === 'closed-in-open'"
+    " ? outer.attachShadow({{mode: 'open'}}).appendChild(document.createElement('div')) : outer;"
+    " const r = host.attachShadow({{mode: mode === 'open' ? 'open' : 'closed'}});"
     " r.innerHTML = {inner};"
-    " r.getElementById('s2').startViewTransition(() => {{ r.getElementById('t2').textContent = 'benign'; }}); }}"
+    " return r.getElementById('s2').startViewTransition(() => {{ r.getElementById('t2').textContent = 'benign'; }})"
+    ".updateCallbackDone; }}"
 )
 
 
-@pytest.mark.parametrize("mode", ["open", "closed"])
-@pytest.mark.parametrize("stage", ["redact", "watch"])
+@pytest.mark.parametrize(
+    ("stage", "mode"), [("redact", "closed"), ("redact", "closed-in-open"), ("watch", "open"), ("watch", "closed")]
+)
 async def test_a_transition_in_a_root_attached_after_roots_are_collected_refuses_the_screenshot(
     stage: str, mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The root is attached between collecting the roots and counting, so only a read of what Chrome draws finds it.
+    # Each root is attached after the roots it would be found in were collected, so neither the redaction nor the
+    # running check reaches its transition: only a read of what Chrome draws finds it.
     script = _LATE_ROOT.format(inner=json.dumps(_LONG + f"<div id=s2><p id=t2>{SECRET}</p></div>"))
     target = tmp_path / "late.png"
     async with _page("<div id=h2></div><p>visible</p>") as page:
@@ -189,11 +197,11 @@ async def test_a_transition_in_a_root_attached_after_roots_are_collected_refuses
 
         async def attach_first(self: PageController, *args: Any) -> Any:
             await page.evaluate(script, mode)
-            await page.wait_for_timeout(100)
+            await page.evaluate(_SETTLED)
             return await original(self, *args)
 
         monkeypatch.setattr(PageController, stage, attach_first)
-        with pytest.raises(RuntimeError):
+        with pytest.raises(RuntimeError, match="view transition is drawn"):
             await redacted_screenshot(_Session(page), {"path": str(target)}, (SECRET,), root=tmp_path)
         assert not target.exists()
 

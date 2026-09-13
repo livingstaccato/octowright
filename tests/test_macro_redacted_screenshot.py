@@ -116,6 +116,10 @@ class FakeCDP:
             raise RuntimeError("No style sheet with given id found")
         return {"text": text}
 
+    async def _CSS_getComputedStyleForNode(self, params: dict[str, Any]) -> dict[str, Any]:
+        self.page.style_updates.append((params["nodeId"], list(self.page.calls)))
+        return {"computedStyle": []}
+
     async def _Runtime_evaluate(self, params: dict[str, Any]) -> dict[str, Any]:
         assert params["expression"] == "document"
         return {"result": {"objectId": "document"}}
@@ -220,6 +224,7 @@ class FakePage:
         self.redacted_values: list[str] | None = None
         self.redact_arguments: list[dict[str, Any]] | None = None
         self.resolved: list[int] = []
+        self.style_updates: list[tuple[int, list[str]]] = []
         self.ended_roots: list[str] | None = None
         self.latent: bool | None = None
         self.released = False
@@ -774,3 +779,11 @@ async def test_a_mistyped_policy_suppresses_an_automatic_screenshot_instead_of_f
 
     assert page.calls == []
     assert [record["type"] for record in evidence.records] == ["screenshot_suppressed"]
+
+
+async def test_the_redactions_style_changes_are_applied_before_anything_is_counted(tmp_path: Path) -> None:
+    # Chrome reports a stylesheet the redaction rewrote at its next style update; DevTools makes that update
+    # happen right after the redaction, on the document element, before the sheets are read or counting begins.
+    page = FakePage(document={"children": [{"nodeType": 10, "nodeId": 2}, {"nodeType": 1, "nodeId": 3}]})
+    await _shoot(page, tmp_path / "shot.png")
+    assert page.style_updates == [(3, ["animations:0", "view_transitions", "redact"])]

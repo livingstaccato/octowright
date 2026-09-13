@@ -29,7 +29,8 @@ a section that is already tagged and on PyPI.
     keep their value and caret. It hides pixels it cannot read, and SVG images
     whose link an animation targets, judging names by their local part so a
     namespace prefix changes nothing.
-  - It counts page changes from then on, through Chrome's DevTools events for DOM,
+  - It has Chrome apply pending style changes, so its own stylesheet edit is not
+    counted, then counts page changes from then on, through Chrome's DevTools events for DOM,
     stylesheet and animation changes and in the page for inline styles that could
     reveal a value, form state and focus. Before and after the capture, it refuses
     and deletes the file if a change was counted, if a view transition is running on the
@@ -40,7 +41,8 @@ a section that is already tagged and on PyPI.
     is split, reordered or reversed. It captures through DevTools rather than
     Playwright's screenshot helper, which writes to the page.
   - It restores the page, bringing hidden elements back without replaying their own
-    transitions and with their transition longhands as they were.
+    transitions and with their transition longhands as they were, and gives an attribute
+    the page removed and put back unchanged its original value.
 
   It trusts the page not to hide changes deliberately; `docs/macros.md` lists the
   limits.

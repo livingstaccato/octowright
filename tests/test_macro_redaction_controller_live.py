@@ -85,6 +85,7 @@ async def _watched(page: Any, values: tuple[str, ...] = (SECRET,)) -> AsyncItera
     controller = await PageController.create(cdp, spellings)
     try:
         await controller.redact(closed_roots)
+        await changes.apply_styles()
         await controller.watch(await changes.sheets_hold(spellings))
         changes.begin()
         yield _Watched(page, controller, changes)
@@ -634,6 +635,77 @@ async def test_an_element_hidden_after_its_style_was_redacted_comes_back_without
             " return [e.getAttribute('style'), getComputedStyle(e).opacity, e.getAnimations().length]; }"
         )
         assert state == [f"--x:{SECRET}", "1", 0]
+
+
+async def test_a_media_element_styled_again_after_its_style_was_redacted_comes_back_shown_without_a_fade() -> None:
+    # Hidden as media, its style redacted, then hidden again for its poster: the redacted style is judged against the
+    # first styling, so the restore rolls it back and shows the video (mutant n08).
+    html = (
+        "<style>video{transition:opacity 2s}</style>"
+        f"<video id=v style='--x:{SECRET};width:80px;height:20px' poster='data:image/svg+xml,benign#{SECRET}'></video>"
+    )
+    async with _page(html) as page:
+        async with _watched(page):
+            assert await page.evaluate(_HIDDEN, "v") == ["hidden", "0"]
+        state = (
+            "() => { const e = document.getElementById('v'); const s = getComputedStyle(e);"
+            " return [s.visibility, s.opacity, e.style.width, e.getAnimations().length]; }"
+        )
+        assert await page.evaluate(state) == ["visible", "1", "80px", 0]
+
+
+async def test_a_stylesheet_the_redaction_rewrote_is_not_counted_as_a_page_change() -> None:
+    # Chrome replaces a sheet whose text changed at its next style update and reports it then; the styles are applied
+    # before counting begins, so the redaction's own change is never counted.
+    async with _page(f"<style>#a::after{{content:'{SECRET}'}}</style><p id=a></p>") as page, _watched(page) as watched:
+        await page.evaluate(_SETTLED)
+        assert watched.changes.count == 0
+
+
+_STYLE_REDACTED_THEN_HIDDEN = (
+    "<style>image{{transition:opacity 2s}}</style><svg width=80 height=20>"
+    "<image id=im style='{style}' href='data:image/svg+xml,benign' width=80 height=20>"
+    "<set attributeName='href' to='data:,x' begin='indefinite'/></image></svg>"
+)
+_PUT_BACK = "(name) => {{ const e = document.getElementById('{id}'); const v = e.getAttribute(name); e.removeAttribute(name); e.setAttribute(name, {value}); }}"
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["(name) => document.getElementById('im').removeAttribute(name)", _PUT_BACK.format(id="im", value="v")],
+    ids=["removed", "removed-and-put-back"],
+)
+async def test_a_style_redacted_before_hiding_that_the_page_replaced_comes_back_whole(change: str) -> None:
+    # The page removes the style attribute node the redaction changed, or puts a new one in its place; the restore
+    # finds the element's styling by the element, not by the removed node.
+    original = f"opacity:0.5;--x:{SECRET}"
+    async with _page(_STYLE_REDACTED_THEN_HIDDEN.format(style=original)) as page:
+        async with _watched(page):
+            assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+            await page.evaluate(change, "style")
+        state = (
+            "() => { const e = document.getElementById('im');"
+            " return [e.getAttribute('style'), getComputedStyle(e).opacity, e.getAnimations().length]; }"
+        )
+        assert await page.evaluate(state) == [original, "0.5", 0]
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        ("(name) => document.getElementById('p').removeAttribute(name)", None),
+        (_PUT_BACK.format(id="p", value="v"), SECRET),
+        (_PUT_BACK.format(id="p", value="'page'"), "page"),
+    ],
+    ids=["removed", "put-back-unchanged", "put-back-changed"],
+)
+async def test_an_attribute_the_page_replaced_is_restored_only_when_the_page_put_back_what_it_removed(
+    change: str, expected: str | None
+) -> None:
+    async with _page(f"<p id=p title='{SECRET}'>text</p>") as page:
+        async with _watched(page):
+            await page.evaluate(change, "title")
+        assert await page.evaluate("() => document.getElementById('p').getAttribute('title')") == expected
 
 
 async def test_a_media_query_change_is_counted() -> None:

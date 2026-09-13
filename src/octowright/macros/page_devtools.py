@@ -105,6 +105,7 @@ class PageChanges:
         self._handlers: list[tuple[str, Any]] = []
         self._sheets: set[str] = set()
         self._counting = False
+        self._document_element: int | None = None
         self.count = 0
 
     async def start(self) -> list[int]:
@@ -116,7 +117,23 @@ class PageChanges:
         await self._cdp.send("DOM.enable")
         document = await self._cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
         await self._cdp.send("CSS.enable")
-        return closed_shadow_roots(document.get("root", {}))
+        root = document.get("root", {})
+        self._document_element = next(
+            (int(child["nodeId"]) for child in root.get("children", []) if child.get("nodeType") == 1), None
+        )
+        return closed_shadow_roots(root)
+
+    async def apply_styles(self) -> None:
+        """Have Chrome apply the page's pending style changes now, before counting begins.
+
+        Chrome replaces a stylesheet whose text changed, the redaction's own edit of a ``<style>`` included, only at its
+        next style update, and reports the replacement then, as a removed and an added sheet. On a busy machine that
+        update can come after counting begins, and the screenshot would be refused for a change the redaction made.
+        Computing the document element's style through DevTools, which page script cannot intercept, runs the update,
+        and its events arrive before the reply.
+        """
+        if self._document_element is not None:
+            await self._cdp.send("CSS.getComputedStyleForNode", {"nodeId": self._document_element})
 
     def _handler(self, method: str) -> Any:
         def handle(params: Mapping[str, Any]) -> None:

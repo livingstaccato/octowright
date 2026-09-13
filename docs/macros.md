@@ -286,6 +286,8 @@ It is decided in this order:
      a `use` draws cannot undo, and lose their transitions, so they vanish at once.
      A resource address is never rewritten, because a rewritten frame address would
      navigate or reload.
+   - It has Chrome apply the page's pending style changes through DevTools, so a stylesheet
+     its own redaction rewrote is replaced before counting begins, not counted as a change.
    - From then on it counts the page's changes. Chrome reports every DOM mutation
      (closed shadow roots and same-process frames included), every stylesheet added,
      removed or edited through any CSSOM route, and every new animation. The page
@@ -310,8 +312,11 @@ It is decided in this order:
      meanwhile, putting each transition longhand back as it was. Hidden elements come back
      with their transitions off until their style has settled, so a transition of their
      own does not replay, even when their style attribute was also redacted, and
-     attributes are written back through their attribute nodes. If the restore fails, the screenshot is
-     deleted.
+     attributes are written back through their attribute nodes. A style attribute redacted
+     before its element was hidden comes back whole even if the page removed or replaced it.
+     Any other attribute the page removed stays removed, unless the page put the same value
+     back under the same name, which then gets the original value. If the restore fails, the
+     screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
 The in-page state is held through octowright's own DevTools session, not on a page
