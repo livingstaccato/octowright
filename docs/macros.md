@@ -313,18 +313,21 @@ It is decided in this order:
      order, and with up to a few unrelated text boxes between the parts of a value.
    - It captures through the same DevTools session (`Page.captureScreenshot`), not
      Playwright's screenshot helper, which writes styles onto the page first.
-   - It then restores the page and keeps style changes the page itself made
-     meanwhile, putting each transition longhand back as it was. Hidden elements come back
-     with their transitions off until their style has settled, so a transition of their
-     own does not replay, even when their style attribute was also redacted, and neither
-     does one the page's own style change started from the hidden state (removing the style
-     attribute, say). Attributes are written back through their attribute nodes. A style
-     attribute redacted before its element was hidden comes back whole even if the page
-     removed or replaced it. An attribute node the page moved to another element is
-     restored there, unless the page changed its value. Any other attribute the page
-     removed stays removed, unless the page put back exactly what the redaction wrote under
-     the same namespace and local name, which then gets the original value; a value the
-     page changed stays. If the restore fails, the screenshot is deleted.
+   - It then restores the page. A text, control value, attribute or style property is
+     written back only while it still holds what the redaction left, so a value the page
+     changed meanwhile stays, and so do the page's other style changes. Hidden elements
+     come back with their transitions off until their style has settled, so a transition
+     of their own does not replay, even when their style attribute was also redacted, and
+     neither does one the page's own style change started from the hidden state (removing
+     the style attribute, say). Attributes are written back through their attribute nodes.
+     A style attribute that held a value comes back whole if the page changed it in place,
+     because that change cannot be told apart from the redaction's text, and one redacted
+     before its element was hidden comes back whole even if the page removed or replaced
+     it. An attribute node the page moved to another element is restored there, unless the
+     page changed its value. Any other attribute the page removed stays removed, unless the
+     page put back exactly what the redaction wrote under the same namespace and local
+     name, which then gets the original value. If the restore fails or is cancelled, the
+     screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
 The in-page state is held through octowright's own DevTools session, not on a page

@@ -206,13 +206,17 @@ async def _release(cdp: Any, changes: PageChanges) -> None:
 
 
 async def _restore(controller: PageController, target: Path, *, quiet: bool) -> None:
-    """Undo the redaction. On failure the screenshot is deleted; ``quiet`` logs instead of raising."""
+    """Undo the redaction. On failure or cancellation the screenshot is deleted.
+
+    ``quiet`` logs a failure instead of raising; a cancellation always propagates.
+    """
     try:
         await bounded(controller.restore(), operation=_OPERATION)
-    except Exception as exc:
+    except BaseException as exc:
+        # A cancelled restore may have left the page redacted, so it loses the screenshot like a failed one.
         target.unlink(missing_ok=True)
         log.warning("octowright.macro.redacted_screenshot.restore_failed", error=type(exc).__name__)
-        if not quiet:
+        if not quiet or not isinstance(exc, Exception):
             raise
     finally:
         with contextlib.suppress(Exception):
