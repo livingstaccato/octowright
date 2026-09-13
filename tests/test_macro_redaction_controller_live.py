@@ -416,8 +416,15 @@ async def test_a_use_that_only_swaps_fragments_of_this_document_stays_visible() 
 
 @pytest.mark.parametrize(
     "values",
-    ["#a; #b", "#a;\n        #b", "#a ;#b", "#a;#b;", ";#a;\t#b\r\n"],
-    ids=["space-after", "multiline", "space-before", "trailing-semicolon", "empty-and-whitespace-items"],
+    ["#a; #b", "#a;\n        #b", "#a ;#b", "#a;#b;", ";#a;\t#b\r\n", "#a;#b; "],
+    ids=[
+        "space-after",
+        "multiline",
+        "space-before",
+        "trailing-semicolon",
+        "empty-and-whitespace-items",
+        "whitespace-only-item",
+    ],
 )
 async def test_a_use_whose_values_list_spaces_its_fragments_stays_visible(values: str) -> None:
     # Chrome strips ASCII whitespace from each values item and skips an empty one.
@@ -555,15 +562,51 @@ async def test_an_element_whose_style_the_page_changed_comes_back_without_replay
 
 
 async def test_an_element_whose_style_the_page_changed_keeps_its_transition_longhands() -> None:
-    html = "<canvas id=c width=80 height=20 style='transition-property:opacity;transition-duration:2s;opacity:0.5'></canvas>"
+    html = (
+        "<canvas id=c width=80 height=20"
+        " style='transition-property:opacity;transition-duration:2s;transition-behavior:allow-discrete;opacity:0.5'></canvas>"
+    )
     async with _page(html) as page:
         async with _watched(page):
             await page.evaluate("() => { document.getElementById('c').style.width = '90px'; }")
         state = await page.evaluate(
             "() => { const e = document.getElementById('c'); const s = getComputedStyle(e);"
-            " return [s.transitionProperty, s.transitionDuration, s.opacity, e.style.width, e.getAnimations().length]; }"
+            " return [s.transitionProperty, s.transitionDuration, s.transitionBehavior, s.opacity, e.style.width,"
+            " e.getAnimations().length]; }"
         )
-        assert state == ["opacity", "2s", "0.5", "90px", 0]
+        assert state == ["opacity", "2s", "allow-discrete", "0.5", "90px", 0]
+
+
+async def test_an_element_restyled_by_the_page_comes_back_with_its_whole_original_style() -> None:
+    # A declaration that hiding also records, holding the value, must not be put back from the redacted style.
+    html = (
+        "<style>image{transition:opacity 2s}</style><svg width=80 height=20>"
+        f"<image id=im style='transition-property:{SECRET}' href='data:image/svg+xml,benign' width=80 height=20>"
+        "<set attributeName='href' to='data:,x' begin='indefinite'/></image></svg>"
+    )
+    async with _page(html) as page:
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('im').style.transform = 'translateX(1px)'; }")
+            assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+        restored = await page.evaluate("() => document.getElementById('im').getAttribute('style')")
+        assert restored == f"transition-property:{SECRET}"
+
+
+async def test_an_element_hidden_after_its_style_was_redacted_and_restyled_by_the_page_comes_back_without_a_fade() -> (
+    None
+):
+    # The page's restyle means the attribute no longer matches the hiding; its undo still holds transitions off.
+    html = (
+        "<style>image{transition:opacity 2s}</style><svg width=80 height=20>"
+        f"<image id=im style='--x:{SECRET}' href='data:image/svg+xml,benign' width=80 height=20>"
+        "<set attributeName='href' to='data:,x' begin='indefinite'/></image></svg>"
+    )
+    async with _page(html) as page:
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('im').style.transform = 'translateX(1px)'; }")
+            assert await page.evaluate(_HIDDEN, "im") == ["hidden", "0"]
+        state = "() => { const e = document.getElementById('im'); return [getComputedStyle(e).opacity, e.getAnimations().length]; }"
+        assert await page.evaluate(state) == ["1", 0]
 
 
 async def test_a_hidden_element_whose_style_held_the_value_comes_back_as_it_was() -> None:

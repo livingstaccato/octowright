@@ -33,7 +33,8 @@ a section that is already tagged and on PyPI.
     stylesheet and animation changes and in the page for inline styles that could
     reveal a value, form state and focus. Before and after the capture, it refuses
     and deletes the file if a change was counted, if a view transition is running on the
-    document or on any redacted element, or if Chrome's rendered surface
+    document or on any redacted element or Chrome still draws one in any shadow root, or
+    if Chrome's rendered surface
     still holds a value. That surface covers generated content, frames, unmasked
     form values, drawn attributes, image styles and SVG image links, and text that
     is split, reordered or reversed. It captures through DevTools rather than

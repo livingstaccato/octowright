@@ -255,7 +255,8 @@ It is decided in this order:
    - It pauses the page's animations for the whole capture and ends every running view
      transition, on the document or on any element in it or in its open or closed
      shadow roots, which would otherwise draw its raster of the old state from before
-     the redaction.
+     the redaction, and waits, reading DevTools rather than the page, until their
+     pseudo-elements are gone.
    - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
      classified values with `<redacted>` in text and attribute values across the
      document and its open and closed shadow roots. Case, whitespace, Unicode
@@ -294,7 +295,9 @@ It is decided in this order:
      focus, and the location hash. Inline style changes that could reveal nothing,
      such as a spinner's transform, do not count.
    - Before and after the capture, it refuses the screenshot and deletes any file if
-     it counted a change, if a view transition is running anywhere it redacted, if the redacted page still
+     it counted a change, if a view transition is running anywhere it redacted or Chrome
+     still draws one in any root (including a shadow root attached after the redaction
+     collected its roots), if the redacted page still
      holds a value, or if Chrome's rendered surface does. The rendered surface is read with
      `DOMSnapshot.captureSnapshot`: layout text and text boxes (generated content and
      same-process frames included), drawn form values that are not masked, drawn

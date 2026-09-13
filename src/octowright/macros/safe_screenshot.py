@@ -58,7 +58,12 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
-from octowright.macros.page_devtools import PageChanges, PageController, end_view_transitions
+from octowright.macros.page_devtools import (
+    PageChanges,
+    PageController,
+    end_view_transitions,
+    view_transition_pseudo_elements,
+)
 from octowright.macros.privacy import sensitive_value_variants
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
 from octowright.session.timeouts import bounded
@@ -142,6 +147,10 @@ async def _require_unrendered(
         raise RuntimeError(f"classified values are still in the page {stage} the screenshot; {_REFUSED}")
     if int(report.get("transitioning", 1)):
         raise RuntimeError(f"a view transition is running {stage} the screenshot; {_REFUSED}")
+    # What Chrome draws, whatever root it is in: a root attached after the redaction collected its roots is not in them.
+    document_tree = await bounded(cdp.send("DOM.getDocument", {"depth": -1, "pierce": True}), operation=_OPERATION)
+    if view_transition_pseudo_elements(document_tree.get("root", {})):
+        raise RuntimeError(f"a view transition is drawn {stage} the screenshot; {_REFUSED}")
     snapshot = await bounded(cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS), operation=_OPERATION)
     leaks = rendered_leaks(snapshot, values)
     if leaks:
@@ -171,7 +180,10 @@ async def _pause_animations(cdp: Any) -> None:
 
 async def _end_view_transitions(cdp: Any) -> None:
     """End every running view transition, which draws a raster of its scope taken before the redaction."""
-    await bounded(end_view_transitions(cdp), operation=_OPERATION)
+    try:
+        await bounded(end_view_transitions(cdp), operation=_OPERATION)
+    except Exception as exc:
+        raise RuntimeError(f"a view transition could not be ended; {_REFUSED}") from exc
 
 
 async def _release(cdp: Any, changes: PageChanges) -> None:

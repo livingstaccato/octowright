@@ -24,6 +24,7 @@ harmless one from one that could reveal a value.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -54,6 +55,8 @@ COUNTED_EVENTS = (
 
 _STYLE_ATTRIBUTE_EVENTS = frozenset({"DOM.attributeModified", "DOM.attributeRemoved"})
 _OBJECT_GROUP = "octowright-redacted-screenshot"
+#: How often ending view transitions re-reads the document until their pseudo-elements are gone.
+_VIEW_TRANSITION_SETTLE_POLL_SECONDS = 0.02
 
 
 def closed_shadow_roots(node: Mapping[str, Any]) -> list[int]:
@@ -71,6 +74,26 @@ def closed_shadow_roots(node: Mapping[str, Any]) -> list[int]:
                 found.append(int(shadow["backendNodeId"]))
             pending.append(shadow)
         pending.extend(current.get("children", []))
+    return found
+
+
+def view_transition_pseudo_elements(node: Mapping[str, Any]) -> list[str]:
+    """The view-transition pseudo-elements Chrome still draws, in a pierced ``DOM.getDocument`` tree.
+
+    Every shadow root is read, open or closed, including one attached after the redaction collected its roots. A
+    frame's document is not: frames are hidden, so a transition inside one is never drawn.
+    """
+    found: list[str] = []
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        for pseudo in current.get("pseudoElements", []):
+            kind = str(pseudo.get("pseudoType", ""))
+            if kind.startswith("view-transition"):
+                found.append(kind)
+            pending.append(pseudo)
+        pending.extend(current.get("children", []))
+        pending.extend(current.get("shadowRoots", []))
     return found
 
 
@@ -170,7 +193,16 @@ async def end_view_transitions(cdp: Any) -> bool:
             "objectGroup": _OBJECT_GROUP,
         },
     )
-    return reply.get("result", {}).get("value") is True
+    ended = reply.get("result", {}).get("value") is True
+    # Their pseudo-elements go at a later rendering update, which DevTools reports as a page change; wait until the
+    # document no longer holds them, so the removal lands before anything is counted. The page's own frame callbacks
+    # are not used, because page script can replace them.
+    while ended:
+        document_tree = await cdp.send("DOM.getDocument", {"depth": -1, "pierce": True})
+        if not view_transition_pseudo_elements(document_tree.get("root", {})):
+            break
+        await asyncio.sleep(_VIEW_TRANSITION_SETTLE_POLL_SECONDS)
+    return ended
 
 
 class PageController:

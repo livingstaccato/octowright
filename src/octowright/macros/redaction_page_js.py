@@ -159,7 +159,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   };
   const style = (element, declarations) => {
     if (!element.style) return;
-    const record = styled.get(element) || {before: element.getAttribute('style'), previous: []};
+    const record = styled.get(element) || {before: element.getAttribute('style'), previous: [], at: changes.length};
     for (const [declared] of declarations) {
       for (const name of recorded(declared)) {
         if (record.previous.some(([known]) => known === name)) continue;
@@ -214,7 +214,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     settle(element);
     putBack(element, previous.filter(([name]) => TRANSITION.includes(name)));
   };
-  const undo = (change) => {
+  const undo = (change, index) => {
     const [kind, node] = change;
     if (kind === 'text') {
       node.nodeValue = change[2];
@@ -224,8 +224,12 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     // element's transitions stay off until its style has settled.
     const isStyle = kind === 'attribute' && node.namespaceURI === null && node.localName === 'style';
     const record = isStyle ? styled.get(node.ownerElement) : undefined;
-    if (record && node.value === record.after) {
+    if (record && index < record.at) {
+      // Redacted before its element was styled: the restore puts this value back whole with transitions held off, and a
+      // restyle by the page meanwhile is lost. A value redacted after the styling rolls back into the styled attribute
+      // below, which the restore then replaces with the style from before it.
       record.before = change[2];
+      record.after = node.value;
       return;
     }
     // An attribute change holds its attribute node, and a control change its element: both undo through value.
@@ -350,7 +354,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       if (observer) observer.disconnect();
       for (const [type, listener] of listeners) window.removeEventListener(type, listener, true);
       for (let index = unhooks.length - 1; index >= 0; index -= 1) unhooks[index]();
-      for (let index = changes.length - 1; index >= 0; index -= 1) undo(changes[index]);
+      for (let index = changes.length - 1; index >= 0; index -= 1) undo(changes[index], index);
       for (const [element, record] of styled) unstyle(element, record);
     },
   };
@@ -358,7 +362,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
 
 
 #: Ends every running view transition, whose raster of its scope's old state no redaction reaches, and waits
-#: for each to finish. One runs on the document or on any element in it or in a shadow root; the caller passes
+#: for each to finish; the caller then waits for their pseudo-elements to go, reading DevTools rather than the page. One runs on the document or on any element in it or in a shadow root; the caller passes
 #: the closed shadow roots. Frames are hidden, so a transition inside one is never drawn.
 END_VIEW_TRANSITIONS_JS = r"""async function endViewTransitions(...closedRoots) {
   const running = new Set();
@@ -372,11 +376,7 @@ END_VIEW_TRANSITIONS_JS = r"""async function endViewTransitions(...closedRoots) 
   }
   for (const transition of running) transition.skipTransition();
   await Promise.all(Array.from(running, (transition) => transition.finished.catch(() => undefined)));
-  if (running.size === 0) return false;
-  // A finished transition's pseudo-elements are removed at the next rendering update, which DevTools reports as a
-  // page change; two frames later it has happened, before anything is counted.
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  return true;
+  return running.size > 0;
 }"""
 
 

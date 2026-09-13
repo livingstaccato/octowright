@@ -99,8 +99,11 @@ class FakeCDP:
 
     async def _DOM_getDocument(self, params: dict[str, Any]) -> dict[str, Any]:
         assert params == {"depth": -1, "pierce": True}
-        for sheet_id in self.page.sheets:
-            self.emit("CSS.styleSheetAdded", {"header": {"styleSheetId": sheet_id}})
+        # CSS.enable announces existing sheets once; later pierced reads (view-transition checks) announce nothing.
+        if self.handlers.get("CSS.styleSheetAdded") and not getattr(self, "sheets_announced", False):
+            self.sheets_announced = True
+            for sheet_id in self.page.sheets:
+                self.emit("CSS.styleSheetAdded", {"header": {"styleSheetId": sheet_id}})
         return {"root": self.page.document}
 
     async def _DOM_resolveNode(self, params: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +128,8 @@ class FakeCDP:
         page = self.page
         if params["functionDeclaration"] == page_js.END_VIEW_TRANSITIONS_JS:
             assert params["objectId"] == "document" and params["awaitPromise"] is True
+            if getattr(page, "end_error", None) is not None:
+                raise page.end_error
             page.calls.append("view_transitions")
             page.ended_roots = [argument["objectId"] for argument in params["arguments"]]
             return {"result": {"value": False}}
