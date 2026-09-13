@@ -267,7 +267,11 @@ It is decided in this order:
    - It hides canvases, media, embeds and frames, whose pixels it cannot read, and
      any element whose `src`, `srcset`, `srcdoc`, `data` or `poster`, or whose link as
      an SVG image, `use` or filter image, holds a value (for a `<picture>` source, the
-     picture's image). Hidden elements lose their transitions, so they vanish at once.
+     picture's image). An SVG image or `use` that an `<animate>` or `<set>` targets
+     through its link is hidden too, whether or not the animation has begun, because
+     an animated link is drawn without being the attribute or changing the page; a
+     filter image with an animated link refuses. Hidden elements lose their
+     transitions, so they vanish at once.
      A resource address is never rewritten, because a rewritten frame address would
      navigate or reload.
    - From then on it counts the page's changes. Chrome reports every DOM mutation

@@ -24,7 +24,8 @@ a section that is already tagged and on PyPI.
     closed shadow roots included (ignoring case, whitespace, compatibility forms,
     control and invisible characters inside a value, and matching a phone-like
     value by its digits). Text controls are masked rather than rewritten, so they
-    keep their value and caret. It hides pixels it cannot read.
+    keep their value and caret. It hides pixels it cannot read, and SVG images
+    whose link an animation targets.
   - It counts page changes from then on, through Chrome's DevTools events for DOM,
     stylesheet and animation changes and in the page for inline styles that could
     reveal a value, form state and focus. Before and after the capture, it refuses

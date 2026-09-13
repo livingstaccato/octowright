@@ -125,6 +125,7 @@ _CHANGES = {
     "indeterminate": "() => { document.getElementById('c').indeterminate = true; }",
     "custom validity": "() => document.getElementById('i').setCustomValidity('bad')",
     "focus": "() => document.getElementById('i').focus()",
+    "location hash": "() => { location.hash = 'moved'; }",
     "popover": "() => document.getElementById('pop').showPopover()",
     "script animation": "() => { document.getElementById('t').animate([{opacity: 0}, {opacity: 1}], 1000); }",
 }
@@ -226,6 +227,72 @@ async def test_every_invisible_character_inside_the_value_is_redacted_in_the_pag
             texts = await page.evaluate("() => Array.from(document.querySelectorAll('p'), (p) => p.textContent)")
             assert texts == ["x <redacted> y"] * len(characters)
             assert await watched.remaining() == 0
+
+
+async def test_a_value_the_page_patterns_cannot_find_is_replaced_whole() -> None:
+    # Full-width letters equal the value only after compatibility normalization, which the page's
+    # patterns do not apply, so only the whole-string fallback removes them.
+    shown = "".join(chr(ord(character) + 0xFEE0) if "!" <= character <= "~" else character for character in SECRET)
+    async with _page("<p id=t></p>") as page:
+        await page.evaluate("(text) => { document.getElementById('t').textContent = text; }", f"x {shown} y")
+        async with _watched(page) as watched:
+            assert await page.evaluate("() => document.getElementById('t').textContent") == "<redacted>"
+            assert await watched.remaining() == 0
+
+
+def _svg_image(animation: str) -> str:
+    return (
+        "<svg width=100 height=20><image id=im href='data:image/svg+xml,benign' width=100 height=20>"
+        f"{animation}</image></svg>"
+    )
+
+
+_VISIBILITY = "() => getComputedStyle(document.getElementById('im')).visibility"
+
+
+async def test_an_svg_image_whose_link_an_animation_sets_to_the_value_is_hidden_and_restored() -> None:
+    html = _svg_image(f"<set attributeName='href' to='data:image/svg+xml,{SECRET}' begin='0s' fill='freeze'/>")
+    async with _page(html) as page:
+        await page.wait_for_timeout(100)
+        assert SECRET in await page.evaluate("() => document.getElementById('im').href.animVal")
+        async with _watched(page) as watched:
+            assert await page.evaluate(_VISIBILITY) == "hidden"
+            assert await watched.remaining() == 0
+        assert await page.evaluate(_VISIBILITY) == "visible"
+
+
+async def test_an_svg_link_animation_hides_its_image_before_it_begins() -> None:
+    html = _svg_image("<animate attributeName='xlink:href' to='data:image/svg+xml,later' begin='indefinite' dur='1s'/>")
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_VISIBILITY) == "hidden"
+        assert await watched.remaining() == 0
+
+
+async def test_an_svg_image_animated_in_another_attribute_stays_visible() -> None:
+    html = _svg_image("<animate attributeName='opacity' from='0' to='1' begin='0s' dur='1s'/>")
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_VISIBILITY) == "visible"
+        assert await watched.remaining() == 0
+
+
+async def test_an_svg_link_animation_added_after_redaction_is_left_in_the_page() -> None:
+    async with _page(_svg_image("")) as page, _watched(page) as watched:
+        await page.evaluate(
+            "() => { const a = document.createElementNS('http://www.w3.org/2000/svg', 'set');"
+            " a.setAttribute('attributeName', 'href'); a.setAttribute('to', 'data:image/svg+xml,x');"
+            " document.getElementById('im').append(a); }"
+        )
+        assert await watched.remaining() >= 1
+
+
+async def test_a_filter_image_whose_link_is_animated_is_refused() -> None:
+    html = (
+        "<svg width=100 height=20><filter id=f><feImage href='data:image/svg+xml,benign'>"
+        "<animate attributeName='href' to='data:image/svg+xml,x' begin='indefinite' dur='1s'/></feImage></filter>"
+        "<rect width=100 height=20 filter='url(#f)'/></svg>"
+    )
+    async with _page(html) as page, _watched(page) as watched:
+        assert await watched.remaining() >= 1
 
 
 async def test_a_formatted_number_is_redacted_by_its_digits_and_restored() -> None:

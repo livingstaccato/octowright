@@ -36,6 +36,15 @@ def test_every_ignorable_range_boundary_is_removed(codepoint: int) -> None:
     assert normalize(f"ab{chr(codepoint)}cd") == "abcd"
 
 
+#: Bidirectional formatting characters, listed here rather than derived from the table.
+_BIDI_CONTROLS = (0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069)
+
+
+@pytest.mark.parametrize("codepoint", _BIDI_CONTROLS, ids=[f"U+{codepoint:04X}" for codepoint in _BIDI_CONTROLS])
+def test_every_bidi_control_inside_a_value_is_removed(codepoint: int) -> None:
+    assert normalize(f"ab{chr(codepoint)}cd") == "abcd"
+
+
 def test_characters_just_outside_each_range_are_kept() -> None:
     kept = 0
     for low, high in IGNORABLE_RANGES:

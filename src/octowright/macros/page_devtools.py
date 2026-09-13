@@ -123,7 +123,6 @@ class PageChanges:
 
     def begin(self) -> None:
         """Count from now on."""
-        self.count = 0
         self._counting = True
 
     def end(self) -> None:

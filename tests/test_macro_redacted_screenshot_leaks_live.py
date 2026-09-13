@@ -248,6 +248,23 @@ _CASES.update(
 )
 
 
+# An SVG image link set by an animation draws the value while the attribute stays benign (review of 9ecfd5d6).
+_SVG_BOX = "width=880 height=60"
+_CASES.update(
+    {
+        f"svg_image_link_{kind}": (
+            f"{STYLE}<svg {_SVG_BOX}><image href='{_svg('benign')}' {_SVG_BOX}>{animation}</image></svg>",
+            f"{STYLE}<svg {_SVG_BOX}><image href='{_svg('benign')}' {_SVG_BOX} style='visibility:hidden'></image></svg>",
+            SECRET,
+        )
+        for kind, animation in (
+            ("animated", f"<animate attributeName='href' to='{_svg(SECRET)}' begin='0s' dur='0.05s' fill='freeze'/>"),
+            ("set", f"<set attributeName='href' to='{_svg(SECRET)}' begin='0s' fill='freeze'/>"),
+        )
+    }
+)
+
+
 def _closed_with(inner: str, script: str) -> str:
     """A closed shadow root holding ``inner``, and a script that can reach it as ``root``."""
     return (

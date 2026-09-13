@@ -45,13 +45,14 @@ from typing import Any
 from octowright.macros.redaction_text import JS_DIGIT_SEPARATOR_CLASS, JS_IGNORABLE_CLASS, digit_needles
 from octowright.macros.rendered_surface import (
     HREF_ATTRIBUTES,
+    HREF_DRAWN_ELEMENTS,
     HREF_LOADING_ELEMENTS,
     LOADING_ATTRIBUTES,
     OPAQUE_ELEMENTS,
     UNMASKED_INPUT_TYPES,
 )
 
-CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttributes, hrefLoading, opaque, unmaskedTypes}) => {
+CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttributes, hrefLoading, hrefDrawn, opaque, unmaskedTypes}) => {
   const invisible = new RegExp(`[\\s${ignorable}]+`, 'gu');
   const invisibleOrSeparator = new RegExp(`[\\s${ignorable}${separators}]+`, 'gu');
   const gap = `[\\s${ignorable}]*`;
@@ -80,12 +81,21 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttrib
   const LOADING = new Set(loading);
   const HREF = new Set(hrefAttributes);
   const HREF_LOADS = new Set(hrefLoading);
+  const HREF_DRAWN = new Set(hrefDrawn);
+  const LINK_ANIMATIONS = new Set(['ANIMATE', 'SET']);
   const UNMASKED = new Set(unmaskedTypes);
   const EDITABLE = new Set(['INPUT', 'TEXTAREA']);
   const HIDDEN_STYLE = [['transition', 'none'], ['animation', 'none'], ['visibility', 'hidden']];
   const MASK_STYLE = [['-webkit-text-security', 'disc']];
   const tag = (element) => String((element && element.tagName) || '').toUpperCase();
   const loads = (element, name) => LOADING.has(name) || (HREF.has(name) && HREF_LOADS.has(tag(element)));
+  // An <animate> or <set> can change the link an SVG image draws without changing the page, and the
+  // animated value is not the attribute, so the image an SVG link animation targets is judged unseen.
+  const animatedLinkTarget = (element) => {
+    if (!LINK_ANIMATIONS.has(tag(element)) || !HREF.has(String(element.getAttribute('attributeName') ?? ''))) return null;
+    const target = element.targetElement;
+    return target && HREF_DRAWN.has(tag(target)) ? target : null;
+  };
   const maskable = (element) => tag(element) === 'TEXTAREA'
     || (tag(element) === 'INPUT' && !UNMASKED.has(String(element.getAttribute('type') ?? '').toLowerCase()));
   const changes = [];
@@ -204,6 +214,8 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttrib
           return;
         }
         if (OPAQUE.has(tag(node))) hide(node);
+        const animatedLink = animatedLinkTarget(node);
+        if (animatedLink) shield(animatedLink);
         const maskedKind = maskable(node);
         if (maskedKind && (holds(node.value) || holds(node.getAttribute('value')) || holds(node.textContent))) mask(node);
         for (const attribute of Array.from(node.attributes || [])) {
@@ -245,6 +257,9 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefAttrib
           if (holds(node.nodeValue) && !masked.has(node.parentNode)) remaining += 1;
           return;
         }
+        // A filter image has no box to hide.
+        const animatedLink = animatedLinkTarget(node);
+        if (animatedLink && (!shielded.has(animatedLink) || tag(animatedLink) === 'FEIMAGE')) remaining += 1;
         for (const attribute of Array.from(node.attributes || [])) {
           if (!holds(attribute.value)) continue;
           if (loads(node, attribute.name) && shielded.has(node)) continue;
@@ -279,6 +294,7 @@ def controller_argument(values: list[str]) -> dict[str, Any]:
         "loading": sorted(LOADING_ATTRIBUTES),
         "hrefAttributes": sorted(HREF_ATTRIBUTES),
         "hrefLoading": sorted(HREF_LOADING_ELEMENTS),
+        "hrefDrawn": sorted(HREF_DRAWN_ELEMENTS),
         "opaque": sorted(OPAQUE_ELEMENTS),
         "unmaskedTypes": sorted(UNMASKED_INPUT_TYPES),
     }

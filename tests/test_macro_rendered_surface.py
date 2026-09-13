@@ -237,6 +237,17 @@ def test_parts_reordered_on_one_line_match_in_visual_order() -> None:
     assert rendered_leaks(_snapshot(strings, other_lines), [SECRET]) == []
 
 
+def test_a_box_whose_middle_is_exactly_half_a_line_away_is_on_the_same_line() -> None:
+    strings = [SECRET[8:], SECRET[:8]]
+    at_the_edge = [(0, [300.0, 0.0, 90.0, 40.0], 0, len(strings[0])), (1, [0.0, 20.0, 90.0, 40.0], 0, len(strings[1]))]
+    same_line = _document(layout_text=[0, 1], text_boxes=at_the_edge)
+    assert rendered_leaks(_snapshot(strings, same_line), [SECRET]) == ["rendered text"]
+
+    past_it = [(0, [300.0, 0.0, 90.0, 40.0], 0, len(strings[0])), (1, [0.0, 21.0, 90.0, 40.0], 0, len(strings[1]))]
+    next_line = _document(layout_text=[0, 1], text_boxes=past_it)
+    assert rendered_leaks(_snapshot(strings, next_line), [SECRET]) == []
+
+
 def test_a_few_unrelated_boxes_between_parts_still_match() -> None:
     strings = [SECRET[:8], "at", "x", SECRET[8:]]
     gapped = _document(layout_text=[0, 1, 2, 3], text_boxes=_line(*strings, top=10.0))

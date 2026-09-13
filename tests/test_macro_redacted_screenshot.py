@@ -366,6 +366,40 @@ async def test_a_change_devtools_reports_once_counting_began_refuses(stage: str,
     assert not (tmp_path / "shot.png").exists()
 
 
+#: Every DevTools event that means the page changed, written out rather than imported, so an event
+#: dropped from ``COUNTED_EVENTS`` fails here.
+_PAGE_CHANGE_EVENTS = (
+    "Animation.animationCreated",
+    "CSS.mediaQueryResultChanged",
+    "CSS.styleSheetAdded",
+    "CSS.styleSheetChanged",
+    "CSS.styleSheetRemoved",
+    "DOM.attributeModified",
+    "DOM.attributeRemoved",
+    "DOM.characterDataModified",
+    "DOM.childNodeCountUpdated",
+    "DOM.childNodeInserted",
+    "DOM.childNodeRemoved",
+    "DOM.documentUpdated",
+    "DOM.pseudoElementAdded",
+    "DOM.pseudoElementRemoved",
+    "DOM.shadowRootPopped",
+    "DOM.shadowRootPushed",
+    "DOM.topLayerElementsUpdated",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", _PAGE_CHANGE_EVENTS)
+async def test_every_page_change_event_after_counting_began_refuses(method: str, tmp_path: Path) -> None:
+    page = FakePage(events={"verify": ((method, {"nodeId": 7, "name": "class", "styleSheetId": "9"}),)})
+
+    with pytest.raises(RuntimeError, match="page changed before"):
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert not (tmp_path / "shot.png").exists()
+
+
 @pytest.mark.asyncio
 async def test_changes_before_counting_and_inline_style_attribute_events_are_not_counted(tmp_path: Path) -> None:
     style_event = ("DOM.attributeModified", {"nodeId": 7, "name": "style", "value": "width: 3px"})
