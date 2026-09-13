@@ -12,6 +12,8 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.24.0] - 2026-09-13
+
 ### Added
 - **Redacted screenshots for classified macro runs.** A run holding classified
   argument values (credentials, and identity values such as `email`) refused every
@@ -135,7 +137,7 @@ a section that is already tagged and on PyPI.
   `session="1"`, rewrites matching text in every later row of the session's
   recording (#247). Exported scripts carry `_ARG_PRIVACY_CLASSIFIER_VERSION`, with
   the leading underscore. The `macro_save` refusal rules now say plainly that a
-  recording with no redacted field is unaffected, and describe `all` mode.
+  recording with no redacted field is unaffected by the redacted-field rules, and describe `all` mode.
 - **Session-kind plugins have an author guide**, `docs/plugins.md`: the entry
   point and descriptor, what core validates before loading, the pool and launch
   transaction, side artifacts, scenario capabilities, and the dashboard renderer
@@ -145,6 +147,13 @@ a section that is already tagged and on PyPI.
 - **The unimplemented privacy design work is tracked in #248.** The 0.23.0 entry
   below points at a design document and derivation script that are no longer in
   the repository.
+- **Corrections to the redacted screenshot and upgrade notice docs.**
+  `docs/macros.md` names exactly which elements are hidden and which inputs have
+  their value replaced. The `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS` entry in
+  `docs/env-vars.md` now covers view transitions, `visibility: hidden`, when
+  counting starts, every refusal and the restore. `AGENTS.md` describes the
+  notice's `releases` field and the grouped, capped banner, and the
+  `OCTOWRIGHT_UPGRADE_STATE` entry points at it.
 
 ### Internal
 - **The tool-count docs check matches its exclusions by path segment.** A
@@ -3061,7 +3070,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/livingstaccato/octowright/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/livingstaccato/octowright/compare/v0.21.0...v0.22.0

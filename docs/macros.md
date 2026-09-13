@@ -74,19 +74,20 @@ are the **reusable middle** of a flow, not the wrapper. Pass `include_launch=Tru
 on `macro_save` if you need the initial navigation baked into the macro.
 
 `OCTOWRIGHT_REDACT_INPUTS` (default `passwords`) records a password field as a
-redaction marker, so the declared value never appears in the recording. A
-recording with no redacted field saves as before. When there is one,
-`macro_save` binds it to `{{name}}` only if exactly one field was redacted and
-exactly one credential-named parameter matched nothing else in the recording,
-as `password` does above. Otherwise it refuses before writing anything: when
-more than one field was redacted, when more than one credential-named parameter
-is left unmatched, or when none is left to fill the field. Under
-`OCTOWRIGHT_REDACT_INPUTS=all` every `fill`, `fill_by` and `type_text` value is
-redacted, so a recording with more than one of those is always refused.
-Parameters that share a value are refused too, because the recorded fields
-could belong to either; the message names the parameters, never the value.
-Record such parameters with distinct values, or re-record with
-`OCTOWRIGHT_REDACT_INPUTS=off` in a trusted environment.
+redaction marker, so the declared value never appears in the recording. The
+rules for redacted fields do not affect a recording that has none. When there is
+one, `macro_save` binds it to `{{name}}` only if exactly one field was redacted
+and exactly one credential-named parameter matched nothing else in the
+recording, as `password` does above. Otherwise it refuses before writing
+anything: when more than one field was redacted, when more than one
+credential-named parameter is left unmatched, or when none is left to fill the
+field. Under `OCTOWRIGHT_REDACT_INPUTS=all` every `fill`, `fill_by` and
+`type_text` value is redacted, so a recording with more than one of those is
+always refused. Parameters that share a value are refused in every recording,
+redacted field or not, because the recorded fields could belong to either; the
+message names the parameters, never the value. Record such parameters with
+distinct values, or re-record with `OCTOWRIGHT_REDACT_INPUTS=off` in a trusted
+environment.
 
 Recorded CSS `click` and `fill` actions may include semantic metadata such as
 `role`, `role_name`, `label`, `text`, or `test_id`. Macro replay treats those as
@@ -266,9 +267,11 @@ It is decided in this order:
      matched by its digits, formatted differently or by an ending of at least seven
      digits. A string that still holds a value after replacement is replaced whole.
    - A text control holding a value keeps its value, caret and selection; its text is
-     masked with `-webkit-text-security` instead. Buttons and hidden inputs have their
-     value replaced.
-   - It hides canvases, media, embeds and frames, whose pixels it cannot read, and
+     masked with `-webkit-text-security` instead. Every other input, such as a button,
+     hidden input, checkbox, radio, or color, date, time or range input, has its value
+     replaced; a file input whose chosen file name holds a value refuses.
+   - It hides `canvas`, `video`, `embed`, `object`, `frame` and `iframe` elements,
+     whose pixels it cannot read, and
      any element whose `src`, `srcset`, `srcdoc`, `data` or `poster`, or whose link as
      an SVG image, `use` or filter image, holds a value (for a `<picture>` source, the
      picture's image). An SVG image or `use` that an `<animate>` or `<set>` targets

@@ -506,7 +506,7 @@ def octowright_status() -> dict[str, Any]:
         # the flag points at the tool that mints one on demand instead.
         "dashboard_pairing_required": _dashboard_pairing_required(),
         # Present only on the first run after an update (version changed since
-        # last seen) — {kind, previous_version, current_version, highlights}.
+        # last seen) — {kind, previous_version, current_version, releases, highlights}.
         # Surface these highlights to the user as a "what's new" banner.
         "upgrade": upgrade_notice_snapshot(),
     }
