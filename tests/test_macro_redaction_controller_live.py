@@ -696,8 +696,13 @@ async def test_a_style_redacted_before_hiding_that_the_page_replaced_comes_back_
         ("(name) => document.getElementById('p').removeAttribute(name)", None),
         (_PUT_BACK.format(id="p", value="v"), SECRET),
         (_PUT_BACK.format(id="p", value="'page'"), "page"),
+        (
+            "(name) => { const e = document.getElementById('p'); e.setAttribute(name, 'page');"
+            " e.removeAttribute(name); e.setAttribute(name, 'page'); }",
+            "page",
+        ),
     ],
-    ids=["removed", "put-back-unchanged", "put-back-changed"],
+    ids=["removed", "put-back-unchanged", "put-back-changed", "changed-then-put-back"],
 )
 async def test_an_attribute_the_page_replaced_is_restored_only_when_the_page_put_back_what_it_removed(
     change: str, expected: str | None
@@ -706,6 +711,87 @@ async def test_an_attribute_the_page_replaced_is_restored_only_when_the_page_put
         async with _watched(page):
             await page.evaluate(change, "title")
         assert await page.evaluate("() => document.getElementById('p').getAttribute('title')") == expected
+
+
+async def test_an_attribute_node_the_page_moved_to_another_element_is_restored_where_it_is() -> None:
+    move = (
+        "() => { const p = document.getElementById('p'); const a = p.getAttributeNode('title');"
+        " p.removeAttributeNode(a); document.getElementById('u').setAttributeNode(a); }"
+    )
+    titles = (
+        "() => [document.getElementById('p').getAttribute('title'), document.getElementById('u').getAttribute('title')]"
+    )
+    async with _page(f"<p id=p title='{SECRET}'>text</p><p id=u>other</p>") as page:
+        async with _watched(page):
+            await page.evaluate(move)
+        assert await page.evaluate(titles) == [None, SECRET]
+
+
+@pytest.mark.parametrize(
+    ("namespace", "qualified", "expected"),
+    [("urn:x", "b:data", SECRET), ("urn:y", "a:data", "<redacted>")],
+    ids=["same-namespace-other-prefix", "other-namespace"],
+)
+async def test_a_namespaced_attribute_is_put_back_only_under_its_own_namespace(
+    namespace: str, qualified: str, expected: str
+) -> None:
+    # The page's put-back is matched by namespace and local name; the prefix may differ.
+    html = (
+        f"<p id=p>text</p><script>document.getElementById('p').setAttributeNS('urn:x', 'a:data', '{SECRET}');</script>"
+    )
+    put_back = (
+        "([namespace, qualified]) => { const e = document.getElementById('p'); const v = e.getAttributeNS('urn:x', 'data');"
+        " e.removeAttributeNS('urn:x', 'data'); e.setAttributeNS(namespace, qualified, v); }"
+    )
+    read = "([namespace, name]) => document.getElementById('p').getAttributeNS(namespace, name)"
+    async with _page(html) as page:
+        async with _watched(page):
+            await page.evaluate(put_back, [namespace, qualified])
+        assert await page.evaluate(read, [namespace, qualified.split(":")[1]]) == expected
+
+
+async def test_a_hidden_element_whose_style_the_page_removed_comes_back_without_a_fade() -> None:
+    # Removing the style attribute drops the hiding with it, so the element's own transition starts from the hidden
+    # state; the restore cancels that transition instead of letting the element fade back in.
+    html = "<style>video{transition:opacity 2s}</style><video id=v style='width:80px;height:20px'></video>"
+    state = (
+        "() => { const e = document.getElementById('v');"
+        " return [getComputedStyle(e).opacity, e.getAnimations().length, e.getAttribute('style')]; }"
+    )
+    async with _page(html) as page:
+        async with _watched(page):
+            assert await page.evaluate(_HIDDEN, "v") == ["hidden", "0"]
+            await page.evaluate("() => document.getElementById('v').removeAttribute('style')")
+        assert await page.evaluate(state) == ["1", 0, None]
+
+
+async def test_a_masked_control_whose_style_the_page_changed_keeps_its_own_transition() -> None:
+    # Transitions are held off while a restored style settles, then put back as the element had them.
+    html = f"<input id=i value='{SECRET}' style='transition:color 1s'>"
+    state = "() => { const s = getComputedStyle(document.getElementById('i')); return [s.transitionProperty, s.transitionDuration]; }"
+    async with _page(html) as page:
+        async with _watched(page):
+            await page.evaluate("() => { document.getElementById('i').style.color = 'red'; }")
+        assert await page.evaluate(state) == ["color", "1s"]
+
+
+async def test_styles_are_applied_after_the_page_replaced_its_document_element() -> None:
+    # The style update reads the document element afresh, so a node id the page made stale cannot fail it.
+    reappend = "() => { const h = document.documentElement; document.removeChild(h); document.appendChild(h); }"
+    async with _page(f"<style>#a::after{{content:'{SECRET}'}}</style><p id=a></p>") as page:
+        cdp = await page.context.new_cdp_session(page)
+        changes = PageChanges(cdp)
+        closed_roots = await changes.start()
+        controller = await PageController.create(cdp, list(sensitive_value_variants((SECRET,))))
+        try:
+            await controller.redact(closed_roots)
+            await page.evaluate(reappend)
+            await changes.apply_styles()
+        finally:
+            await controller.restore()
+            await controller.dispose()
+            await changes.close()
+            await cdp.detach()
 
 
 async def test_a_media_query_change_is_counted() -> None:

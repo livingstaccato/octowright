@@ -41,8 +41,11 @@ a section that is already tagged and on PyPI.
     is split, reordered or reversed. It captures through DevTools rather than
     Playwright's screenshot helper, which writes to the page.
   - It restores the page, bringing hidden elements back without replaying their own
-    transitions and with their transition longhands as they were, and gives an attribute
-    the page removed and put back unchanged its original value.
+    transitions or one the page's own style change started, and with their transition
+    longhands as they were. An attribute node the page moved to another element is
+    restored there, and an attribute the page removed gets its original value only if
+    the page put the redacted value back unchanged. A style update Chrome cannot apply
+    refuses the screenshot.
 
   It trusts the page not to hide changes deliberately; `docs/macros.md` lists the
   limits.

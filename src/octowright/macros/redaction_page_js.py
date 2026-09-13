@@ -37,9 +37,13 @@ controller:
   attributes, control values, and only the style properties it set. If the page itself
   changed an element's style meanwhile, that change is kept, and each transition
   longhand is put back as it was. Attributes are written and undone through their
-  attribute nodes, and a hidden element's transitions stay off until its style has
-  settled, so its own transition does not replay; a style attribute that was redacted
-  before its element was hidden comes back with the hiding. It is idempotent.
+  attribute nodes: a node the page moved to another element is restored there unless
+  the page changed its value, and a node the page removed comes back only when the page
+  put back what the redaction wrote under the same namespace and local name. A hidden
+  element's transitions stay off until its style has settled, so neither its own
+  transition nor one the page's style change started from the hidden state plays; a
+  style attribute that was redacted before its element was hidden comes back with the
+  hiding. It is idempotent.
 
 The page's own mutation observers see the redaction: an application that saves what it
 observes (an autosave, say) could save a redacted text or attribute.
@@ -210,9 +214,17 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       setBefore();
       return;
     }
+    const removed = element.getAttribute('style') === null;
     putBack(element, previous.filter(([name]) => !TRANSITION.includes(name)));
+    // The page's own style change may have dropped the hiding and started a transition from the hidden state, removing
+    // the style attribute, say. Transitions are held off while the style settles, which cancels one already running.
+    const held = TRANSITION.map((name) => [name, element.style.getPropertyValue(name), element.style.getPropertyPriority(name)]);
+    element.style.setProperty('transition', 'none', 'important');
     settle(element);
+    putBack(element, held);
     putBack(element, previous.filter(([name]) => TRANSITION.includes(name)));
+    // Holding transitions off wrote a style attribute onto an element whose style attribute the page had removed.
+    if (removed && element.getAttribute('style') === '') element.removeAttribute('style');
   };
   const undo = (change, index) => {
     const [kind, node] = change;
@@ -225,9 +237,11 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       node.value = change[2];
       return;
     }
-    // An attribute change holds its attribute node and its element, because the page may have removed that node during
-    // the capture, or put a new one of the same name in its place.
+    // An attribute change holds its attribute node, its element and the value the redaction wrote, because the page may
+    // have removed that node during the capture, moved it to another element, or put a new one of the same name in its
+    // place.
     const element = change[3];
+    const redacted = change[4];
     // A style attribute redacted before its element was hidden or masked comes back with that styling, so the
     // element's transitions stay off until its style has settled.
     const isStyle = node.namespaceURI === null && node.localName === 'style';
@@ -244,10 +258,15 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
       node.value = change[2];
       return;
     }
-    // The page removed the node: its value comes back only if the page put the same value back under the same name.
-    // Otherwise the page's own change stands.
+    // The page moved the node to another element: it is written back there, unless the page changed its value.
+    if (node.ownerElement) {
+      if (node.value === redacted) node.value = change[2];
+      return;
+    }
+    // The page removed the node: its value comes back only if the page put back what the redaction wrote, under the same
+    // namespace and local name. Otherwise the page's own change stands.
     const current = element.getAttributeNodeNS(node.namespaceURI, node.localName);
-    if (current && current.value === node.value) current.value = change[2];
+    if (current && current.value === redacted) current.value = change[2];
   };
   const count = (records) => {
     for (const record of records) {
@@ -317,8 +336,10 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
           }
           if (maskedKind && attribute.name === 'value') continue;
           // Through the attribute node: setAttribute lowercases an HTML name and picks the first attribute of that name.
-          changes.push(['attribute', attribute, attribute.value, node]);
-          attribute.value = redact(attribute.value);
+          // The change keeps what the redaction wrote, so the restore can tell it from a value the page wrote since.
+          const safe = redact(attribute.value);
+          changes.push(['attribute', attribute, attribute.value, node, safe]);
+          attribute.value = safe;
         }
         if (!maskedKind && EDITABLE.has(tag(node)) && node.type !== 'file' && holds(node.value)) {
           changes.push(['value', node, node.value]);

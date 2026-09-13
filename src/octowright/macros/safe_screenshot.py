@@ -186,6 +186,14 @@ async def _end_view_transitions(cdp: Any) -> None:
         raise RuntimeError(f"a view transition could not be ended; {_REFUSED}") from exc
 
 
+async def _apply_styles(changes: PageChanges) -> None:
+    """Have Chrome apply the page's pending style changes; one it cannot apply refuses the screenshot."""
+    try:
+        await bounded(changes.apply_styles(), operation=_OPERATION)
+    except Exception as exc:
+        raise RuntimeError(f"the page's styles could not be applied; {_REFUSED}") from exc
+
+
 async def _release(cdp: Any, changes: PageChanges) -> None:
     """Stop counting, resume animations and detach; each step is attempted even if an earlier one failed."""
     with contextlib.suppress(Exception):
@@ -220,7 +228,7 @@ async def _redact_and_capture(cdp: Any, changes: PageChanges, values: list[str],
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
         await bounded(controller.redact(closed_roots), operation=_OPERATION)
-        await bounded(changes.apply_styles(), operation=_OPERATION)
+        await _apply_styles(changes)
         latent = await bounded(changes.sheets_hold(values), operation=_OPERATION)
         await bounded(controller.watch(latent), operation=_OPERATION)
         changes.begin()

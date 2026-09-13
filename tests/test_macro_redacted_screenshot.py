@@ -111,12 +111,16 @@ class FakeCDP:
         return {"object": {"objectId": f"root-{params['backendNodeId']}"}}
 
     async def _CSS_getStyleSheetText(self, params: dict[str, Any]) -> dict[str, Any]:
+        # Which sheet was read, and how many style updates came before the read.
+        self.page.sheet_reads.append((params["styleSheetId"], len(self.page.style_updates)))
         text = self.page.sheets[params["styleSheetId"]]
         if text is None:
             raise RuntimeError("No style sheet with given id found")
         return {"text": text}
 
     async def _CSS_getComputedStyleForNode(self, params: dict[str, Any]) -> dict[str, Any]:
+        if self.page.style_error is not None:
+            raise self.page.style_error
         self.page.style_updates.append((params["nodeId"], list(self.page.calls)))
         return {"computedStyle": []}
 
@@ -202,6 +206,7 @@ class FakePage:
         document: dict[str, Any] | None = None,
         redact_error: BaseException | None = None,
         restore_error: Exception | None = None,
+        style_error: Exception | None = None,
         capture_error: Exception | None = None,
         pause_error: Exception | None = None,
         resume_error: Exception | None = None,
@@ -216,6 +221,7 @@ class FakePage:
         self.document = document or {}
         self.redact_error = redact_error
         self.restore_error = restore_error
+        self.style_error = style_error
         self.capture_error = capture_error
         self.pause_error = pause_error
         self.resume_error = resume_error
@@ -225,6 +231,7 @@ class FakePage:
         self.redact_arguments: list[dict[str, Any]] | None = None
         self.resolved: list[int] = []
         self.style_updates: list[tuple[int, list[str]]] = []
+        self.sheet_reads: list[tuple[str, int]] = []
         self.ended_roots: list[str] | None = None
         self.latent: bool | None = None
         self.released = False
@@ -784,6 +791,21 @@ async def test_a_mistyped_policy_suppresses_an_automatic_screenshot_instead_of_f
 async def test_the_redactions_style_changes_are_applied_before_anything_is_counted(tmp_path: Path) -> None:
     # Chrome reports a stylesheet the redaction rewrote at its next style update; DevTools makes that update
     # happen right after the redaction, on the document element, before the sheets are read or counting begins.
-    page = FakePage(document={"children": [{"nodeType": 10, "nodeId": 2}, {"nodeType": 1, "nodeId": 3}]})
+    page = FakePage(
+        document={"children": [{"nodeType": 10, "nodeId": 2}, {"nodeType": 1, "nodeId": 3}]}, sheets={"1": "p{}"}
+    )
     await _shoot(page, tmp_path / "shot.png")
     assert page.style_updates == [(3, ["animations:0", "view_transitions", "redact"])]
+    assert page.sheet_reads == [("1", 1)]
+
+
+async def test_styles_that_cannot_be_applied_refuse_the_screenshot(tmp_path: Path) -> None:
+    # Chrome fails the style update when, say, the page replaced its document mid-capture: a refusal, not a raw error.
+    page = FakePage(
+        document={"children": [{"nodeType": 1, "nodeId": 3}]},
+        style_error=Exception("Could not find node with given id"),
+    )
+    with pytest.raises(RuntimeError, match="styles could not be applied"):
+        await _shoot(page, tmp_path / "shot.png")
+    assert not (tmp_path / "shot.png").exists()
+    assert page.calls == _refused("redact")
