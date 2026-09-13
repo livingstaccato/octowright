@@ -364,7 +364,8 @@ async def test_a_link_animation_in_a_shadow_root_hides_its_image() -> None:
 
 async def test_a_sibling_animation_naming_its_target_hides_that_image() -> None:
     html = (
-        "<svg width=100 height=20><image id=im href='data:image/svg+xml,benign' width=100 height=20/>"
+        # Quoted values: an unquoted `height=20/>` keeps the slash in the value and leaves the image open.
+        "<svg width='100' height='20'><image id='im' href='data:image/svg+xml,benign' width='100' height='20'/>"
         f"<set href='#im' attributeName='href' to='data:image/svg+xml,{SECRET}' begin='0s' fill='freeze'/></svg>"
     )
     async with _page(html) as page, _watched(page) as watched:
@@ -374,7 +375,7 @@ async def test_a_sibling_animation_naming_its_target_hides_that_image() -> None:
 
 def _svg_use(animation: str) -> str:
     return (
-        "<svg width=100 height=20><defs><rect id=a width=10 height=10/><circle id=b r=5/></defs>"
+        "<svg width='100' height='20'><defs><rect id='a' width='10' height='10'/><circle id='b' r='5'/></defs>"
         f"<use id=u href='#a'>{animation}</use></svg>"
     )
 
@@ -383,6 +384,25 @@ async def test_a_use_whose_link_animation_names_another_document_is_hidden() -> 
     html = _svg_use("<set attributeName='href' to='data:image/svg+xml,benign#t' begin='indefinite'/>")
     async with _page(html) as page, _watched(page) as watched:
         assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+        assert await watched.remaining() == 0
+
+
+async def test_a_use_whose_values_list_names_another_document_is_hidden() -> None:
+    html = _svg_use(
+        "<animate attributeName='href' values='#b;data:image/svg+xml,benign#t' calcMode='discrete' dur='1s'/>"
+    )
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_HIDDEN, "u") == ["hidden", "0"]
+        assert await watched.remaining() == 0
+
+
+async def test_a_use_whose_values_list_only_names_fragments_stays_visible() -> None:
+    # Dropping the values list would leave nothing to judge and hide the sprite (mutant f06).
+    html = _svg_use(
+        "<animate attributeName='href' values='#a;#b' calcMode='discrete' dur='1s' repeatCount='indefinite'/>"
+    )
+    async with _page(html) as page, _watched(page) as watched:
+        assert await page.evaluate(_HIDDEN, "u") == ["visible", "1"]
         assert await watched.remaining() == 0
 
 

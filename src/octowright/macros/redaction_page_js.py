@@ -94,7 +94,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     return text.slice(text.indexOf(':') + 1).toLowerCase();
   };
   const isLink = (name) => localName(name) === 'href';
-  const loads = (element, name) => LOADING.has(localName(name)) || (isLink(name) && HREF_LOADS.has(tag(element)));
+  const loads = (element, name) => LOADING.has(String(name ?? '').toLowerCase()) || (isLink(name) && HREF_LOADS.has(tag(element)));
   // A <use> whose link animation only names fragments of this document draws page content, which is redacted.
   const fragmentsOnly = (animation) => {
     const links = ['to', 'from', 'by'].map((name) => animation.getAttribute(name)).filter((value) => value !== null);
