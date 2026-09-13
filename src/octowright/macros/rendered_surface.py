@@ -8,48 +8,71 @@
 The in-page redaction reaches only the open DOM. What reaches a screenshot is the
 rendered page, which also holds closed shadow roots, CSS generated content, text split
 across nodes and the contents of same-process frames. Chrome's
-``DOMSnapshot.captureSnapshot`` reports that rendered surface -- layout text for every
-document including closed shadow content and pseudo-elements, form values, computed
-visibility -- so a redacted screenshot is refused unless this scan finds nothing.
+``DOMSnapshot.captureSnapshot`` reports that rendered surface: layout text and text
+boxes for every document including closed shadow content and pseudo-elements, form
+values, attributes and computed styles. A redacted screenshot is refused unless this
+scan finds nothing.
 
-Matching ignores whitespace and case and runs over each document's layout text joined
-together, so a value split across elements, re-cased or wrapped still matches. That can
-refuse a page where unrelated adjacent text happens to spell a value, which is the
-acceptable direction to err.
+Values compare as :func:`octowright.macros.redaction_text.normalize` defines, and
+reversed, so right-to-left overrides match. Text is matched in three arrangements:
+
+- every layout text of a document joined in document order;
+- the text boxes in document order;
+- the text boxes in visual order (by line, then left to right), which catches a value
+  whose parts are reordered by flex ``order``, absolute positioning and the like.
+
+Within the text boxes, a value of at least ``GAP_MIN_LENGTH`` characters also matches
+when a few unrelated boxes sit between its parts, such as screen-reader-only text.
+Every rule errs toward refusal: unrelated text that happens to spell a value refuses a
+page that was clean.
+
+Also refused: a shown ``placeholder``, ``alt`` or ``label`` holding a value; a shown
+opaque element (canvas, media, embed, frame); a shown element, or a ``<picture>``'s
+image, whose resource address holds a value; and a shown image style holding one.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-#: Parameters for ``DOMSnapshot.captureSnapshot``; ``visibility`` is the one computed style read.
-SNAPSHOT_PARAMS: dict[str, Any] = {"computedStyles": ["visibility"]}
+from octowright.macros.redaction_text import normalize
+
+#: Computed styles read per layout object; ``visibility`` must stay first.
+IMAGE_STYLES = ("background-image", "border-image-source", "list-style-image", "mask-image")
+SNAPSHOT_PARAMS: dict[str, Any] = {"computedStyles": ["visibility", *IMAGE_STYLES]}
 
 #: Elements whose pixels no text scan can read; they must be hidden in the screenshot.
 OPAQUE_ELEMENTS = frozenset({"CANVAS", "EMBED", "FRAME", "IFRAME", "OBJECT", "VIDEO"})
 
-#: Attributes that load a resource; a visible element carrying a value in one is refused.
-LOADING_ATTRIBUTES = frozenset({"src", "srcset", "data", "poster"})
+#: Attributes that load a resource; a shown element carrying a value in one is refused.
+LOADING_ATTRIBUTES = frozenset({"src", "srcset", "srcdoc", "data", "poster"})
 
-_WHITESPACE = re.compile(r"\s+")
+#: Attributes whose text the browser draws itself, outside the layout text.
+DRAWN_ATTRIBUTES = frozenset({"alt", "label", "placeholder"})
+
+#: Unrelated text boxes allowed between two parts of one value.
+MAX_GAP = 4
+
+#: Shorter values match only as contiguous text; a gap would match ordinary words.
+GAP_MIN_LENGTH = 6
+
 _TEXT_NODE = 3
 
 
-def _normalize(text: str) -> str:
-    return _WHITESPACE.sub("", text).casefold()
+def _styles(layout: Mapping[str, Any], strings: Sequence[str]) -> dict[int, list[str]]:
+    """Computed style strings per node that has a layout object, in ``SNAPSHOT_PARAMS`` order."""
+    result: dict[int, list[str]] = {}
+    styles = layout.get("styles", [])
+    for position, node in enumerate(layout.get("nodeIndex", [])):
+        style = styles[position] if position < len(styles) else []
+        result[node] = [strings[index] if 0 <= index < len(strings) else "" for index in style]
+    return result
 
 
 def _visibility(layout: Mapping[str, Any], strings: Sequence[str]) -> dict[int, str]:
     """Computed visibility per node that has a layout object."""
-    result: dict[int, str] = {}
-    styles = layout.get("styles", [])
-    for position, node in enumerate(layout.get("nodeIndex", [])):
-        style = styles[position] if position < len(styles) else []
-        index = style[0] if style else -1
-        result[node] = strings[index] if 0 <= index < len(strings) else ""
-    return result
+    return {node: (style[0] if style else "") for node, style in _styles(layout, strings).items()}
 
 
 def _hidden_documents(documents: Sequence[Mapping[str, Any]], strings: Sequence[str]) -> set[int]:
@@ -73,29 +96,96 @@ def _hidden_documents(documents: Sequence[Mapping[str, Any]], strings: Sequence[
     return hidden
 
 
+def spelled_by_pieces(needle: str, pieces: Sequence[str], max_gap: int) -> bool:
+    """Whether consecutive ``pieces`` spell ``needle``, skipping up to ``max_gap`` pieces at a time.
+
+    A piece may end with the start of the value and a later piece may begin with its end;
+    every piece between the two that is not skipped must be a whole middle part.
+    """
+    states: set[tuple[int, int]] = set()
+    for piece in pieces:
+        if not piece:
+            continue
+        if needle in piece:
+            return True
+        following: set[tuple[int, int]] = set()
+        for matched, gap in states:
+            rest = needle[matched:]
+            if piece.startswith(rest):
+                return True
+            if rest.startswith(piece):
+                following.add((matched + len(piece), 0))
+            if gap < max_gap:
+                following.add((matched, gap + 1))
+        for length in range(1, min(len(piece), len(needle)) + 1):
+            if needle.startswith(piece[-length:]):
+                following.add((length, 0))
+        states = following
+    return False
+
+
+def _visual_order(fragments: Iterable[tuple[float, float, float, str]]) -> list[str]:
+    """Text box strings ordered by line (vertical centre), then left to right."""
+    ordered: list[str] = []
+    line: list[tuple[float, str]] = []
+    centre = half = 0.0
+    for top, height, left, text in sorted(fragments):
+        middle = top + height / 2
+        if line and abs(middle - centre) > half:
+            ordered.extend(text for _, text in sorted(line))
+            line = []
+        if not line:
+            centre, half = middle, max(height / 2, 0.5)
+        line.append((left, text))
+    ordered.extend(text for _, text in sorted(line))
+    return ordered
+
+
 class _Snapshot:
     """Index-safe accessors over one ``DOMSnapshot.captureSnapshot`` result."""
 
     def __init__(self, snapshot: Mapping[str, Any], values: Iterable[str]) -> None:
         self.strings: Sequence[str] = snapshot.get("strings", [])
         self.documents: Sequence[Mapping[str, Any]] = snapshot.get("documents", [])
-        self.needles = sorted(
-            {needle for needle in (_normalize(value) for value in values if isinstance(value, str)) if needle}
-        )
+        forward = {normalize(value) for value in values if isinstance(value, str)}
+        forward.discard("")
+        self.needles = sorted(forward | {needle[::-1] for needle in forward})
 
     def text(self, index: int) -> str:
         return self.strings[index] if 0 <= index < len(self.strings) else ""
 
     def holds(self, value: str) -> bool:
-        normalized = _normalize(value)
+        normalized = normalize(value)
         return any(needle in normalized for needle in self.needles)
+
+    def spelled(self, texts: Iterable[str]) -> bool:
+        pieces = [normalize(text) for text in texts]
+        return any(
+            spelled_by_pieces(needle, pieces, MAX_GAP if len(needle) >= GAP_MIN_LENGTH else 0)
+            for needle in self.needles
+        )
+
+
+def _fragments(snap: _Snapshot, document: Mapping[str, Any]) -> list[tuple[float, float, float, str]]:
+    """Each text box as ``(top, height, left, text)``, in document order."""
+    texts = document.get("layout", {}).get("text", [])
+    boxes = document.get("textBoxes", {})
+    fragments: list[tuple[float, float, float, str]] = []
+    columns = (boxes.get(key, []) for key in ("layoutIndex", "bounds", "start", "length"))
+    for layout_index, bounds, start, length in zip(*columns, strict=False):
+        text = snap.text(texts[layout_index]) if 0 <= layout_index < len(texts) else ""
+        left, top, _width, height = [*bounds, 0.0, 0.0, 0.0, 0.0][:4]
+        fragments.append((top, height, left, text[start : start + length]))
+    return fragments
 
 
 def _text_reasons(snap: _Snapshot, document: Mapping[str, Any]) -> set[str]:
-    """Rendered text (joined, so split values match) and form values."""
+    """Rendered text in every arrangement, and form values."""
     reasons: set[str] = set()
-    layout = document.get("layout", {})
-    if snap.holds("".join(snap.text(index) for index in layout.get("text", []))):
+    joined = "".join(snap.text(index) for index in document.get("layout", {}).get("text", []))
+    fragments = _fragments(snap, document)
+    in_order = [fragment[3] for fragment in fragments]
+    if snap.holds(joined) or snap.spelled(in_order) or snap.spelled(_visual_order(fragments)):
         reasons.add("rendered text")
     nodes = document.get("nodes", {})
     for key in ("inputValue", "textValue"):
@@ -104,31 +194,68 @@ def _text_reasons(snap: _Snapshot, document: Mapping[str, Any]) -> set[str]:
     return reasons
 
 
-def _visible_element_reasons(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> set[str]:
-    """A shown element that is opaque, or whose resource address holds a value."""
-    reasons: set[str] = set()
-    names = nodes.get("nodeName", [])
-    name = snap.text(names[node]).upper()
-    if name in OPAQUE_ELEMENTS:
-        reasons.add(f"visible {name.lower()}")
+def _attributes(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> list[tuple[str, str]]:
     attributes = nodes.get("attributes", [])
     pairs = attributes[node] if node < len(attributes) else []
-    for key, value in zip(pairs[::2], pairs[1::2], strict=False):
-        if snap.text(key).lower() in LOADING_ATTRIBUTES and snap.holds(snap.text(value)):
-            reasons.add("visible resource address")
+    return [(snap.text(key).lower(), snap.text(value)) for key, value in zip(pairs[::2], pairs[1::2], strict=False)]
+
+
+def _name(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> str:
+    names = nodes.get("nodeName", [])
+    return snap.text(names[node]).upper() if 0 <= node < len(names) else ""
+
+
+def _visible_element_reasons(snap: _Snapshot, nodes: Mapping[str, Any], node: int, styles: Sequence[str]) -> set[str]:
+    """A shown element that is opaque, or whose resource address or image style holds a value."""
+    reasons: set[str] = set()
+    name = _name(snap, nodes, node)
+    if name in OPAQUE_ELEMENTS:
+        reasons.add(f"visible {name.lower()}")
+    if any(key in LOADING_ATTRIBUTES and snap.holds(value) for key, value in _attributes(snap, nodes, node)):
+        reasons.add("visible resource address")
+    if any(snap.holds(style) for style in styles[1:]):
+        reasons.add("visible style image")
+    return reasons
+
+
+def _feeds_shown_picture_image(
+    snap: _Snapshot, nodes: Mapping[str, Any], node: int, visibility: Mapping[int, str]
+) -> bool:
+    """Whether ``node`` is a ``<picture>`` source whose picture has an image that is not hidden."""
+    parents = nodes.get("parentIndex", [])
+    parent = parents[node] if node < len(parents) else -1
+    if _name(snap, nodes, node) != "SOURCE" or _name(snap, nodes, parent) != "PICTURE":
+        return False
+    return any(
+        _name(snap, nodes, sibling) == "IMG" and visibility.get(sibling, "hidden") != "hidden"
+        for sibling, owner in enumerate(parents)
+        if owner == parent
+    )
+
+
+def _drawn_attribute_reasons(
+    snap: _Snapshot, nodes: Mapping[str, Any], node: int, visibility: Mapping[int, str]
+) -> set[str]:
+    """Attribute text the browser draws, and a ``<picture>`` source feeding a shown image."""
+    reasons: set[str] = set()
+    attributes = _attributes(snap, nodes, node)
+    if any(key in DRAWN_ATTRIBUTES and snap.holds(value) for key, value in attributes):
+        reasons.add("visible attribute text")
+    loading = any(key in LOADING_ATTRIBUTES and snap.holds(value) for key, value in attributes)
+    if loading and _feeds_shown_picture_image(snap, nodes, node, visibility):
+        reasons.add("visible resource address")
     return reasons
 
 
 def _is_option_text_leak(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -> bool:
     """A text node inside an ``<option>``, whose label a select renders outside the layout text."""
-    names = nodes.get("nodeName", [])
     types = nodes.get("nodeType", [])
     parents = nodes.get("parentIndex", [])
     node_values = nodes.get("nodeValue", [])
     if node >= len(types) or types[node] != _TEXT_NODE:
         return False
     parent = parents[node] if node < len(parents) else -1
-    if not 0 <= parent < len(names) or snap.text(names[parent]).upper() != "OPTION":
+    if _name(snap, nodes, parent) != "OPTION":
         return False
     return snap.holds(snap.text(node_values[node] if node < len(node_values) else -1))
 
@@ -136,11 +263,14 @@ def _is_option_text_leak(snap: _Snapshot, nodes: Mapping[str, Any], node: int) -
 def _document_reasons(snap: _Snapshot, document: Mapping[str, Any]) -> set[str]:
     reasons = _text_reasons(snap, document)
     nodes = document.get("nodes", {})
-    visibility = _visibility(document.get("layout", {}), snap.strings)
+    styles = _styles(document.get("layout", {}), snap.strings)
+    visibility = {node: (style[0] if style else "") for node, style in styles.items()}
     for node in range(len(nodes.get("nodeName", []))):
         shown = visibility.get(node)
         if shown is not None and shown != "hidden":
-            reasons |= _visible_element_reasons(snap, nodes, node)
+            reasons |= _visible_element_reasons(snap, nodes, node, styles[node])
+        if shown != "hidden":
+            reasons |= _drawn_attribute_reasons(snap, nodes, node, visibility)
         if _is_option_text_leak(snap, nodes, node):
             reasons.add("option text")
     return reasons

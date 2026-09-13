@@ -252,27 +252,50 @@ It is decided in this order:
    `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
    [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
    Chromium page:
+   - It pauses the page's CSS animations and transitions for the whole capture.
    - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
-     classified values with `<redacted>`, ignoring case, in text, attribute values
-     and form-control values across the document and open shadow roots.
+     classified values with `<redacted>` in text, attribute values and form-control
+     values across the document and open shadow roots. Case, whitespace, Unicode
+     compatibility forms and invisible characters inside a value (zero-width spaces,
+     soft hyphens, joiners, bidi controls) are ignored; a string that still holds a
+     value after replacement is replaced whole.
    - It hides canvases, media, embeds and frames, whose pixels it cannot read, and
-     any element whose `src`, `srcset`, `data` or `poster` holds a value. Hidden
-     elements lose their transitions, so they vanish at once. A resource address
-     is never rewritten, because a rewritten frame `src` would navigate.
+     any element whose `src`, `srcset`, `srcdoc`, `data` or `poster` holds a value
+     (for a `<picture>` source, the picture's image). Hidden elements lose their
+     transitions, so they vanish at once. A resource address is never rewritten,
+     because a rewritten frame address would navigate or reload.
    - Before and after the capture, it refuses the screenshot and deletes any file
-     if the page changed since redaction (a timer, animation frame or observer
-     putting text back), if the open DOM still holds a value, or if Chrome's
-     rendered surface does. That surface is read with `DOMSnapshot.captureSnapshot`
-     and includes closed shadow roots, CSS generated content, text split across
-     elements and same-process frames, none of which redaction can reach.
-   - It then restores the page. If the restore fails, the screenshot is deleted.
+     if the page changed since redaction, if the open DOM still holds a value, or if
+     Chrome's rendered surface does. A change is any DOM mutation, any write to a
+     form value or selection, any stylesheet edit through the CSSOM methods, and any
+     new open shadow root. The rendered surface is read with
+     `DOMSnapshot.captureSnapshot`: layout text and text boxes (closed shadow roots,
+     generated content and same-process frames included), form values, drawn
+     attributes (`placeholder`, `alt`, `label`), resource addresses and image
+     styles. Its text is matched joined, reversed, in visual order, and with up to a
+     few unrelated text boxes between the parts of a value.
+   - It captures through the same DevTools session (`Page.captureScreenshot`), not
+     Playwright's screenshot helper, which writes styles onto the page first.
+   - It then restores the page, including the selection of any control it touched,
+     and keeps style changes the page itself made meanwhile. If the restore fails,
+     the screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
 The in-page state lives in a Playwright handle, not on a page global, so page script
-cannot reach it. The page is assumed to be the application under test, not an
-adversary patching DOM prototypes. Pixels of an ordinary image are not read. Firefox
-and WebKit have no rendered-surface snapshot, so a redacted screenshot is refused
-there.
+cannot reach it.
+
+The limits are real and deliberate:
+- The page is assumed to be the application under test, not an adversary. Page script
+  keeps running during the capture. A script that kept its own references to the DOM or
+  CSSOM setters, or edited a stylesheet rule through a named style property such as
+  `rule.style.content`, can change the page without being counted.
+- Text matching covers the spellings and arrangements listed above, not every way a
+  page could draw a value, for example one glyph per absolutely positioned element
+  scattered across the page.
+- Pixels of an ordinary image are not read; an image is hidden only when one of its
+  resource addresses holds a value.
+- Firefox and WebKit have no rendered-surface snapshot, so a redacted screenshot is
+  refused there.
 
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped

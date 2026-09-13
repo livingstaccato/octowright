@@ -7,32 +7,42 @@
 
 A screenshot of a page a credential or identity was typed into is a durable copy of
 it that no text scrub can reach, so a classified run refuses screenshots by default.
-This module is the safe path for a Chromium page. It redacts the page, proves nothing
-classified is rendered, takes the screenshot, proves again, and restores the page:
+This module is the safe path for a Chromium page. It pauses CSS animations, redacts the
+page, proves nothing classified is rendered, takes the screenshot, proves again, and
+restores the page:
 
 1. The in-page controller (:mod:`octowright.macros.redaction_page_js`) replaces every
    spelling of the run's values in the open DOM and hides elements whose pixels or
    resource addresses cannot be redacted.
 2. Before and after the capture, the controller must report no page change since
    redaction and no remaining value, and Chrome's rendered surface
-   (:mod:`octowright.macros.rendered_surface`) must hold no value. Closed shadow roots,
-   generated content, split or re-cased text, and pages that re-render are refused
-   here rather than redacted.
-3. The page is restored whatever happened. A refused or unrestorable screenshot leaves
+   (:mod:`octowright.macros.rendered_surface`) must hold no value. Content redaction
+   cannot reach, such as closed shadow roots and generated content, is refused there
+   rather than redacted.
+3. The screenshot is captured through the same DevTools session
+   (``Page.captureScreenshot``). Playwright's screenshot helper is not used, because it
+   writes styles onto the page before capturing and a page can react to them.
+4. The page is restored whatever happened. A refused or unrestorable screenshot leaves
    no file.
 
 Opt in per session with :func:`enable_redacted_screenshots`, or for every session with
 ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``. A caller-installed handler still
 wins and may wrap :func:`redacted_screenshot` with its own checks.
 
-Limits: a page is assumed to be the application under test, not an adversary that
-patches DOM prototypes to hide from the scan. Pixels of an ordinary image are not read;
-an image is hidden only when one of its resource addresses holds a value. Engines other
-than Chromium have no rendered-surface snapshot, so the screenshot is refused there.
+Limits. A page is assumed to be the application under test, not an adversary: page
+script keeps running, and a script that kept its own references to the DOM and CSSOM
+setters, or changed a stylesheet rule through a named style property, could change the
+page without being counted. The text matching (see ``rendered_surface``) covers
+invisible characters, re-casing, normalization, reversal, reordering by position and a
+few interleaved text boxes, not every way a page could draw a value. Pixels of an
+ordinary image are not read; an image is hidden only when one of its resource addresses
+holds a value. Engines other than Chromium have no rendered-surface snapshot, so the
+screenshot is refused there.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import os
 from collections.abc import Awaitable, Callable
@@ -42,7 +52,7 @@ from typing import Any, Literal
 from provide.telemetry import get_logger
 
 from octowright import defaults
-from octowright._paths import reject_unsafe_path
+from octowright._paths import atomic_write_via_writer, reject_unsafe_path
 from octowright.macros import redaction_page_js as page_js
 from octowright.macros.privacy import sensitive_value_variants
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
@@ -131,6 +141,34 @@ async def _require_unrendered(controller: Any, cdp: Any, values: list[str], *, s
         )
 
 
+async def _capture(cdp: Any, target: Path) -> None:
+    """Write the screenshot from ``Page.captureScreenshot``, atomically."""
+    image = "jpeg" if target.suffix.lower() in {".jpg", ".jpeg"} else "png"
+    shot = await bounded(cdp.send("Page.captureScreenshot", {"format": image}), operation=_OPERATION)
+    data = base64.b64decode(shot["data"])
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    async def write(temporary: Path) -> None:
+        temporary.write_bytes(data)
+
+    await atomic_write_via_writer(target, write)
+
+
+async def _pause_animations(cdp: Any) -> None:
+    """Stop the page's CSS animations and transitions, so the scans and the capture see one frame."""
+    await bounded(cdp.send("Animation.enable"), operation=_OPERATION)
+    await bounded(cdp.send("Animation.setPlaybackRate", {"playbackRate": 0}), operation=_OPERATION)
+
+
+async def _release(cdp: Any) -> None:
+    """Resume animations and detach; each step is attempted even if an earlier one failed."""
+    for method, params in (("Animation.setPlaybackRate", {"playbackRate": 1}), ("Animation.disable", None)):
+        with contextlib.suppress(Exception):
+            await bounded(cdp.send(method, params) if params else cdp.send(method), operation=_OPERATION)
+    with contextlib.suppress(Exception):
+        await cdp.detach()
+
+
 async def _restore(controller: Any, target: Path, *, quiet: bool) -> None:
     """Undo the redaction. On failure the screenshot is deleted; ``quiet`` logs instead of raising."""
     try:
@@ -152,7 +190,7 @@ async def redacted_screenshot(
     *,
     root: Path | None = None,
 ) -> tuple[int, int]:
-    """Redact, prove nothing is rendered, screenshot, prove again, restore.
+    """Pause animations, redact, prove nothing is rendered, screenshot, prove again, restore.
 
     Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
     page was restored. Refusals raise ``RuntimeError`` naming what was found, never the
@@ -179,10 +217,12 @@ async def redacted_screenshot(
             ) from exc
         controller: Any = None
         try:
-            controller = await bounded(page.evaluate_handle(page_js.CONTROLLER_JS, values), operation=_OPERATION)
+            await _pause_animations(cdp)
+            argument = page_js.controller_argument(values)
+            controller = await bounded(page.evaluate_handle(page_js.CONTROLLER_JS, argument), operation=_OPERATION)
             await bounded(controller.evaluate(page_js.REDACT_CALL), operation=_OPERATION)
             await _require_unrendered(controller, cdp, values, stage="before")
-            await session.screenshot(target)
+            await _capture(cdp, target)
             await _require_unrendered(controller, cdp, values, stage="after")
         except BaseException:
             target.unlink(missing_ok=True)
@@ -190,7 +230,9 @@ async def redacted_screenshot(
                 await _restore(controller, target, quiet=True)
             raise
         finally:
-            with contextlib.suppress(Exception):
-                await cdp.detach()
+            await _release(cdp)
         await _restore(controller, target, quiet=False)
+        recorder = getattr(session, "recorder", None)
+        if recorder is not None:
+            recorder.record("screenshot", path=str(target))
     return 1, 0

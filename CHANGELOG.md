@@ -20,12 +20,18 @@ a section that is already tagged and on PyPI.
   safe path for Chromium pages, turned on by
   `macros.safe_screenshot.enable_redacted_screenshots(session)` or
   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact`. It works in three steps:
-  - It redacts every spelling of the run's values in the page, ignoring case, and
-    hides pixels it cannot read.
+  - It pauses CSS animations, redacts every spelling of the run's values in the
+    page (ignoring case, whitespace, compatibility forms and invisible characters
+    inside a value), and hides pixels it cannot read.
   - Before and after the capture, it refuses and deletes the file if the page
     changed or if Chrome's rendered surface still holds a value. That surface
-    covers closed shadow roots, generated content, split text and frames.
-  - It restores the page.
+    covers closed shadow roots, generated content, frames, drawn attributes, image
+    styles, and text that is split, reordered or reversed. It captures through
+    DevTools rather than Playwright's screenshot helper, which writes to the page.
+  - It restores the page, including control selection.
+
+  It trusts the page not to hide changes deliberately; `docs/macros.md` lists the
+  limits.
 
   The default is still refusal. An application's own handler still wins. Firefox
   and WebKit refuse. Related: #247, #248.

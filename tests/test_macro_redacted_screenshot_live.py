@@ -23,8 +23,6 @@ EMAIL = "c9-live-redaction-canary@example.test"
 
 _NO_ENGINE = (
     "executable doesn't exist",
-    "browser has been closed",
-    "target page, context or browser has been closed",
     "missing x server",
     "no protocol specified",
     "playwright install",
@@ -87,10 +85,6 @@ async def test_every_rendered_spelling_is_redacted_and_the_page_is_restored(tmp_
                     }""",
                     EMAIL,
                 )
-                # Playwright's own screenshot hides the caret and leaves `style=""` on
-                # inputs; take one plain screenshot first so the comparison below
-                # measures only what the redaction changes.
-                await page.screenshot(path=str(tmp_path / "warmup.png"))
                 before = await page.evaluate(_STATE_JS)
                 session = _PageSession(page)
                 target = tmp_path / "shots" / "redacted.png"
@@ -133,7 +127,8 @@ async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(tmp
                     }""",
                     EMAIL,
                 )
-                controller = await page.evaluate_handle(page_js.CONTROLLER_JS, list(sensitive_value_variants((EMAIL,))))
+                argument = page_js.controller_argument(list(sensitive_value_variants((EMAIL,))))
+                controller = await page.evaluate_handle(page_js.CONTROLLER_JS, argument)
                 await controller.evaluate(page_js.REDACT_CALL)
                 try:
                     assert await controller.evaluate(page_js.VERIFY_CALL) == {"changed": 0, "remaining": 0}

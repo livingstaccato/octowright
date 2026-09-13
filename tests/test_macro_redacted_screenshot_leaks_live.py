@@ -14,6 +14,8 @@ into the PNG. Refusing (no file written) is always an acceptable outcome.
 from __future__ import annotations
 
 import contextlib
+import json
+import urllib.parse
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -40,13 +42,11 @@ class _PageSession:
     def __init__(self, page: object) -> None:
         self.page = page
 
+    # No ``screenshot`` method: the redacted path captures through DevTools itself, and a
+    # call to Playwright's screenshot helper (which writes styles onto the page) fails here.
     @contextlib.asynccontextmanager
     async def operation(self, _name: str) -> AsyncIterator[None]:
         yield
-
-    async def screenshot(self, path: Path) -> Path:
-        await self.page.screenshot(path=str(path))  # type: ignore[attr-defined]
-        return path
 
 
 @contextlib.asynccontextmanager
@@ -158,6 +158,108 @@ _CASES = {
     ),
 }
 
+_R = "&lt;redacted&gt;"
+
+
+def _closed(inner: str) -> str:
+    return (
+        "<div id=h></div><script>document.getElementById('h')"
+        f".attachShadow({{mode:'closed'}}).innerHTML={json.dumps(inner)}</script>"
+    )
+
+
+def _adopted(css: str) -> str:
+    return (
+        f"<script>const s=new CSSStyleSheet();s.replaceSync({json.dumps(css)});document.adoptedStyleSheets=[s]</script>"
+    )
+
+
+def _svg(text: str) -> str:
+    svg = f"<svg xmlns='http://www.w3.org/2000/svg' width='880' height='60'><text x='0' y='45' font-size='40'>{text}</text></svg>"
+    return "data:image/svg+xml," + urllib.parse.quote(svg, safe="")
+
+
+_FIELD = "style='font:40px monospace;width:880px'"
+_BROKEN = "data:image/png;base64,AAAA"
+
+# Spellings, arrangements and drawn attributes a text-node scan misses (review of a64ea07b).
+_CASES.update(
+    {
+        "zero_width_space_inside": (f"{STYLE}<p>Probe-Secret-&#x200B;Canary-7f3a</p>", f"{STYLE}<p>{_R}</p>", SECRET),
+        "soft_hyphen_inside": (f"{STYLE}<p>Probe-Secret-&shy;Canary-7f3a</p>", f"{STYLE}<p>{_R}</p>", SECRET),
+        "word_joiner_inside": (f"{STYLE}<p>Probe-Secret-&#x2060;Canary-7f3a</p>", f"{STYLE}<p>{_R}</p>", SECRET),
+        "decomposed_accent": (f"{STYLE}<p>Jose&#x301;-Canary-Name</p>", f"{STYLE}<p>{_R}</p>", "Jos\u00e9-Canary-Name"),
+        "bidi_override": (f"{STYLE}<p><bdo dir=rtl>{SECRET[::-1]}</bdo></p>", f"{STYLE}<p>{_R}</p>", SECRET),
+        "flex_order": (
+            f"{STYLE}<p style='display:flex;margin:0'><span style=order:2>Canary-7f3a</span>"
+            "<span style=order:1>Probe-Secret-</span></p>",
+            f"{STYLE}<p style='margin:0'>{_R}</p>",
+            SECRET,
+        ),
+        "offscreen_text_between": (
+            f"{STYLE}<p><span>Probe-Secret-</span><span style='position:absolute;left:-9999px'>at</span>"
+            "<span>Canary-7f3a</span></p>",
+            f"{STYLE}<p>{_R}</p>",
+            SECRET,
+        ),
+        "clipped_text_between": (
+            f"{STYLE}<p><span>Probe-Secret-</span><span style='position:absolute;width:1px;height:1px;"
+            "overflow:hidden;clip:rect(0,0,0,0)'>screen reader</span><span>Canary-7f3a</span></p>",
+            f"{STYLE}<p>{_R}</p>",
+            SECRET,
+        ),
+        "picture_source": (
+            f'{STYLE}<picture><source srcset="{_svg(SECRET)}"><img src="{_svg("x")}"></picture>',
+            f'{STYLE}<picture><source srcset="{_svg("x")}"><img src="{_svg("x")}"></picture>',
+            SECRET,
+        ),
+        "adopted_background_image": (
+            f"{STYLE}<div id=b style='width:880px;height:60px'></div>"
+            + _adopted(f'#b{{background-image:url("{_svg(SECRET)}")}}'),
+            f"{STYLE}<div id=b style='width:880px;height:60px'></div>",
+            SECRET,
+        ),
+        "placeholder_in_closed_shadow": (
+            STYLE + _closed(f"<input placeholder='{SECRET}' {_FIELD}>"),
+            STYLE + _closed(f"<input placeholder='<redacted>' {_FIELD}>"),
+            SECRET,
+        ),
+        "textarea_placeholder_in_closed_shadow": (
+            STYLE + _closed(f"<textarea placeholder='{SECRET}' {_FIELD}></textarea>"),
+            STYLE + _closed(f"<textarea placeholder='<redacted>' {_FIELD}></textarea>"),
+            SECRET,
+        ),
+        "broken_image_alt_in_closed_shadow": (
+            STYLE + _closed(f"<img alt='{SECRET}' src='{_BROKEN}' style='width:880px;height:80px'>"),
+            STYLE + _closed(f"<img alt='<redacted>' src='{_BROKEN}' style='width:880px;height:80px'>"),
+            SECRET,
+        ),
+        "option_label_in_closed_shadow": (
+            STYLE + _closed(f"<select style='font:40px monospace'><option label='{SECRET}' value=1></option></select>"),
+            STYLE
+            + _closed("<select style='font:40px monospace'><option label='<redacted>' value=1></option></select>"),
+            SECRET,
+        ),
+    }
+)
+
+# Pages that change what they show on their own; every attempt must refuse or show nothing.
+_REPEATED = {
+    "input_value_toggled_by_a_timer": (
+        f"{STYLE}<input id=i {_FIELD}><script>const e=document.getElementById('i');"
+        f"setInterval(()=>{{e.value=e.value?'':{json.dumps(SECRET)}}},7)</script>",
+        f"{STYLE}<input id=i {_FIELD}>",
+    ),
+    "generated_content_animated_by_keyframes": (
+        f"{STYLE}<p id=a style='margin:0'></p>"
+        + _adopted(
+            "@keyframes k{0%{content:'x'}50%{content:'" + SECRET + "'}} "
+            "#a::before{content:'x';animation:k 120ms steps(1) infinite}"
+        ),
+        f"{STYLE}<p id=a style='margin:0'>x</p>",
+    ),
+}
+
 _CANVAS = (
     "<canvas id=c width=800 height=80></canvas><script>const x=document.getElementById('c').getContext('2d');"
     f"x.font='40px monospace';x.fillText('{SECRET}',0,50)</script>"
@@ -233,3 +335,12 @@ async def test_page_script_cannot_disable_the_restore(tmp_path: Path) -> None:
         with contextlib.suppress(RuntimeError):
             await redacted_screenshot(_PageSession(page), {"path": str(target)}, (SECRET,), root=tmp_path)
         assert await page.inner_text("#t") == SECRET
+
+
+@pytest.mark.parametrize("name", sorted(_REPEATED))
+async def test_a_page_that_changes_itself_never_keeps_a_screenshot_showing_the_value(name: str, tmp_path: Path) -> None:
+    html, never_held = _REPEATED[name]
+    async with _browser() as browser:
+        reference = await _render(browser, never_held, tmp_path / f"{name}.reference.png")
+        outcomes = [await _redacted(browser, html, SECRET, tmp_path, f"{name}-{attempt}") for attempt in range(4)]
+    assert all(outcome is None or outcome == reference for outcome in outcomes)
