@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from pydantic import StrictBool
+
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.browser_pool import limits as _limits
@@ -195,7 +197,7 @@ async def browser_launch(
     extra_http_headers: dict[str, str] | None = None,
     extra_http_headers_urls: list[str] | None = None,
     disable_gpu: bool | None = None,
-    disable_automation_controlled: bool = False,
+    disable_automation_controlled: StrictBool = False,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
