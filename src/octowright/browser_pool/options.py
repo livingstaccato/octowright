@@ -326,6 +326,8 @@ class LaunchOptions:
         self._validate_headers()
 
     def _validate_engine_specific_options(self) -> None:
+        if not isinstance(self.disable_automation_controlled, bool):
+            raise InvalidRequestError("disable_automation_controlled must be a boolean")
         if self.disable_automation_controlled and self.kind != "chromium":
             raise InvalidRequestError("disable_automation_controlled is only supported for kind='chromium'")
 

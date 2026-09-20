@@ -21,6 +21,7 @@ import pytest
 
 from octowright.browser_pool import launch_helpers
 from octowright.browser_pool.options import LaunchOptions
+from octowright.request_errors import InvalidRequestError
 
 # ─── to_pool_kwargs ──────────────────────────────────────────────────────────
 
@@ -139,6 +140,11 @@ class TestToPoolKwargs:
 
 
 class TestFromLaunchRecord:
+    @pytest.mark.parametrize("value", ["false", 0, 1, None, [], {}])
+    def test_disable_automation_controlled_rejects_non_boolean(self, value: object) -> None:
+        with pytest.raises(InvalidRequestError, match="must be a boolean"):
+            LaunchOptions.from_launch_record({"kind": "chromium", "disable_automation_controlled": value})
+
     def test_disable_automation_controlled_restores_true(self) -> None:
         opts = LaunchOptions.from_launch_record({"kind": "chromium", "disable_automation_controlled": True})
         assert opts.disable_automation_controlled is True
