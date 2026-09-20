@@ -51,10 +51,11 @@ page-visible automation signal. It applies to the whole browser launch, not one
 hostname or one authentication page. It changes `navigator.webdriver`; it is
 not general stealth and is not a sign-in guarantee.
 
-For a sign-in-only workflow, use a persistent profile, complete authentication,
-close the browser, then relaunch the same profile without this option. Do not
-use handoff or fluid relaunch to turn it off: both preserve the original launch
-setting by design.
+For a sign-in-only workflow, use a persistent profile and complete
+authentication. Have the user close that protected browser, or close it only
+with explicit user authorization under the teardown rules below, then relaunch
+the same profile without this option. Do not use handoff or fluid relaunch to
+turn it off: both preserve the original launch setting by design.
 
 ## Teardown Discipline
 
