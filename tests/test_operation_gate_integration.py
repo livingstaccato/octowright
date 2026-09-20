@@ -339,6 +339,20 @@ def build_session_for_test(pool: BrowserPool, parts: FakeLaunchParts) -> Browser
     )
 
 
+def test_automation_controlled_option_reaches_new_session(
+    fake_launch_parts: FakeLaunchParts,
+) -> None:
+    pool = BrowserPool()
+    fake_launch_parts.launch_options = LaunchOptions(
+        protected=False,
+        disable_automation_controlled=True,
+    )
+
+    session = build_session_for_test(pool, fake_launch_parts)
+
+    assert session.disable_automation_controlled is True
+
+
 def test_pool_explicit_operation_timeout_reaches_new_session(
     monkeypatch: pytest.MonkeyPatch,
     fake_launch_parts: FakeLaunchParts,
