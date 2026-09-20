@@ -459,6 +459,7 @@ class RelaunchSnapshot:
     har_path: Any
     protected: bool
     protected_reason: str
+    disable_automation_controlled: bool
     target_url: str
 
 

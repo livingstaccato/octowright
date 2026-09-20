@@ -29,6 +29,7 @@ def _fake_source(
     har_path: Any = None,
     stabilize: bool = False,
     trace: bool = False,
+    disable_automation_controlled: bool = False,
 ) -> Any:
     """A duck-typed handoff/relaunch source carrying a REAL
     ``SessionOperationGate`` -- Task 8 routes ``close_original=True`` through
@@ -54,6 +55,7 @@ def _fake_source(
         har_path=har_path,
         stabilize=stabilize,
         trace=trace,
+        disable_automation_controlled=disable_automation_controlled,
         protected=False,
         protected_reason="explicit",
         page=SimpleNamespace(url=url),
@@ -162,6 +164,7 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
         label="scratch",
         profile=None,
         user_data_dir=tmp_path / "session-dir",
+        disable_automation_controlled=True,
     )
     pool._sessions["old-session"] = source
     launched: dict[str, object] = {}
@@ -186,6 +189,7 @@ async def test_handoff_preserves_session_scoped_tmpdir(monkeypatch: pytest.Monke
     assert result["new_instance_id"] == "new-session"
     assert launched["session"] is True
     assert launched["profile"] is None
+    assert launched["disable_automation_controlled"] is True
 
 
 # ─── Eviction-mid-handoff race regression ────────────────────────────────────

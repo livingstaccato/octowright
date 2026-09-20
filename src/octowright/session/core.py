@@ -105,6 +105,7 @@ class BrowserSession(
     protected_reason: str = "explicit"
     trace: bool = False
     har_path: Path | None = None
+    disable_automation_controlled: bool = False
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None

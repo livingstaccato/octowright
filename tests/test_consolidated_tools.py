@@ -259,6 +259,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     session.stabilize = True
     session.trace = False
     session.har_path = None
+    session.disable_automation_controlled = True
     session.user_data_dir = None
     session.url = "https://octowright.com/original"
     session.page.url = "https://octowright.com/current"
@@ -275,6 +276,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     assert kwargs["label"] == "player"
     assert kwargs["profile"] == "profile-a"
     assert kwargs["headed"] is True
+    assert kwargs["disable_automation_controlled"] is True
     assert "viewport_w" not in kwargs
     assert "viewport_h" not in kwargs
     assert result["old_instance_id"] == "old-id"
