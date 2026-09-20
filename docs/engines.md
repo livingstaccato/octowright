@@ -61,7 +61,8 @@ authentication page. To limit its scope to a sign-in flow:
 
 1. Launch Chromium with a persistent profile and
    `disable_automation_controlled=True`.
-2. Complete sign-in, then close that browser so profile state is flushed.
+2. Complete sign-in. Have the user close that protected browser, or close it only
+   with explicit user authorization, so profile state is flushed.
 3. Launch the same profile again without the option for ordinary browsing.
 
 Launch recordings, handoff, and fluid relaunch preserve the setting. Therefore,
