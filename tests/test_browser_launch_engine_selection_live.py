@@ -109,22 +109,24 @@ async def test_disable_automation_controlled_changes_webdriver_signal(
                 ephemeral=True,
                 url="data:text/html,<h1>webdriver-default</h1>",
             )
-            default_value = await pool.get(default_launch["instance_id"]).page.evaluate("navigator.webdriver")
-            await pool.close(default_launch["instance_id"])
-
-            changed_launch = await pool.launch(
-                kind="chromium",
-                headed=False,
-                ephemeral=True,
-                disable_automation_controlled=True,
-                url="data:text/html,<h1>webdriver-changed</h1>",
-            )
-            changed_value = await pool.get(changed_launch["instance_id"]).page.evaluate("navigator.webdriver")
-            await pool.close(changed_launch["instance_id"])
         except Exception as exc:
             _maybe_skip_live_engine(exc)
+            raise
 
+        default_value = await pool.get(default_launch["instance_id"]).page.evaluate("navigator.webdriver")
         assert default_value is True
+        await pool.close(default_launch["instance_id"])
+
+        changed_launch = await pool.launch(
+            kind="chromium",
+            headed=False,
+            ephemeral=True,
+            disable_automation_controlled=True,
+            url="data:text/html,<h1>webdriver-changed</h1>",
+        )
+        changed_value = await pool.get(changed_launch["instance_id"]).page.evaluate("navigator.webdriver")
         assert changed_value is False
+        await pool.close(changed_launch["instance_id"])
+
     finally:
         await pool.shutdown()
