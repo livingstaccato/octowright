@@ -44,6 +44,30 @@ from a saved launch record, and never carried across handoff/relaunch — a
 poisoned recording can't turn into an `executable_path` code-execution
 primitive, and replay can't silently weaken sandboxing via `launch_args`.
 
+## Chromium's automation-controlled signal
+
+`browser_launch(disable_automation_controlled=True)` adds the fixed Chromium
+switch `--disable-blink-features=AutomationControlled`. On current Chromium,
+that changes the page-visible `navigator.webdriver` value from `true` to
+`false`.
+
+The option is Chromium-only, off by default, and does not accept arbitrary
+flags. Firefox and WebKit reject it. It changes one browser signal; it is not
+a general stealth mode and does not guarantee that a site will accept a
+browser or a sign-in.
+
+The setting can affect any site that keys behavior on that signal, not only an
+authentication page. To limit its scope to a sign-in flow:
+
+1. Launch Chromium with a persistent profile and
+   `disable_automation_controlled=True`.
+2. Complete sign-in, then close that browser so profile state is flushed.
+3. Launch the same profile again without the option for ordinary browsing.
+
+Launch recordings, handoff, and fluid relaunch preserve the setting. Therefore,
+use a close plus a new launch—not handoff/fluid relaunch—when returning to the
+default after sign-in.
+
 ## Launch mode (headed vs headless)
 
 Mode is environment-driven, with one explicit override:
