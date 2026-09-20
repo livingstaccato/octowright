@@ -203,6 +203,23 @@ async def test_browser_launch_forwards_channel_executable_path_launch_args(
 
 
 @pytest.mark.anyio
+async def test_browser_launch_forwards_disable_automation_controlled(
+    _patch_state: dict[str, MagicMock],
+) -> None:
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
+
+    await _lifecycle.browser_launch(
+        url="https://x.com",
+        ephemeral=True,
+        disable_automation_controlled=True,
+    )
+
+    _, kwargs = pool.launch.call_args
+    assert kwargs["disable_automation_controlled"] is True
+
+
+@pytest.mark.anyio
 async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """browser_capture_and_close now routes through the REAL close
     coordinator (capture runs as a preparation callback inside the
