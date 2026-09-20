@@ -57,7 +57,7 @@ async def test_enabled_option_adds_exact_fixed_chromium_flag() -> None:
         disable_automation_controlled=True,
     )
 
-    assert kwargs["args"].count(AUTOMATION_CONTROLLED_DISABLE_ARG) == 1
+    assert kwargs["args"].count("--disable-blink-features=AutomationControlled") == 1
 
 
 @pytest.mark.anyio
