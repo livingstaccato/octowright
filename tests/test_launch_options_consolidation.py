@@ -139,6 +139,14 @@ class TestToPoolKwargs:
 
 
 class TestFromLaunchRecord:
+    def test_disable_automation_controlled_restores_true(self) -> None:
+        opts = LaunchOptions.from_launch_record({"kind": "chromium", "disable_automation_controlled": True})
+        assert opts.disable_automation_controlled is True
+
+    def test_old_record_defaults_disable_automation_controlled_false(self) -> None:
+        opts = LaunchOptions.from_launch_record({"kind": "chromium"})
+        assert opts.disable_automation_controlled is False
+
     def test_viewport_dict_unpacks_to_w_h(self) -> None:
         record = {
             "kind": "chromium",

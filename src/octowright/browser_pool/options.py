@@ -302,6 +302,7 @@ class LaunchOptions:
                 "tile": record.get("tile", False),
                 "ephemeral": record.get("ephemeral", False),
                 "session": record.get("session", False),
+                "disable_automation_controlled": record.get("disable_automation_controlled", False),
             }
         )
 

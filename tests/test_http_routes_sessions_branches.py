@@ -843,6 +843,7 @@ def test_launch_recording_persists_relaunch_relevant_options(tmp_path: Path) -> 
         tile=True,
         ephemeral=False,
         session=True,
+        disable_automation_controlled=True,
     )
     recorder.close()
 
@@ -852,6 +853,7 @@ def test_launch_recording_persists_relaunch_relevant_options(tmp_path: Path) -> 
     assert row["tile"] is True
     assert row["ephemeral"] is False
     assert row["session"] is True
+    assert row["disable_automation_controlled"] is True
 
 
 # ─── session_detail live-path: aria swallow + macro_intent attach swallow ──

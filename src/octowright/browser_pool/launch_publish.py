@@ -281,6 +281,7 @@ async def _prepare_session_before_publication(
         tile=launch_options.tile,
         ephemeral=launch_options.ephemeral,
         session=session,
+        disable_automation_controlled=launch_options.disable_automation_controlled,
     )
 
     # NOTE: the BrowserSession local was named ``session`` for years, but

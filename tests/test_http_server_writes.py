@@ -1000,6 +1000,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
             "tile": True,
             "ephemeral": True,
             "session": False,
+            "disable_automation_controlled": True,
         },
     )
     r = client.post("/api/sessions/relaunchext01/relaunch")
@@ -1018,6 +1019,7 @@ def test_post_session_relaunch_preserves_extended_launch_fields(
     assert call["tile"] is True
     assert call["ephemeral"] is True
     assert call["session"] is False
+    assert call["disable_automation_controlled"] is True
 
 
 def test_post_session_relaunch_409_when_live(

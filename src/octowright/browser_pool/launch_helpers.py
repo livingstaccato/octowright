@@ -468,6 +468,7 @@ def _record_launch_event(
     tile: bool,
     ephemeral: bool,
     session: bool,
+    disable_automation_controlled: bool,
 ) -> None:
     """Emit the JSONL `launch` event with all the conditional fields. Pulled
     out of launch() to keep its complexity rank below the gate."""
@@ -495,6 +496,7 @@ def _record_launch_event(
         tile=tile,
         ephemeral=ephemeral,
         session=session,
+        disable_automation_controlled=disable_automation_controlled,
     )
 
 
