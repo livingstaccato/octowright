@@ -199,6 +199,10 @@ class LaunchOptions:
     #: Launch Chromium with the GPU disabled (see ``resolve_disable_gpu``).
     #: ``None`` defers to ``OCTOWRIGHT_DISABLE_GPU``; ``True``/``False`` force it.
     disable_gpu: bool | None = None
+    #: Disable Blink's AutomationControlled feature for this Chromium launch.
+    #: This changes the browser-exposed ``navigator.webdriver`` signal only; it is
+    #: not a promise that the browser is undetectable as automated.
+    disable_automation_controlled: bool = False
 
     @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
@@ -312,7 +316,12 @@ class LaunchOptions:
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
+        self._validate_engine_specific_options()
         self._validate_headers()
+
+    def _validate_engine_specific_options(self) -> None:
+        if self.disable_automation_controlled and self.kind != "chromium":
+            raise InvalidRequestError("disable_automation_controlled is only supported for kind='chromium'")
 
     def _validate_headers(self) -> None:
         """Header checks, split out because ``to_pool_kwargs`` needs them too.
@@ -364,6 +373,7 @@ class LaunchOptions:
         ``resolve_protected``, not an input -- the one exclusion, and it is the
         same one the accept set makes.
         """
+        self._validate_engine_specific_options()
         self._validate_headers()
         return {name: getattr(self, name) for name in sorted(CALLER_SETTABLE_FIELDS)}
 

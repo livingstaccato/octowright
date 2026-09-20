@@ -42,7 +42,7 @@ class TestToPoolKwargs:
         exclusion, being an output of ``resolve_protected`` rather than an input.
         """
         opts = LaunchOptions(
-            kind="firefox",
+            kind="chromium",
             url="https://x.test",
             headed=False,
             label="lab",
@@ -69,10 +69,11 @@ class TestToPoolKwargs:
             extra_http_headers={"X-Env": "staging"},
             extra_http_headers_urls=["**/api/**"],
             disable_gpu=True,
+            disable_automation_controlled=True,
             base_url="https://dev.test",
         )
         assert opts.to_pool_kwargs() == {
-            "kind": "firefox",
+            "kind": "chromium",
             "base_url": "https://dev.test",
             "url": "https://x.test",
             "headed": False,
@@ -100,6 +101,7 @@ class TestToPoolKwargs:
             "extra_http_headers": {"X-Env": "staging"},
             "extra_http_headers_urls": ["**/api/**"],
             "disable_gpu": True,
+            "disable_automation_controlled": True,
         }
 
     def test_defaults(self) -> None:
@@ -117,6 +119,7 @@ class TestToPoolKwargs:
         assert kwargs["tile"] is False
         assert kwargs["ephemeral"] is False
         assert kwargs["session"] is False
+        assert kwargs["disable_automation_controlled"] is False
 
     def test_from_mapping_round_trip(self) -> None:
         """``from_mapping(d).to_pool_kwargs()`` reproduces the input keys."""
