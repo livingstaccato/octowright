@@ -68,6 +68,7 @@ async def launch_profile_locked(
     )
     launch_kwargs = await pool._build_launch_kwargs(
         disable_gpu=launch_options.disable_gpu,
+        disable_automation_controlled=launch_options.disable_automation_controlled,
         tile=launch_options.tile,
         kind=kind,
         headless=headless,

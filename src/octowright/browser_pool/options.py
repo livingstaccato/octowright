@@ -91,6 +91,11 @@ _DISABLE_GPU_TOKENS_OFF = frozenset({"", "0", "off", "false", "no", "never", "no
 #: leaves the compositor on a path that still touches the driver.
 GPU_DISABLE_ARGS = ("--disable-gpu", "--disable-gpu-compositing")
 
+# Fixed Chromium switch for sites that change behavior when Blink exposes its
+# automation-controlled feature. This is one signal adjustment, not a general
+# stealth mode, and deliberately has no environment-wide opt-in.
+AUTOMATION_CONTROLLED_DISABLE_ARG: Final = "--disable-blink-features=AutomationControlled"
+
 
 def resolve_disable_gpu(explicit: bool | None) -> bool:
     """Whether to launch Chromium with the GPU disabled.
