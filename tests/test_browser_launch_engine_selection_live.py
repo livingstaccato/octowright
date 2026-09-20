@@ -3,9 +3,9 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Live-browser proof that channel/executable_path/launch_args actually reach
-a real Playwright launch, not just octowright's internal kwarg-merge logic
-(which the unit tests in test_browser_pool_branches.py already cover)."""
+"""Live-browser proofs that launch options reach a real Playwright launch,
+not just octowright's internal kwarg-merge logic (which the unit tests in
+test_browser_pool_branches.py already cover)."""
 
 from __future__ import annotations
 
@@ -86,5 +86,45 @@ async def test_launch_with_channel_chrome_or_skip(monkeypatch: pytest.MonkeyPatc
 
         assert launched["instance_id"]
         await pool.close(launched["instance_id"])
+    finally:
+        await pool.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.live_browser
+async def test_disable_automation_controlled_changes_webdriver_signal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The Chromium launch option changes the browser-exposed webdriver signal."""
+    pytest.importorskip("playwright")
+    _configure_runtime_paths(monkeypatch, tmp_path)
+
+    pool = BrowserPool()
+    try:
+        try:
+            default_launch = await pool.launch(
+                kind="chromium",
+                headed=False,
+                ephemeral=True,
+                url="data:text/html,<h1>webdriver-default</h1>",
+            )
+            default_value = await pool.get(default_launch["instance_id"]).page.evaluate("navigator.webdriver")
+            await pool.close(default_launch["instance_id"])
+
+            changed_launch = await pool.launch(
+                kind="chromium",
+                headed=False,
+                ephemeral=True,
+                disable_automation_controlled=True,
+                url="data:text/html,<h1>webdriver-changed</h1>",
+            )
+            changed_value = await pool.get(changed_launch["instance_id"]).page.evaluate("navigator.webdriver")
+            await pool.close(changed_launch["instance_id"])
+        except Exception as exc:
+            _maybe_skip_live_engine(exc)
+
+        assert default_value is True
+        assert changed_value is False
     finally:
         await pool.shutdown()
