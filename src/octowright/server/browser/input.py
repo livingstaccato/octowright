@@ -38,6 +38,33 @@ def _truncate_text_value(text: str, *, max_chars: int | None, full: bool) -> dic
     return {"text": text, "truncated": False, "text_size": len(text)}
 
 
+def _validate_upload_trigger(
+    *,
+    selector: str | None,
+    role: str | None,
+    role_name: str | None,
+    role_exact: bool,
+    label: str | None,
+    label_exact: bool,
+    text: str | None,
+    text_exact: bool,
+    test_id: str | None,
+) -> None:
+    if role_name is not None and role is None:
+        raise ValueError("role_name requires role")
+    for flag_name, enabled, finder_name, finder in (
+        ("role_exact", role_exact, "role", role),
+        ("label_exact", label_exact, "label", label),
+        ("text_exact", text_exact, "text", text),
+    ):
+        if enabled and finder is None:
+            raise ValueError(f"{flag_name} requires {finder_name}")
+
+    finder_count = sum(value is not None for value in (selector, role, label, text, test_id))
+    if finder_count != 1:
+        raise ValueError("exactly one trigger must be set: selector or one of role/label/text/test_id")
+
+
 def _get_text_by_full_action(
     instance_id: str,
     *,
@@ -309,9 +336,11 @@ async def browser_get_text_by(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Upload one or more files into an <input type=file> element. `paths` is a list "
-        "of absolute file paths on this machine. Pass response_mode='outline' to get a "
-        "compact browser_page_outline in the same call."
+        "Directly upload one or more files to an existing file input. This tool directly targets "
+        "the <input type=file> by CSS selector and does not click a separate upload button. "
+        "Never click an upload trigger first; use browser_upload_files when a visible trigger opens "
+        "the chooser. `paths` is a list of absolute file paths on this machine. Pass "
+        "response_mode='outline' to get a compact browser_page_outline in the same call."
     ),
 )
 async def browser_set_input_files(
@@ -324,6 +353,62 @@ async def browser_set_input_files(
         raise ValueError("paths must be a non-empty list of file paths")
     async with browser_operation(pool, instance_id, "browser_set_input_files") as session:
         result = await session.set_input_files(selector, paths)
+        return await _with_outline(instance_id, dict(result), response_mode)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Upload one or more files through a visible upload trigger. This tool atomically arms and "
+        "captures the file chooser before clicking a visible upload trigger, then assigns `paths`. "
+        "Never click an upload trigger first; call this tool directly so the chooser event cannot "
+        "be missed. Provide exactly one trigger: a CSS `selector`, or one of `role`, `label`, "
+        "`text`, or `test_id`. `paths` is a non-empty list of absolute file paths on this machine. "
+        "Pass response_mode='outline' to get a compact browser_page_outline in the same call."
+    ),
+)
+async def browser_upload_files(
+    instance_id: str,
+    paths: list[str],
+    selector: str | None = None,
+    role: str | None = None,
+    role_name: str | None = None,
+    role_exact: bool = False,
+    label: str | None = None,
+    label_exact: bool = False,
+    text: str | None = None,
+    text_exact: bool = False,
+    test_id: str | None = None,
+    timeout_ms: int | None = None,
+    response_mode: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(paths, list) or not paths:
+        raise ValueError("paths must be a non-empty list of file paths")
+    _validate_upload_trigger(
+        selector=selector,
+        role=role,
+        role_name=role_name,
+        role_exact=role_exact,
+        label=label,
+        label_exact=label_exact,
+        text=text,
+        text_exact=text_exact,
+        test_id=test_id,
+    )
+    async with browser_operation(pool, instance_id, "browser_upload_files") as session:
+        result = await session.upload_files(
+            paths=paths,
+            selector=selector,
+            role=role,
+            role_name=role_name,
+            role_exact=role_exact,
+            label=label,
+            label_exact=label_exact,
+            text=text,
+            text_exact=text_exact,
+            test_id=test_id,
+            timeout_ms=timeout_ms,
+        )
         return await _with_outline(instance_id, dict(result), response_mode)
 
 

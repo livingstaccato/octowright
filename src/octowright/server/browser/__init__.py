@@ -36,6 +36,7 @@ from octowright.server.browser.input import (
     browser_select_option,
     browser_set_input_files,
     browser_type,
+    browser_upload_files,
 )
 from octowright.server.browser.inspect import (
     browser_brief,
@@ -160,6 +161,7 @@ __all__ = [
     "browser_tail_recording",
     "browser_type",
     "browser_unmock_route",
+    "browser_upload_files",
     "browser_viewport_status",
     "browser_viewport_sync",
     "browser_wait_for",
