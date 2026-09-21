@@ -408,6 +408,7 @@ source_paths = [
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
 # etc.), so we point it at the targeted unit suites only.
 pytest_add_cli_args_test_selection = [
+    "tests/test_macro_blind_scrub_policy.py",
     "tests/test_macro_listing.py",
     "tests/test_macro_privacy_vocabulary.py",
     "tests/test_macro_save_authoring.py",
