@@ -483,8 +483,8 @@ class SensitiveRecorder:
 
     def _scrubbed(self, fields: dict[str, Any]) -> dict[str, Any]:
         values = self.ledger.values
-        # Nothing to scrub is the common case for a session that never ran a
-        # classified macro, and scrubbing an empty set still copies every field.
+        # Nothing to scrub is the common case for a session that never admitted a
+        # macro value, and scrubbing an empty set still copies every field.
         return scrub_sensitive_values(fields, values) if values else fields
 
     def record(self, action: str, **fields: Any) -> None:

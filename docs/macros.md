@@ -223,9 +223,9 @@ summaries for conditionals.
 
 ## Argument privacy
 
-A macro argument whose **name** reads like a credential is classified when the
-macro runs, and its value is kept out of everything a run writes or returns.
-Classification is by name, not by value. Credential names include `password`,
+A macro argument whose **name** reads like a credential, identity, or context is
+classified when the macro runs. Classification is by name, not by value.
+Credential names include `password`,
 `passwd`, `pwd`, `pw`, `passphrase`, `secret`, `token`, `api_key`, `access_key`,
 `private_key`, `authorization`, `auth`, `bearer`, `cookie`, `otp` and
 `credential`, including plural and camelCase spellings. Identity and contextual
@@ -233,17 +233,19 @@ names such as `email`, `username`, `user`, `peer` and `session` are classified
 too. A value nested under a classified key inside an ordinary container
 (`{"profile": {"password": ...}}`) is classified as well.
 
-**Where a classified value is scrubbed.** When a run fails, its value is removed
-from the diagnostic payload before it leaves the process — the failure message,
-the healing suggestion, the failed-request tail and the executed-action
-descriptors — in its raw, JSON-escaped and repeatedly URL-encoded spellings.
-`args_used` in a run result shows the argument redacted. The session recording
-is scrubbed at write time, replacing each value with `<redacted>`.
+**Structural redaction and blind scrubbing are different.** Every classified
+argument is redacted where its key provides provenance, so `args_used`,
+manifests and argument dictionaries never expose values stored under `email`,
+`user`, `password` or another classified key. Blind scrubbing has no such
+provenance: it replaces an admitted value wherever that text occurs in a
+diagnostic, recording row, artifact or page prepared for a screenshot. The
+default admits only credential-tier values. See **Blind-scrub policy** below.
 
-**Screenshots of a classified run.** A screenshot of a page a credential was
-typed into is a durable copy of it, which no text scrub can reach. While a run
-holds classified values, a `screenshot` action is never taken the generic way.
-It is decided in this order:
+**Screenshots of a blind-scrub-protected run.** A screenshot of a page a
+credential was typed into is a durable copy of it, which no text scrub can
+reach. While a run holds values admitted by the blind-scrub policy, a
+`screenshot` action is never taken the generic way. It is decided in this
+order:
 
 1. If the embedding application called
    `octowright.macros.safe_screenshot.enable_redacted_screenshots(session, handler=...)`
@@ -259,7 +261,7 @@ It is decided in this order:
      the redaction, and waits, reading DevTools rather than the page, until their
      pseudo-elements are gone.
    - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
-     classified values with `<redacted>` in text and attribute values across the
+     policy-admitted values with `<redacted>` in text and attribute values across the
      document and its open and closed shadow roots. Case, whitespace, Unicode
      compatibility forms and invisible characters inside a value (zero-width spaces,
      soft hyphens, joiners, bidi controls, control characters) are ignored. A value
@@ -353,26 +355,38 @@ Automatic artifact screenshots follow the same rule, with one exception: they ar
 never taken on a session whose application installed its own handler. A mistyped
 policy value suppresses them rather than failing the artifact run. When one is not
 taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for a classified
-run; the payload records `diagnostic_suppressed` instead.
+producer, which saves raw page HTML and a screenshot, is not called for a run
+with policy-admitted values; the payload records `diagnostic_suppressed`
+instead.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified
-where the call executes, at every depth, so a credential passed only to a nested
-macro is covered like one passed to the outer run. Values collected on a
-session accumulate for that session's lifetime and are scrubbed from every
-later recording write, including in the next step of a `macro_run_sequence`,
-because a credential typed once can keep rendering in later page output.
+where the call executes, at every depth. Values admitted by the selected policy
+join the run ledger and the session ledger. The session ledger lasts for the
+session's lifetime and scrubs every later recording write, including the next
+step of a `macro_run_sequence`, because a credential typed once can keep
+rendering in later page output.
 
-**Short and common values.** The scrub replaces a value's text wherever it
-appears in a row, not only in the field it came from. A value of four or more
-characters is replaced anywhere, including inside a longer word; a shorter one
-only where it stands alone between non-alphanumeric characters. Because the
-session keeps every value for its lifetime, a classified argument holding a
-short or common value rewrites that text in every later row: after
-`session="1"`, a recorded `li:nth-child(1)` becomes `li:nth-child(<redacted>)`
-and `?page=1` becomes `?page=<redacted>`, so a macro saved or a script exported
-from that recording no longer replays. Give classified arguments distinctive
-values, or start a new session after a run that needed a short one.
+**Blind-scrub policy.** `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY` selects one of
+three strict modes:
+
+- `credentials` (default) admits only passwords, tokens, cookies, API keys and
+  other credential-tier values to blind scrubbers and the permanent session
+  ledger. Identity/context values remain structurally redacted, but a value
+  such as `session="1"` does not rewrite `li:nth-child(1)` or `?page=1`, and
+  `user="admin"` does not rewrite unrelated prose.
+- `all` admits every classified tier and preserves the behavior before issue
+  #247. It offers maximum identity/context redaction, but a short or common
+  value can corrupt selectors, URLs and text anywhere in the current or later
+  recording rows.
+- `reject` refuses an invocation containing identity or contextual values
+  before substitution, recording changes, artifact writes, screenshots or
+  browser activity. Its error lists argument paths and tiers, never values.
+  Credential-only invocations continue normally.
+
+Unknown values fail configuration rather than silently choosing a privacy
+posture. This setting also governs diagnostics, automatic and explicit
+screenshots, artifact reports and generated scripts. It does not change the
+classifier vocabulary or the credential sink guard.
 
 **Credential-named arguments in URLs and code.** A credential-named argument
 expanded into `url`, `expression`, `verify_js` or `grabbed_predicate_js` is
@@ -380,14 +394,15 @@ refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
 **Exported scripts** carry their own copy of the classifier, stamped
-`_ARG_PRIVACY_CLASSIFIER_VERSION = 4`. A script exported by an older
-octowright keeps the table it was generated with; regenerate it to pick up the
-current one.
+`_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy
+when they run. A script exported by an older octowright keeps the classifier
+and policy behavior it was generated with; regenerate it to pick up the current
+default.
 
 **Not covered.** Writers outside the recording are not scrubbed. They include:
 
 - the page HTML and screenshot the generic diagnostic producer saves when a run
-  with no classified values fails, which can still show a credential an earlier
+  with no policy-admitted values fails, which can still show a credential an earlier
   run left on the page;
 - the websocket frame sidecar, which stores frame payloads as received;
 - a HAR file, when HAR recording is enabled at launch;

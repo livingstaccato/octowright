@@ -3,13 +3,13 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Redacted screenshots for macro runs that hold classified values.
+"""Redacted screenshots for macro runs that hold policy-admitted values.
 
-A screenshot of a page a credential or identity was typed into is a durable copy of
-it that no text scrub can reach, so a classified run refuses screenshots by default.
-This module is the safe path for a Chromium page. It pauses CSS animations, redacts the
-page, proves nothing classified is rendered, takes the screenshot, proves again, and
-restores the page, all through one DevTools session:
+A screenshot of a page a protected value was typed into is a durable copy of it that no
+text scrub can reach, so a run holding values admitted by the blind-scrub policy refuses
+screenshots by default. This module is the safe path for a Chromium page. It pauses CSS
+animations, redacts the page, proves no admitted value is rendered, takes the screenshot,
+proves again, and restores the page, all through one DevTools session:
 
 1. The in-page controller (:mod:`octowright.macros.redaction_page_js`) replaces every
    spelling of the run's values in the document and in open and closed shadow roots,

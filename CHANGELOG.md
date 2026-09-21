@@ -12,6 +12,16 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Fixed
+- **Short or common identity/context macro arguments no longer corrupt replay
+  recordings** (#247). Blind value replacement now defaults to credential-tier
+  arguments only, while every classified key remains structurally redacted.
+  `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY=all` preserves the previous
+  maximum-privacy behavior, and `=reject` refuses identity/context arguments
+  before browser or artifact side effects. Runtime diagnostics, session
+  ledgers, screenshots, artifact reports and generated scripts share the same
+  strict policy.
+
 ## [0.24.0] - 2026-09-13
 
 ### Added
