@@ -165,6 +165,16 @@ artifacts = [
     "src/octowright/server/frontend/*.svg",
 ]
 
+[tool.uv]
+# Source-checkout security floor only; this is not emitted into either wheel's
+# package metadata. AsyncSSH 2.24.0 fixes CVE-2026-62949 but requires
+# cryptography >=48.0.1. Windows ARM64 remains on cryptography 46.0.3 because
+# newer releases have no installable wheel there, so retain its existing lock
+# resolution until that platform constraint clears.
+constraint-dependencies = [
+    "asyncssh>=2.24.0; sys_platform != 'win32' or (platform_machine != 'ARM64' and platform_machine != 'arm64' and platform_machine != 'aarch64')",
+]
+
 [tool.uv.workspace]
 # The session-kind terminal plugin (see AGENTS.md "Terminal Sessions") lives as
 # its own workspace member so it can declare its own dependencies (uterm +

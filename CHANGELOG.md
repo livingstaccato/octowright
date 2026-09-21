@@ -22,6 +22,14 @@ a section that is already tagged and on PyPI.
   ledgers, screenshots, artifact reports and generated scripts share the same
   strict policy.
 
+### Security
+- **Source checkouts now resolve AsyncSSH 2.24.0 or newer on supported
+  platforms**, closing CVE-2026-62949 in the terminal plugin's SSH dependency.
+  The floor is a uv-only constraint, not a dependency published by core or the
+  terminal plugin. Windows ARM64 keeps its existing resolution because the
+  patched AsyncSSH release requires a Cryptography version with no installable
+  wheel on that platform.
+
 ## [0.24.0] - 2026-09-13
 
 ### Added
