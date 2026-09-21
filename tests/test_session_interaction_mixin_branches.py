@@ -701,3 +701,240 @@ class TestSetInputFiles:
         with pytest.raises(ValueError, match="outside the allowed roots"):
             await session.set_input_files("#upload", [str(outside_file)])
         page.set_input_files.assert_not_called()
+
+
+# ─── upload_files ───────────────────────────────────────────────────────────
+
+
+class _UploadLocator:
+    def __init__(self, *, click_error: Exception | None = None) -> None:
+        self.click_calls: list[int] = []
+        self.click_error = click_error
+
+    async def click(self, *, timeout: int) -> None:
+        self.click_calls.append(timeout)
+        if self.click_error is not None:
+            raise self.click_error
+
+
+class _UploadChooser:
+    def __init__(self, *, set_files_error: Exception | None = None) -> None:
+        self.set_files_calls: list[tuple[list[str], int]] = []
+        self.set_files_error = set_files_error
+
+    async def set_files(self, paths: list[str], *, timeout: int) -> None:
+        self.set_files_calls.append((paths, timeout))
+        if self.set_files_error is not None:
+            raise self.set_files_error
+
+
+class _UploadChooserInfo:
+    def __init__(self, chooser: _UploadChooser, *, value_error: Exception | None = None) -> None:
+        self.chooser = chooser
+        self.value_error = value_error
+
+    async def __aenter__(self) -> _UploadChooserInfo:
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    @property
+    async def value(self) -> _UploadChooser:
+        if self.value_error is not None:
+            raise self.value_error
+        return self.chooser
+
+
+class _UploadPage:
+    def __init__(
+        self,
+        *,
+        chooser: _UploadChooser | None = None,
+        chooser_value_error: Exception | None = None,
+    ) -> None:
+        self.url = "about:blank"
+        self.selector_locator = _UploadLocator()
+        self.semantic_locator = _UploadLocator()
+        self.chooser = chooser or _UploadChooser()
+        self.chooser_value_error = chooser_value_error
+        self.expect_file_chooser_calls: list[int] = []
+        self.locator_calls: list[str] = []
+        self.semantic_calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def expect_file_chooser(self, *, timeout: int) -> _UploadChooserInfo:
+        self.expect_file_chooser_calls.append(timeout)
+        return _UploadChooserInfo(self.chooser, value_error=self.chooser_value_error)
+
+    def locator(self, selector: str) -> _UploadLocator:
+        self.locator_calls.append(selector)
+        return self.selector_locator
+
+    def get_by_role(self, role: str, **kwargs: Any) -> _UploadLocator:
+        self.semantic_calls.append(("role", (role,), kwargs))
+        return self.semantic_locator
+
+    def get_by_label(self, label: str, **kwargs: Any) -> _UploadLocator:
+        self.semantic_calls.append(("label", (label,), kwargs))
+        return self.semantic_locator
+
+    def get_by_text(self, text: str, **kwargs: Any) -> _UploadLocator:
+        self.semantic_calls.append(("text", (text,), kwargs))
+        return self.semantic_locator
+
+    def get_by_test_id(self, test_id: str) -> _UploadLocator:
+        self.semantic_calls.append(("test_id", (test_id,), {}))
+        return self.semantic_locator
+
+
+class TestUploadFiles:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("paths", [None, "one.txt", (), []])
+    async def test_upload_files_paths_must_be_a_non_empty_list(self, tmp_path: Path, paths: Any) -> None:
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+        with pytest.raises(ValueError, match="non-empty list"):
+            await session.upload_files(paths=paths, selector="#upload")
+        assert page.expect_file_chooser_calls == []
+        assert page.locator_calls == []
+
+    @pytest.mark.anyio
+    async def test_upload_files_validates_every_path_before_resolving_or_clicking_trigger(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+        seen: list[str] = []
+
+        def _validate(path: str) -> Path:
+            seen.append(path)
+            if path == "bad":
+                raise ValueError("bad upload")
+            return Path(path)
+
+        from octowright.session import upload_paths
+
+        monkeypatch.setattr(upload_paths, "validate_upload_path", _validate)
+        with pytest.raises(ValueError, match="bad upload"):
+            await session.upload_files(paths=["good", "bad"], selector="#upload")
+        assert seen == ["good", "bad"]
+        assert page.locator_calls == []
+        assert page.expect_file_chooser_calls == []
+        assert page.selector_locator.click_calls == []
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("kwargs", "message"),
+        [
+            ({}, "exactly one trigger"),
+            ({"selector": "#upload", "role": "button"}, "exactly one trigger"),
+            ({"role": "button", "label": "Upload"}, "exactly one trigger"),
+            ({"role_name": "Upload"}, "role_name requires role"),
+            ({"role": "button", "role_exact": True}, "role_exact requires role_name"),
+            ({"label_exact": True}, "label_exact requires label"),
+            ({"text_exact": True}, "text_exact requires text"),
+        ],
+    )
+    async def test_upload_files_invalid_trigger_modes_fail_before_arming_listener(
+        self,
+        tmp_path: Path,
+        _allow_tmp_uploads: Path,
+        kwargs: dict[str, Any],
+        message: str,
+    ) -> None:
+        upload = tmp_path / "x.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+        with pytest.raises(ValueError, match=message):
+            await session.upload_files(paths=[str(upload)], **kwargs)
+        assert page.expect_file_chooser_calls == []
+
+    @pytest.mark.anyio
+    async def test_upload_files_selector_trigger_uses_default_timeout(
+        self, tmp_path: Path, _allow_tmp_uploads: Path
+    ) -> None:
+        upload = tmp_path / "selector.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+
+        result = await session.upload_files(paths=[str(upload)], selector="#pick")
+
+        assert page.locator_calls == ["#pick"]
+        assert page.expect_file_chooser_calls == [defaults.DEFAULT_ACTION_TIMEOUT_MS]
+        assert page.selector_locator.click_calls == [defaults.DEFAULT_ACTION_TIMEOUT_MS]
+        assert page.chooser.set_files_calls == [([str(upload)], defaults.DEFAULT_ACTION_TIMEOUT_MS)]
+        assert result == {"ok": True, "paths": [str(upload)], "selector": "#pick"}
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        ("kwargs", "semantic_call", "locator_fields"),
+        [
+            (
+                {"role": "button", "role_name": "Upload", "role_exact": True},
+                ("role", ("button",), {"name": "Upload", "exact": True}),
+                {"role": "button", "role_name": "Upload", "role_exact": True},
+            ),
+            (
+                {"label": "Choose file", "label_exact": True},
+                ("label", ("Choose file",), {"exact": True}),
+                {"label": "Choose file", "label_exact": True},
+            ),
+            (
+                {"text": "Upload files", "text_exact": True},
+                ("text", ("Upload files",), {"exact": True}),
+                {"text": "Upload files", "text_exact": True},
+            ),
+            (
+                {"test_id": "upload"},
+                ("test_id", ("upload",), {}),
+                {"test_id": "upload"},
+            ),
+        ],
+    )
+    async def test_upload_files_semantic_triggers_forward_full_finder_set_and_explicit_timeout(
+        self,
+        tmp_path: Path,
+        _allow_tmp_uploads: Path,
+        kwargs: dict[str, Any],
+        semantic_call: tuple[str, tuple[Any, ...], dict[str, Any]],
+        locator_fields: dict[str, Any],
+    ) -> None:
+        upload = tmp_path / "semantic.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+
+        result = await session.upload_files(paths=[str(upload)], timeout_ms=432, **kwargs)
+
+        assert page.semantic_calls == [semantic_call]
+        assert page.expect_file_chooser_calls == [432]
+        assert page.semantic_locator.click_calls == [432]
+        assert page.chooser.set_files_calls == [([str(upload)], 432)]
+        assert result == {"ok": True, "paths": [str(upload)], **locator_fields}
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("failure_point", ["chooser", "set_files"])
+    async def test_failure_does_not_record_successful_upload_files(
+        self,
+        tmp_path: Path,
+        _allow_tmp_uploads: Path,
+        failure_point: str,
+    ) -> None:
+        upload = tmp_path / "failure.txt"
+        upload.write_text("x")
+        chooser = _UploadChooser(
+            set_files_error=RuntimeError("set-files failed") if failure_point == "set_files" else None
+        )
+        page = _UploadPage(
+            chooser=chooser,
+            chooser_value_error=RuntimeError("chooser failed") if failure_point == "chooser" else None,
+        )
+        session = _make_session(tmp_path, page=page)
+        captured = _record_calls(session)
+
+        with pytest.raises(RuntimeError, match="failed"):
+            await session.upload_files(paths=[str(upload)], selector="#upload")
+
+        assert [action for action, _kwargs in captured if action == "upload_files"] == []

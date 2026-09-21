@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.http_headers import (
     REDACTED_HEADER_PLACEHOLDER,
     redact_header_values,
@@ -53,6 +54,65 @@ def _reject_redacted_headers(headers: dict[str, str]) -> None:
             "the recording never stored the real value. Parameterize the macro "
             '(e.g. "Authorization": "Bearer {{token}}") and pass it at run time.'
         )
+
+
+def _validate_upload_trigger(
+    *,
+    selector: str | None,
+    role: str | None,
+    role_name: str | None,
+    role_exact: bool,
+    label: str | None,
+    label_exact: bool,
+    text: str | None,
+    text_exact: bool,
+    test_id: str | None,
+) -> None:
+    """Reject contradictory or incomplete upload-trigger arguments."""
+    if role_name is not None and role is None:
+        raise ValueError("role_name requires role")
+    exact_requirements = (
+        ("role_exact", role_exact, "role_name", role_name),
+        ("label_exact", label_exact, "label", label),
+        ("text_exact", text_exact, "text", text),
+    )
+    for flag_name, enabled, finder_name, finder in exact_requirements:
+        if enabled and finder is None:
+            raise ValueError(f"{flag_name} requires {finder_name}")
+
+    finder_count = sum(value is not None for value in (selector, role, label, text, test_id))
+    if finder_count != 1:
+        raise ValueError("exactly one trigger must be set: selector or one of role/label/text/test_id")
+
+
+def _upload_locator_fields(
+    *,
+    selector: str | None,
+    role: str | None,
+    role_name: str | None,
+    role_exact: bool,
+    label: str | None,
+    label_exact: bool,
+    text: str | None,
+    text_exact: bool,
+    test_id: str | None,
+) -> dict[str, Any]:
+    """Return only trigger fields meaningful to recording and replay."""
+    return {
+        key: value
+        for key, value in (
+            ("selector", selector),
+            ("role", role),
+            ("role_name", role_name),
+            ("role_exact", role_exact or None),
+            ("label", label),
+            ("label_exact", label_exact or None),
+            ("text", text),
+            ("text_exact", text_exact or None),
+            ("test_id", test_id),
+        )
+        if value is not None
+    }
 
 
 class SessionInteractionMixin(SessionLike):
@@ -342,6 +402,73 @@ class SessionInteractionMixin(SessionLike):
     # ------------------------------------------------------------------
     # File-input upload
     # ------------------------------------------------------------------
+
+    @gated_operation("browser_upload_files")
+    async def upload_files(
+        self,
+        *,
+        paths: list[str],
+        selector: str | None = None,
+        role: str | None = None,
+        role_name: str | None = None,
+        role_exact: bool = False,
+        label: str | None = None,
+        label_exact: bool = False,
+        text: str | None = None,
+        text_exact: bool = False,
+        test_id: str | None = None,
+        timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Click an upload trigger and assign files to its file chooser atomically."""
+        from octowright.session.upload_paths import validate_upload_path
+
+        if not isinstance(paths, list) or not paths:
+            raise ValueError("paths must be a non-empty list of file paths")
+        _validate_upload_trigger(
+            selector=selector,
+            role=role,
+            role_name=role_name,
+            role_exact=role_exact,
+            label=label,
+            label_exact=label_exact,
+            text=text,
+            text_exact=text_exact,
+            test_id=test_id,
+        )
+        locator_fields = _upload_locator_fields(
+            selector=selector,
+            role=role,
+            role_name=role_name,
+            role_exact=role_exact,
+            label=label,
+            label_exact=label_exact,
+            text=text,
+            text_exact=text_exact,
+            test_id=test_id,
+        )
+
+        validated = [str(validate_upload_path(path)) for path in paths]
+        if selector is not None:
+            locator = self._target().locator(selector)
+        else:
+            locator = await cast("BrowserSession", self)._locator(
+                role=role,
+                role_name=role_name,
+                role_exact=role_exact,
+                label=label,
+                label_exact=label_exact,
+                text=text,
+                text_exact=text_exact,
+                test_id=test_id,
+            )
+
+        timeout = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        async with self.page.expect_file_chooser(timeout=timeout) as chooser_info:
+            await locator.click(timeout=timeout)
+        chooser = await chooser_info.value
+        await chooser.set_files(validated, timeout=timeout)
+        self.recorder.record("upload_files", paths=validated, **locator_fields)
+        return {"ok": True, "paths": validated, **locator_fields}
 
     @gated_operation("browser_set_input_files")
     async def set_input_files(self, selector: str, paths: list[str]) -> dict[str, Any]:
