@@ -28,7 +28,7 @@ from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.macros import artifacts, execution, safe_screenshot
 from octowright.macros import redaction_page_js as page_js
 from octowright.macros.page_devtools import closed_shadow_roots
-from octowright.macros.privacy import PrivacyLedger
+from octowright.macros.privacy import BLIND_SCRUB_POLICY_ENV, PrivacyLedger
 from octowright.macros.redaction_text import JS_IGNORABLE_CLASS
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS
 
@@ -306,6 +306,7 @@ async def test_without_opt_in_the_classified_screenshot_is_still_refused(
 
 @pytest.mark.asyncio
 async def test_opt_in_redacts_then_screenshots_then_restores(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
     page = FakePage()
     session = _session(page)
     safe_screenshot.enable_redacted_screenshots(session)

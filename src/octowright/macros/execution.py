@@ -24,13 +24,13 @@ from octowright.macros.privacy import (
     install_sensitive_recorder,
 )
 from octowright.macros.privacy import (
+    blind_scrub_arg_values as _sensitive_arg_values,
+)
+from octowright.macros.privacy import (
     redact_args as _privacy_redact_args,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
-)
-from octowright.macros.privacy import (
-    sensitive_arg_values as _sensitive_arg_values,
 )
 from octowright.macros.repair import repair_apply as repair_apply_impl
 from octowright.macros.repair import repair_preview as repair_preview_impl

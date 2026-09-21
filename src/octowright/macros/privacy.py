@@ -421,7 +421,12 @@ def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str,
         str(key): marker if is_sensitive_arg_key(key) else _redact_nested_args(value, marker)
         for key, value in args.items()
     }
-    return scrub_sensitive_values(redacted, blind_scrub_arg_values(args), marker=marker)
+    policy = blind_scrub_policy()
+    # ``reject`` governs macro INVOCATIONS, not read-only rendering of an
+    # existing manifest or result. Structural redaction must remain usable in
+    # that mode, with the same alias handling as the replay-safe default.
+    blind_policy: BlindScrubPolicy = "credentials" if policy == "reject" else policy
+    return scrub_sensitive_values(redacted, blind_scrub_arg_values(args, policy=blind_policy), marker=marker)
 
 
 #: The session attribute that owns its scrub set, in the private namespace
