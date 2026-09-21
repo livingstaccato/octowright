@@ -281,6 +281,8 @@ async def test_exported_script_scrubs_runtime_error_and_persisted_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
+
     class Page:
         async def fill(self, *_args: Any, **_kwargs: Any) -> None:
             raise RuntimeError(f"browser rejected {PASSWORD} for {EMAIL}")

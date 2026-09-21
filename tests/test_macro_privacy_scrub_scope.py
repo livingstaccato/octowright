@@ -20,20 +20,33 @@ from typing import Any
 import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
-from octowright.macros.privacy import redact_args, scrub_sensitive_values, sensitive_arg_values
+from octowright.macros.privacy import (
+    ARG_PRIVACY_CLASSIFIER_VERSION,
+    BLIND_SCRUB_POLICY_ENV,
+    blind_scrub_arg_values,
+    redact_args,
+    scrub_sensitive_values,
+    sensitive_arg_values,
+)
 
 STRUCTURAL_ARGS = {"user": {"name": "a4-subject-canary", "role": "a4-role-canary"}}
 DIAGNOSTIC = "timeout waiting for selector [name=q] role=listbox id=main"
 
 
-def _exported_module(name: str, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+def _exported_module(
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    macro: dict[str, Any] | None = None,
+    async_playwright: Any | None = None,
+) -> dict[str, Any]:
     async_api = types.ModuleType("playwright.async_api")
-    async_api.async_playwright = lambda: None  # type: ignore[attr-defined]
+    async_api.async_playwright = async_playwright or (lambda: None)  # type: ignore[attr-defined]
     package = types.ModuleType("playwright")
     package.async_api = async_api  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "playwright", package)
     monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
-    source = render_macro_cli(name=name, macro={"actions": []})
+    source = render_macro_cli(name=name, macro=macro or {"actions": []})
     module: dict[str, Any] = {"__name__": name.replace("-", "_")}
     exec(compile(source, f"<{name}>", "exec"), module)
     return module
@@ -72,6 +85,66 @@ def test_exported_classifier_matches_runtime_on_structural_key_names(
 
     assert exported == sensitive_arg_values(STRUCTURAL_ARGS)
     assert module["_redact_value"](DIAGNOSTIC, list(exported)) == DIAGNOSTIC
+
+
+def test_exported_blind_scrub_policy_matches_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _exported_module("privacy-policy-parity", monkeypatch)
+    args = {
+        "session": "1",
+        "user": "admin",
+        "email": "person@example.test",
+        "password": "p",  # pragma: allowlist secret
+    }
+
+    assert module["_ARG_PRIVACY_CLASSIFIER_VERSION"] == ARG_PRIVACY_CLASSIFIER_VERSION
+    assert module["_blind_scrub_arg_values"](args) == list(blind_scrub_arg_values(args)) == ["p"]
+
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
+    assert module["_blind_scrub_arg_values"](args) == list(blind_scrub_arg_values(args))
+
+
+def test_exported_structural_redaction_preserves_unrelated_identity_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _exported_module("privacy-structural-redaction", monkeypatch)
+    args = {"user": "admin", "note": "Administrator panel, admin tools"}
+
+    assert (
+        module["_redact_args"](args)
+        == redact_args(args)
+        == {
+            "user": "<redacted>",
+            "note": "Administrator panel, admin tools",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_exported_reject_policy_fails_before_starting_playwright(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def start_playwright() -> None:
+        calls.append("started")
+
+    module = _exported_module(
+        "reject-before-browser",
+        monkeypatch,
+        macro={"parameters": ["user"], "actions": []},
+        async_playwright=start_playwright,
+    )
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "reject")
+    canary = "A4-EXPORTED-REJECT-CANARY"
+
+    with pytest.raises(ValueError) as caught:
+        await module["run_reject_before_browser"](user=canary)
+
+    assert "user (contextual)" in str(caught.value)
+    assert canary not in str(caught.value)
+    assert calls == []
 
 
 # A classified key holding a SEQUENCE was reachable code with no test behind it

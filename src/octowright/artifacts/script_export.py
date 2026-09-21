@@ -15,14 +15,19 @@ from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
+    BLIND_SCRUB_POLICY_ENV,
+    CONTEXTUAL_TOKEN_TOKENS,
+    CREDENTIAL_SUBSTRING_TOKENS,
+    CREDENTIAL_TOKEN_TOKENS,
     DEPLURALIZE_MIN_LENGTH,
     FIELD_NAME_PATTERN,
+    IDENTITY_TOKEN_TOKENS,
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
+    blind_scrub_arg_values,
     is_sensitive_arg_key,
     scrub_sensitive_values,
-    sensitive_arg_values,
 )
 
 
@@ -55,6 +60,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -70,8 +76,14 @@ ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
 _SUBSTRING_TOKENS = {tuple(sorted(SUBSTRING_TOKENS))!r}
 _TOKEN_TOKENS = {tuple(sorted(TOKEN_TOKENS))!r}
+_CREDENTIAL_SUBSTRING_TOKENS = {tuple(sorted(CREDENTIAL_SUBSTRING_TOKENS))!r}
+_CREDENTIAL_TOKEN_TOKENS = {tuple(sorted(CREDENTIAL_TOKEN_TOKENS))!r}
+_IDENTITY_TOKEN_TOKENS = {tuple(sorted(IDENTITY_TOKEN_TOKENS))!r}
+_CONTEXTUAL_TOKEN_TOKENS = {tuple(sorted(CONTEXTUAL_TOKEN_TOKENS))!r}
 _SENSITIVE_KEY_PAIRS = {tuple(sorted(SENSITIVE_KEY_PAIRS))!r}
 _DEPLURALIZE_MIN_LENGTH = {DEPLURALIZE_MIN_LENGTH!r}
+_BLIND_SCRUB_POLICY_ENV = {BLIND_SCRUB_POLICY_ENV!r}
+_TIER_RANK = {{"contextual": 1, "identity": 2, "credential": 3}}
 _MAX_ENCODING_DEPTH = 3
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {placeholder_re!r}
@@ -93,15 +105,40 @@ def _depluralized(token: str) -> str:
     return token
 
 
-def _is_sensitive_arg_key(key: object) -> bool:
+def _matches(
+    key: object,
+    substrings: tuple[str, ...],
+    whole_tokens: tuple[str, ...],
+    *,
+    include_pairs: bool = False,
+) -> bool:
     tokens = _key_tokens(key)
-    if any(token in "_".join(tokens) for token in _SUBSTRING_TOKENS):
+    if any(token in "_".join(tokens) for token in substrings):
         return True
     candidates = set(tokens) | {{_depluralized(token) for token in tokens}}
-    if candidates.intersection(_TOKEN_TOKENS):
+    if candidates.intersection(whole_tokens):
         return True
     adjacent = set(zip(tokens, tokens[1:]))
-    return bool(adjacent.intersection(_SENSITIVE_KEY_PAIRS))
+    return include_pairs and bool(adjacent.intersection(_SENSITIVE_KEY_PAIRS))
+
+
+def _is_sensitive_arg_key(key: object) -> bool:
+    return _matches(key, _SUBSTRING_TOKENS, _TOKEN_TOKENS, include_pairs=True)
+
+
+def _privacy_tier(key: object) -> str | None:
+    if _matches(
+        key,
+        _CREDENTIAL_SUBSTRING_TOKENS,
+        _CREDENTIAL_TOKEN_TOKENS,
+        include_pairs=True,
+    ):
+        return "credential"
+    if _matches(key, (), _IDENTITY_TOKEN_TOKENS):
+        return "identity"
+    if _matches(key, (), _CONTEXTUAL_TOKEN_TOKENS):
+        return "contextual"
+    return None
 
 
 def _redact_nested_args(value: Any) -> Any:
@@ -126,32 +163,103 @@ def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
         else _redact_nested_args(value)
         for key, value in args.items()
     }}
-    return _redact_value(redacted, _sensitive_arg_values(args))
+    policy = _blind_scrub_policy()
+    blind_policy = "credentials" if policy == "reject" else policy
+    return _redact_value(redacted, _blind_scrub_arg_values(args, policy=blind_policy))
 
 
-def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
-    values: set[str] = set()
+def _stronger_tier(inherited: str | None, own: str | None) -> str | None:
+    if inherited is None:
+        return own
+    if own is None or _TIER_RANK[inherited] >= _TIER_RANK[own]:
+        return inherited
+    return own
+
+
+def _child_path(path: str, key: object) -> str:
+    rendered = str(key)
+    if _FIELD_NAME_RE.fullmatch(rendered):
+        return f"{{path}}.{{rendered}}" if path else rendered
+    return f"{{path}}[<key>]"
+
+
+def _collect_classified_values(
+    value: Any,
+    *,
+    inherited: str | None,
+    path: str,
+) -> set[tuple[str, str, str]]:
+    values: set[tuple[str, str, str]] = set()
     if isinstance(value, dict):
         for key, item in value.items():
-            branch_sensitive = inherited or _is_sensitive_arg_key(key)
-            if inherited and key not in (None, "") and not _FIELD_NAME_RE.fullmatch(str(key)):
-                values.add(str(key))
-            values.update(_collect_sensitive_values(item, inherited=branch_sensitive))
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            values.update(_collect_sensitive_values(item, inherited=inherited))
-    elif inherited and value not in (None, ""):
-        values.add(str(value))
+            if inherited is not None and key not in (None, "") and not _FIELD_NAME_RE.fullmatch(str(key)):
+                values.add((str(key), f"{{path}}[<key>]", inherited))
+            branch_tier = _stronger_tier(inherited, _privacy_tier(key))
+            values.update(
+                _collect_classified_values(
+                    item,
+                    inherited=branch_tier,
+                    path=_child_path(path, key),
+                )
+            )
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            values.update(
+                _collect_classified_values(
+                    item,
+                    inherited=inherited,
+                    path=f"{{path}}[{{index}}]",
+                )
+            )
+    elif isinstance(value, (set, frozenset)):
+        for index, item in enumerate(sorted(value, key=repr)):
+            values.update(
+                _collect_classified_values(
+                    item,
+                    inherited=inherited,
+                    path=f"{{path}}[{{index}}]",
+                )
+            )
+    elif inherited is not None and value not in (None, ""):
+        values.add((str(value), path, inherited))
     return values
 
 
-def _sensitive_arg_values(args: dict[str, Any]) -> list[str]:
-    values: set[str] = set()
+def _classified_arg_values(args: dict[str, Any]) -> list[tuple[str, str, str]]:
+    values: set[tuple[str, str, str]] = set()
     for key, value in args.items():
         values.update(
-            _collect_sensitive_values(value, inherited=_is_sensitive_arg_key(key))
+            _collect_classified_values(
+                value,
+                inherited=_privacy_tier(key),
+                path=str(key),
+            )
         )
-    return sorted(values, key=len, reverse=True)
+    return sorted(values, key=lambda item: (item[1], -_TIER_RANK[item[2]], item[0]))
+
+
+def _sensitive_arg_values(args: dict[str, Any]) -> list[str]:
+    return sorted({{item[0] for item in _classified_arg_values(args)}}, key=lambda value: (-len(value), value))
+
+
+def _blind_scrub_policy() -> str:
+    raw = os.environ.get(_BLIND_SCRUB_POLICY_ENV, "credentials").strip().lower()
+    if raw in {{"credentials", "all", "reject"}}:
+        return raw
+    raise ValueError(
+        f"{{_BLIND_SCRUB_POLICY_ENV}} must be 'credentials', 'all', or 'reject'"
+    )
+
+
+def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) -> list[str]:
+    resolved = policy or _blind_scrub_policy()
+    classified = _classified_arg_values(args)
+    rejected = [item for item in classified if item[2] != "credential"]
+    if resolved == "reject" and rejected:
+        details = ", ".join(sorted({{f"{{item[1]}} ({{item[2]}})" for item in rejected}}))
+        raise ValueError(f"non-credential classified arguments refused: {{details}}")
+    selected = classified if resolved == "all" else [item for item in classified if item[2] == "credential"]
+    return sorted({{item[0] for item in selected}}, key=lambda value: (-len(value), value))
 
 
 def _serialized_variants(value: str) -> list[str]:
@@ -200,8 +308,11 @@ def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
     return value
 
 
-def _redact_action(action: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-    redacted = {{key: _redact_value(value, _sensitive_arg_values(args)) for key, value in action.items()}}
+def _redact_action(
+    action: dict[str, Any],
+    sensitive_values: list[str],
+) -> dict[str, Any]:
+    redacted = {{key: _redact_value(value, sensitive_values) for key, value in action.items()}}
     if redacted.get("action") in {{"fill", "type", "fill_by"}}:
         for key in ("value", "text"):
             if key in redacted:
@@ -249,6 +360,7 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
+    sensitive_values = _blind_scrub_arg_values(args)
 {evidence_setup}    print(json.dumps({{"event": "args", "args": _redact_args(args)}}, sort_keys=True))
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -282,7 +394,11 @@ async def {fn_name}({signature}) -> dict[str, int]:
                 for index, raw_action in enumerate(ACTIONS):
                     action = _resolve(raw_action, args)
                     kind = action.get("action")
-                    log_record = {{"event": "action", "index": index, "action": _redact_action(action, args)}}
+                    log_record = {{
+                        "event": "action",
+                        "index": index,
+                        "action": _redact_action(action, sensitive_values),
+                    }}
                     print(json.dumps(log_record, sort_keys=True))
                     if evidence is not None:
                         evidence.record(log_record)
@@ -291,14 +407,14 @@ async def {fn_name}({signature}) -> dict[str, int]:
 {dispatch_chain}
                 result = {{"executed": executed, "skipped": skipped}}
             except Exception as exc:
-                safe_error = str(_redact_value(str(exc), _sensitive_arg_values(args)))
+                safe_error = str(_redact_value(str(exc), sensitive_values))
             if safe_error is None:
                 if evidence is not None:
                     try:
                         evidence.finish(result)
                     except Exception as secondary:
                         failure = RuntimeError(
-                            str(_redact_value(str(secondary), _sensitive_arg_values(args)))
+                            str(_redact_value(str(secondary), sensitive_values))
                         )
             else:
                 if evidence is not None:
@@ -306,7 +422,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
                         evidence.finish({{"status": "failed", "error": safe_error}})
                     except Exception as secondary:
                         safe_error += "; evidence cleanup: " + str(
-                            _redact_value(str(secondary), _sensitive_arg_values(args))
+                            _redact_value(str(secondary), sensitive_values)
                         )
                 failure = RuntimeError(safe_error)
         finally:
@@ -315,7 +431,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
                 await browser.close()
             except Exception as secondary:
                 if active_error is None:
-                    safe_close = str(_redact_value(str(secondary), _sensitive_arg_values(args)))
+                    safe_close = str(_redact_value(str(secondary), sensitive_values))
                     failure = RuntimeError(
                         safe_close if failure is None else f"{{failure}}; browser close: {{safe_close}}"
                     )
@@ -442,7 +558,7 @@ def _safe_default(param: str, args: dict[str, Any] | None) -> str:
         return ""
     value = (args or {}).get(param, "")
     rendered = str(value) if value is not None else ""
-    scrubbed = scrub_sensitive_values(rendered, sensitive_arg_values(args or {}))
+    scrubbed = scrub_sensitive_values(rendered, blind_scrub_arg_values(args or {}))
     return rendered if scrubbed == rendered else ""
 
 
