@@ -278,6 +278,31 @@ def test_upload_files_rejects_modifier_without_parent_finder(modifier: str, find
 
 
 @pytest.mark.parametrize(
+    ("exact_flag", "trigger"),
+    [
+        ("role_exact", {"selector": "#upload"}),
+        ("label_exact", {"test_id": "upload"}),
+        ("text_exact", {"role": "button"}),
+    ],
+)
+def test_upload_files_accepts_false_exact_flag_without_its_finder(exact_flag: str, trigger: dict[str, Any]) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/a"], exact_flag: False, **trigger}
+    assert lint_macro(_macro([action])) == []
+
+
+def test_upload_files_rejects_empty_role_name_without_role() -> None:
+    action = {
+        "action": "upload_files",
+        "paths": ["/tmp/a"],
+        "selector": "#upload",
+        "role_name": "",
+    }
+    issue = _only(lint_macro(_macro([action])), "invalid_upload_trigger_modifier")
+    assert "role_name" in issue.message
+    assert "role" in issue.message
+
+
+@pytest.mark.parametrize(
     "trigger",
     [
         {"selector": "#upload"},

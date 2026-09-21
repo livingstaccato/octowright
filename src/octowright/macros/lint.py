@@ -294,16 +294,26 @@ def _check_upload_files_shape(action: dict[str, Any], kind: str, report: _Report
             "invalid_upload_trigger",
         )
 
-    modifier_parents = {
-        "role_name": "role",
+    _check_upload_files_modifiers(action, report)
+
+
+def _check_upload_files_modifiers(action: dict[str, Any], report: _Report) -> None:
+    """Require parent finders only for active upload trigger modifiers."""
+    if action.get("role_name") is not None and action.get("role") is None:
+        report(
+            "action 'upload_files' field 'role_name' requires 'role'",
+            "invalid_upload_trigger_modifier",
+        )
+
+    exact_flag_parents = {
         "role_exact": "role",
         "label_exact": "label",
         "text_exact": "text",
     }
-    for modifier, parent in modifier_parents.items():
-        if action.get(modifier) is not None and action.get(parent) is None:
+    for exact_flag, parent in exact_flag_parents.items():
+        if bool(action.get(exact_flag)) and action.get(parent) is None:
             report(
-                f"action 'upload_files' field {modifier!r} requires {parent!r}",
+                f"action 'upload_files' field {exact_flag!r} requires {parent!r}",
                 "invalid_upload_trigger_modifier",
             )
 
