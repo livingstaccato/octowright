@@ -868,6 +868,26 @@ class TestUploadFiles:
         assert result == {"ok": True, "paths": [str(upload)], "selector": "#pick"}
 
     @pytest.mark.anyio
+    async def test_upload_files_selector_uses_active_frame_but_page_owns_chooser_listener(
+        self, tmp_path: Path, _allow_tmp_uploads: Path
+    ) -> None:
+        upload = tmp_path / "frame.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        frame = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+        session.active_frame = frame
+
+        await session.upload_files(paths=[str(upload)], selector="#frame-upload", timeout_ms=246)
+
+        assert page.locator_calls == []
+        assert frame.locator_calls == ["#frame-upload"]
+        assert frame.selector_locator.click_calls == [246]
+        assert page.expect_file_chooser_calls == [246]
+        assert frame.expect_file_chooser_calls == []
+        assert page.chooser.set_files_calls == [([str(upload)], 246)]
+
+    @pytest.mark.anyio
     @pytest.mark.parametrize(
         ("kwargs", "semantic_call", "locator_fields"),
         [
@@ -942,4 +962,21 @@ class TestUploadFiles:
         with pytest.raises(RuntimeError, match="failed"):
             await session.upload_files(paths=[str(upload)], selector="#upload")
 
+        assert [action for action, _kwargs in captured if action == "upload_files"] == []
+
+    @pytest.mark.anyio
+    async def test_upload_files_click_failure_propagates_without_assignment_or_recording(
+        self, tmp_path: Path, _allow_tmp_uploads: Path
+    ) -> None:
+        upload = tmp_path / "click-failure.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        page.selector_locator.click_error = RuntimeError("click failed")
+        session = _make_session(tmp_path, page=page)
+        captured = _record_calls(session)
+
+        with pytest.raises(RuntimeError, match="click failed"):
+            await session.upload_files(paths=[str(upload)], selector="#upload")
+
+        assert page.chooser.set_files_calls == []
         assert [action for action, _kwargs in captured if action == "upload_files"] == []
