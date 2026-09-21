@@ -72,7 +72,7 @@ def action_kwargs(action: dict[str, Any]) -> dict[str, Any]:
 #: the thing the action matches on. Enumerated rather than inferred, and it has
 #: already been missed once: get_text_by was absent, so replaying one called
 #: session.get_text_by() with no finder at all.
-_SEMANTIC_ACTIONS = {"click", "fill", "click_by", "fill_by", "get_text_by"}
+_SEMANTIC_ACTIONS = {"click", "fill", "click_by", "fill_by", "get_text_by", "upload_files"}
 
 
 def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
