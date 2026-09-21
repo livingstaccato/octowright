@@ -135,6 +135,28 @@ def _py_click_by(entry: dict) -> str | None:
     return None
 
 
+def _py_upload_files(entry: dict) -> str | None:
+    loc = _py_locator(entry)
+    if loc is None and entry.get("selector") is not None:
+        loc = f"page.locator({entry['selector']!r})"
+    if loc is None:
+        return None
+
+    timeout = entry.get("timeout_ms")
+    if timeout is None:
+        timeout_arg = timeout_suffix = ""
+    else:
+        timeout = _safe_int(timeout, action="upload_files", field="timeout_ms")
+        timeout_arg = f"timeout={timeout}"
+        timeout_suffix = f", {timeout_arg}"
+    return (
+        f"        async with page.expect_file_chooser({timeout_arg}) as chooser_info:\n"
+        f"            await {loc}.click({timeout_arg})\n"
+        f"        chooser = await chooser_info.value\n"
+        f"        await chooser.set_files({entry.get('paths', [])!r}{timeout_suffix})"
+    )
+
+
 def _py_fill_by(entry: dict) -> str | None:
     loc = _py_locator(entry)
     if loc is not None:
@@ -259,6 +281,7 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "unmock_route": lambda e: f"        await page.unroute({e['url_pattern']!r})",
     "set_dialog_policy": _py_set_dialog_policy,
     "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {e.get('files', [])!r})",
+    "upload_files": _py_upload_files,
     "if": _py_cond_while,
     "if_not": _py_cond_while,
     "while": _py_cond_while,

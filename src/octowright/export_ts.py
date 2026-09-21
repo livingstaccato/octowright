@@ -166,6 +166,30 @@ def _ts_click_by(entry: dict) -> str | None:
     return None
 
 
+def _ts_upload_files(entry: dict) -> str | None:
+    loc = _ts_locator(entry)
+    if loc is None and entry.get("selector") is not None:
+        loc = f"page.locator({json.dumps(entry['selector'])})"
+    if loc is None:
+        return None
+
+    timeout = entry.get("timeout_ms")
+    if timeout is None:
+        options_arg = options_suffix = ""
+    else:
+        timeout = _safe_int(timeout, action="upload_files", field="timeout_ms")
+        options_arg = f"{{ timeout: {timeout} }}"
+        options_suffix = f", {options_arg}"
+    return (
+        "  {\n"
+        f"    const chooserPromise = page.waitForEvent('filechooser'{options_suffix});\n"
+        f"    await {loc}.click({options_arg});\n"
+        "    const chooser = await chooserPromise;\n"
+        f"    await chooser.setFiles({json.dumps(entry.get('paths', []))}{options_suffix});\n"
+        "  }"
+    )
+
+
 def _ts_fill_by(entry: dict) -> str | None:
     loc = _ts_locator(entry)
     if loc is not None:
@@ -270,6 +294,7 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "set_input_files": lambda e: (
         f"  await page.setInputFiles({json.dumps(e['selector'])}, {json.dumps(e.get('files', []))});"
     ),
+    "upload_files": _ts_upload_files,
     "if": _ts_cond_while,
     "if_not": _ts_cond_while,
     "while": _ts_cond_while,

@@ -57,6 +57,7 @@ def test_export_declares_nothing_the_runtime_cannot_replay() -> None:
         {"action": "unmock_route", "pattern": "**/api/*"},
         {"action": "set_dialog_policy", "policy": "accept"},
         {"action": "set_input_files", "selector": "#file", "files": ["a.txt"]},
+        {"action": "upload_files", "selector": "#pick-file", "paths": ["a.txt"]},
     ],
 )
 def test_previously_unsupported_kinds_now_render(action: dict[str, object]) -> None:

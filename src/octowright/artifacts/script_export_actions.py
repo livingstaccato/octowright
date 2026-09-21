@@ -370,6 +370,16 @@ executed += 1
 await _target(state).set_input_files(action["selector"], action.get("paths") or action.get("files") or [])
 executed += 1
 """,
+    "upload_files": """
+target = _target(state)
+trigger = target.locator(action["selector"]) if action.get("selector") is not None else _locator(target, action)
+timeout = action.get("timeout_ms")
+async with _page(state).expect_file_chooser(timeout=timeout) as chooser_info:
+    await trigger.click(timeout=timeout)
+chooser = await chooser_info.value
+await chooser.set_files(action["paths"], timeout=timeout)
+executed += 1
+""",
     "resize": """
 await _page(state).set_viewport_size({"width": int(action["width"]), "height": int(action["height"])})
 executed += 1

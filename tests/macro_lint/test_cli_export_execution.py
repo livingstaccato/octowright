@@ -78,6 +78,39 @@ class _FakeLocator:
         return 1
 
 
+class _FakeFileChooser:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def set_files(self, paths: list[str], **kw: Any) -> None:
+        self._rec.record("file_chooser.set_files", paths, **kw)
+
+
+class _FakeFileChooserInfo:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    @property
+    def value(self) -> Any:
+        async def resolve() -> _FakeFileChooser:
+            self._rec.record("file_chooser.await")
+            return _FakeFileChooser(self._rec)
+
+        return resolve()
+
+
+class _FakeFileChooserContext:
+    def __init__(self, rec: _Recorder, timeout: int | None) -> None:
+        self._rec, self._timeout = rec, timeout
+
+    async def __aenter__(self) -> _FakeFileChooserInfo:
+        self._rec.record("file_chooser.arm", timeout=self._timeout)
+        return _FakeFileChooserInfo(self._rec)
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+
 class _FakeHandle:
     def __init__(self, rec: _Recorder, frame: Any) -> None:
         self._rec, self._frame = rec, frame
@@ -156,6 +189,9 @@ class _FakePage:
 
     async def set_input_files(self, selector: str, paths: list[str]) -> None:
         self._log("set_input_files", selector, paths)
+
+    def expect_file_chooser(self, *, timeout: int | None = None) -> _FakeFileChooserContext:
+        return _FakeFileChooserContext(self._rec, timeout)
 
     async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
         self._log("set_extra_http_headers", headers)
@@ -280,6 +316,7 @@ _EVERY_ACTION: list[dict[str, Any]] = [
         "verify_js": "() => true",
     },
     {"action": "set_input_files", "selector": "#file", "paths": ["a.txt"]},
+    {"action": "upload_files", "selector": "#pick-file", "paths": ["b.txt"], "timeout_ms": 321},
     {"action": "resize", "width": 1280, "height": 800},
     {"action": "navigate_back"},
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
@@ -331,6 +368,9 @@ def test_each_branch_reaches_the_playwright_call_it_claims(monkeypatch: pytest.M
         "select_option",
         "drag_and_drop",
         "set_input_files",
+        "file_chooser.arm",
+        "file_chooser.await",
+        "file_chooser.set_files",
         "set_viewport_size",
         "go_back",
         "route",
@@ -352,9 +392,42 @@ def test_recorded_field_spellings_reach_the_right_parameters(monkeypatch: pytest
     assert rec.args_for("drag_and_drop") == ("#a", "#b")
     assert rec.args_for("route") == ("**/api/*",)
     assert rec.args_for("set_input_files") == ("#file", ["a.txt"])
+    assert rec.args_for("file_chooser.set_files") == (["b.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 321}
     assert rec.kwargs_for("select_option") == {"value": "NL"}
     assert rec.args_for("set_viewport_size") == ({"width": 1280, "height": 800},)
     assert rec.kwargs_for("screenshot") == {"path": "shot.png"}
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_click"),
+    [
+        ({"selector": "#pick-file"}, "locator.click:css"),
+        ({"role": "button", "role_name": "Upload", "role_exact": True}, "locator.click:role"),
+    ],
+)
+def test_upload_files_arms_clicks_awaits_and_sets_in_order(
+    monkeypatch: pytest.MonkeyPatch, trigger: dict[str, Any], expected_click: str
+) -> None:
+    action = {
+        "action": "upload_files",
+        "paths": ["first.txt", "second.txt"],
+        "timeout_ms": 246,
+        **trigger,
+    }
+    result, rec = _run(monkeypatch, [action])
+
+    assert result == {"executed": 1, "skipped": 0}
+    relevant = [
+        name
+        for name in rec.names()
+        if name in {"file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"}
+    ]
+    assert relevant == ["file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"]
+    assert rec.kwargs_for("file_chooser.arm") == {"timeout": 246}
+    assert rec.kwargs_for(expected_click) == {"timeout": 246}
+    assert rec.args_for("file_chooser.set_files") == (["first.txt", "second.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
 
 
 @pytest.mark.parametrize(

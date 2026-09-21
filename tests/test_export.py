@@ -238,6 +238,73 @@ def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
     assert "page.fill(" not in src
 
 
+def test_python_export_upload_files_selector_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "selector": "#pick-files",
+                "paths": ["/tmp/first.txt", "/tmp/second.txt"],
+                "timeout_ms": 321,
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    expected = """\
+        async with page.expect_file_chooser(timeout=321) as chooser_info:
+            await page.locator('#pick-files').click(timeout=321)
+        chooser = await chooser_info.value
+        await chooser.set_files(['/tmp/first.txt', '/tmp/second.txt'], timeout=321)"""
+    assert expected in src
+
+
+def test_python_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "role": "button",
+                "role_name": "Upload 'now'",
+                "role_exact": True,
+                "paths": ["/tmp/a'b.txt"],
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    expected = """\
+        async with page.expect_file_chooser() as chooser_info:
+            await page.get_by_role('button', name="Upload 'now'", exact=True).click()
+        chooser = await chooser_info.value
+        await chooser.set_files(["/tmp/a'b.txt"])"""
+    assert expected in src
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_locator"),
+    [
+        ({"label": "Choose file", "label_exact": True}, "page.get_by_label('Choose file', exact=True)"),
+        ({"text": "Upload files", "text_exact": False}, "page.get_by_text('Upload files')"),
+        ({"test_id": "file-picker"}, "page.get_by_test_id('file-picker')"),
+    ],
+)
+def test_python_export_upload_files_renders_semantic_locator_variants(
+    tmp_path: Path, trigger: dict[str, object], expected_locator: str
+) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/file.txt"], **trigger}
+    log = _write_recording(tmp_path / "r.jsonl", [action])
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert f"await {expected_locator}.click()" in src
+    assert "exact=False" not in src
+
+
 def test_python_export_creates_parent_dir(tmp_path: Path) -> None:
     log = _write_recording(
         tmp_path / "r.jsonl",
@@ -414,6 +481,74 @@ def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
     assert 'await page.getByLabel("Email").fill("me@octowright.test");' in src
     assert "page.click(" not in src
     assert "page.fill(" not in src
+
+
+def test_ts_export_upload_files_selector_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "selector": "#pick-files",
+                "paths": ["/tmp/first.txt", "/tmp/second.txt"],
+                "timeout_ms": 321,
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    expected = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 321 });
+    await page.locator("#pick-files").click({ timeout: 321 });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/first.txt", "/tmp/second.txt"], { timeout: 321 });
+  }"""
+    assert expected in src
+
+
+def test_ts_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "role": "button",
+                "role_name": "Upload 'now'",
+                "role_exact": True,
+                "paths": ["/tmp/a'b.txt"],
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    expected = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole("button", { name: "Upload 'now'", exact: true }).click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/a'b.txt"]);
+  }"""
+    assert expected in src
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_locator"),
+    [
+        ({"label": "Choose file", "label_exact": True}, 'page.getByLabel("Choose file", { exact: true })'),
+        ({"text": "Upload files", "text_exact": False}, 'page.getByText("Upload files")'),
+        ({"test_id": "file-picker"}, 'page.getByTestId("file-picker")'),
+    ],
+)
+def test_ts_export_upload_files_renders_semantic_locator_variants(
+    tmp_path: Path, trigger: dict[str, object], expected_locator: str
+) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/file.txt"], **trigger}
+    log = _write_recording(tmp_path / "r.jsonl", [action])
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    assert f"await {expected_locator}.click();" in src
+    assert "exact: false" not in src
 
 
 # ---------------------------------------------------------------------------
