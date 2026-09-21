@@ -359,8 +359,8 @@ async def browser_set_input_files(
 @mcp.tool(
     structured_output=False,
     description=(
-        "Upload one or more files through a visible upload trigger. This tool atomically arms and "
-        "captures the file chooser before clicking a visible upload trigger, then assigns `paths`. "
+        "Upload one or more files through a visible upload trigger. This tool arms the file-chooser "
+        "listener before clicking the trigger, then captures the chooser and assigns `paths`. "
         "Never click an upload trigger first; call this tool directly so the chooser event cannot "
         "be missed. Provide exactly one trigger: a CSS `selector`, or one of `role`, `label`, "
         "`text`, or `test_id`. `paths` is a non-empty list of absolute file paths on this machine. "

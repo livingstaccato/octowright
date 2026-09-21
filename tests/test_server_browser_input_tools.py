@@ -197,7 +197,10 @@ def test_file_upload_tool_descriptions_distinguish_atomic_trigger_and_direct_inp
 
     atomic = descriptions["browser_upload_files"]
     direct = descriptions["browser_set_input_files"]
-    assert "atomically arms and captures the file chooser before clicking a visible upload trigger" in atomic
+    assert (
+        "arms the file-chooser listener before clicking the trigger, then captures the chooser and assigns `paths`"
+        in atomic
+    )
     assert "directly targets the <input type=file>" in direct
     assert "Never click an upload trigger first" in atomic
     assert "Never click an upload trigger first" in direct
