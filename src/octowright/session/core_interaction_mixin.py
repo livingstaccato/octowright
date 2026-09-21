@@ -72,7 +72,7 @@ def _validate_upload_trigger(
     if role_name is not None and role is None:
         raise ValueError("role_name requires role")
     exact_requirements = (
-        ("role_exact", role_exact, "role_name", role_name),
+        ("role_exact", role_exact, "role", role),
         ("label_exact", label_exact, "label", label),
         ("text_exact", text_exact, "text", text),
     )

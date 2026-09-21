@@ -830,7 +830,7 @@ class TestUploadFiles:
             ({"selector": "#upload", "role": "button"}, "exactly one trigger"),
             ({"role": "button", "label": "Upload"}, "exactly one trigger"),
             ({"role_name": "Upload"}, "role_name requires role"),
-            ({"role": "button", "role_exact": True}, "role_exact requires role_name"),
+            ({"role_exact": True}, "role_exact requires role"),
             ({"label_exact": True}, "label_exact requires label"),
             ({"text_exact": True}, "text_exact requires text"),
         ],
@@ -871,6 +871,11 @@ class TestUploadFiles:
     @pytest.mark.parametrize(
         ("kwargs", "semantic_call", "locator_fields"),
         [
+            (
+                {"role": "button", "role_exact": True},
+                ("role", ("button",), {}),
+                {"role": "button", "role_exact": True},
+            ),
             (
                 {"role": "button", "role_name": "Upload", "role_exact": True},
                 ("role", ("button",), {"name": "Upload", "exact": True}),
