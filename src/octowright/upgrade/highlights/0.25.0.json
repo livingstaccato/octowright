@@ -1,0 +1,10 @@
+[
+  {
+    "title": "Chromium sign-in can opt out of the automation-controlled signal",
+    "body": "Some sign-in providers, including Google, can reject a Chromium session when the browser exposes its automation-controlled signal. Launch that session with disable_automation_controlled: true to add Chromium's --disable-blink-features=AutomationControlled switch. The option is off by default, accepts only a boolean, is rejected for Firefox and WebKit, and survives relaunch and handoff. It does not disable Octowright's title, status, emoji, viewport, recording, or other browser behavior."
+  },
+  {
+    "title": "Short identity values no longer corrupt macro recordings by default",
+    "body": "Blind replacement of every classified value could rewrite unrelated recording content when an identity or context argument was short or common, such as session=1. Blind scrubbing now defaults to credential-tier arguments, while every classified key remains structurally redacted. Set OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY=all to retain the previous maximum-privacy behavior, or =reject to refuse identity/context arguments before browser or artifact side effects."
+  }
+]

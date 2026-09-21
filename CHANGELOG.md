@@ -12,6 +12,18 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.25.0] - 2026-09-20
+
+### Added
+- **Chromium sessions can opt out of the automation-controlled browser signal
+  when a site rejects automated sign-in.** Set
+  `disable_automation_controlled: true` at launch to add Chromium's
+  `--disable-blink-features=AutomationControlled` switch. The option defaults
+  to `false`, accepts only a strict boolean, is rejected for Firefox and WebKit,
+  and persists across relaunch, handoff, and HTTP relaunch paths. It changes
+  only Chromium's automation-controlled signal; Octowright's title, status,
+  emoji, viewport, recording, and other browser behavior remain enabled.
+
 ### Fixed
 - **Short or common identity/context macro arguments no longer corrupt replay
   recordings** (#247). Blind value replacement now defaults to credential-tier
@@ -3096,7 +3108,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/livingstaccato/octowright/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/livingstaccato/octowright/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1
