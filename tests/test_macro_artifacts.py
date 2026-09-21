@@ -262,6 +262,7 @@ def test_macro_export_cli_unsupported_action_exits_nonzero_and_writes_evidence(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     storage, macro_artifacts, _recordings_dir = _reload_macro_artifacts(monkeypatch, tmp_path)
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY", "all")
     storage.write_macro(
         name="unsupported",
         macro={
