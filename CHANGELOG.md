@@ -12,7 +12,7 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
-## [0.25.0] - 2026-09-20
+## [0.25.0] - 2026-09-21
 
 ### Added
 - **Chromium sessions can opt out of the automation-controlled browser signal
@@ -25,6 +25,12 @@ a section that is already tagged and on PyPI.
   emoji, viewport, recording, and other browser behavior remain enabled.
 
 ### Fixed
+- **Visible upload triggers no longer leave an orphaned native file chooser
+  that can stall later actions or browser close.** `browser_upload_files` now
+  arms the chooser listener before it clicks the trigger and assigns the staged
+  files as one atomic operation. Use `browser_set_input_files` only when
+  targeting a known `<input type=file>` directly; never click an upload trigger
+  before calling the atomic tool.
 - **Short or common identity/context macro arguments no longer corrupt replay
   recordings** (#247). Blind value replacement now defaults to credential-tier
   arguments only, while every classified key remains structurally redacted.
