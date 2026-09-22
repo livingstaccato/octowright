@@ -134,6 +134,27 @@ def test_create_draft_uses_a_fixed_safe_gh_command(tmp_path: Path) -> None:
     ]
 
 
+def test_create_draft_resolves_a_relative_literal_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    notes = tmp_path / "-"
+    notes.write_text("Reliable startup.", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    runner = RecordingRunner()
+
+    release_notes.create_draft("v0.26.0", Path("-"), runner=runner)
+
+    command = runner.calls[0][0]
+    assert command[command.index("--notes-file") + 1] == str(notes.resolve())
+
+
+def test_create_draft_rejects_a_missing_file_before_calling_runner(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+
+    with pytest.raises(FileNotFoundError):
+        release_notes.create_draft("v0.26.0", tmp_path / "missing.md", runner=runner)
+
+    assert runner.calls == []
+
+
 @pytest.mark.parametrize(
     ("tag", "notes_text"),
     [("vnext", "### Fixed\nReliable startup."), ("v0.26.0", "See #247 for details")],
@@ -261,6 +282,26 @@ def test_main_uses_default_repository_for_remote_subcommands(monkeypatch: pytest
     }
     assert release_notes.main(["audit-remote"]) == 0
     assert audit_call == {"repository": "livingstaccato/octowright"}
+
+
+@pytest.mark.parametrize("diagnostic", ["Bad credentials", b"Bad credentials"])
+def test_main_prints_captured_gh_runner_diagnostic_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], diagnostic: str | bytes
+) -> None:
+    def fail_runner(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, args, stderr=diagnostic)
+
+    original_audit_remote = release_notes.audit_remote
+
+    def audit_with_mocked_runner(repository: str) -> int:
+        return original_audit_remote(repository, runner=fail_runner)
+
+    monkeypatch.setattr(release_notes, "audit_remote", audit_with_mocked_runner)
+
+    assert release_notes.main(["audit-remote"]) == 1
+    error_output = capsys.readouterr().err
+    assert "Bad credentials" in error_output
+    assert "Traceback" not in error_output
 
 
 def test_cli_entrypoint_runs_check_body_without_gh(tmp_path: Path) -> None:

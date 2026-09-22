@@ -66,8 +66,9 @@ def create_draft(
 ) -> None:
     """Create a GitHub draft after validating the tag and note body locally."""
     validate_tag(tag)
-    notes = notes_file.read_text(encoding="utf-8")
-    validate_notes(notes, source=str(notes_file))
+    resolved_notes_file = notes_file.resolve(strict=True)
+    notes = resolved_notes_file.read_text(encoding="utf-8")
+    validate_notes(notes, source=str(resolved_notes_file))
     command = [
         "gh",
         "release",
@@ -78,7 +79,7 @@ def create_draft(
         "--title",
         tag,
         "--notes-file",
-        str(notes_file),
+        str(resolved_notes_file),
         "--draft",
         "--verify-tag",
     ]
@@ -183,6 +184,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"audited {count} remote releases")
         else:
             raise ValueError(f"unknown command: {args.command!r}")
+    except subprocess.CalledProcessError as error:
+        diagnostic = error.stderr
+        if isinstance(diagnostic, bytes):
+            diagnostic = diagnostic.decode("utf-8", errors="replace")
+        print(diagnostic or str(error), file=sys.stderr)
+        return 1
     except (json.JSONDecodeError, OSError, subprocess.SubprocessError, ValueError) as error:
         print(error, file=sys.stderr)
         return 1
