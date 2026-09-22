@@ -374,6 +374,8 @@ executed += 1
 target = _target(state)
 trigger = target.locator(action["selector"]) if action.get("selector") is not None else _locator(target, action)
 timeout = action.get("timeout_ms")
+if timeout is None or timeout == 0:
+    timeout = _DEFAULT_ACTION_TIMEOUT_MS
 async with _page(state).expect_file_chooser(timeout=timeout) as chooser_info:
     await trigger.click(timeout=timeout)
 chooser = await chooser_info.value
@@ -405,14 +407,18 @@ state["frame"] = None
 executed += 1
 """,
     "close_page": """
-index = int(action["index"])
+if len(state["pages"]) <= 1:
+    raise RuntimeError("cannot close the last remaining page")
+index = int(action["index"]) if action.get("index") is not None else state["index"]
 if not 0 <= index < len(state["pages"]):
     raise RuntimeError(f"no page at index {index}")
+was_active = index == state["index"]
 await state["pages"].pop(index).close()
-if not state["pages"]:
-    raise RuntimeError("closed the last remaining page")
-state["index"] = min(state["index"], len(state["pages"]) - 1)
-state["frame"] = None
+if was_active:
+    state["index"] = 0
+    state["frame"] = None
+elif index < state["index"]:
+    state["index"] -= 1
 executed += 1
 """,
     "switch_frame": """

@@ -13,6 +13,7 @@ from typing import Any
 
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -85,6 +86,7 @@ _DEPLURALIZE_MIN_LENGTH = {DEPLURALIZE_MIN_LENGTH!r}
 _BLIND_SCRUB_POLICY_ENV = {BLIND_SCRUB_POLICY_ENV!r}
 _TIER_RANK = {{"contextual": 1, "identity": 2, "credential": 3}}
 _MAX_ENCODING_DEPTH = 3
+_DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {placeholder_re!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})

@@ -17,6 +17,7 @@ from octowright._export_shared import (
     _validate_kind,
 )
 from octowright._paths import atomic_write_text
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros.storage import load_macro
 
 _PY_HEADER = '''\
@@ -147,13 +148,16 @@ def _py_upload_files(entry: dict) -> str | None:
     if loc is None:
         return None
 
-    timeout = entry.get("timeout_ms")
-    if timeout is None:
-        timeout_arg = timeout_suffix = ""
-    else:
-        timeout = _safe_int(timeout, action="upload_files", field="timeout_ms")
-        timeout_arg = f"timeout={timeout}"
-        timeout_suffix = f", {timeout_arg}"
+    timeout = _safe_int(
+        entry.get("timeout_ms"),
+        action="upload_files",
+        field="timeout_ms",
+        default=DEFAULT_ACTION_TIMEOUT_MS,
+    )
+    if timeout == 0:
+        timeout = DEFAULT_ACTION_TIMEOUT_MS
+    timeout_arg = f"timeout={timeout}"
+    timeout_suffix = f", {timeout_arg}"
     return (
         f"        async with page.expect_file_chooser({timeout_arg}) as chooser_info:\n"
         f"            await {loc}.click({timeout_arg})\n"
@@ -179,9 +183,7 @@ def _py_switch_frame(entry: dict) -> str:
 
 
 def _py_open_url(entry: dict) -> str:
-    return (
-        f"        page = await ctx.new_page()\n        await page.goto({entry['url']!r})\n        _upload_target = page"
-    )
+    return f"        _new_page = await ctx.new_page()\n        await _new_page.goto({entry['url']!r})"
 
 
 def _py_switch_page(entry: dict) -> str:
@@ -189,9 +191,24 @@ def _py_switch_page(entry: dict) -> str:
     return f"        page = ctx.pages[{index}]\n        _upload_target = page"
 
 
-def _py_close_page(_entry: dict) -> str:
+def _py_close_page(entry: dict) -> str:
+    if entry.get("index") is None:
+        index = "_close_pages.index(page)"
+    else:
+        index = str(_safe_int(entry["index"], action="close_page", field="index"))
     return (
-        "        await page.close()\n        page = ctx.pages[0] if ctx.pages else page\n        _upload_target = page"
+        "        _close_pages = list(ctx.pages)\n"
+        "        if len(_close_pages) <= 1:\n"
+        "            raise RuntimeError('cannot close the last remaining page')\n"
+        f"        _close_index = {index}\n"
+        "        if not 0 <= _close_index < len(_close_pages):\n"
+        "            raise RuntimeError(f'no page at index {_close_index}')\n"
+        "        _close_target = _close_pages[_close_index]\n"
+        "        _close_was_active = _close_target is page\n"
+        "        await _close_target.close()\n"
+        "        if _close_was_active:\n"
+        "            page = ctx.pages[0]\n"
+        "            _upload_target = page"
     )
 
 

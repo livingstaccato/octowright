@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros.runtime import _ACTION_MAP
 
 
@@ -142,10 +143,13 @@ class _FakeKeyboard:
 class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
+        self.pages: list[_FakePage] = []
 
     async def new_page(self) -> _FakePage:
         self._rec.record("context.new_page")
-        return _FakePage(self._rec, tag="tab")
+        page = _FakePage(self._rec, tag=f"tab-{len(self.pages)}", context=self)
+        self.pages.append(page)
+        return page
 
     async def route(self, pattern: str, handler: Any) -> None:
         """`inject_headers` routes on the CONTEXT, matching the live session --
@@ -159,11 +163,11 @@ class _FakeContext:
 class _FakePage:
     """Records every call the generated dispatch bodies can make on a page."""
 
-    def __init__(self, rec: _Recorder, tag: str = "main") -> None:
+    def __init__(self, rec: _Recorder, tag: str = "main", context: _FakeContext | None = None) -> None:
         self._rec, self.tag = rec, tag
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
-        self.context = _FakeContext(rec)
+        self.context = context or _FakeContext(rec)
 
     def _log(self, name: str, *args: Any, **kw: Any) -> None:
         self._rec.record(name, *args, **kw)
@@ -243,6 +247,8 @@ class _FakePage:
 
     async def close(self) -> None:
         self._log("close_page", self.tag)
+        if self in self.context.pages:
+            self.context.pages.remove(self)
 
     def get_by_role(self, role: str, **kw: Any) -> _FakeLocator:
         return _FakeLocator(self._rec, "role")
@@ -264,8 +270,13 @@ class _FakePage:
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:
     class _Browser:
+        def __init__(self) -> None:
+            self.context = _FakeContext(rec)
+
         async def new_page(self) -> _FakePage:
-            return _FakePage(rec)
+            page = _FakePage(rec, context=self.context)
+            self.context.pages.append(page)
+            return page
 
         async def close(self) -> None:
             rec.record("browser.close")
@@ -434,6 +445,22 @@ def test_upload_files_arms_clicks_awaits_and_sets_in_order(
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
 
 
+@pytest.mark.parametrize(
+    ("recorded", "expected"), [(None, DEFAULT_ACTION_TIMEOUT_MS), (0, DEFAULT_ACTION_TIMEOUT_MS), (246, 246)]
+)
+def test_upload_files_normalizes_timeout(monkeypatch: pytest.MonkeyPatch, recorded: int | None, expected: int) -> None:
+    action: dict[str, Any] = {"action": "upload_files", "selector": "#pick", "paths": ["file.txt"]}
+    if recorded is not None:
+        action["timeout_ms"] = recorded
+
+    result, rec = _run(monkeypatch, [action])
+
+    assert result == {"executed": 1, "skipped": 0}
+    assert rec.kwargs_for("file_chooser.arm") == {"timeout": expected}
+    assert rec.kwargs_for("locator.click:css") == {"timeout": expected}
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": expected}
+
+
 def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -458,6 +485,71 @@ def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
     assert "locator.click:css:main" not in names
     assert rec.args_for("file_chooser.set_files") == (["inside-frame.txt"],)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 357}
+
+
+def test_open_url_preserves_active_page_and_frame_until_switch_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "open_url", "url": "https://example.test/new"},
+        {"action": "upload_files", "selector": "#frame-upload", "paths": ["frame.txt"]},
+        {"action": "switch_page", "index": 1},
+        {"action": "upload_files", "selector": "#page-upload", "paths": ["page.txt"]},
+    ]
+
+    result, rec = _run(monkeypatch, actions)
+
+    assert result == {"executed": len(actions), "skipped": 0}
+    names = rec.names()
+    assert names.count("file_chooser.arm:main") == 1
+    assert names.count("locator.click:css:frame") == 1
+    assert names.count("file_chooser.arm:tab-1") == 1
+    assert names.count("locator.click:css:tab-1") == 1
+
+
+def test_close_page_preserves_inactive_identity_and_frame_then_resets_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "open_url", "url": "https://example.test/one"},
+        {"action": "open_url", "url": "https://example.test/two"},
+        {"action": "switch_page", "index": 2},
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "close_page", "index": 0},
+        {"action": "upload_files", "selector": "#still-frame", "paths": ["frame.txt"]},
+        {"action": "close_page", "index": 1},
+        {"action": "upload_files", "selector": "#remaining", "paths": ["page.txt"]},
+    ]
+
+    result, rec = _run(monkeypatch, actions)
+
+    assert result == {"executed": len(actions), "skipped": 0}
+    assert [args for name, args, _kw in rec.calls if name == "close_page"] == [("main",), ("tab-2",)]
+    assert rec.names().count("file_chooser.arm:tab-2") == 1
+    assert rec.names().count("locator.click:css:frame") == 1
+    assert rec.names().count("file_chooser.arm:tab-1") == 1
+    assert rec.names().count("locator.click:css:tab-1") == 1
+
+
+def test_close_page_without_index_closes_current_and_refuses_last_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, rec = _run(
+        monkeypatch,
+        [
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "switch_page", "index": 1},
+            {"action": "close_page"},
+            {"action": "upload_files", "selector": "#remaining", "paths": ["page.txt"]},
+        ],
+    )
+
+    assert result == {"executed": 4, "skipped": 0}
+    assert rec.args_for("close_page") == ("tab-1",)
+    assert rec.names().count("file_chooser.arm:main") == 1
+    with pytest.raises(RuntimeError, match="last remaining page"):
+        _run(monkeypatch, [{"action": "close_page"}])
 
 
 @pytest.mark.parametrize(
