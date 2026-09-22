@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -317,6 +318,42 @@ def test_cli_entrypoint_runs_check_body_without_gh(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert "validated release note body" in result.stdout
+
+
+def test_committed_release_note_sources_validate_with_expected_count() -> None:
+    assert release_notes.validate_local_sources() == 47
+
+
+def test_committed_release_note_sources_contain_no_issue_reference_tokens() -> None:
+    issue_reference = re.compile(r"#[0-9]+|issues?\s+#?[0-9]+", re.IGNORECASE)
+
+    for path in release_notes.local_note_paths(release_notes.REPO_ROOT):
+        assert not issue_reference.search(path.read_text(encoding="utf-8")), path
+
+
+def test_make_lint_validates_local_release_note_sources() -> None:
+    makefile = (release_notes.REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+
+    assert "uv run python scripts/github_release_notes.py check-local" in makefile
+
+
+def test_release_guide_uses_the_draft_creation_helper() -> None:
+    guide = (release_notes.REPO_ROOT / "docs/releasing.md").read_text(encoding="utf-8")
+
+    assert "scripts/github_release_notes.py create-draft vX.Y.Z" in guide
+    assert "/tmp/octowright-release-notes.md" in guide
+
+
+def test_release_workflow_links_to_the_release_guide() -> None:
+    workflow = (release_notes.REPO_ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "docs/releasing.md" in workflow
+
+
+def test_docs_index_links_to_the_release_guide() -> None:
+    docs_index = (release_notes.REPO_ROOT / "docs/README.md").read_text(encoding="utf-8")
+
+    assert "[releasing.md](releasing.md)" in docs_index
 
 
 def test_local_note_paths_includes_changelog_and_sorted_highlights(tmp_path: Path) -> None:

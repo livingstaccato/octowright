@@ -19,6 +19,7 @@ something drifted silently once:
 | `check_max_loc.py` | any Python file exceeds 777 lines. |
 | `check_operation_gate_architecture.py` | Playwright is reached outside the session operation gate. |
 | `check_agent_docs_sync.py` | `CLAUDE.md` is not a byte-for-byte copy of `AGENTS.md`. |
+| `github_release_notes.py check-local` | the changelog or versioned highlights are empty, a highlight document or entry is malformed or empty, or a release-note source includes an issue-number reference. |
 | `check_telemetry_docs.py` | an emitted metric or MCP notification is undocumented in `AGENTS.md`. |
 | `check_tool_inventory_docs.py` | a tool count or list in `docs/architecture/mcp-tool-inventory.md`, its PlantUML diagram, `README.md` or `docs/getting-started.md` disagrees with the live registry. |
 | `check_mutmut_selection.py` | a test that covers a mutated module is missing from the mutmut selection. |

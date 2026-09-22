@@ -32,7 +32,7 @@ a section that is already tagged and on PyPI.
   targeting a known `<input type=file>` directly; never click an upload trigger
   before calling the atomic tool.
 - **Short or common identity/context macro arguments no longer corrupt replay
-  recordings** (#247). Blind value replacement now defaults to credential-tier
+  recordings.** Blind value replacement now defaults to credential-tier
   arguments only, while every classified key remains structurally redacted.
   `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY=all` preserves the previous
   maximum-privacy behavior, and `=reject` refuses identity/context arguments
@@ -92,7 +92,9 @@ a section that is already tagged and on PyPI.
   limits.
 
   The default is still refusal. An application's own handler still wins. Firefox
-  and WebKit refuse. Related: #247, #248.
+  and WebKit refuse. Known limitations remain: short or common classified values
+  can rewrite unrelated recording rows, and some macro parameter metadata does
+  not yet reach every privacy boundary.
 
 ### Changed
 - **An automatic artifact screenshot of a classified run** is taken redacted when
@@ -101,8 +103,8 @@ a section that is already tagged and on PyPI.
   session whose application installed its own handler.
 
 ### Fixed
-- **An upgrade that skipped a release dropped that release's highlights**
-  (#240). `compute_upgrade` attached only the current version's entries, so a
+- **An upgrade that skipped a release dropped that release's highlights.**
+  `compute_upgrade` attached only the current version's entries, so a
   user going from 0.21.0 straight to 0.23.0 never saw 0.22.0's or 0.22.1's. The
   notice now carries every release in `(previous, current]`, newest first, as
   a new `releases` field grouped by version; the existing flat `highlights` list
@@ -112,7 +114,7 @@ a section that is already tagged and on PyPI.
   `octowright_status` returns, is never capped. A fresh install, a downgrade, or
   a previous version that does not parse still shows only the current release.
 - **Every macro run wrapped the session recorder again, and nothing unwrapped
-  it** (#234). An N-step `macro_run_sequence` left N nested `SensitiveRecorder`
+  it.** An N-step `macro_run_sequence` left N nested `SensitiveRecorder`
   wrappers on a long-lived session, each re-scrubbing every write, so recording
   cost grew with the number of runs. The scrub set is now a
   `SessionPrivacyLedger` owned by the session: exactly one wrapper reads it, a
@@ -123,8 +125,8 @@ a section that is already tagged and on PyPI.
   that keeps rendering in the next step. The wrapper is also installed when a
   run classifies nothing yet, so a later append reaches a ledger something
   reads.
-- **A credential passed only to a nested `macro_call` was never collected**
-  (#235). Collection ran once, over the outer macro's arguments. A nested call's
+- **A credential passed only to a nested `macro_call` was never collected.**
+  Collection ran once, over the outer macro's arguments. A nested call's
   own arguments are now classified where it executes, at every depth, and join
   both the session ledger and the run's own set, so the recording, the failure
   payload and the classified-screenshot refusal all see them. Latent in the
@@ -174,7 +176,7 @@ a section that is already tagged and on PyPI.
   are not scrubbed now includes Playwright traces and launch video. A new "Short
   and common values" section explains that a short classified value, such as
   `session="1"`, rewrites matching text in every later row of the session's
-  recording (#247). Exported scripts carry `_ARG_PRIVACY_CLASSIFIER_VERSION`, with
+  recording. Exported scripts carry `_ARG_PRIVACY_CLASSIFIER_VERSION`, with
   the leading underscore. The `macro_save` refusal rules now say plainly that a
   recording with no redacted field is unaffected by the redacted-field rules, and describe `all` mode.
 - **Session-kind plugins have an author guide**, `docs/plugins.md`: the entry
@@ -183,9 +185,10 @@ a section that is already tagged and on PyPI.
   contract.
 - **Code and test comments no longer cite the removed design plans** by task or
   section number; each now states its reason directly.
-- **The unimplemented privacy design work is tracked in #248.** The 0.23.0 entry
-  below points at a design document and derivation script that are no longer in
-  the repository.
+- **Some planned macro-parameter privacy work remains unimplemented: privacy
+  metadata does not yet reach every execution path, and typed parameter
+  specifications remain incomplete.** The 0.23.0 entry below points at a design
+  document and derivation script that are no longer in the repository.
 - **Corrections to the redacted screenshot and upgrade notice docs.**
   `docs/macros.md` names exactly which elements are hidden and which inputs have
   their value replaced. The `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS` entry in
@@ -209,7 +212,7 @@ a section that is already tagged and on PyPI.
   apart from the removed files. An existing clone should be re-cloned, or
   fetched with `--force --prune-tags` and reset to `origin/main`.
 - **The privacy classifier baseline cites a commit on `main`.** It named
-  `c58a1461`, a pre-rebase commit from #232's branch that was never on `main`.
+  `c58a1461`, a pre-rebase branch commit that was never on `main`.
   It now names `b3dafe83`, whose `src/` tree is identical to that commit's.
 - **A release PR's link check no longer fails on the `[Unreleased]` link.** A
   release moves that link to compare the tag it is about to create with `HEAD`,
@@ -246,8 +249,8 @@ a section that is already tagged and on PyPI.
   rewrite unrelated failure text and destroy the bundle this exists to keep
   safe); it is still collected wherever it appears as a value. Two structural
   gaps are tracked rather than fixed: recorder wrappers stack across runs on a
-  long-lived session (#234), and a nested `macro_call`'s own arguments are not
-  collected (#235) -- latent in the measured corpus, which is stated in each.
+  long-lived session, and a nested `macro_call`'s own arguments are not
+  collected -- latent in the measured corpus, which is stated in each.
 - **`octowright.macros.privacy.sensitive_value_variants()`**, the public
   multi-value form of the per-value variant expansion, for a caller that has to
   remove every encoding of every classified value from a live DOM before a
@@ -717,7 +720,7 @@ a section that is already tagged and on PyPI.
   an open dashboard learns immediately instead of on its next poll.
 - **`browser_launch`'s terminal counterpart emits `client_key`, not
   `client_key_path`.** The connector rejects the latter, so SSH key auth was
-  silently ignored. (#187)
+  silently ignored.
 
 ### Changed
 - The engine's stop callback holds the pool weakly, so an engine no longer keeps

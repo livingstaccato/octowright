@@ -55,6 +55,7 @@ lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, se
 	uv run python scripts/check_js_typecheck_coverage.py
 	uv run python scripts/check_operation_gate_architecture.py
 	uv run python scripts/check_agent_docs_sync.py
+	uv run python scripts/github_release_notes.py check-local
 	uv run python scripts/check_telemetry_docs.py
 	uv run python scripts/check_tool_inventory_docs.py
 	uv run python scripts/check_mutmut_selection.py
