@@ -236,6 +236,29 @@ def test_upload_files_requires_non_empty_paths_list(paths: Any) -> None:
 
 
 @pytest.mark.parametrize(
+    ("paths", "invalid_index"),
+    [
+        ([None], 0),
+        ([123], 0),
+        ([""], 0),
+        ([" \t "], 0),
+        (["/tmp/valid", None], 1),
+    ],
+)
+def test_upload_files_paths_must_contain_non_empty_strings(paths: list[Any], invalid_index: int) -> None:
+    action = {"action": "upload_files", "paths": paths, "selector": "#upload"}
+    issue = _only(lint_macro(_macro([action])), "invalid_upload_paths")
+    assert f"paths[{invalid_index}]" in issue.message
+    assert "non-empty string" in issue.message
+
+
+@pytest.mark.parametrize("paths", [["/tmp/a"], ["{{upload_path}}"], ["/tmp/a", "{{upload_path}}"]])
+def test_upload_files_accepts_non_empty_path_strings_and_placeholders(paths: list[str]) -> None:
+    action = {"action": "upload_files", "paths": paths, "selector": "#upload"}
+    assert lint_macro(_macro([action])) == []
+
+
+@pytest.mark.parametrize(
     "action",
     [
         {"action": "upload_files", "paths": ["/tmp/a"]},

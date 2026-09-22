@@ -280,8 +280,7 @@ def _check_upload_files_shape(action: dict[str, Any], kind: str, report: _Report
         return
 
     paths = action.get("paths")
-    if not isinstance(paths, list) or not paths:
-        report("action 'upload_files' field 'paths' must be a non-empty list", "invalid_upload_paths")
+    _check_upload_files_paths(paths, report)
 
     semantic_finders = _provided_locator_keys(action)
     selector_provided = action.get("selector") is not None
@@ -295,6 +294,21 @@ def _check_upload_files_shape(action: dict[str, Any], kind: str, report: _Report
         )
 
     _check_upload_files_modifiers(action, report)
+
+
+def _check_upload_files_paths(paths: Any, report: _Report) -> None:
+    """Require a non-empty list containing only non-blank path strings."""
+    if not isinstance(paths, list) or not paths:
+        report("action 'upload_files' field 'paths' must be a non-empty list", "invalid_upload_paths")
+        return
+
+    for index, path in enumerate(paths):
+        if not isinstance(path, str) or not path.strip():
+            report(
+                f"action 'upload_files' field 'paths[{index}]' must be a non-empty string",
+                "invalid_upload_paths",
+            )
+            return
 
 
 def _check_upload_files_modifiers(action: dict[str, Any], report: _Report) -> None:
