@@ -288,6 +288,10 @@ def test_python_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_
 @pytest.mark.parametrize(
     ("trigger", "expected_locator"),
     [
+        ({"role": ""}, "page.get_by_role('')"),
+        ({"label": ""}, "page.get_by_label('')"),
+        ({"text": ""}, "page.get_by_text('')"),
+        ({"test_id": ""}, "page.get_by_test_id('')"),
         ({"label": "Choose file", "label_exact": True}, "page.get_by_label('Choose file', exact=True)"),
         ({"text": "Upload files", "text_exact": False}, "page.get_by_text('Upload files')"),
         ({"test_id": "file-picker"}, "page.get_by_test_id('file-picker')"),
@@ -301,7 +305,9 @@ def test_python_export_upload_files_renders_semantic_locator_variants(
     src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
 
     assert _python_compiles(src)
+    assert "async with page.expect_file_chooser() as chooser_info:" in src
     assert f"await {expected_locator}.click()" in src
+    assert "await chooser.set_files(['/tmp/file.txt'])" in src
     assert "exact=False" not in src
 
 
@@ -535,6 +541,10 @@ def test_ts_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path
 @pytest.mark.parametrize(
     ("trigger", "expected_locator"),
     [
+        ({"role": ""}, 'page.getByRole("")'),
+        ({"label": ""}, 'page.getByLabel("")'),
+        ({"text": ""}, 'page.getByText("")'),
+        ({"test_id": ""}, 'page.getByTestId("")'),
         ({"label": "Choose file", "label_exact": True}, 'page.getByLabel("Choose file", { exact: true })'),
         ({"text": "Upload files", "text_exact": False}, 'page.getByText("Upload files")'),
         ({"test_id": "file-picker"}, 'page.getByTestId("file-picker")'),
@@ -547,7 +557,9 @@ def test_ts_export_upload_files_renders_semantic_locator_variants(
     log = _write_recording(tmp_path / "r.jsonl", [action])
     src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
 
+    assert "const chooserPromise = page.waitForEvent('filechooser');" in src
     assert f"await {expected_locator}.click();" in src
+    assert 'await chooser.setFiles(["/tmp/file.txt"]);' in src
     assert "exact: false" not in src
 
 

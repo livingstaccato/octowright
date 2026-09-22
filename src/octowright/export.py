@@ -49,8 +49,11 @@ if __name__ == "__main__":
 """
 
 
-def _py_locator(entry: dict) -> str | None:
-    if entry.get("role"):
+def _py_locator(entry: dict, *, include_empty: bool = False) -> str | None:
+    def provided(key: str) -> bool:
+        return entry.get(key) is not None if include_empty else bool(entry.get(key))
+
+    if provided("role"):
         args = [repr(entry["role"])]
         if entry.get("role_name") is not None:
             args.append(f"name={entry['role_name']!r}")
@@ -59,13 +62,13 @@ def _py_locator(entry: dict) -> str | None:
         return f"page.get_by_role({', '.join(args)})"
     # exact= is emitted only when set, so scripts exported from pre-existing
     # (substring) recordings stay byte-identical to what they produced before.
-    if entry.get("label"):
+    if provided("label"):
         exact = ", exact=True" if entry.get("label_exact") else ""
         return f"page.get_by_label({entry['label']!r}{exact})"
-    if entry.get("text"):
+    if provided("text"):
         exact = ", exact=True" if entry.get("text_exact") else ""
         return f"page.get_by_text({entry['text']!r}{exact})"
-    if entry.get("test_id"):
+    if provided("test_id"):
         return f"page.get_by_test_id({entry['test_id']!r})"
     return None
 
@@ -136,7 +139,7 @@ def _py_click_by(entry: dict) -> str | None:
 
 
 def _py_upload_files(entry: dict) -> str | None:
-    loc = _py_locator(entry)
+    loc = _py_locator(entry, include_empty=True)
     if loc is None and entry.get("selector") is not None:
         loc = f"page.locator({entry['selector']!r})"
     if loc is None:

@@ -70,14 +70,17 @@ def _ts_exact_opt(entry: dict, flag: str) -> str:
     return ", { exact: true }" if entry.get(flag) else ""
 
 
-def _ts_locator(entry: dict) -> str | None:
-    if entry.get("role"):
+def _ts_locator(entry: dict, *, include_empty: bool = False) -> str | None:
+    def provided(key: str) -> bool:
+        return entry.get(key) is not None if include_empty else bool(entry.get(key))
+
+    if provided("role"):
         return _ts_role_locator(entry)
-    if entry.get("label"):
+    if provided("label"):
         return f"page.getByLabel({json.dumps(entry['label'])}{_ts_exact_opt(entry, 'label_exact')})"
-    if entry.get("text"):
+    if provided("text"):
         return f"page.getByText({json.dumps(entry['text'])}{_ts_exact_opt(entry, 'text_exact')})"
-    if entry.get("test_id"):
+    if provided("test_id"):
         return f"page.getByTestId({json.dumps(entry['test_id'])})"
     return None
 
@@ -167,7 +170,7 @@ def _ts_click_by(entry: dict) -> str | None:
 
 
 def _ts_upload_files(entry: dict) -> str | None:
-    loc = _ts_locator(entry)
+    loc = _ts_locator(entry, include_empty=True)
     if loc is None and entry.get("selector") is not None:
         loc = f"page.locator({json.dumps(entry['selector'])})"
     if loc is None:
