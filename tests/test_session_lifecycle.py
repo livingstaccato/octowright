@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -62,6 +63,12 @@ def _session(events: list[str] | None = None) -> BrowserSession:
         recorder=_Recorder(events),
         log_path=Path("/tmp/octowright-test.jsonl"),
     )
+
+
+def test_disable_automation_controlled_is_keyword_only() -> None:
+    parameter = inspect.signature(BrowserSession).parameters["disable_automation_controlled"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
 
 def test_network_capture_is_bounded_and_reports_dropped_count() -> None:

@@ -14,11 +14,16 @@ Playwright TS API surface.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import sys
+import types
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.export import export_script
 
 
@@ -31,6 +36,111 @@ def _python_compiles(source: str) -> bool:
     """Sanity check: compile to bytecode without executing — catches syntax errors."""
     compile(source, "<exported>", "exec")
     return True
+
+
+def _run_python_export(source: str, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Any]]:
+    """Execute generated Python against identity-aware Playwright fakes."""
+    calls: list[tuple[str, Any]] = []
+
+    class Locator:
+        def __init__(self, owner: str) -> None:
+            self.owner = owner
+
+        async def click(self, **kwargs: Any) -> None:
+            calls.append((f"click:{self.owner}", kwargs))
+
+    class Target:
+        def __init__(self, owner: str) -> None:
+            self.owner = owner
+
+        def locator(self, _selector: str) -> Locator:
+            return Locator(self.owner)
+
+    class Chooser:
+        async def set_files(self, paths: list[str], **kwargs: Any) -> None:
+            calls.append(("set_files", (paths, kwargs)))
+
+    class ChooserInfo:
+        @property
+        def value(self) -> Any:
+            async def resolve() -> Chooser:
+                calls.append(("chooser.await", None))
+                return Chooser()
+
+            return resolve()
+
+    class ChooserContext:
+        def __init__(self, owner: str, timeout: int) -> None:
+            self.owner, self.timeout = owner, timeout
+
+        async def __aenter__(self) -> ChooserInfo:
+            calls.append((f"chooser.arm:{self.owner}", self.timeout))
+            return ChooserInfo()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    class Context:
+        def __init__(self) -> None:
+            self.pages: list[Page] = []
+
+        async def new_page(self) -> Page:
+            tag = "main" if not self.pages else f"tab-{len(self.pages)}"
+            page = Page(self, tag)
+            self.pages.append(page)
+            calls.append(("new_page", tag))
+            return page
+
+    class Page(Target):
+        def __init__(self, context: Context, tag: str) -> None:
+            super().__init__(tag)
+            self.context, self.tag = context, tag
+
+        async def goto(self, url: str) -> None:
+            calls.append((f"goto:{self.tag}", url))
+
+        def frame_locator(self, _selector: str) -> Target:
+            return Target(f"frame:{self.tag}")
+
+        def expect_file_chooser(self, *, timeout: int) -> ChooserContext:
+            return ChooserContext(self.tag, timeout)
+
+        async def close(self) -> None:
+            calls.append(("close", self.tag))
+            self.context.pages.remove(self)
+
+    class Browser:
+        def __init__(self) -> None:
+            self.context = Context()
+
+        async def new_context(self, **_kwargs: Any) -> Context:
+            return self.context
+
+        async def close(self) -> None:
+            return None
+
+    class Chromium:
+        async def launch(self, **_kwargs: Any) -> Browser:
+            return Browser()
+
+    class Playwright:
+        chromium = Chromium()
+
+    class Manager:
+        async def __aenter__(self) -> Playwright:
+            return Playwright()
+
+        async def __aexit__(self, *_args: Any) -> None:
+            return None
+
+    async_api = types.ModuleType("playwright.async_api")
+    async_api.async_playwright = lambda: Manager()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
+    namespace: dict[str, Any] = {"__name__": "exported"}
+    exec(source, namespace)
+    asyncio.run(namespace["main"]())
+    return calls
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +348,231 @@ def test_python_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
     assert "page.fill(" not in src
 
 
+def test_python_export_upload_files_selector_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "selector": "#pick-files",
+                "paths": ["/tmp/first.txt", "/tmp/second.txt"],
+                "timeout_ms": 321,
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    expected = """\
+        async with page.expect_file_chooser(timeout=321) as chooser_info:
+            await _upload_target.locator('#pick-files').click(timeout=321)
+        chooser = await chooser_info.value
+        await chooser.set_files(['/tmp/first.txt', '/tmp/second.txt'], timeout=321)"""
+    assert expected in src
+
+
+def test_python_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "role": "button",
+                "role_name": "Upload 'now'",
+                "role_exact": True,
+                "paths": ["/tmp/a'b.txt"],
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    expected = """\
+        async with page.expect_file_chooser(timeout=15000) as chooser_info:
+            await _upload_target.get_by_role('button', name="Upload 'now'", exact=True).click(timeout=15000)
+        chooser = await chooser_info.value
+        await chooser.set_files(["/tmp/a'b.txt"], timeout=15000)"""
+    assert expected in src
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"), [(None, DEFAULT_ACTION_TIMEOUT_MS), (0, DEFAULT_ACTION_TIMEOUT_MS), (246, 246)]
+)
+def test_python_export_upload_files_normalizes_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: int | None, expected: int
+) -> None:
+    action: dict[str, object] = {"action": "upload_files", "selector": "#pick", "paths": ["/tmp/a"]}
+    if recorded is not None:
+        action["timeout_ms"] = recorded
+    entries = [
+        {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+        action,
+    ]
+    src = export_script(_write_recording(tmp_path / "r.jsonl", entries), tmp_path / "out.py", fmt="python").read_text()
+
+    assert f"expect_file_chooser(timeout={expected})" in src
+    assert f".click(timeout={expected})" in src
+    assert f"chooser.set_files(['/tmp/a'], timeout={expected})" in src
+    calls = _run_python_export(src, monkeypatch)
+    assert ("chooser.arm:main", expected) in calls
+    assert ("click:main", {"timeout": expected}) in calls
+    assert ("set_files", (["/tmp/a"], {"timeout": expected})) in calls
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_locator"),
+    [
+        ({"role": ""}, "_upload_target.get_by_role('')"),
+        ({"label": ""}, "_upload_target.get_by_label('')"),
+        ({"text": ""}, "_upload_target.get_by_text('')"),
+        ({"test_id": ""}, "_upload_target.get_by_test_id('')"),
+        (
+            {"label": "Choose file", "label_exact": True},
+            "_upload_target.get_by_label('Choose file', exact=True)",
+        ),
+        ({"text": "Upload files", "text_exact": False}, "_upload_target.get_by_text('Upload files')"),
+        ({"test_id": "file-picker"}, "_upload_target.get_by_test_id('file-picker')"),
+    ],
+)
+def test_python_export_upload_files_renders_semantic_locator_variants(
+    tmp_path: Path, trigger: dict[str, object], expected_locator: str
+) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/file.txt"], **trigger}
+    log = _write_recording(tmp_path / "r.jsonl", [action])
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert f"async with page.expect_file_chooser(timeout={DEFAULT_ACTION_TIMEOUT_MS}) as chooser_info:" in src
+    assert f"await {expected_locator}.click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert f"await chooser.set_files(['/tmp/file.txt'], timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert "exact=False" not in src
+
+
+def test_python_export_upload_files_tracks_frame_and_page_transitions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            {
+                "action": "switch_frame",
+                "selector": "#embedded",
+                "name": None,
+                "url_pattern": None,
+                "index": 1,
+                "frame_url": "https://example.test/embedded",
+                "frame_name": "embedded",
+            },
+            {
+                "ts": "2026-09-21T12:00:00Z",
+                "action": "upload_files",
+                "selector": "#upload",
+                "paths": ["/tmp/frame.txt"],
+                "timeout_ms": 45000,
+            },
+            {"action": "upload_files", "label": "Choose file", "paths": ["/tmp/semantic.txt"]},
+            {"action": "reset_frame"},
+            {"action": "upload_files", "test_id": "top-upload", "paths": ["/tmp/top.txt"]},
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "upload_files", "selector": "#new-page-upload", "paths": ["/tmp/new.txt"]},
+            {"action": "switch_page", "index": 0},
+            {"action": "upload_files", "text": "Original page", "paths": ["/tmp/original.txt"]},
+            {"action": "close_page", "index": 0},
+            {"action": "upload_files", "text": "Remaining page", "paths": ["/tmp/remaining.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert "_upload_target = page" in src
+    assert "_upload_target = page.frame_locator('#embedded')" in src
+    frame_selector_upload = """\
+        async with page.expect_file_chooser(timeout=45000) as chooser_info:
+            await _upload_target.locator('#upload').click(timeout=45000)
+        chooser = await chooser_info.value
+        await chooser.set_files(['/tmp/frame.txt'], timeout=45000)"""
+    assert frame_selector_upload in src
+    assert f"await _upload_target.get_by_label('Choose file').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert (
+        f"_upload_target = page\n        async with page.expect_file_chooser(timeout={DEFAULT_ACTION_TIMEOUT_MS})"
+        in src
+    )
+    assert f"await _upload_target.get_by_test_id('top-upload').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert "_new_page = await ctx.new_page()\n        await _new_page.goto('https://example.test/new')" in src
+    assert f"await _upload_target.locator('#new-page-upload').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert "page = ctx.pages[0]\n        _upload_target = page" in src
+    assert f"await _upload_target.get_by_text('Original page').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+    assert "_close_index = 0" in src
+    assert "_close_target = _close_pages[_close_index]" in src
+    assert "_close_was_active = _close_target is page" in src
+    assert "if _close_was_active:" in src
+    assert f"await _upload_target.get_by_text('Remaining page').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+
+
+def test_python_export_executes_open_and_close_with_page_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    actions = [
+        {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "open_url", "url": "https://example.test/one"},
+        {"action": "upload_files", "selector": "#preserved-frame", "paths": ["one.txt"]},
+        {"action": "open_url", "url": "https://example.test/two"},
+        {"action": "switch_page", "index": 2},
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "close_page", "index": 0},
+        {"action": "upload_files", "selector": "#still-frame", "paths": ["two.txt"]},
+        {"action": "close_page", "index": 1},
+        {"action": "upload_files", "selector": "#remaining", "paths": ["three.txt"]},
+    ]
+    src = export_script(_write_recording(tmp_path / "r.jsonl", actions), tmp_path / "out.py", fmt="python").read_text()
+
+    calls = _run_python_export(src, monkeypatch)
+
+    assert [(name, value) for name, value in calls if name.startswith("chooser.arm:")] == [
+        ("chooser.arm:main", DEFAULT_ACTION_TIMEOUT_MS),
+        ("chooser.arm:tab-2", DEFAULT_ACTION_TIMEOUT_MS),
+        ("chooser.arm:tab-1", DEFAULT_ACTION_TIMEOUT_MS),
+    ]
+    assert [name for name, _value in calls if name.startswith("click:")] == [
+        "click:frame:main",
+        "click:frame:tab-2",
+        "click:tab-1",
+    ]
+    assert [value for name, value in calls if name == "close"] == ["main", "tab-2"]
+
+
+@pytest.mark.parametrize(
+    ("switch", "expected"),
+    [
+        (
+            {"action": "switch_frame", "name": "checkout"},
+            "_upload_target = page.frame(name='checkout')",
+        ),
+        (
+            {"action": "switch_frame", "url_pattern": r"provider\.test/pay"},
+            "_upload_target = page.frame(url=__import__('re').compile('provider\\\\.test/pay'))",
+        ),
+    ],
+)
+def test_python_export_upload_files_preserves_non_selector_frame_modes(
+    tmp_path: Path, switch: dict[str, str], expected: str
+) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            switch,
+            {"action": "upload_files", "selector": "#upload", "paths": ["/tmp/file.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert expected in src
+    assert "if _upload_target is None:" in src
+    assert f"await _upload_target.locator('#upload').click(timeout={DEFAULT_ACTION_TIMEOUT_MS})" in src
+
+
 def test_python_export_creates_parent_dir(tmp_path: Path) -> None:
     log = _write_recording(
         tmp_path / "r.jsonl",
@@ -416,6 +751,219 @@ def test_ts_export_keeps_native_semantic_actions(tmp_path: Path) -> None:
     assert "page.fill(" not in src
 
 
+def test_ts_export_upload_files_selector_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "selector": "#pick-files",
+                "paths": ["/tmp/first.txt", "/tmp/second.txt"],
+                "timeout_ms": 321,
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    expected = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 321 });
+    await uploadTarget.locator("#pick-files").click({ timeout: 321 });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/first.txt", "/tmp/second.txt"], { timeout: 321 });
+  }"""
+    assert expected in src
+
+
+def test_ts_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {
+                "action": "upload_files",
+                "role": "button",
+                "role_name": "Upload 'now'",
+                "role_exact": True,
+                "paths": ["/tmp/a'b.txt"],
+            }
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    expected = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 15000 });
+    await uploadTarget.getByRole("button", { name: "Upload 'now'", exact: true }).click({ timeout: 15000 });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/a'b.txt"], { timeout: 15000 });
+  }"""
+    assert expected in src
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"), [(None, DEFAULT_ACTION_TIMEOUT_MS), (0, DEFAULT_ACTION_TIMEOUT_MS), (246, 246)]
+)
+def test_ts_export_upload_files_normalizes_timeout(tmp_path: Path, recorded: int | None, expected: int) -> None:
+    action: dict[str, object] = {"action": "upload_files", "selector": "#pick", "paths": ["/tmp/a"]}
+    if recorded is not None:
+        action["timeout_ms"] = recorded
+    src = export_script(_write_recording(tmp_path / "r.jsonl", [action]), tmp_path / "out.ts", fmt="ts").read_text()
+
+    options = f"{{ timeout: {expected} }}"
+    assert f"waitForEvent('filechooser', {options})" in src
+    assert f".click({options})" in src
+    assert f'chooser.setFiles(["/tmp/a"], {options})' in src
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_locator"),
+    [
+        ({"role": ""}, 'uploadTarget.getByRole("")'),
+        ({"label": ""}, 'uploadTarget.getByLabel("")'),
+        ({"text": ""}, 'uploadTarget.getByText("")'),
+        ({"test_id": ""}, 'uploadTarget.getByTestId("")'),
+        (
+            {"label": "Choose file", "label_exact": True},
+            'uploadTarget.getByLabel("Choose file", { exact: true })',
+        ),
+        ({"text": "Upload files", "text_exact": False}, 'uploadTarget.getByText("Upload files")'),
+        ({"test_id": "file-picker"}, 'uploadTarget.getByTestId("file-picker")'),
+    ],
+)
+def test_ts_export_upload_files_renders_semantic_locator_variants(
+    tmp_path: Path, trigger: dict[str, object], expected_locator: str
+) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/file.txt"], **trigger}
+    log = _write_recording(tmp_path / "r.jsonl", [action])
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    options = f"{{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }}"
+    assert f"const chooserPromise = page.waitForEvent('filechooser', {options});" in src
+    assert f"await {expected_locator}.click({options});" in src
+    assert f'await chooser.setFiles(["/tmp/file.txt"], {options});' in src
+    assert "exact: false" not in src
+
+
+def test_ts_export_multiple_upload_files_use_independent_block_scopes(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "upload_files", "selector": "#first", "paths": ["/tmp/first.txt"]},
+            {"action": "if", "selector": "#ready"},
+            {"action": "upload_files", "label": "Second", "paths": ["/tmp/second.txt"]},
+            {"action": "end_block"},
+            {"action": "upload_files", "test_id": "third", "paths": ["/tmp/third.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    lines = src.splitlines()
+    chooser_declarations = [index for index, line in enumerate(lines) if "const chooserPromise" in line]
+    assert len(chooser_declarations) == 3
+    assert all(lines[index - 1].strip() == "{" for index in chooser_declarations)
+    assert src.count("const chooser = await chooserPromise;") == 3
+    options = f"{{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }}"
+    assert f'await uploadTarget.locator("#first").click({options});' in src
+    assert 'if (await page.locator("#ready").count() > 0) {' in src
+    assert f'await uploadTarget.getByLabel("Second").click({options});' in src
+    assert f'await uploadTarget.getByTestId("third").click({options});' in src
+    assert f'await chooser.setFiles(["/tmp/first.txt"], {options});' in src
+    assert f'await chooser.setFiles(["/tmp/second.txt"], {options});' in src
+    assert f'await chooser.setFiles(["/tmp/third.txt"], {options});' in src
+
+
+def test_ts_export_upload_files_tracks_frame_and_page_transitions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            {
+                "action": "switch_frame",
+                "selector": "#embedded",
+                "name": None,
+                "url_pattern": None,
+                "index": 1,
+                "frame_url": "https://example.test/embedded",
+                "frame_name": "embedded",
+            },
+            {
+                "ts": "2026-09-21T12:00:00Z",
+                "action": "upload_files",
+                "selector": "#upload",
+                "paths": ["/tmp/frame.txt"],
+                "timeout_ms": 45000,
+            },
+            {"action": "upload_files", "label": "Choose file", "paths": ["/tmp/semantic.txt"]},
+            {"action": "reset_frame"},
+            {"action": "upload_files", "test_id": "top-upload", "paths": ["/tmp/top.txt"]},
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "upload_files", "selector": "#new-page-upload", "paths": ["/tmp/new.txt"]},
+            {"action": "switch_page", "index": 0},
+            {"action": "upload_files", "text": "Original page", "paths": ["/tmp/original.txt"]},
+            {"action": "close_page", "index": 0},
+            {"action": "upload_files", "text": "Remaining page", "paths": ["/tmp/remaining.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    assert "uploadTarget = page;" in src
+    assert 'uploadTarget = page.frameLocator("#embedded");' in src
+    frame_selector_upload = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 45000 });
+    await uploadTarget.locator("#upload").click({ timeout: 45000 });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/frame.txt"], { timeout: 45000 });
+  }"""
+    assert frame_selector_upload in src
+    assert f'await uploadTarget.getByLabel("Choose file").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+    assert (
+        f"uploadTarget = page;\n  {{\n    const chooserPromise = page.waitForEvent('filechooser', {{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }})"
+        in src
+    )
+    assert f'await uploadTarget.getByTestId("top-upload").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+    assert 'const newPage = await ctx.newPage();\n    await newPage.goto("https://example.test/new");' in src
+    assert f'await uploadTarget.locator("#new-page-upload").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+    assert "page = ctx.pages()[0];\n  uploadTarget = page;" in src
+    assert f'await uploadTarget.getByText("Original page").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+    assert "const closeIndex = 0;" in src
+    assert "const closeTarget = closePages[closeIndex];" in src
+    assert "const closeWasActive = closeTarget === page;" in src
+    assert "if (closeWasActive)" in src
+    assert f'await uploadTarget.getByText("Remaining page").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+
+
+@pytest.mark.parametrize(
+    ("switch", "expected"),
+    [
+        (
+            {"action": "switch_frame", "name": "checkout"},
+            'uploadTarget = page.frame({ name: "checkout" })',
+        ),
+        (
+            {"action": "switch_frame", "url_pattern": r"provider\.test/pay"},
+            'uploadTarget = page.frame({ url: new RegExp("provider\\\\.test/pay") })',
+        ),
+    ],
+)
+def test_ts_export_upload_files_preserves_non_selector_frame_modes(
+    tmp_path: Path, switch: dict[str, str], expected: str
+) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            switch,
+            {"action": "upload_files", "selector": "#upload", "paths": ["/tmp/file.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    assert expected in src
+    assert "throw new Error(" in src
+    assert f'await uploadTarget.locator("#upload").click({{ timeout: {DEFAULT_ACTION_TIMEOUT_MS} }});' in src
+
+
 # ---------------------------------------------------------------------------
 # atomic-write cleanup
 # ---------------------------------------------------------------------------
@@ -518,7 +1066,9 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
     assert "await page.evaluate('1===1')" in src
     assert "page = await ctx.new_page()" in src
     assert "page = ctx.pages[1]" in src
-    assert "await page.close()" in src
+    assert "_close_index = _close_pages.index(page)" in src
+    assert "cannot close the last remaining page" in src
+    assert "await _close_target.close()" in src
     assert "lambda route: route.fulfill(status=200, body='hi')" in src
     assert "await page.unroute('*')" in src
     assert "lambda dialog, _policy='accept': asyncio.create_task(getattr(dialog, _policy)())" in src
@@ -534,6 +1084,8 @@ def test_export_missing_actions_ts(tmp_path: Path) -> None:
             {"action": "launch", "kind": "webkit", "url": "https://x", "headed": True},
             {"action": "expect_url", "pattern": "x", "mode": "regex"},
             {"action": "open_url", "url": "https://y"},
+            {"action": "switch_page", "index": 1},
+            {"action": "close_page"},
             {"action": "if", "selector": "#foo"},
             {"action": "click", "selector": "#bar"},
             {"action": "end_block"},
@@ -542,7 +1094,10 @@ def test_export_missing_actions_ts(tmp_path: Path) -> None:
     out = export_script(log, tmp_path / "out.ts", fmt="ts")
     src = out.read_text()
     assert 'new RegExp("x").test(page.url())' in src
-    assert "page = await ctx.newPage();" in src
+    assert "const newPage = await ctx.newPage();" in src
+    assert "page = ctx.pages()[1];" in src
+    assert "const closeIndex = closePages.indexOf(page);" in src
+    assert "cannot close the last remaining page" in src
     assert 'if (await page.locator("#foo").count() > 0) {' in src
     assert '    await page.click("#bar");' in src
     assert "  }" in src

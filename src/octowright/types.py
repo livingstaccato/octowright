@@ -184,6 +184,21 @@ class SetInputFilesAction(MacroActionBase):
     paths: list[str]
 
 
+class UploadFilesAction(MacroActionBase):
+    action: Literal["upload_files"]
+    paths: list[str]
+    selector: NotRequired[str]
+    role: NotRequired[str]
+    role_name: NotRequired[str]
+    role_exact: NotRequired[bool]
+    label: NotRequired[str]
+    label_exact: NotRequired[bool]
+    text: NotRequired[str]
+    text_exact: NotRequired[bool]
+    test_id: NotRequired[str]
+    timeout_ms: NotRequired[int | None]
+
+
 MacroAction = (
     NavigateAction
     | ClickAction
@@ -203,6 +218,7 @@ MacroAction = (
     | UnmockRouteAction
     | SetDialogPolicyAction
     | SetInputFilesAction
+    | UploadFilesAction
 )
 
 

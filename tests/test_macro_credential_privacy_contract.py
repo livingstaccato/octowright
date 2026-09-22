@@ -18,10 +18,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from octowright import defaults
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.macros import execution
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
+    BLIND_SCRUB_POLICY_ENV,
+    MacroBlindScrubRejected,
     PrivacyLedger,
     is_sensitive_arg_key,
     redact_args,
@@ -74,7 +77,10 @@ def _session() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exception_chain() -> None:
+async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exception_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
     session = _session()
 
     async def fail_dispatch(*_args: Any, **_kwargs: Any) -> tuple[int, int]:
@@ -154,6 +160,7 @@ async def test_success_scrubs_args_used_logs_spans_and_metrics(monkeypatch: pyte
 async def test_runtime_scrubs_console_action_and_log_fields_before_recorder_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
     persisted: list[object] = []
     session = _session()
     session.recorder = types.SimpleNamespace(
@@ -177,10 +184,105 @@ async def test_runtime_scrubs_console_action_and_log_fields_before_recorder_writ
 
 
 @pytest.mark.asyncio
+async def test_default_session_ledger_does_not_admit_contextual_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted: list[tuple[str, dict[str, Any]]] = []
+    underlying = types.SimpleNamespace(
+        record=lambda action, **fields: persisted.append((action, fields)),
+        record_control=lambda action, **fields: persisted.append((action, fields)),
+    )
+    session = _session()
+    session.recorder = underlying
+    monkeypatch.setattr(execution, "load_macro", lambda _name: {"actions": []})
+    monkeypatch.setattr(execution, "_push_status", AsyncMock())
+
+    await execution._run_macro_impl(session, "context", {"session": "1"}, slowmo_ms=0)
+    session.recorder.record(
+        "click",
+        selector="li:nth-child(1) > a",
+        url="https://shop.test/list?page=1&sort=11",
+    )
+
+    assert persisted == [
+        (
+            "click",
+            {
+                "selector": "li:nth-child(1) > a",
+                "url": "https://shop.test/list?page=1&sort=11",
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_short_credentials_stay_in_the_permanent_session_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted: list[tuple[str, dict[str, Any]]] = []
+    session = _session()
+    session.recorder = types.SimpleNamespace(
+        record=lambda action, **fields: persisted.append((action, fields)),
+        record_control=lambda action, **fields: persisted.append((action, fields)),
+    )
+    monkeypatch.setattr(execution, "load_macro", lambda _name: {"actions": []})
+    monkeypatch.setattr(execution, "_push_status", AsyncMock())
+
+    await execution._run_macro_impl(session, "secret", {"password": "1"}, slowmo_ms=0)  # pragma: allowlist secret
+    session.recorder.record("console", text="password=1")
+
+    assert persisted == [("console", {"text": "password=<redacted>"})]
+
+
+@pytest.mark.asyncio
+async def test_reject_fails_before_recorder_or_browser_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "reject")
+    underlying = types.SimpleNamespace(record=MagicMock(), record_control=MagicMock())
+    session = _session()
+    session.recorder = underlying
+    dispatch = AsyncMock(return_value=(1, 0))
+    status = AsyncMock()
+    monkeypatch.setattr(execution, "load_macro", lambda _name: {"actions": [{"action": "click"}]})
+    monkeypatch.setattr(execution, "_dispatch_one", dispatch)
+    monkeypatch.setattr(execution, "_push_status", status)
+
+    with pytest.raises(MacroBlindScrubRejected):
+        await execution._run_macro_impl(session, "context", {"user": "admin"}, slowmo_ms=0)
+
+    assert session.recorder is underlying
+    dispatch.assert_not_awaited()
+    status.assert_not_awaited()
+
+
+def test_nested_reject_fails_before_installing_or_extending_a_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "reject")
+    session = _session()
+    underlying = types.SimpleNamespace(record=MagicMock(), record_control=MagicMock())
+    session.recorder = underlying
+    run_ledger = PrivacyLedger((PASSWORD,))
+
+    with pytest.raises(MacroBlindScrubRejected):
+        execution._collect_nested_call_privacy(
+            session,
+            {"action": "macro_call", "name": "child", "args": {"email": EMAIL}},
+            run_ledger,
+        )
+
+    assert session.recorder is underlying
+    assert run_ledger.values == (PASSWORD,)
+
+
+@pytest.mark.asyncio
 async def test_exported_script_scrubs_runtime_error_and_persisted_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
+
     class Page:
         async def fill(self, *_args: Any, **_kwargs: Any) -> None:
             raise RuntimeError(f"browser rejected {PASSWORD} for {EMAIL}")
@@ -293,7 +395,7 @@ async def test_exported_classified_macro_refuses_raw_screenshot(
 
 
 def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary() -> None:
-    assert ARG_PRIVACY_CLASSIFIER_VERSION == 4
+    assert ARG_PRIVACY_CLASSIFIER_VERSION == 5
     for key in (*SOCIAL_ARGS, "auth", "credential", "api_key", "apikey", "access_key", "passphrase"):
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")
@@ -616,6 +718,28 @@ async def test_classified_explicit_screenshot_uses_only_privacy_handler(
 
 
 @pytest.mark.asyncio
+async def test_identity_only_run_uses_an_ordinary_screenshot_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    session = _session()
+    session.screenshot = AsyncMock(return_value=tmp_path / "identity.png")
+    path = tmp_path / "identity.png"
+    monkeypatch.setattr(defaults, "RECORDINGS_DIR", tmp_path)
+    monkeypatch.setattr(
+        execution,
+        "load_macro",
+        lambda _name: {"actions": [{"action": "screenshot", "path": str(path)}]},
+    )
+    monkeypatch.setattr(execution, "_push_status", AsyncMock())
+
+    result = await execution._run_macro_impl(session, "identity", {"email": EMAIL}, slowmo_ms=0)
+
+    assert result["executed"] == 1
+    session.screenshot.assert_awaited_once_with(path)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("container", ["conditional", "macro_call"])
 async def test_nested_classified_screenshot_cannot_bypass_privacy_handler(
     monkeypatch: pytest.MonkeyPatch,
@@ -656,7 +780,10 @@ async def test_nested_classified_screenshot_cannot_bypass_privacy_handler(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("secondary", ["diagnostic", "healing", "failed_requests"])
-async def test_secondary_diagnostic_failures_never_retain_raw_exception_context(secondary: str) -> None:
+async def test_secondary_diagnostic_failures_never_retain_raw_exception_context(
+    secondary: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
     session = _session()
     if secondary == "diagnostic":
         session.diagnostic_bundle = AsyncMock(side_effect=OSError("diagnostic failed"))

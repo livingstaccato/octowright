@@ -192,6 +192,7 @@ def _build_session_object(
         protected_reason=launch_options.protected_reason,
         trace=launch_options.trace,
         har_path=har_path,
+        disable_automation_controlled=launch_options.disable_automation_controlled,
         viewport_mode=viewport_info.mode.value,
         viewport_width=viewport_info.width,
         viewport_height=viewport_info.height,
@@ -281,6 +282,7 @@ async def _prepare_session_before_publication(
         tile=launch_options.tile,
         ephemeral=launch_options.ephemeral,
         session=session,
+        disable_automation_controlled=launch_options.disable_automation_controlled,
     )
 
     # NOTE: the BrowserSession local was named ``session`` for years, but

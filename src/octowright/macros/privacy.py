@@ -8,14 +8,34 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from itertools import pairwise
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, quote_plus
 
-ARG_PRIVACY_CLASSIFIER_VERSION = 4
+ARG_PRIVACY_CLASSIFIER_VERSION = 5
 REDACTED = "<redacted>"
+BLIND_SCRUB_POLICY_ENV = "OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY"
+
+BlindScrubPolicy = Literal["credentials", "all", "reject"]
+PrivacyTier = Literal["credential", "identity", "contextual"]
+
+
+@dataclass(frozen=True)
+class ClassifiedArgValue:
+    """One classified leaf, retaining the provenance blind scrubbing loses."""
+
+    value: str
+    path: str
+    tier: PrivacyTier
+
+
+class MacroBlindScrubRejected(ValueError):
+    """The configured policy refuses a non-credential classified argument."""
+
 
 # Three classifiers decided sensitivity independently -- this one,
 # ``artifacts.redaction.is_sensitive_key`` and
@@ -103,14 +123,20 @@ def _token_candidates(tokens: tuple[str, ...]) -> set[str]:
     return set(tokens) | {_depluralized(token) for token in tokens}
 
 
-def _matches(key: object, substrings: frozenset[str], whole_tokens: frozenset[str]) -> bool:
+def _matches(
+    key: object,
+    substrings: frozenset[str],
+    whole_tokens: frozenset[str],
+    *,
+    pairs: frozenset[tuple[str, str]] = frozenset(),
+) -> bool:
     normalized = _normalized_key(key)
     if any(token in normalized for token in substrings):
         return True
     tokens = key_tokens(key)
     if _token_candidates(tokens) & whole_tokens:
         return True
-    return bool(set(pairwise(tokens)).intersection(SENSITIVE_KEY_PAIRS))
+    return bool(set(pairwise(tokens)).intersection(pairs))
 
 
 def is_credential_key(key: object) -> bool:
@@ -120,11 +146,26 @@ def is_credential_key(key: object) -> bool:
     the ordinary parameterized-navigation case, while a password there is
     exfiltration.
     """
-    return _matches(key, CREDENTIAL_SUBSTRING_TOKENS, CREDENTIAL_TOKEN_TOKENS)
+    return _matches(
+        key,
+        CREDENTIAL_SUBSTRING_TOKENS,
+        CREDENTIAL_TOKEN_TOKENS,
+        pairs=SENSITIVE_KEY_PAIRS,
+    )
 
 
 def is_sensitive_arg_key(key: object) -> bool:
-    return _matches(key, SUBSTRING_TOKENS, TOKEN_TOKENS)
+    return _matches(key, SUBSTRING_TOKENS, TOKEN_TOKENS, pairs=SENSITIVE_KEY_PAIRS)
+
+
+def _privacy_tier(key: object) -> PrivacyTier | None:
+    if is_credential_key(key):
+        return "credential"
+    if _matches(key, frozenset(), IDENTITY_TOKEN_TOKENS):
+        return "identity"
+    if _matches(key, frozenset(), CONTEXTUAL_TOKEN_TOKENS):
+        return "contextual"
+    return None
 
 
 _MAX_ENCODING_DEPTH = 3
@@ -151,32 +192,136 @@ def _is_identity_key(key: object) -> bool:
     return key not in (None, "") and not is_field_name(key)
 
 
-def _collect_from_mapping(value: Mapping[Any, Any], *, inherited: bool) -> set[str]:
-    values: set[str] = set()
+_TIER_RANK: dict[PrivacyTier, int] = {"contextual": 1, "identity": 2, "credential": 3}
+
+
+def _stronger_tier(inherited: PrivacyTier | None, own: PrivacyTier | None) -> PrivacyTier | None:
+    if inherited is None:
+        return own
+    if own is None or _TIER_RANK[inherited] >= _TIER_RANK[own]:
+        return inherited
+    return own
+
+
+def _child_path(path: str, key: object) -> str:
+    rendered = str(key)
+    if is_field_name(rendered):
+        return f"{path}.{rendered}" if path else rendered
+    # A non-field mapping key is data under a classified branch. Do not put
+    # that data into a rejection message disguised as a path component.
+    return f"{path}[<key>]"
+
+
+def _collect_classified_mapping(
+    value: Mapping[Any, Any],
+    *,
+    inherited: PrivacyTier | None,
+    path: str,
+) -> set[ClassifiedArgValue]:
+    values: set[ClassifiedArgValue] = set()
     for key, item in value.items():
-        if inherited and _is_identity_key(key):
-            values.add(str(key))
-        values.update(_collect_sensitive_values(item, inherited=inherited or is_sensitive_arg_key(key)))
+        if inherited is not None and _is_identity_key(key):
+            values.add(ClassifiedArgValue(str(key), f"{path}[<key>]", inherited))
+        branch_tier = _stronger_tier(inherited, _privacy_tier(key))
+        values.update(
+            _collect_classified_values(
+                item,
+                inherited=branch_tier,
+                path=_child_path(path, key),
+            )
+        )
     return values
 
 
-def _collect_sensitive_values(value: Any, *, inherited: bool) -> set[str]:
-    values: set[str] = set()
+def _collect_classified_sequence(
+    value: Iterable[Any],
+    *,
+    inherited: PrivacyTier | None,
+    path: str,
+) -> set[ClassifiedArgValue]:
+    values: set[ClassifiedArgValue] = set()
+    for index, item in enumerate(value):
+        values.update(_collect_classified_values(item, inherited=inherited, path=f"{path}[{index}]"))
+    return values
+
+
+def _collect_classified_values(
+    value: Any,
+    *,
+    inherited: PrivacyTier | None,
+    path: str,
+) -> set[ClassifiedArgValue]:
     if isinstance(value, Mapping):
-        values.update(_collect_from_mapping(value, inherited=inherited))
-    elif isinstance(value, (list, tuple, set, frozenset)):
-        for item in value:
-            values.update(_collect_sensitive_values(item, inherited=inherited))
-    elif inherited and value not in (None, ""):
-        values.add(str(value))
-    return values
+        return _collect_classified_mapping(value, inherited=inherited, path=path)
+    if isinstance(value, (list, tuple)):
+        return _collect_classified_sequence(value, inherited=inherited, path=path)
+    if isinstance(value, (set, frozenset)):
+        return _collect_classified_sequence(sorted(value, key=repr), inherited=inherited, path=path)
+    if inherited is not None and value not in (None, ""):
+        return {ClassifiedArgValue(str(value), path, inherited)}
+    return set()
+
+
+def classified_arg_values(args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
+    """Classified leaves with their effective tier and value-free-safe path."""
+    values: set[ClassifiedArgValue] = set()
+    for key, value in args.items():
+        values.update(
+            _collect_classified_values(
+                value,
+                inherited=_privacy_tier(key),
+                path=str(key),
+            )
+        )
+    return tuple(sorted(values, key=lambda item: (item.path, -_TIER_RANK[item.tier], item.value)))
 
 
 def sensitive_arg_values(args: Mapping[str, Any]) -> tuple[str, ...]:
-    values: set[str] = set()
-    for key, value in args.items():
-        values.update(_collect_sensitive_values(value, inherited=is_sensitive_arg_key(key)))
-    return tuple(sorted(values, key=len, reverse=True))
+    """Every classified value, independent of blind-scrub admission policy."""
+    return tuple(sorted({item.value for item in classified_arg_values(args)}, key=lambda value: (-len(value), value)))
+
+
+def blind_scrub_policy() -> BlindScrubPolicy:
+    """Resolve the strict policy governing provenance-free value replacement."""
+    raw = os.environ.get(BLIND_SCRUB_POLICY_ENV, "credentials").strip().lower()
+    if raw == "credentials":
+        return "credentials"
+    if raw == "all":
+        return "all"
+    if raw == "reject":
+        return "reject"
+    raise ValueError(f"{BLIND_SCRUB_POLICY_ENV} must be 'credentials', 'all', or 'reject'")
+
+
+def _reject_noncredential_values(classified: tuple[ClassifiedArgValue, ...]) -> None:
+    rejected = [item for item in classified if item.tier != "credential"]
+    if not rejected:
+        return
+    details = ", ".join(sorted({f"{item.path} ({item.tier})" for item in rejected}))
+    raise MacroBlindScrubRejected(f"non-credential classified arguments refused: {details}")
+
+
+def _admitted_classified_values(
+    classified: tuple[ClassifiedArgValue, ...],
+    policy: BlindScrubPolicy,
+) -> tuple[ClassifiedArgValue, ...]:
+    if policy == "reject":
+        _reject_noncredential_values(classified)
+    if policy == "all":
+        return classified
+    return tuple(item for item in classified if item.tier == "credential")
+
+
+def blind_scrub_arg_values(
+    args: Mapping[str, Any],
+    *,
+    policy: BlindScrubPolicy | None = None,
+) -> tuple[str, ...]:
+    """Values admitted to blind scrubbers under the configured policy."""
+    resolved = policy or blind_scrub_policy()
+    classified = classified_arg_values(args)
+    selected = _admitted_classified_values(classified, resolved)
+    return tuple(sorted({item.value for item in selected}, key=lambda value: (-len(value), value)))
 
 
 def _serialized_variants(value: str) -> tuple[str, ...]:
@@ -276,7 +421,12 @@ def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str,
         str(key): marker if is_sensitive_arg_key(key) else _redact_nested_args(value, marker)
         for key, value in args.items()
     }
-    return scrub_sensitive_values(redacted, sensitive_arg_values(args), marker=marker)
+    policy = blind_scrub_policy()
+    # ``reject`` governs macro INVOCATIONS, not read-only rendering of an
+    # existing manifest or result. Structural redaction must remain usable in
+    # that mode, with the same alias handling as the replay-safe default.
+    blind_policy: BlindScrubPolicy = "credentials" if policy == "reject" else policy
+    return scrub_sensitive_values(redacted, blind_scrub_arg_values(args, policy=blind_policy), marker=marker)
 
 
 #: The session attribute that owns its scrub set, in the private namespace
@@ -333,8 +483,8 @@ class SensitiveRecorder:
 
     def _scrubbed(self, fields: dict[str, Any]) -> dict[str, Any]:
         values = self.ledger.values
-        # Nothing to scrub is the common case for a session that never ran a
-        # classified macro, and scrubbing an empty set still copies every field.
+        # Nothing to scrub is the common case for a session that never admitted a
+        # macro value, and scrubbing an empty set still copies every field.
         return scrub_sensitive_values(fields, values) if values else fields
 
     def record(self, action: str, **fields: Any) -> None:

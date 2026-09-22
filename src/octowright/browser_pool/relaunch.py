@@ -73,6 +73,7 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
         har_path=getattr(session, "har_path", None),
         protected=getattr(session, "protected", False),
         protected_reason=getattr(session, "protected_reason", "explicit"),
+        disable_automation_controlled=getattr(session, "disable_automation_controlled", False),
         target_url=getattr(session.page, "url", None) or session.url,
     )
 
@@ -115,6 +116,7 @@ async def _launch_from_snapshot(
         ephemeral=ephemeral,
         session=snapshot.profile is None and snapshot.user_data_dir is not None,
         protected=snapshot.protected,
+        disable_automation_controlled=snapshot.disable_automation_controlled,
     )
 
 

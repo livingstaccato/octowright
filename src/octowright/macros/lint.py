@@ -59,6 +59,7 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "unmock_route": ("pattern",),
     "set_dialog_policy": ("policy",),
     "set_input_files": ("selector",),
+    "upload_files": ("paths",),
     "hover": ("selector",),
     "select_option": ("selector",),
     "drag": (),
@@ -177,6 +178,7 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
         issues.append(Issue(severity="error", code=code, message=message, action_index=outer_index))
 
     _check_simple_locator_fields(action, kind, _report)
+    _check_upload_files_shape(action, kind, _report)
     _check_simple_drag_fields(action, kind, _report)
     _check_a11y_dragdrop_verify_arity(action, kind, _report)
     _check_simple_required_fields(action, kind, _report)
@@ -270,6 +272,64 @@ def _check_simple_locator_fields(action: dict[str, Any], kind: str, report: _Rep
             "replay requires exactly one of role/label/text/test_id and raises ValueError otherwise; keep one",
             "ambiguous_locator",
         )
+
+
+def _check_upload_files_shape(action: dict[str, Any], kind: str, report: _Report) -> None:
+    """Validate the atomic upload action's paths and trigger arity."""
+    if kind != "upload_files":
+        return
+
+    paths = action.get("paths")
+    _check_upload_files_paths(paths, report)
+
+    semantic_finders = _provided_locator_keys(action)
+    selector_provided = action.get("selector") is not None
+    trigger_count = len(semantic_finders) + int(selector_provided)
+    if trigger_count != 1:
+        provided = (["selector"] if selector_provided else []) + semantic_finders
+        detail = f"; got {', '.join(provided)}" if provided else ""
+        report(
+            f"action 'upload_files' requires exactly one trigger: selector or one of role/label/text/test_id{detail}",
+            "invalid_upload_trigger",
+        )
+
+    _check_upload_files_modifiers(action, report)
+
+
+def _check_upload_files_paths(paths: Any, report: _Report) -> None:
+    """Require a non-empty list containing only non-blank path strings."""
+    if not isinstance(paths, list) or not paths:
+        report("action 'upload_files' field 'paths' must be a non-empty list", "invalid_upload_paths")
+        return
+
+    for index, path in enumerate(paths):
+        if not isinstance(path, str) or not path.strip():
+            report(
+                f"action 'upload_files' field 'paths[{index}]' must be a non-empty string",
+                "invalid_upload_paths",
+            )
+            return
+
+
+def _check_upload_files_modifiers(action: dict[str, Any], report: _Report) -> None:
+    """Require parent finders only for active upload trigger modifiers."""
+    if action.get("role_name") is not None and action.get("role") is None:
+        report(
+            "action 'upload_files' field 'role_name' requires 'role'",
+            "invalid_upload_trigger_modifier",
+        )
+
+    exact_flag_parents = {
+        "role_exact": "role",
+        "label_exact": "label",
+        "text_exact": "text",
+    }
+    for exact_flag, parent in exact_flag_parents.items():
+        if bool(action.get(exact_flag)) and action.get(parent) is None:
+            report(
+                f"action 'upload_files' field {exact_flag!r} requires {parent!r}",
+                "invalid_upload_trigger_modifier",
+            )
 
 
 def _check_simple_drag_fields(action: dict[str, Any], kind: str, report: _Report) -> None:

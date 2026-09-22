@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from pydantic import StrictBool
+
 from octowright import _format as fmt
 from octowright import resolve as resolve_mod
 from octowright.browser_pool import limits as _limits
@@ -149,6 +151,11 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "alone (fixed allowlist) needs no opt-in. "
         "All three are launch-time only: never persisted into the recording, so macro replay, "
         "handoff, and fluid relaunch of this instance do NOT carry them forward. "
+        "disable_automation_controlled=True is Chromium-only and disables Blink's "
+        "AutomationControlled feature for this launch, which changes the exposed "
+        "navigator.webdriver signal. It is off by default and is not a general stealth "
+        "or sign-in guarantee. Firefox and WebKit reject it. The setting is recorded and "
+        "preserved by handoff/relaunch. "
         "extra_http_headers sets headers for the WHOLE browser — every page, popup, tab and "
         "subresource, for its entire life — which is the cheapest way to carry an API key or "
         "a test-env header. It is also never restored from a recording (an attacker-supplied "
@@ -190,6 +197,7 @@ async def browser_launch(
     extra_http_headers: dict[str, str] | None = None,
     extra_http_headers_urls: list[str] | None = None,
     disable_gpu: bool | None = None,
+    disable_automation_controlled: StrictBool = False,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -243,6 +251,7 @@ async def browser_launch(
         extra_http_headers=extra_http_headers,
         extra_http_headers_urls=extra_http_headers_urls,
         disable_gpu=disable_gpu,
+        disable_automation_controlled=disable_automation_controlled,
         channel=channel,
         executable_path=executable_path,
         launch_args=launch_args,

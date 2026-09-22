@@ -98,6 +98,7 @@ _ACTION_MAP = {
     "unmock_route": "unmock_route",
     "set_dialog_policy": "set_dialog_policy",
     "set_input_files": "set_input_files",
+    "upload_files": "upload_files",
     "click_by": "click_by",
     "fill_by": "fill_by",
     "a11y_dragdrop": "a11y_dragdrop",

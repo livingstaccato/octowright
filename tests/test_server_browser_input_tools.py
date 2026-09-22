@@ -3,6 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -76,11 +77,112 @@ async def test_mutating_input_tools_outline_mode_return_page_outline(
     outline.assert_awaited_once_with("i")
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        {"selector": "#upload"},
+        {"role": "button", "role_name": "Upload", "role_exact": True},
+        {"role": "button", "role_exact": True},
+        {"label": "Choose file", "label_exact": True},
+        {"text": "Upload files", "text_exact": True},
+        {"test_id": "upload"},
+    ],
+)
+async def test_browser_upload_files_forwards_paths_and_every_trigger_field_by_keyword(
+    _patch_pool_input: MagicMock,
+    trigger: dict[str, Any],
+) -> None:
+    s = _FakeSession()
+    upload_files = AsyncMock(return_value={"ok": True, "paths": ["/tmp/a.txt"]})
+    s.upload_files = upload_files  # type: ignore[attr-defined]
+    _patch_pool_input.get.return_value = s
+
+    out = await _input.browser_upload_files(
+        "i",
+        ["/tmp/a.txt"],
+        timeout_ms=432,
+        **trigger,
+    )
+
+    assert out == {"ok": True, "paths": ["/tmp/a.txt"]}
+    upload_files.assert_awaited_once_with(
+        paths=["/tmp/a.txt"],
+        selector=trigger.get("selector"),
+        role=trigger.get("role"),
+        role_name=trigger.get("role_name"),
+        role_exact=trigger.get("role_exact", False),
+        label=trigger.get("label"),
+        label_exact=trigger.get("label_exact", False),
+        text=trigger.get("text"),
+        text_exact=trigger.get("text_exact", False),
+        test_id=trigger.get("test_id"),
+        timeout_ms=432,
+    )
+
+
+@pytest.mark.anyio
+async def test_browser_upload_files_outline_retains_session_result(
+    _patch_pool_input: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    s = _FakeSession()
+    session_result = {"ok": True, "paths": ["/tmp/a.txt"], "role": "button"}
+    s.upload_files = AsyncMock(return_value=session_result)  # type: ignore[attr-defined]
+    _patch_pool_input.get.return_value = s
+    outline = AsyncMock(return_value={"url": "https://octowright.test", "headings": []})
+    monkeypatch.setattr(_input, "browser_page_outline", outline)
+
+    out = await _input.browser_upload_files(
+        "i",
+        ["/tmp/a.txt"],
+        role="button",
+        response_mode="outline",
+    )
+
+    assert out == {
+        "ok": True,
+        "paths": ["/tmp/a.txt"],
+        "role": "button",
+        "outline": {"url": "https://octowright.test", "headings": []},
+    }
+    assert session_result == {"ok": True, "paths": ["/tmp/a.txt"], "role": "button"}
+    outline.assert_awaited_once_with("i")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("paths", "trigger", "message"),
+    [
+        ("/tmp/a.txt", {"selector": "#upload"}, "non-empty list"),
+        ([], {"selector": "#upload"}, "non-empty list"),
+        (["/tmp/a.txt"], {}, "exactly one trigger"),
+        (["/tmp/a.txt"], {"selector": "#upload", "role": "button"}, "exactly one trigger"),
+        (["/tmp/a.txt"], {"role": "button", "label": "Upload"}, "exactly one trigger"),
+        (["/tmp/a.txt"], {"role_name": "Upload"}, "role_name requires role"),
+        (["/tmp/a.txt"], {"role_exact": True}, "role_exact requires role"),
+        (["/tmp/a.txt"], {"label_exact": True}, "label_exact requires label"),
+        (["/tmp/a.txt"], {"text_exact": True}, "text_exact requires text"),
+    ],
+)
+async def test_browser_upload_files_rejects_invalid_structure_before_pool_access(
+    _patch_pool_input: MagicMock,
+    paths: object,
+    trigger: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        await _input.browser_upload_files("i", paths, **trigger)  # type: ignore[arg-type]
+
+    _patch_pool_input.get.assert_not_called()
+
+
 def test_mutating_input_tool_descriptions_advertise_outline_mode() -> None:
     descriptions = {tool.name: tool.description for tool in _input.mcp._tool_manager.list_tools()}
 
     for tool_name in (
         "browser_type",
+        "browser_upload_files",
         "browser_set_input_files",
         "browser_hover",
         "browser_select_option",
@@ -88,6 +190,30 @@ def test_mutating_input_tool_descriptions_advertise_outline_mode() -> None:
     ):
         if tool_name in descriptions:
             assert "response_mode='outline'" in descriptions[tool_name]
+
+
+def test_file_upload_tool_descriptions_distinguish_atomic_trigger_and_direct_input() -> None:
+    descriptions = {tool.name: tool.description for tool in _input.mcp._tool_manager.list_tools()}
+
+    atomic = descriptions["browser_upload_files"]
+    direct = descriptions["browser_set_input_files"]
+    assert (
+        "arms the file-chooser listener before clicking the trigger, then captures the chooser and assigns `paths`"
+        in atomic
+    )
+    assert "directly targets the <input type=file>" in direct
+    assert "Never click an upload trigger first" in atomic
+    assert "Never click an upload trigger first" in direct
+
+
+def test_browser_upload_files_is_reexported_from_browser_and_server_packages() -> None:
+    from octowright import server
+    from octowright.server import browser
+
+    assert browser.browser_upload_files is _input.browser_upload_files
+    assert server.browser_upload_files is _input.browser_upload_files
+    assert "browser_upload_files" in browser.__all__
+    assert "browser_upload_files" in server.__all__
 
 
 @pytest.mark.anyio

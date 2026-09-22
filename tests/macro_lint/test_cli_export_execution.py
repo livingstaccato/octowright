@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros.runtime import _ACTION_MAP
 
 
@@ -50,11 +51,13 @@ class _Recorder:
 
 
 class _FakeLocator:
-    def __init__(self, rec: _Recorder, label: str) -> None:
-        self._rec, self._label = rec, label
+    def __init__(self, rec: _Recorder, label: str, owner: str | None = None) -> None:
+        self._rec, self._label, self._owner = rec, label, owner
 
     async def click(self, **kw: Any) -> None:
         self._rec.record(f"locator.click:{self._label}", **kw)
+        if self._owner is not None:
+            self._rec.record(f"locator.click:{self._label}:{self._owner}", **kw)
 
     async def fill(self, value: str, **kw: Any) -> None:
         self._rec.record(f"locator.fill:{self._label}", value, **kw)
@@ -76,6 +79,40 @@ class _FakeLocator:
     async def count(self) -> int:
         self._rec.record(f"locator.count:{self._label}")
         return 1
+
+
+class _FakeFileChooser:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def set_files(self, paths: list[str], **kw: Any) -> None:
+        self._rec.record("file_chooser.set_files", paths, **kw)
+
+
+class _FakeFileChooserInfo:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    @property
+    def value(self) -> Any:
+        async def resolve() -> _FakeFileChooser:
+            self._rec.record("file_chooser.await")
+            return _FakeFileChooser(self._rec)
+
+        return resolve()
+
+
+class _FakeFileChooserContext:
+    def __init__(self, rec: _Recorder, timeout: int | None, owner: str) -> None:
+        self._rec, self._timeout, self._owner = rec, timeout, owner
+
+    async def __aenter__(self) -> _FakeFileChooserInfo:
+        self._rec.record("file_chooser.arm", timeout=self._timeout)
+        self._rec.record(f"file_chooser.arm:{self._owner}", timeout=self._timeout)
+        return _FakeFileChooserInfo(self._rec)
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
 
 
 class _FakeHandle:
@@ -106,10 +143,13 @@ class _FakeKeyboard:
 class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
+        self.pages: list[_FakePage] = []
 
     async def new_page(self) -> _FakePage:
         self._rec.record("context.new_page")
-        return _FakePage(self._rec, tag="tab")
+        page = _FakePage(self._rec, tag=f"tab-{len(self.pages)}", context=self)
+        self.pages.append(page)
+        return page
 
     async def route(self, pattern: str, handler: Any) -> None:
         """`inject_headers` routes on the CONTEXT, matching the live session --
@@ -123,11 +163,11 @@ class _FakeContext:
 class _FakePage:
     """Records every call the generated dispatch bodies can make on a page."""
 
-    def __init__(self, rec: _Recorder, tag: str = "main") -> None:
+    def __init__(self, rec: _Recorder, tag: str = "main", context: _FakeContext | None = None) -> None:
         self._rec, self.tag = rec, tag
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
-        self.context = _FakeContext(rec)
+        self.context = context or _FakeContext(rec)
 
     def _log(self, name: str, *args: Any, **kw: Any) -> None:
         self._rec.record(name, *args, **kw)
@@ -156,6 +196,9 @@ class _FakePage:
 
     async def set_input_files(self, selector: str, paths: list[str]) -> None:
         self._log("set_input_files", selector, paths)
+
+    def expect_file_chooser(self, *, timeout: int | None = None) -> _FakeFileChooserContext:
+        return _FakeFileChooserContext(self._rec, timeout, self.tag)
 
     async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
         self._log("set_extra_http_headers", headers)
@@ -204,6 +247,8 @@ class _FakePage:
 
     async def close(self) -> None:
         self._log("close_page", self.tag)
+        if self in self.context.pages:
+            self.context.pages.remove(self)
 
     def get_by_role(self, role: str, **kw: Any) -> _FakeLocator:
         return _FakeLocator(self._rec, "role")
@@ -219,13 +264,19 @@ class _FakePage:
 
     def locator(self, selector: str) -> _FakeLocator:
         """a11y_dragdrop's source/verify_selector_* locators (CSS, not ARIA)."""
-        return _FakeLocator(self._rec, "css")
+        self._log(f"locator.resolve:{self.tag}", selector)
+        return _FakeLocator(self._rec, "css", self.tag)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:
     class _Browser:
+        def __init__(self) -> None:
+            self.context = _FakeContext(rec)
+
         async def new_page(self) -> _FakePage:
-            return _FakePage(rec)
+            page = _FakePage(rec, context=self.context)
+            self.context.pages.append(page)
+            return page
 
         async def close(self) -> None:
             rec.record("browser.close")
@@ -280,6 +331,7 @@ _EVERY_ACTION: list[dict[str, Any]] = [
         "verify_js": "() => true",
     },
     {"action": "set_input_files", "selector": "#file", "paths": ["a.txt"]},
+    {"action": "upload_files", "selector": "#pick-file", "paths": ["b.txt"], "timeout_ms": 321},
     {"action": "resize", "width": 1280, "height": 800},
     {"action": "navigate_back"},
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
@@ -331,6 +383,9 @@ def test_each_branch_reaches_the_playwright_call_it_claims(monkeypatch: pytest.M
         "select_option",
         "drag_and_drop",
         "set_input_files",
+        "file_chooser.arm",
+        "file_chooser.await",
+        "file_chooser.set_files",
         "set_viewport_size",
         "go_back",
         "route",
@@ -352,9 +407,149 @@ def test_recorded_field_spellings_reach_the_right_parameters(monkeypatch: pytest
     assert rec.args_for("drag_and_drop") == ("#a", "#b")
     assert rec.args_for("route") == ("**/api/*",)
     assert rec.args_for("set_input_files") == ("#file", ["a.txt"])
+    assert rec.args_for("file_chooser.set_files") == (["b.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 321}
     assert rec.kwargs_for("select_option") == {"value": "NL"}
     assert rec.args_for("set_viewport_size") == ({"width": 1280, "height": 800},)
     assert rec.kwargs_for("screenshot") == {"path": "shot.png"}
+
+
+@pytest.mark.parametrize(
+    ("trigger", "expected_click"),
+    [
+        ({"selector": "#pick-file"}, "locator.click:css"),
+        ({"role": "button", "role_name": "Upload", "role_exact": True}, "locator.click:role"),
+    ],
+)
+def test_upload_files_arms_clicks_awaits_and_sets_in_order(
+    monkeypatch: pytest.MonkeyPatch, trigger: dict[str, Any], expected_click: str
+) -> None:
+    action = {
+        "action": "upload_files",
+        "paths": ["first.txt", "second.txt"],
+        "timeout_ms": 246,
+        **trigger,
+    }
+    result, rec = _run(monkeypatch, [action])
+
+    assert result == {"executed": 1, "skipped": 0}
+    relevant = [
+        name
+        for name in rec.names()
+        if name in {"file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"}
+    ]
+    assert relevant == ["file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"]
+    assert rec.kwargs_for("file_chooser.arm") == {"timeout": 246}
+    assert rec.kwargs_for(expected_click) == {"timeout": 246}
+    assert rec.args_for("file_chooser.set_files") == (["first.txt", "second.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"), [(None, DEFAULT_ACTION_TIMEOUT_MS), (0, DEFAULT_ACTION_TIMEOUT_MS), (246, 246)]
+)
+def test_upload_files_normalizes_timeout(monkeypatch: pytest.MonkeyPatch, recorded: int | None, expected: int) -> None:
+    action: dict[str, Any] = {"action": "upload_files", "selector": "#pick", "paths": ["file.txt"]}
+    if recorded is not None:
+        action["timeout_ms"] = recorded
+
+    result, rec = _run(monkeypatch, [action])
+
+    assert result == {"executed": 1, "skipped": 0}
+    assert rec.kwargs_for("file_chooser.arm") == {"timeout": expected}
+    assert rec.kwargs_for("locator.click:css") == {"timeout": expected}
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": expected}
+
+
+def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {
+            "action": "upload_files",
+            "selector": "#pick-file",
+            "paths": ["inside-frame.txt"],
+            "timeout_ms": 357,
+        },
+    ]
+    result, rec = _run(monkeypatch, actions)
+    names = rec.names()
+
+    assert result == {"executed": 2, "skipped": 0}
+    assert names.count("file_chooser.arm:main") == 1
+    assert "file_chooser.arm:frame" not in names
+    assert rec.args_for("locator.resolve:frame") == ("#pick-file",)
+    assert "locator.resolve:main" not in names
+    assert names.count("locator.click:css:frame") == 1
+    assert "locator.click:css:main" not in names
+    assert rec.args_for("file_chooser.set_files") == (["inside-frame.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 357}
+
+
+def test_open_url_preserves_active_page_and_frame_until_switch_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "open_url", "url": "https://example.test/new"},
+        {"action": "upload_files", "selector": "#frame-upload", "paths": ["frame.txt"]},
+        {"action": "switch_page", "index": 1},
+        {"action": "upload_files", "selector": "#page-upload", "paths": ["page.txt"]},
+    ]
+
+    result, rec = _run(monkeypatch, actions)
+
+    assert result == {"executed": len(actions), "skipped": 0}
+    names = rec.names()
+    assert names.count("file_chooser.arm:main") == 1
+    assert names.count("locator.click:css:frame") == 1
+    assert names.count("file_chooser.arm:tab-1") == 1
+    assert names.count("locator.click:css:tab-1") == 1
+
+
+def test_close_page_preserves_inactive_identity_and_frame_then_resets_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "open_url", "url": "https://example.test/one"},
+        {"action": "open_url", "url": "https://example.test/two"},
+        {"action": "switch_page", "index": 2},
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {"action": "close_page", "index": 0},
+        {"action": "upload_files", "selector": "#still-frame", "paths": ["frame.txt"]},
+        {"action": "close_page", "index": 1},
+        {"action": "upload_files", "selector": "#remaining", "paths": ["page.txt"]},
+    ]
+
+    result, rec = _run(monkeypatch, actions)
+
+    assert result == {"executed": len(actions), "skipped": 0}
+    assert [args for name, args, _kw in rec.calls if name == "close_page"] == [("main",), ("tab-2",)]
+    assert rec.names().count("file_chooser.arm:tab-2") == 1
+    assert rec.names().count("locator.click:css:frame") == 1
+    assert rec.names().count("file_chooser.arm:tab-1") == 1
+    assert rec.names().count("locator.click:css:tab-1") == 1
+
+
+def test_close_page_without_index_closes_current_and_refuses_last_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, rec = _run(
+        monkeypatch,
+        [
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "switch_page", "index": 1},
+            {"action": "close_page"},
+            {"action": "upload_files", "selector": "#remaining", "paths": ["page.txt"]},
+        ],
+    )
+
+    assert result == {"executed": 4, "skipped": 0}
+    assert rec.args_for("close_page") == ("tab-1",)
+    assert rec.names().count("file_chooser.arm:main") == 1
+    with pytest.raises(RuntimeError, match="last remaining page"):
+        _run(monkeypatch, [{"action": "close_page"}])
 
 
 @pytest.mark.parametrize(

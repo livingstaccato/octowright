@@ -216,6 +216,132 @@ def test_click_by_with_no_locator_field_fails() -> None:
 
 
 # ---------------------------------------------------------------------------
+# upload_files — atomic action shape
+# ---------------------------------------------------------------------------
+
+
+def test_upload_files_is_a_known_action() -> None:
+    issues = lint_macro(_macro([{"action": "upload_files", "paths": ["/tmp/a"], "selector": "#upload"}]))
+    assert all(i.code != "unknown_action" for i in issues)
+
+
+@pytest.mark.parametrize("paths", [None, "one.txt", (), [], {}])
+def test_upload_files_requires_non_empty_paths_list(paths: Any) -> None:
+    action: dict[str, Any] = {"action": "upload_files", "selector": "#upload"}
+    if paths is not None:
+        action["paths"] = paths
+    issues = lint_macro(_macro([action]))
+    issue = _only(issues, "invalid_upload_paths")
+    assert "non-empty list" in issue.message
+
+
+@pytest.mark.parametrize(
+    ("paths", "invalid_index"),
+    [
+        ([None], 0),
+        ([123], 0),
+        ([""], 0),
+        ([" \t "], 0),
+        (["/tmp/valid", None], 1),
+    ],
+)
+def test_upload_files_paths_must_contain_non_empty_strings(paths: list[Any], invalid_index: int) -> None:
+    action = {"action": "upload_files", "paths": paths, "selector": "#upload"}
+    issue = _only(lint_macro(_macro([action])), "invalid_upload_paths")
+    assert f"paths[{invalid_index}]" in issue.message
+    assert "non-empty string" in issue.message
+
+
+@pytest.mark.parametrize("paths", [["/tmp/a"], ["{{upload_path}}"], ["/tmp/a", "{{upload_path}}"]])
+def test_upload_files_accepts_non_empty_path_strings_and_placeholders(paths: list[str]) -> None:
+    action = {"action": "upload_files", "paths": paths, "selector": "#upload"}
+    assert lint_macro(_macro([action])) == []
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"action": "upload_files", "paths": ["/tmp/a"]},
+        {
+            "action": "upload_files",
+            "paths": ["/tmp/a"],
+            "selector": "#upload",
+            "role": "button",
+        },
+        {
+            "action": "upload_files",
+            "paths": ["/tmp/a"],
+            "role": "button",
+            "label": "Upload",
+        },
+    ],
+)
+def test_upload_files_requires_exactly_one_trigger(action: dict[str, Any]) -> None:
+    issue = _only(lint_macro(_macro([action])), "invalid_upload_trigger")
+    assert "exactly one" in issue.message
+
+
+@pytest.mark.parametrize(
+    ("modifier", "finder"),
+    [
+        ("role_name", "role"),
+        ("role_exact", "role"),
+        ("label_exact", "label"),
+        ("text_exact", "text"),
+    ],
+)
+def test_upload_files_rejects_modifier_without_parent_finder(modifier: str, finder: str) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/a"], modifier: True}
+    if modifier == "role_name":
+        action[modifier] = "Upload"
+    issues = lint_macro(_macro([action]))
+    issue = _only(issues, "invalid_upload_trigger_modifier")
+    assert modifier in issue.message
+    assert finder in issue.message
+
+
+@pytest.mark.parametrize(
+    ("exact_flag", "trigger"),
+    [
+        ("role_exact", {"selector": "#upload"}),
+        ("label_exact", {"test_id": "upload"}),
+        ("text_exact", {"role": "button"}),
+    ],
+)
+def test_upload_files_accepts_false_exact_flag_without_its_finder(exact_flag: str, trigger: dict[str, Any]) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/a"], exact_flag: False, **trigger}
+    assert lint_macro(_macro([action])) == []
+
+
+def test_upload_files_rejects_empty_role_name_without_role() -> None:
+    action = {
+        "action": "upload_files",
+        "paths": ["/tmp/a"],
+        "selector": "#upload",
+        "role_name": "",
+    }
+    issue = _only(lint_macro(_macro([action])), "invalid_upload_trigger_modifier")
+    assert "role_name" in issue.message
+    assert "role" in issue.message
+
+
+@pytest.mark.parametrize(
+    "trigger",
+    [
+        {"selector": "#upload"},
+        {"role": "button", "role_exact": True},
+        {"role": "button", "role_name": "Upload", "role_exact": True},
+        {"label": "Choose file", "label_exact": True},
+        {"text": "Upload files", "text_exact": True},
+        {"test_id": "upload"},
+    ],
+)
+def test_upload_files_accepts_each_trigger_shape(trigger: dict[str, Any]) -> None:
+    action = {"action": "upload_files", "paths": ["/tmp/a"], **trigger}
+    assert lint_macro(_macro([action])) == []
+
+
+# ---------------------------------------------------------------------------
 # _check_simple — required field None or empty string both trip the rule
 # ---------------------------------------------------------------------------
 

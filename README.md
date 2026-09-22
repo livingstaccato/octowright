@@ -269,7 +269,8 @@ appends a record to that instance's JSONL log.
 | `browser_hover` | Hover the cursor over a CSS selector (triggers `:hover` / hover-reveal menus / tooltips). |
 | `browser_select_option` | Select one option in a native `<select>` by `value`, `label`, or 0-based `index`. |
 | `browser_drag` | Drag-and-drop from `source_selector` onto `target_selector` (Playwright `drag_and_drop`). |
-| `browser_set_input_files` | Upload files into an `<input type=file>`. |
+| `browser_upload_files` | Upload through a visible trigger atomically: it arms the native file-chooser listener before clicking, then assigns the files. Use this for visible upload buttons; never click the trigger first. |
+| `browser_set_input_files` | Upload directly into a known `<input type=file>` selector. Use this only when targeting the input itself, not a visible trigger. |
 
 Recorded CSS `click` and `fill` actions also capture semantic metadata when
 Playwright can resolve it. Macro playback and exported replay scripts try that
@@ -419,7 +420,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 133 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 134 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -438,7 +439,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; `pip install octowright-terminal`, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every core-install tool registers. | 133 |
+| `all` (or unset) | Default — every core-install tool registers. | 134 |
 
 ```bash
 octowright serve --profile=core              # 31 tools — core + always-on

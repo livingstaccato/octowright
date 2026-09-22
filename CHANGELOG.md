@@ -12,6 +12,42 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.25.0] - 2026-09-21
+
+### Added
+- **Chromium sessions can opt out of the automation-controlled browser signal
+  when a site rejects automated sign-in.** Set
+  `disable_automation_controlled: true` at launch to add Chromium's
+  `--disable-blink-features=AutomationControlled` switch. The option defaults
+  to `false`, accepts only a strict boolean, is rejected for Firefox and WebKit,
+  and persists across relaunch, handoff, and HTTP relaunch paths. It changes
+  only Chromium's automation-controlled signal; Octowright's title, status,
+  emoji, viewport, recording, and other browser behavior remain enabled.
+
+### Fixed
+- **Visible upload triggers no longer leave an orphaned native file chooser
+  that can stall later actions or browser close.** `browser_upload_files` now
+  arms the chooser listener before it clicks the trigger and assigns the staged
+  files as one atomic operation. Use `browser_set_input_files` only when
+  targeting a known `<input type=file>` directly; never click an upload trigger
+  before calling the atomic tool.
+- **Short or common identity/context macro arguments no longer corrupt replay
+  recordings** (#247). Blind value replacement now defaults to credential-tier
+  arguments only, while every classified key remains structurally redacted.
+  `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY=all` preserves the previous
+  maximum-privacy behavior, and `=reject` refuses identity/context arguments
+  before browser or artifact side effects. Runtime diagnostics, session
+  ledgers, screenshots, artifact reports and generated scripts share the same
+  strict policy.
+
+### Security
+- **Source checkouts now resolve AsyncSSH 2.24.0 or newer on supported
+  platforms**, closing CVE-2026-62949 in the terminal plugin's SSH dependency.
+  The floor is a uv-only constraint, not a dependency published by core or the
+  terminal plugin. Windows ARM64 keeps its existing resolution because the
+  patched AsyncSSH release requires a Cryptography version with no installable
+  wheel on that platform.
+
 ## [0.24.0] - 2026-09-13
 
 ### Added
@@ -3078,7 +3114,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.24.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/livingstaccato/octowright/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/livingstaccato/octowright/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/livingstaccato/octowright/compare/v0.22.0...v0.22.1

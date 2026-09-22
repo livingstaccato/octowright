@@ -27,7 +27,12 @@ from octowright.browser_pool.lifecycle import (
     close_browser,
     shutdown_pool,
 )
-from octowright.browser_pool.options import GPU_DISABLE_ARGS, LaunchOptions, resolve_disable_gpu
+from octowright.browser_pool.options import (
+    AUTOMATION_CONTROLLED_DISABLE_ARG,
+    GPU_DISABLE_ARGS,
+    LaunchOptions,
+    resolve_disable_gpu,
+)
 from octowright.browser_pool.refusals import RefusalTracker
 from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
@@ -520,6 +525,7 @@ class BrowserPool:
         executable_path: str | None = None,
         launch_args: list[str] | None = None,
         disable_gpu: bool | None = None,
+        disable_automation_controlled: bool = False,
     ) -> dict[str, Any]:
         """Chromium-only window tiling + new-tab-page override extension, plus
         any caller-supplied channel/executable_path/launch_args passthrough.
@@ -538,7 +544,13 @@ class BrowserPool:
         (e.g. its own --disable-extensions-except) if it deliberately chooses
         to — the reverse would silently break tiling/new-tab-override/shm.
         """
-        args = await self._chromium_args(kind=kind, tile=tile, headless=headless, disable_gpu=disable_gpu)
+        args = await self._chromium_args(
+            kind=kind,
+            tile=tile,
+            headless=headless,
+            disable_gpu=disable_gpu,
+            disable_automation_controlled=disable_automation_controlled,
+        )
         if launch_args:
             args.extend(launch_args)
         out: dict[str, Any] = {}
@@ -550,7 +562,15 @@ class BrowserPool:
             out["executable_path"] = executable_path
         return out
 
-    async def _chromium_args(self, *, kind: str, tile: bool, headless: bool, disable_gpu: bool | None) -> list[str]:
+    async def _chromium_args(
+        self,
+        *,
+        kind: str,
+        tile: bool,
+        headless: bool,
+        disable_gpu: bool | None,
+        disable_automation_controlled: bool = False,
+    ) -> list[str]:
         """Chromium-only argv: shm workaround, GPU escape hatch, new-tab
         extension, tiling. EMPTY for every other engine -- Firefox and WebKit
         would be handed argv they do not understand."""
@@ -571,6 +591,8 @@ class BrowserPool:
             # launch_args flag can still override it, matching the ordering
             # rule documented below.
             args.extend(GPU_DISABLE_ARGS)
+        if disable_automation_controlled:
+            args.append(AUTOMATION_CONTROLLED_DISABLE_ARG)
         if not headless:
             args.extend(self._headed_chromium_args())
         if tile and not headless:

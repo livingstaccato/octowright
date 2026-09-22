@@ -24,6 +24,10 @@ skinparam noteBorderColor #d1d5db
 top to bottom direction
 
 [BrowserSession] as SESSION
+[Macro argument classifier\ncredential / identity / contextual] as CLASSIFIER
+[Blind-scrub policy\ncredentials (default) / all / reject] as POLICY
+[SensitiveRecorder\npolicy-admitted session ledger] as SCRUBBER
+[Structured args / results\nall classified keys redacted] as STRUCTURED
 
 ' ─── WRITE PATHS: every arrow leaves SESSION going down ───────────────
 package "Write paths — session produces artifacts" #f9fafb {
@@ -45,7 +49,11 @@ package "Write paths — session produces artifacts" #f9fafb {
   }
 }
 
-SESSION --> JSONL : every recorder.record(...)
+CLASSIFIER --> POLICY : classified leaves\nwith value-free paths
+CLASSIFIER --> STRUCTURED : key provenance\n(all tiers)
+POLICY --> SCRUBBER : admitted values only
+SESSION --> SCRUBBER : every recorder.record(...)
+SCRUBBER --> JSONL : blind-scrub before write
 SESSION --> WEBM : Playwright record_video_dir
 SESSION --> DLFILES : page.on('download')
 SESSION --> FAILPNG : on macro_run failure
@@ -90,6 +98,13 @@ note bottom of REC
   WRITE side (JSONL / video / HAR / downloads) for one pool
   — the dashboard/discovery/cleanup readers still use the
   global root. For concurrent-pools-in-one-process embedders.
+end note
+
+note right of POLICY
+  reject stops before browser/artifact side effects.
+  credentials keeps short/common identity values from
+  corrupting unrelated selectors, URLs and prose.
+  all preserves the legacy maximum-privacy behavior.
 end note
 
 note bottom of MAC

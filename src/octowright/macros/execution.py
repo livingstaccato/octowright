@@ -24,13 +24,13 @@ from octowright.macros.privacy import (
     install_sensitive_recorder,
 )
 from octowright.macros.privacy import (
+    blind_scrub_arg_values as _sensitive_arg_values,
+)
+from octowright.macros.privacy import (
     redact_args as _privacy_redact_args,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
-)
-from octowright.macros.privacy import (
-    sensitive_arg_values as _sensitive_arg_values,
 )
 from octowright.macros.repair import repair_apply as repair_apply_impl
 from octowright.macros.repair import repair_preview as repair_preview_impl
@@ -223,7 +223,7 @@ async def _dispatch_classified_screenshot(
     action: dict[str, Any],
     sensitive_values: tuple[str, ...],
 ) -> tuple[int, int]:
-    """Route a screenshot taken under classified args through the privacy boundary.
+    """Route a screenshot holding policy-admitted values through the privacy boundary.
 
     A screenshot of a page a credential was typed into is a durable copy of
     that credential, so the generic capture path is never used. In order: an
@@ -251,9 +251,10 @@ def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], r
 
     Parent substitution has already run, so these are the values the child will
     see, and a deeper call reaches ``_dispatch_one`` again with its own
-    substituted arguments, so every depth is covered. They join the run's set and
-    the session ledger the one recorder wrapper reads. A malformed ``args`` is
-    left for ``validate_macro_call_shape`` to report.
+    substituted arguments, so every depth is covered. Values admitted by the
+    configured policy join the run's set and the session ledger the one recorder
+    wrapper reads. A malformed ``args`` is left for
+    ``validate_macro_call_shape`` to report.
     """
     call_args = action.get("args")
     if not isinstance(call_args, dict):
@@ -584,9 +585,9 @@ async def _run_macro_impl(
     effective_args = args or {}
     sensitive_values = _sensitive_arg_values(effective_args)
     install_sensitive_recorder(session, sensitive_values)
-    # What THIS run has classified: its own arguments plus every nested call's,
-    # appended as they execute. The failure payload and the classified-screenshot
-    # refusal read it; the recorder reads the session ledger instead.
+    # What THIS run has admitted for blind scrubbing: its own arguments plus every
+    # nested call's, appended as they execute. Failure payloads and screenshot
+    # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args)
 

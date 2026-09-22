@@ -203,6 +203,23 @@ async def test_browser_launch_forwards_channel_executable_path_launch_args(
 
 
 @pytest.mark.anyio
+async def test_browser_launch_forwards_disable_automation_controlled(
+    _patch_state: dict[str, MagicMock],
+) -> None:
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
+
+    await _lifecycle.browser_launch(
+        url="https://x.com",
+        ephemeral=True,
+        disable_automation_controlled=True,
+    )
+
+    _, kwargs = pool.launch.call_args
+    assert kwargs["disable_automation_controlled"] is True
+
+
+@pytest.mark.anyio
 async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """browser_capture_and_close now routes through the REAL close
     coordinator (capture runs as a preparation callback inside the
@@ -242,6 +259,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     session.stabilize = True
     session.trace = False
     session.har_path = None
+    session.disable_automation_controlled = True
     session.user_data_dir = None
     session.url = "https://octowright.com/original"
     session.page.url = "https://octowright.com/current"
@@ -258,6 +276,7 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     assert kwargs["label"] == "player"
     assert kwargs["profile"] == "profile-a"
     assert kwargs["headed"] is True
+    assert kwargs["disable_automation_controlled"] is True
     assert "viewport_w" not in kwargs
     assert "viewport_h" not in kwargs
     assert result["old_instance_id"] == "old-id"

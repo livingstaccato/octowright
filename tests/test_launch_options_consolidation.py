@@ -21,6 +21,7 @@ import pytest
 
 from octowright.browser_pool import launch_helpers
 from octowright.browser_pool.options import LaunchOptions
+from octowright.request_errors import InvalidRequestError
 
 # ─── to_pool_kwargs ──────────────────────────────────────────────────────────
 
@@ -42,7 +43,7 @@ class TestToPoolKwargs:
         exclusion, being an output of ``resolve_protected`` rather than an input.
         """
         opts = LaunchOptions(
-            kind="firefox",
+            kind="chromium",
             url="https://x.test",
             headed=False,
             label="lab",
@@ -69,10 +70,11 @@ class TestToPoolKwargs:
             extra_http_headers={"X-Env": "staging"},
             extra_http_headers_urls=["**/api/**"],
             disable_gpu=True,
+            disable_automation_controlled=True,
             base_url="https://dev.test",
         )
         assert opts.to_pool_kwargs() == {
-            "kind": "firefox",
+            "kind": "chromium",
             "base_url": "https://dev.test",
             "url": "https://x.test",
             "headed": False,
@@ -100,6 +102,7 @@ class TestToPoolKwargs:
             "extra_http_headers": {"X-Env": "staging"},
             "extra_http_headers_urls": ["**/api/**"],
             "disable_gpu": True,
+            "disable_automation_controlled": True,
         }
 
     def test_defaults(self) -> None:
@@ -117,6 +120,7 @@ class TestToPoolKwargs:
         assert kwargs["tile"] is False
         assert kwargs["ephemeral"] is False
         assert kwargs["session"] is False
+        assert kwargs["disable_automation_controlled"] is False
 
     def test_from_mapping_round_trip(self) -> None:
         """``from_mapping(d).to_pool_kwargs()`` reproduces the input keys."""
@@ -136,6 +140,19 @@ class TestToPoolKwargs:
 
 
 class TestFromLaunchRecord:
+    @pytest.mark.parametrize("value", ["false", 0, 1, None, [], {}])
+    def test_disable_automation_controlled_rejects_non_boolean(self, value: object) -> None:
+        with pytest.raises(InvalidRequestError, match="must be a boolean"):
+            LaunchOptions.from_launch_record({"kind": "chromium", "disable_automation_controlled": value})
+
+    def test_disable_automation_controlled_restores_true(self) -> None:
+        opts = LaunchOptions.from_launch_record({"kind": "chromium", "disable_automation_controlled": True})
+        assert opts.disable_automation_controlled is True
+
+    def test_old_record_defaults_disable_automation_controlled_false(self) -> None:
+        opts = LaunchOptions.from_launch_record({"kind": "chromium"})
+        assert opts.disable_automation_controlled is False
+
     def test_viewport_dict_unpacks_to_w_h(self) -> None:
         record = {
             "kind": "chromium",

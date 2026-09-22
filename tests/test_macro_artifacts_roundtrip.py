@@ -42,6 +42,7 @@ from typing import Any
 
 import pytest
 
+from octowright.macros.privacy import BLIND_SCRUB_POLICY_ENV, MacroBlindScrubRejected
 from tests._macro_artifact_fixtures import (
     _CapturingSession,
     _FakeSession,
@@ -386,6 +387,68 @@ async def test_capture_true_never_writes_automatic_images_for_classified_args(
     assert canary.encode() not in b"".join(
         path.read_bytes() for path in Path(result["paths"]["run_dir"]).rglob("*") if path.is_file()
     )
+
+
+@pytest.mark.asyncio
+async def test_identity_only_artifact_run_takes_ordinary_screenshots_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    session = _CapturingSession(tmp_path)
+
+    result = await macro_artifacts.run_macro_artifact(
+        session=session,
+        name="login",
+        args={"email": "person@example.test"},
+        capture=True,
+    )
+
+    assert result["ok"] is True
+    assert len(session.shots) == 2
+
+
+@pytest.mark.asyncio
+async def test_reject_policy_fails_before_artifact_writes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "reject")
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    replayed: list[str] = []
+
+    async def replay(**_kwargs: Any) -> dict[str, Any]:
+        replayed.append("replayed")
+        return {"executed": 1, "skipped": 0}
+
+    monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", replay)
+
+    with pytest.raises(MacroBlindScrubRejected):
+        await macro_artifacts.run_macro_artifact(
+            session=_FakeSession(tmp_path),
+            name="login",
+            args={"user": "admin"},
+            capture=False,
+        )
+
+    assert replayed == []
+    assert not (tmp_path / "recordings" / "artifacts").exists()
+
+
+@pytest.mark.parametrize("operation", ["plan", "export"])
+def test_reject_policy_blocks_non_run_artifact_writes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, operation: str
+) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "reject")
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+
+    with pytest.raises(MacroBlindScrubRejected):
+        if operation == "plan":
+            macro_artifacts.plan_macro_artifact("login", args={"user": "admin"})
+        else:
+            macro_artifacts.export_macro_cli(name="login", args={"user": "admin"})
+
+    assert not (tmp_path / "recordings" / "artifacts").exists()
 
 
 # ---------------------------------------------------------------------------

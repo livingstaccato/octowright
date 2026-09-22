@@ -23,7 +23,7 @@ from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import redact_args, scrub_sensitive_values, sensitive_arg_values
+from octowright.macros.privacy import blind_scrub_arg_values, redact_args, scrub_sensitive_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -38,6 +38,7 @@ def _cap_macro(name: str) -> str:
 def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     macro = load_macro(name)
     args_used = dict(args or {})
+    blind_scrub_arg_values(args_used)
     missing_args = _missing_args(macro, args_used)
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
@@ -115,6 +116,7 @@ def export_macro_cli(
 ) -> dict[str, Any]:
     macro = load_macro(name)
     args_used = dict(args or {})
+    blind_scrub_arg_values(args_used)
     store = ArtifactStore()
     target = store.resolve_macro_export_path(name, out_path)
     write_macro_cli(path=target, name=name, macro=macro, args=args_used, include_evidence=include_evidence)
@@ -156,7 +158,7 @@ async def run_macro_artifact(
     async with session.operation("macro_artifact_run"):
         macro = load_macro(name)
         args_used = dict(args or {})
-        sensitive_values = sensitive_arg_values(args_used)
+        sensitive_values = blind_scrub_arg_values(args_used)
         store = ArtifactStore()
         artifact_dir = store.macro_dir(name)
         runs_dir = artifact_dir / "runs"

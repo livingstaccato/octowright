@@ -51,6 +51,7 @@ def _full_session() -> MagicMock:
         "unmock_route",
         "set_dialog_policy",
         "set_input_files",
+        "upload_files",
         "click_by",
         "fill_by",
     ):
@@ -103,6 +104,7 @@ class TestConstantTables:
             ("unmock_route", "unmock_route"),
             ("set_dialog_policy", "set_dialog_policy"),
             ("set_input_files", "set_input_files"),
+            ("upload_files", "upload_files"),
             ("click_by", "click_by"),
             ("fill_by", "fill_by"),
             ("hover", "hover"),
@@ -122,7 +124,7 @@ class TestConstantTables:
         """_ACTION_MAP must keep its kind→method-name binding stable."""
         assert _ACTION_MAP[kind] == method
 
-    def test_action_map_size_is_exactly_33(self) -> None:
+    def test_action_map_size_is_exactly_34(self) -> None:
         """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly.
 
         Went 27 -> 29 when switch_frame and get_text_by became replayable. Both
@@ -131,9 +133,10 @@ class TestConstantTables:
         with set_extra_http_headers (page-level headers a run learns partway
         through, e.g. a token obtained by logging in), 30 -> 32 with
         inject_headers/uninject_headers (per-endpoint injection), and 32 -> 33
-        with a11y_dragdrop (keyboard WAI-ARIA APG drag-and-drop).
+        with a11y_dragdrop (keyboard WAI-ARIA APG drag-and-drop), and 33 -> 34
+        with atomic upload_files.
         """
-        assert len(_ACTION_MAP) == 33
+        assert len(_ACTION_MAP) == 34
 
     def test_type_kind_maps_to_type_text_not_type(self) -> None:
         """Pin the rename from 'type' kind → session.type_text method (not session.type)."""
@@ -245,6 +248,48 @@ class TestDispatchStandardKwargs:
             {"action": "set_input_files", "selector": "#file", "paths": ["/a.txt", "/b.txt"]},
         )
         s.set_input_files.assert_awaited_once_with(selector="#file", paths=["/a.txt", "/b.txt"])
+
+    @pytest.mark.anyio
+    async def test_upload_files_forwards_semantic_trigger_without_decomposing_atomic_action(self) -> None:
+        """Atomic upload replay calls upload_files, not the legacy click/set pair."""
+        s = _full_session()
+        await _dispatch_via_simple(
+            s,
+            {
+                "action": "upload_files",
+                "paths": ["/uploads/report.pdf"],
+                "role": "button",
+                "role_name": "Upload files",
+                "role_exact": True,
+            },
+        )
+        s.upload_files.assert_awaited_once_with(
+            paths=["/uploads/report.pdf"],
+            role="button",
+            role_name="Upload files",
+            role_exact=True,
+        )
+        s.click_by.assert_not_called()
+        s.set_input_files.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_upload_files_forwards_selector_and_strips_recording_noise(self) -> None:
+        """Selector-trigger recordings replay with only upload_files inputs."""
+        s = _full_session()
+        await _dispatch_via_simple(
+            s,
+            {
+                "action": "upload_files",
+                "ts": "2026-01-01T00:00:00Z",
+                "kind": "chromium",
+                "profile": "cosmo",
+                "instance_id": "deadbeef",
+                "paths": ["/uploads/report.pdf"],
+                "selector": "#upload",
+                "timeout_ms": 250,
+            },
+        )
+        s.upload_files.assert_awaited_once_with(paths=["/uploads/report.pdf"], selector="#upload", timeout_ms=250)
 
     @pytest.mark.anyio
     async def test_recording_noise_keys_are_stripped(self) -> None:

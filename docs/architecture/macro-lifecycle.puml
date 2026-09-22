@@ -31,7 +31,18 @@ end note
 
 |replay|
 :macro_run(instance_id, name,\nargs={"email":"other@x"});
-:load_macro → substitute {{...}} from args;
+:load_macro;
+:classify argument leaves by\ncredential / identity / contextual tier;
+:resolve OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY\n(credentials default / all / reject);
+if (reject + identity/context value?) then (yes)
+  :raise value-free policy error\nbefore browser or artifact side effects;
+  stop
+else (no)
+  :structurally redact every classified key;
+  :select blind-scrub values by policy;
+  :append selected values to run +\npermanent session privacy ledgers;
+endif
+:substitute {{...}} from args;
 :dispatch each action through BrowserSession\n(navigate, click, fill, expect_*, mock_route, ...);
 if (any action raises?) then (yes)
   :auto-capture diagnostic_bundle\n(html→disk, console_tail, screenshot, url, title);
