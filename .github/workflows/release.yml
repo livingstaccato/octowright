@@ -17,6 +17,8 @@ name: 🚀 Release
 # environment pypi. Same on test.pypi.org with environment testpypi. Each
 # distribution needs its OWN trusted publisher, and a name PyPI has never seen
 # is registered as a "pending publisher" before its first upload.
+# Maintainers: follow docs/releasing.md and validate release-note sources with
+# scripts/github_release_notes.py before publishing a release.
 on:
   release:
     types: [published]
