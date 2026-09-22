@@ -321,7 +321,9 @@ def test_cli_entrypoint_runs_check_body_without_gh(tmp_path: Path) -> None:
 
 
 def test_committed_release_note_sources_validate_with_expected_count() -> None:
-    assert release_notes.validate_local_sources() == 47
+    expected_count = 1 + len(list((release_notes.REPO_ROOT / "src/octowright/upgrade/highlights").glob("*.json")))
+
+    assert release_notes.validate_local_sources() == expected_count
 
 
 def test_committed_release_note_sources_contain_no_issue_reference_tokens() -> None:
@@ -342,6 +344,13 @@ def test_release_guide_uses_the_draft_creation_helper() -> None:
 
     assert "scripts/github_release_notes.py create-draft vX.Y.Z" in guide
     assert "/tmp/octowright-release-notes.md" in guide
+    assert "pushed to GitHub" in guide
+    assert "--verify-tag" in guide
+    assert "Before publication, verify:" in guide
+    assert "Prerelease tags or suffixes do not select TestPyPI." in guide
+    assert "marked and verified as a prerelease" in guide
+    assert "github.event.release.prerelease" in guide
+    assert "Stable releases must remain unmarked." in guide
 
 
 def test_release_workflow_links_to_the_release_guide() -> None:

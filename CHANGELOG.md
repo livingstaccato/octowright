@@ -250,7 +250,7 @@ a section that is already tagged and on PyPI.
   safe); it is still collected wherever it appears as a value. Two structural
   gaps are tracked rather than fixed: recorder wrappers stack across runs on a
   long-lived session, and a nested `macro_call`'s own arguments are not
-  collected -- latent in the measured corpus, which is stated in each.
+  collected. Both gaps were latent in the measured corpus.
 - **`octowright.macros.privacy.sensitive_value_variants()`**, the public
   multi-value form of the per-value variant expansion, for a caller that has to
   remove every encoding of every classified value from a live DOM before a
