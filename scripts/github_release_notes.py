@@ -23,6 +23,7 @@ _REFERENCE_PATTERNS = (
     re.compile(r"\(#\d+\)"),
     re.compile(r"^\s*#\d+\s*:"),
     re.compile(r"/issues/\d+\b"),
+    re.compile(r"(?<![#\w-])#\d+\b"),
 )
 
 
@@ -47,16 +48,19 @@ def local_note_paths(repo_root: Path) -> list[Path]:
     return [repo_root / "CHANGELOG.md", *highlight_paths]
 
 
-def _highlight_notes(value: Any) -> list[tuple[str, str]]:
-    """Extract title/body pairs from a highlight JSON document."""
-    entries = value if isinstance(value, list) else [value]
-    notes: list[tuple[str, str]] = []
-    for entry in entries:
-        if isinstance(entry, dict):
-            notes.extend((str(entry.get(field, "")), field) for field in ("title", "body"))
-        else:
-            notes.append((str(entry), "body"))
-    return notes
+def _validate_highlight_document(path: Path, value: Any) -> None:
+    """Validate the production shape of one versioned highlight document."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{path}: highlight entries must be a non-empty list")
+
+    for entry_number, entry in enumerate(value, start=1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{path}: entry {entry_number} must be an object")
+        for field in ("title", "body"):
+            note = entry.get(field)
+            if not isinstance(note, str):
+                raise ValueError(f"{path}: entry {entry_number} {field} must be a string")
+            validate_notes(note, source=f"{path}: entry {entry_number} {field}")
 
 
 def validate_local_sources(repo_root: Path = REPO_ROOT) -> int:
@@ -65,9 +69,7 @@ def validate_local_sources(repo_root: Path = REPO_ROOT) -> int:
     for path in paths:
         text = path.read_text(encoding="utf-8")
         if path.suffix == ".json":
-            document = json.loads(text)
-            for note, field in _highlight_notes(document):
-                validate_notes(note, source=f"{path} ({field})")
+            _validate_highlight_document(path, json.loads(text))
         else:
             validate_notes(text, source=str(path))
     return len(paths)
