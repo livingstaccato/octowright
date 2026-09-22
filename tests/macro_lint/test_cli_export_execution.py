@@ -50,11 +50,13 @@ class _Recorder:
 
 
 class _FakeLocator:
-    def __init__(self, rec: _Recorder, label: str) -> None:
-        self._rec, self._label = rec, label
+    def __init__(self, rec: _Recorder, label: str, owner: str | None = None) -> None:
+        self._rec, self._label, self._owner = rec, label, owner
 
     async def click(self, **kw: Any) -> None:
         self._rec.record(f"locator.click:{self._label}", **kw)
+        if self._owner is not None:
+            self._rec.record(f"locator.click:{self._label}:{self._owner}", **kw)
 
     async def fill(self, value: str, **kw: Any) -> None:
         self._rec.record(f"locator.fill:{self._label}", value, **kw)
@@ -100,11 +102,12 @@ class _FakeFileChooserInfo:
 
 
 class _FakeFileChooserContext:
-    def __init__(self, rec: _Recorder, timeout: int | None) -> None:
-        self._rec, self._timeout = rec, timeout
+    def __init__(self, rec: _Recorder, timeout: int | None, owner: str) -> None:
+        self._rec, self._timeout, self._owner = rec, timeout, owner
 
     async def __aenter__(self) -> _FakeFileChooserInfo:
         self._rec.record("file_chooser.arm", timeout=self._timeout)
+        self._rec.record(f"file_chooser.arm:{self._owner}", timeout=self._timeout)
         return _FakeFileChooserInfo(self._rec)
 
     async def __aexit__(self, *_a: Any) -> None:
@@ -191,7 +194,7 @@ class _FakePage:
         self._log("set_input_files", selector, paths)
 
     def expect_file_chooser(self, *, timeout: int | None = None) -> _FakeFileChooserContext:
-        return _FakeFileChooserContext(self._rec, timeout)
+        return _FakeFileChooserContext(self._rec, timeout, self.tag)
 
     async def set_extra_http_headers(self, headers: dict[str, str]) -> None:
         self._log("set_extra_http_headers", headers)
@@ -255,7 +258,8 @@ class _FakePage:
 
     def locator(self, selector: str) -> _FakeLocator:
         """a11y_dragdrop's source/verify_selector_* locators (CSS, not ARIA)."""
-        return _FakeLocator(self._rec, "css")
+        self._log(f"locator.resolve:{self.tag}", selector)
+        return _FakeLocator(self._rec, "css", self.tag)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:
@@ -428,6 +432,32 @@ def test_upload_files_arms_clicks_awaits_and_sets_in_order(
     assert rec.kwargs_for(expected_click) == {"timeout": 246}
     assert rec.args_for("file_chooser.set_files") == (["first.txt", "second.txt"],)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
+
+
+def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions = [
+        {"action": "switch_frame", "selector": "iframe#upload"},
+        {
+            "action": "upload_files",
+            "selector": "#pick-file",
+            "paths": ["inside-frame.txt"],
+            "timeout_ms": 357,
+        },
+    ]
+    result, rec = _run(monkeypatch, actions)
+    names = rec.names()
+
+    assert result == {"executed": 2, "skipped": 0}
+    assert names.count("file_chooser.arm:main") == 1
+    assert "file_chooser.arm:frame" not in names
+    assert rec.args_for("locator.resolve:frame") == ("#pick-file",)
+    assert "locator.resolve:main" not in names
+    assert names.count("locator.click:css:frame") == 1
+    assert "locator.click:css:main" not in names
+    assert rec.args_for("file_chooser.set_files") == (["inside-frame.txt"],)
+    assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 357}
 
 
 @pytest.mark.parametrize(

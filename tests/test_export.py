@@ -563,6 +563,33 @@ def test_ts_export_upload_files_renders_semantic_locator_variants(
     assert "exact: false" not in src
 
 
+def test_ts_export_multiple_upload_files_use_independent_block_scopes(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "upload_files", "selector": "#first", "paths": ["/tmp/first.txt"]},
+            {"action": "if", "selector": "#ready"},
+            {"action": "upload_files", "label": "Second", "paths": ["/tmp/second.txt"]},
+            {"action": "end_block"},
+            {"action": "upload_files", "test_id": "third", "paths": ["/tmp/third.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    lines = src.splitlines()
+    chooser_declarations = [index for index, line in enumerate(lines) if "const chooserPromise" in line]
+    assert len(chooser_declarations) == 3
+    assert all(lines[index - 1].strip() == "{" for index in chooser_declarations)
+    assert src.count("const chooser = await chooserPromise;") == 3
+    assert 'await page.locator("#first").click();' in src
+    assert 'if (await page.locator("#ready").count() > 0) {' in src
+    assert 'await page.getByLabel("Second").click();' in src
+    assert 'await page.getByTestId("third").click();' in src
+    assert 'await chooser.setFiles(["/tmp/first.txt"]);' in src
+    assert 'await chooser.setFiles(["/tmp/second.txt"]);' in src
+    assert 'await chooser.setFiles(["/tmp/third.txt"]);' in src
+
+
 # ---------------------------------------------------------------------------
 # atomic-write cleanup
 # ---------------------------------------------------------------------------
