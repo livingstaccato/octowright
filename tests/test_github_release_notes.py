@@ -37,9 +37,12 @@ class RecordingRunner:
     [
         ("Issue #247: fix the login flow", "Issue #247"),
         ("Issue 247: fix the login flow", "Issue 247"),
+        ("Fixed issues 247 and 248.", "issues 247"),
         ("Fix the login flow (#247)", "(#247)"),
         ("#247: fix the login flow", "#247:"),
-        ("See https://github.com/acme/project/issues/247", "/issues/247"),
+        ("See https://github.com/acme/project/issues/247", "https://github.com/acme/project/issues/247"),
+        ("See livingstaccato/octowright#247 for details.", "livingstaccato/octowright#247"),
+        ("Fixed GH-247 in the startup path.", "GH-247"),
         ("Fixed (#181, #182)", "#181"),
         ("See #247 for details", "#247"),
     ],
@@ -57,6 +60,13 @@ def test_validate_notes_reports_the_line_for_a_reference() -> None:
         release_notes.validate_notes("### Fixed\nIssue #247", source="release.md")
 
     assert "Issue #247" in str(error.value)
+
+
+def test_validate_notes_detects_soft_line_break_references_at_the_number_line() -> None:
+    with pytest.raises(ValueError, match=r"release\.md:2") as error:
+        release_notes.validate_notes("Issue\n247: startup fails.", source="release.md")
+
+    assert r"Issue\n247" in str(error.value)
 
 
 def test_validate_notes_rejects_empty_notes() -> None:
@@ -167,6 +177,17 @@ def test_create_draft_validates_before_calling_runner(tmp_path: Path, tag: str, 
 
     with pytest.raises(ValueError):
         release_notes.create_draft(tag, notes, runner=runner)
+
+    assert runner.calls == []
+
+
+def test_create_draft_rejects_repo_qualified_issue_references_before_calling_runner(tmp_path: Path) -> None:
+    notes = tmp_path / "release.md"
+    notes.write_text("See livingstaccato/octowright#247 for details.", encoding="utf-8")
+    runner = RecordingRunner()
+
+    with pytest.raises(ValueError, match="livingstaccato/octowright#247"):
+        release_notes.create_draft("v0.26.0", notes, runner=runner)
 
     assert runner.calls == []
 

@@ -21,14 +21,17 @@ DEFAULT_REPOSITORY = "livingstaccato/octowright"
 _HIGHLIGHTS_DIR = Path("src/octowright/upgrade/highlights")
 
 # These forms are issue-tracker references, not ordinary Markdown headings or
-# identifiers such as CVE-2026-62949. Keep the leading-number form anchored so
-# a heading like ``### Fixed`` remains valid.
+# identifiers such as CVE-2026-62949. Numeric Markdown headings remain valid;
+# numeric ``#`` forms are intentionally not allowed anywhere in release notes.
 _REFERENCE_PATTERNS = (
-    re.compile(r"\bIssue\s+#?\d+\b", re.IGNORECASE),
-    re.compile(r"\(#\d+\)"),
-    re.compile(r"^\s*#\d+\s*:"),
-    re.compile(r"/issues/\d+\b"),
-    re.compile(r"(?<![#\w-])#\d+\b"),
+    re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/issues/[0-9]+\b", re.IGNORECASE),
+    re.compile(r"\b[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+#[0-9]+\b"),
+    re.compile(r"\bissues?\s+#?[0-9]+\b", re.IGNORECASE),
+    re.compile(r"\bGH-[0-9]+\b", re.IGNORECASE),
+    re.compile(r"\(#[0-9]+\)"),
+    re.compile(r"^\s*#[0-9]+\s*:", re.MULTILINE),
+    re.compile(r"/issues/[0-9]+\b"),
+    re.compile(r"#[0-9]+\b"),
 )
 _TAG_RE = re.compile(
     r"\Av(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
@@ -201,12 +204,14 @@ def validate_notes(text: str, *, source: str) -> None:
     if not text.strip():
         raise ValueError(f"{source}: empty release notes")
 
-    for line_number, line in enumerate(text.splitlines(), start=1):
-        for pattern in _REFERENCE_PATTERNS:
-            match = pattern.search(line)
-            if match:
-                reference = match.group(0).strip()
-                raise ValueError(f"{source}:{line_number}: issue reference {reference!r} is not allowed")
+    matches = [match for pattern in _REFERENCE_PATTERNS if (match := pattern.search(text))]
+    if matches:
+        match = min(matches, key=lambda candidate: candidate.start())
+        number = re.search(r"[0-9]+", match.group(0))
+        number_offset = number.start() if number else 0
+        line_number = text.count("\n", 0, match.start() + number_offset) + 1
+        reference = match.group(0).strip()
+        raise ValueError(f"{source}:{line_number}: issue reference {reference!r} is not allowed")
 
 
 def local_note_paths(repo_root: Path) -> list[Path]:
