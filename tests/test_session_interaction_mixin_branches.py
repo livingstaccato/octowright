@@ -858,6 +858,7 @@ class TestUploadFiles:
         upload.write_text("x")
         page = _UploadPage()
         session = _make_session(tmp_path, page=page)
+        captured = _record_calls(session)
 
         result = await session.upload_files(paths=[str(upload)], selector="#pick")
 
@@ -866,6 +867,26 @@ class TestUploadFiles:
         assert page.selector_locator.click_calls == [defaults.DEFAULT_ACTION_TIMEOUT_MS]
         assert page.chooser.set_files_calls == [([str(upload)], defaults.DEFAULT_ACTION_TIMEOUT_MS)]
         assert result == {"ok": True, "paths": [str(upload)], "selector": "#pick"}
+        assert ("upload_files", {"paths": [str(upload)], "selector": "#pick"}) in captured
+
+    @pytest.mark.anyio
+    async def test_upload_files_records_explicit_zero_but_uses_default_timeout_live(
+        self, tmp_path: Path, _allow_tmp_uploads: Path
+    ) -> None:
+        upload = tmp_path / "zero-timeout.txt"
+        upload.write_text("x")
+        page = _UploadPage()
+        session = _make_session(tmp_path, page=page)
+        captured = _record_calls(session)
+
+        result = await session.upload_files(paths=[str(upload)], selector="#pick", timeout_ms=0)
+
+        assert page.expect_file_chooser_calls == [defaults.DEFAULT_ACTION_TIMEOUT_MS]
+        assert page.selector_locator.click_calls == [defaults.DEFAULT_ACTION_TIMEOUT_MS]
+        assert page.chooser.set_files_calls == [([str(upload)], defaults.DEFAULT_ACTION_TIMEOUT_MS)]
+        expected_fields = {"paths": [str(upload)], "selector": "#pick", "timeout_ms": 0}
+        assert ("upload_files", expected_fields) in captured
+        assert result == {"ok": True, **expected_fields}
 
     @pytest.mark.anyio
     async def test_upload_files_selector_uses_active_frame_but_page_owns_chooser_listener(
@@ -930,14 +951,17 @@ class TestUploadFiles:
         upload.write_text("x")
         page = _UploadPage()
         session = _make_session(tmp_path, page=page)
+        captured = _record_calls(session)
 
-        result = await session.upload_files(paths=[str(upload)], timeout_ms=432, **kwargs)
+        result = await session.upload_files(paths=[str(upload)], timeout_ms=45000, **kwargs)
 
         assert page.semantic_calls == [semantic_call]
-        assert page.expect_file_chooser_calls == [432]
-        assert page.semantic_locator.click_calls == [432]
-        assert page.chooser.set_files_calls == [([str(upload)], 432)]
-        assert result == {"ok": True, "paths": [str(upload)], **locator_fields}
+        assert page.expect_file_chooser_calls == [45000]
+        assert page.semantic_locator.click_calls == [45000]
+        assert page.chooser.set_files_calls == [([str(upload)], 45000)]
+        expected_fields = {"paths": [str(upload)], **locator_fields, "timeout_ms": 45000}
+        assert ("upload_files", expected_fields) in captured
+        assert result == {"ok": True, **expected_fields}
 
     @pytest.mark.anyio
     @pytest.mark.parametrize("failure_point", ["chooser", "set_files"])

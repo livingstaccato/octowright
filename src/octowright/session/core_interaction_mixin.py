@@ -467,8 +467,11 @@ class SessionInteractionMixin(SessionLike):
             await locator.click(timeout=timeout)
         chooser = await chooser_info.value
         await chooser.set_files(validated, timeout=timeout)
-        self.recorder.record("upload_files", paths=validated, **locator_fields)
-        return {"ok": True, "paths": validated, **locator_fields}
+        result_fields = {"paths": validated, **locator_fields}
+        if timeout_ms is not None:
+            result_fields["timeout_ms"] = timeout_ms
+        self.recorder.record("upload_files", **result_fields)
+        return {"ok": True, **result_fields}
 
     @gated_operation("browser_set_input_files")
     async def set_input_files(self, selector: str, paths: list[str]) -> dict[str, Any]:

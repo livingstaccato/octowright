@@ -159,7 +159,7 @@ async def test_upload_files_arms_listener_before_click_and_records_only_atomic_a
     upload = tmp_path / "upload.csv"
     upload.write_text("col1,col2\n")
 
-    result = await session.upload_files(paths=[str(upload)], selector="#upload", timeout_ms=321)
+    result = await session.upload_files(paths=[str(upload)], selector="#upload", timeout_ms=1234)
 
     page = session.page
     assert page.events == [  # type: ignore[attr-defined]
@@ -170,10 +170,15 @@ async def test_upload_files_arms_listener_before_click_and_records_only_atomic_a
         "set_files",
     ]
     assert page.locator_calls == ["#upload"]  # type: ignore[attr-defined]
-    assert page.expect_file_chooser_calls == [321]  # type: ignore[attr-defined]
-    assert page.locator_result.click_calls == [321]  # type: ignore[attr-defined]
-    assert page.chooser.set_files_calls == [([str(upload)], 321)]  # type: ignore[attr-defined]
-    assert result == {"ok": True, "paths": [str(upload)], "selector": "#upload"}
+    assert page.expect_file_chooser_calls == [1234]  # type: ignore[attr-defined]
+    assert page.locator_result.click_calls == [1234]  # type: ignore[attr-defined]
+    assert page.chooser.set_files_calls == [([str(upload)], 1234)]  # type: ignore[attr-defined]
+    assert result == {
+        "ok": True,
+        "paths": [str(upload)],
+        "selector": "#upload",
+        "timeout_ms": 1234,
+    }
 
     rows = [json.loads(line) for line in (tmp_path / "test.jsonl").read_text().splitlines()]
     actions = [row["action"] for row in rows]
@@ -184,4 +189,5 @@ async def test_upload_files_arms_listener_before_click_and_records_only_atomic_a
         "action": "upload_files",
         "paths": [str(upload)],
         "selector": "#upload",
+        "timeout_ms": 1234,
     }
