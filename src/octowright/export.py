@@ -49,7 +49,7 @@ if __name__ == "__main__":
 """
 
 
-def _py_locator(entry: dict, *, include_empty: bool = False) -> str | None:
+def _py_locator(entry: dict, *, include_empty: bool = False, target: str = "page") -> str | None:
     def provided(key: str) -> bool:
         return entry.get(key) is not None if include_empty else bool(entry.get(key))
 
@@ -59,17 +59,17 @@ def _py_locator(entry: dict, *, include_empty: bool = False) -> str | None:
             args.append(f"name={entry['role_name']!r}")
             if entry.get("role_exact"):
                 args.append("exact=True")
-        return f"page.get_by_role({', '.join(args)})"
+        return f"{target}.get_by_role({', '.join(args)})"
     # exact= is emitted only when set, so scripts exported from pre-existing
     # (substring) recordings stay byte-identical to what they produced before.
     if provided("label"):
         exact = ", exact=True" if entry.get("label_exact") else ""
-        return f"page.get_by_label({entry['label']!r}{exact})"
+        return f"{target}.get_by_label({entry['label']!r}{exact})"
     if provided("text"):
         exact = ", exact=True" if entry.get("text_exact") else ""
-        return f"page.get_by_text({entry['text']!r}{exact})"
+        return f"{target}.get_by_text({entry['text']!r}{exact})"
     if provided("test_id"):
-        return f"page.get_by_test_id({entry['test_id']!r})"
+        return f"{target}.get_by_test_id({entry['test_id']!r})"
     return None
 
 
@@ -96,6 +96,7 @@ def _py_launch(entry: dict) -> str:
             f"        )\n"
             f"        browser = None\n"
             f"        page = ctx.pages[0] if ctx.pages else await ctx.new_page()\n"
+            f"        _upload_target = page\n"
             f"        await page.goto(_resolve_bundle_url({url!r}))"
         )
     return (
@@ -103,6 +104,7 @@ def _py_launch(entry: dict) -> str:
         f"        browser = await getattr(p, _kind).launch(headless={not headed})\n"
         f"        ctx = await browser.new_context(viewport={{'width': {vp['w']}, 'height': {vp['h']}}})\n"
         f"        page = await ctx.new_page()\n"
+        f"        _upload_target = page\n"
         f"        await page.goto(_resolve_bundle_url({url!r}))"
     )
 
@@ -139,9 +141,9 @@ def _py_click_by(entry: dict) -> str | None:
 
 
 def _py_upload_files(entry: dict) -> str | None:
-    loc = _py_locator(entry, include_empty=True)
+    loc = _py_locator(entry, include_empty=True, target="_upload_target")
     if loc is None and entry.get("selector") is not None:
-        loc = f"page.locator({entry['selector']!r})"
+        loc = f"_upload_target.locator({entry['selector']!r})"
     if loc is None:
         return None
 
@@ -157,6 +159,39 @@ def _py_upload_files(entry: dict) -> str | None:
         f"            await {loc}.click({timeout_arg})\n"
         f"        chooser = await chooser_info.value\n"
         f"        await chooser.set_files({entry.get('paths', [])!r}{timeout_suffix})"
+    )
+
+
+def _py_switch_frame(entry: dict) -> str:
+    if entry.get("selector") is not None:
+        return f"        _upload_target = page.frame_locator({entry['selector']!r})"
+    if entry.get("name") is not None:
+        lookup = f"page.frame(name={entry['name']!r})"
+    elif entry.get("url_pattern") is not None:
+        lookup = f"page.frame(url=__import__('re').compile({entry['url_pattern']!r}))"
+    else:
+        return "        raise RuntimeError('switch_frame needs one of selector/name/url_pattern')"
+    return (
+        f"        _upload_target = {lookup}\n"
+        f"        if _upload_target is None:\n"
+        f"            raise RuntimeError('no frame matched recorded switch_frame')"
+    )
+
+
+def _py_open_url(entry: dict) -> str:
+    return (
+        f"        page = await ctx.new_page()\n        await page.goto({entry['url']!r})\n        _upload_target = page"
+    )
+
+
+def _py_switch_page(entry: dict) -> str:
+    index = _safe_int(entry["index"], action="switch_page", field="index")
+    return f"        page = ctx.pages[{index}]\n        _upload_target = page"
+
+
+def _py_close_page(_entry: dict) -> str:
+    return (
+        "        await page.close()\n        page = ctx.pages[0] if ctx.pages else page\n        _upload_target = page"
     )
 
 
@@ -272,10 +307,11 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "expect_js": lambda e: (
         f"        if not await page.evaluate({e['expression']!r}): raise RuntimeError('JS mismatch')"
     ),
-    "open_url": lambda e: f"        page = await ctx.new_page()\n        await page.goto({e['url']!r})",
-    "switch_page": lambda e: f"        page = ctx.pages[{_safe_int(e['index'], action='switch_page', field='index')}]",
-    "close_page": lambda _e: "        await page.close()",
-    "reset_frame": lambda _e: "        pass",
+    "open_url": _py_open_url,
+    "switch_page": _py_switch_page,
+    "close_page": _py_close_page,
+    "switch_frame": _py_switch_frame,
+    "reset_frame": lambda _e: "        _upload_target = page",
     "mock_route": lambda e: (
         f"        await page.route({e['url_pattern']!r}, lambda route: route.fulfill("
         f"status={_safe_int(e.get('status'), action='mock_route', field='status', default=200)}, "

@@ -255,7 +255,7 @@ def test_python_export_upload_files_selector_preserves_atomic_order(tmp_path: Pa
     assert _python_compiles(src)
     expected = """\
         async with page.expect_file_chooser(timeout=321) as chooser_info:
-            await page.locator('#pick-files').click(timeout=321)
+            await _upload_target.locator('#pick-files').click(timeout=321)
         chooser = await chooser_info.value
         await chooser.set_files(['/tmp/first.txt', '/tmp/second.txt'], timeout=321)"""
     assert expected in src
@@ -279,7 +279,7 @@ def test_python_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_
     assert _python_compiles(src)
     expected = """\
         async with page.expect_file_chooser() as chooser_info:
-            await page.get_by_role('button', name="Upload 'now'", exact=True).click()
+            await _upload_target.get_by_role('button', name="Upload 'now'", exact=True).click()
         chooser = await chooser_info.value
         await chooser.set_files(["/tmp/a'b.txt"])"""
     assert expected in src
@@ -288,13 +288,16 @@ def test_python_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_
 @pytest.mark.parametrize(
     ("trigger", "expected_locator"),
     [
-        ({"role": ""}, "page.get_by_role('')"),
-        ({"label": ""}, "page.get_by_label('')"),
-        ({"text": ""}, "page.get_by_text('')"),
-        ({"test_id": ""}, "page.get_by_test_id('')"),
-        ({"label": "Choose file", "label_exact": True}, "page.get_by_label('Choose file', exact=True)"),
-        ({"text": "Upload files", "text_exact": False}, "page.get_by_text('Upload files')"),
-        ({"test_id": "file-picker"}, "page.get_by_test_id('file-picker')"),
+        ({"role": ""}, "_upload_target.get_by_role('')"),
+        ({"label": ""}, "_upload_target.get_by_label('')"),
+        ({"text": ""}, "_upload_target.get_by_text('')"),
+        ({"test_id": ""}, "_upload_target.get_by_test_id('')"),
+        (
+            {"label": "Choose file", "label_exact": True},
+            "_upload_target.get_by_label('Choose file', exact=True)",
+        ),
+        ({"text": "Upload files", "text_exact": False}, "_upload_target.get_by_text('Upload files')"),
+        ({"test_id": "file-picker"}, "_upload_target.get_by_test_id('file-picker')"),
     ],
 )
 def test_python_export_upload_files_renders_semantic_locator_variants(
@@ -309,6 +312,94 @@ def test_python_export_upload_files_renders_semantic_locator_variants(
     assert f"await {expected_locator}.click()" in src
     assert "await chooser.set_files(['/tmp/file.txt'])" in src
     assert "exact=False" not in src
+
+
+def test_python_export_upload_files_tracks_frame_and_page_transitions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            {
+                "action": "switch_frame",
+                "selector": "#embedded",
+                "name": None,
+                "url_pattern": None,
+                "index": 1,
+                "frame_url": "https://example.test/embedded",
+                "frame_name": "embedded",
+            },
+            {
+                "ts": "2026-09-21T12:00:00Z",
+                "action": "upload_files",
+                "selector": "#upload",
+                "paths": ["/tmp/frame.txt"],
+                "timeout_ms": 45000,
+            },
+            {"action": "upload_files", "label": "Choose file", "paths": ["/tmp/semantic.txt"]},
+            {"action": "reset_frame"},
+            {"action": "upload_files", "test_id": "top-upload", "paths": ["/tmp/top.txt"]},
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "upload_files", "selector": "#new-page-upload", "paths": ["/tmp/new.txt"]},
+            {"action": "switch_page", "index": 0},
+            {"action": "upload_files", "text": "Original page", "paths": ["/tmp/original.txt"]},
+            {"action": "close_page", "index": 0},
+            {"action": "upload_files", "text": "Remaining page", "paths": ["/tmp/remaining.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert "_upload_target = page" in src
+    assert "_upload_target = page.frame_locator('#embedded')" in src
+    frame_selector_upload = """\
+        async with page.expect_file_chooser(timeout=45000) as chooser_info:
+            await _upload_target.locator('#upload').click(timeout=45000)
+        chooser = await chooser_info.value
+        await chooser.set_files(['/tmp/frame.txt'], timeout=45000)"""
+    assert frame_selector_upload in src
+    assert "await _upload_target.get_by_label('Choose file').click()" in src
+    assert "_upload_target = page\n        async with page.expect_file_chooser() as chooser_info:" in src
+    assert "await _upload_target.get_by_test_id('top-upload').click()" in src
+    assert "await page.goto('https://example.test/new')\n        _upload_target = page" in src
+    assert "await _upload_target.locator('#new-page-upload').click()" in src
+    assert "page = ctx.pages[0]\n        _upload_target = page" in src
+    assert "await _upload_target.get_by_text('Original page').click()" in src
+    assert (
+        "await page.close()\n        page = ctx.pages[0] if ctx.pages else page\n        _upload_target = page" in src
+    )
+    assert "await _upload_target.get_by_text('Remaining page').click()" in src
+
+
+@pytest.mark.parametrize(
+    ("switch", "expected"),
+    [
+        (
+            {"action": "switch_frame", "name": "checkout"},
+            "_upload_target = page.frame(name='checkout')",
+        ),
+        (
+            {"action": "switch_frame", "url_pattern": r"provider\.test/pay"},
+            "_upload_target = page.frame(url=__import__('re').compile('provider\\\\.test/pay'))",
+        ),
+    ],
+)
+def test_python_export_upload_files_preserves_non_selector_frame_modes(
+    tmp_path: Path, switch: dict[str, str], expected: str
+) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            switch,
+            {"action": "upload_files", "selector": "#upload", "paths": ["/tmp/file.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.py", fmt="python").read_text()
+
+    assert _python_compiles(src)
+    assert expected in src
+    assert "if _upload_target is None:" in src
+    assert "await _upload_target.locator('#upload').click()" in src
 
 
 def test_python_export_creates_parent_dir(tmp_path: Path) -> None:
@@ -506,7 +597,7 @@ def test_ts_export_upload_files_selector_preserves_atomic_order(tmp_path: Path) 
     expected = """\
   {
     const chooserPromise = page.waitForEvent('filechooser', { timeout: 321 });
-    await page.locator("#pick-files").click({ timeout: 321 });
+    await uploadTarget.locator("#pick-files").click({ timeout: 321 });
     const chooser = await chooserPromise;
     await chooser.setFiles(["/tmp/first.txt", "/tmp/second.txt"], { timeout: 321 });
   }"""
@@ -531,7 +622,7 @@ def test_ts_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path
     expected = """\
   {
     const chooserPromise = page.waitForEvent('filechooser');
-    await page.getByRole("button", { name: "Upload 'now'", exact: true }).click();
+    await uploadTarget.getByRole("button", { name: "Upload 'now'", exact: true }).click();
     const chooser = await chooserPromise;
     await chooser.setFiles(["/tmp/a'b.txt"]);
   }"""
@@ -541,13 +632,16 @@ def test_ts_export_upload_files_semantic_trigger_preserves_atomic_order(tmp_path
 @pytest.mark.parametrize(
     ("trigger", "expected_locator"),
     [
-        ({"role": ""}, 'page.getByRole("")'),
-        ({"label": ""}, 'page.getByLabel("")'),
-        ({"text": ""}, 'page.getByText("")'),
-        ({"test_id": ""}, 'page.getByTestId("")'),
-        ({"label": "Choose file", "label_exact": True}, 'page.getByLabel("Choose file", { exact: true })'),
-        ({"text": "Upload files", "text_exact": False}, 'page.getByText("Upload files")'),
-        ({"test_id": "file-picker"}, 'page.getByTestId("file-picker")'),
+        ({"role": ""}, 'uploadTarget.getByRole("")'),
+        ({"label": ""}, 'uploadTarget.getByLabel("")'),
+        ({"text": ""}, 'uploadTarget.getByText("")'),
+        ({"test_id": ""}, 'uploadTarget.getByTestId("")'),
+        (
+            {"label": "Choose file", "label_exact": True},
+            'uploadTarget.getByLabel("Choose file", { exact: true })',
+        ),
+        ({"text": "Upload files", "text_exact": False}, 'uploadTarget.getByText("Upload files")'),
+        ({"test_id": "file-picker"}, 'uploadTarget.getByTestId("file-picker")'),
     ],
 )
 def test_ts_export_upload_files_renders_semantic_locator_variants(
@@ -581,13 +675,99 @@ def test_ts_export_multiple_upload_files_use_independent_block_scopes(tmp_path: 
     assert len(chooser_declarations) == 3
     assert all(lines[index - 1].strip() == "{" for index in chooser_declarations)
     assert src.count("const chooser = await chooserPromise;") == 3
-    assert 'await page.locator("#first").click();' in src
+    assert 'await uploadTarget.locator("#first").click();' in src
     assert 'if (await page.locator("#ready").count() > 0) {' in src
-    assert 'await page.getByLabel("Second").click();' in src
-    assert 'await page.getByTestId("third").click();' in src
+    assert 'await uploadTarget.getByLabel("Second").click();' in src
+    assert 'await uploadTarget.getByTestId("third").click();' in src
     assert 'await chooser.setFiles(["/tmp/first.txt"]);' in src
     assert 'await chooser.setFiles(["/tmp/second.txt"]);' in src
     assert 'await chooser.setFiles(["/tmp/third.txt"]);' in src
+
+
+def test_ts_export_upload_files_tracks_frame_and_page_transitions(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            {
+                "action": "switch_frame",
+                "selector": "#embedded",
+                "name": None,
+                "url_pattern": None,
+                "index": 1,
+                "frame_url": "https://example.test/embedded",
+                "frame_name": "embedded",
+            },
+            {
+                "ts": "2026-09-21T12:00:00Z",
+                "action": "upload_files",
+                "selector": "#upload",
+                "paths": ["/tmp/frame.txt"],
+                "timeout_ms": 45000,
+            },
+            {"action": "upload_files", "label": "Choose file", "paths": ["/tmp/semantic.txt"]},
+            {"action": "reset_frame"},
+            {"action": "upload_files", "test_id": "top-upload", "paths": ["/tmp/top.txt"]},
+            {"action": "open_url", "url": "https://example.test/new"},
+            {"action": "upload_files", "selector": "#new-page-upload", "paths": ["/tmp/new.txt"]},
+            {"action": "switch_page", "index": 0},
+            {"action": "upload_files", "text": "Original page", "paths": ["/tmp/original.txt"]},
+            {"action": "close_page", "index": 0},
+            {"action": "upload_files", "text": "Remaining page", "paths": ["/tmp/remaining.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    assert "uploadTarget = page;" in src
+    assert 'uploadTarget = page.frameLocator("#embedded");' in src
+    frame_selector_upload = """\
+  {
+    const chooserPromise = page.waitForEvent('filechooser', { timeout: 45000 });
+    await uploadTarget.locator("#upload").click({ timeout: 45000 });
+    const chooser = await chooserPromise;
+    await chooser.setFiles(["/tmp/frame.txt"], { timeout: 45000 });
+  }"""
+    assert frame_selector_upload in src
+    assert 'await uploadTarget.getByLabel("Choose file").click();' in src
+    assert "uploadTarget = page;\n  {\n    const chooserPromise" in src
+    assert 'await uploadTarget.getByTestId("top-upload").click();' in src
+    assert 'await page.goto("https://example.test/new");\n  uploadTarget = page;' in src
+    assert 'await uploadTarget.locator("#new-page-upload").click();' in src
+    assert "page = ctx.pages()[0];\n  uploadTarget = page;" in src
+    assert 'await uploadTarget.getByText("Original page").click();' in src
+    assert "await page.close();\n  page = ctx.pages()[0] ?? page;\n  uploadTarget = page;" in src
+    assert 'await uploadTarget.getByText("Remaining page").click();' in src
+
+
+@pytest.mark.parametrize(
+    ("switch", "expected"),
+    [
+        (
+            {"action": "switch_frame", "name": "checkout"},
+            'uploadTarget = page.frame({ name: "checkout" })',
+        ),
+        (
+            {"action": "switch_frame", "url_pattern": r"provider\.test/pay"},
+            'uploadTarget = page.frame({ url: new RegExp("provider\\\\.test/pay") })',
+        ),
+    ],
+)
+def test_ts_export_upload_files_preserves_non_selector_frame_modes(
+    tmp_path: Path, switch: dict[str, str], expected: str
+) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "chromium", "url": "https://example.test", "headed": True},
+            switch,
+            {"action": "upload_files", "selector": "#upload", "paths": ["/tmp/file.txt"]},
+        ],
+    )
+    src = export_script(log, tmp_path / "out.ts", fmt="ts").read_text()
+
+    assert expected in src
+    assert "throw new Error(" in src
+    assert 'await uploadTarget.locator("#upload").click();' in src
 
 
 # ---------------------------------------------------------------------------

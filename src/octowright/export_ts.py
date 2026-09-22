@@ -39,6 +39,7 @@ const resolveBundleUrl = (raw: string): string => {
   let browser: Browser | null = null;
   let ctx!: BrowserContext;
   let page!: Page;
+  let uploadTarget: Page | ReturnType<Page["frameLocator"]> | NonNullable<ReturnType<Page["frame"]>>;
 """
 
 _TS_FOOTER = """\
@@ -51,7 +52,7 @@ _TS_FOOTER = """\
 """
 
 
-def _ts_role_locator(entry: dict) -> str:
+def _ts_role_locator(entry: dict, *, target: str = "page") -> str:
     args = [json.dumps(entry["role"])]
     opts: dict[str, object] = {}
     if entry.get("role_name") is not None:
@@ -61,7 +62,7 @@ def _ts_role_locator(entry: dict) -> str:
     if opts:
         rendered_opts = ", ".join(f"{key}: {json.dumps(value)}" for key, value in opts.items())
         args.append(f"{{ {rendered_opts} }}")
-    return f"page.getByRole({', '.join(args)})"
+    return f"{target}.getByRole({', '.join(args)})"
 
 
 def _ts_exact_opt(entry: dict, flag: str) -> str:
@@ -70,18 +71,18 @@ def _ts_exact_opt(entry: dict, flag: str) -> str:
     return ", { exact: true }" if entry.get(flag) else ""
 
 
-def _ts_locator(entry: dict, *, include_empty: bool = False) -> str | None:
+def _ts_locator(entry: dict, *, include_empty: bool = False, target: str = "page") -> str | None:
     def provided(key: str) -> bool:
         return entry.get(key) is not None if include_empty else bool(entry.get(key))
 
     if provided("role"):
-        return _ts_role_locator(entry)
+        return _ts_role_locator(entry, target=target)
     if provided("label"):
-        return f"page.getByLabel({json.dumps(entry['label'])}{_ts_exact_opt(entry, 'label_exact')})"
+        return f"{target}.getByLabel({json.dumps(entry['label'])}{_ts_exact_opt(entry, 'label_exact')})"
     if provided("text"):
-        return f"page.getByText({json.dumps(entry['text'])}{_ts_exact_opt(entry, 'text_exact')})"
+        return f"{target}.getByText({json.dumps(entry['text'])}{_ts_exact_opt(entry, 'text_exact')})"
     if provided("test_id"):
-        return f"page.getByTestId({json.dumps(entry['test_id'])})"
+        return f"{target}.getByTestId({json.dumps(entry['test_id'])})"
     return None
 
 
@@ -125,6 +126,7 @@ def _ts_launch(entry: dict) -> str:
             f"    viewport: {{ width: {vp['w']}, height: {vp['h']} }},\n"
             f"  }});\n"
             f"  page = ctx.pages()[0] ?? await ctx.newPage();\n"
+            f"  uploadTarget = page;\n"
             f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
         )
     return (
@@ -132,6 +134,7 @@ def _ts_launch(entry: dict) -> str:
         f"  browser = await engine.launch({{ headless: {str(not headed).lower()} }});\n"
         f"  ctx = await browser.newContext({{ viewport: {{ width: {vp['w']}, height: {vp['h']} }} }});\n"
         f"  page = await ctx.newPage();\n"
+        f"  uploadTarget = page;\n"
         f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
     )
 
@@ -170,9 +173,9 @@ def _ts_click_by(entry: dict) -> str | None:
 
 
 def _ts_upload_files(entry: dict) -> str | None:
-    loc = _ts_locator(entry, include_empty=True)
+    loc = _ts_locator(entry, include_empty=True, target="uploadTarget")
     if loc is None and entry.get("selector") is not None:
-        loc = f"page.locator({json.dumps(entry['selector'])})"
+        loc = f"uploadTarget.locator({json.dumps(entry['selector'])})"
     if loc is None:
         return None
 
@@ -191,6 +194,31 @@ def _ts_upload_files(entry: dict) -> str | None:
         f"    await chooser.setFiles({json.dumps(entry.get('paths', []))}{options_suffix});\n"
         "  }"
     )
+
+
+def _ts_switch_frame(entry: dict) -> str:
+    if entry.get("selector") is not None:
+        return f"  uploadTarget = page.frameLocator({json.dumps(entry['selector'])});"
+    if entry.get("name") is not None:
+        lookup = f"page.frame({{ name: {json.dumps(entry['name'])} }})"
+    elif entry.get("url_pattern") is not None:
+        lookup = f"page.frame({{ url: new RegExp({json.dumps(entry['url_pattern'])}) }})"
+    else:
+        return "  throw new Error('switch_frame needs one of selector/name/url_pattern');"
+    return f"  uploadTarget = {lookup} ?? (() => {{ throw new Error('no frame matched recorded switch_frame'); }})();"
+
+
+def _ts_open_url(entry: dict) -> str:
+    return f"  page = await ctx.newPage();\n  await page.goto({json.dumps(entry['url'])});\n  uploadTarget = page;"
+
+
+def _ts_switch_page(entry: dict) -> str:
+    index = _safe_int(entry["index"], action="switch_page", field="index")
+    return f"  page = ctx.pages()[{index}];\n  uploadTarget = page;"
+
+
+def _ts_close_page(_entry: dict) -> str:
+    return "  await page.close();\n  page = ctx.pages()[0] ?? page;\n  uploadTarget = page;"
 
 
 def _ts_fill_by(entry: dict) -> str | None:
@@ -283,10 +311,11 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "expect_js": lambda e: (
         f"  if (!(await page.evaluate({json.dumps(e['expression'])}))) throw new Error('JS mismatch');"
     ),
-    "open_url": lambda e: f"  page = await ctx.newPage();\n  await page.goto({json.dumps(e['url'])});",
-    "switch_page": lambda e: f"  page = ctx.pages()[{_safe_int(e['index'], action='switch_page', field='index')}];",
-    "close_page": lambda _e: "  await page.close();",
-    "reset_frame": lambda _e: "  // reset_frame",
+    "open_url": _ts_open_url,
+    "switch_page": _ts_switch_page,
+    "close_page": _ts_close_page,
+    "switch_frame": _ts_switch_frame,
+    "reset_frame": lambda _e: "  uploadTarget = page;",
     "mock_route": lambda e: (
         f"  await page.route({json.dumps(e['url_pattern'])}, route => route.fulfill({{ "
         f"status: {_safe_int(e.get('status'), action='mock_route', field='status', default=200)}, "
