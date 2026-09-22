@@ -97,6 +97,15 @@ def test_validate_tag_rejects_non_semver_and_argument_like_tags(tag: str) -> Non
         release_notes.validate_tag(tag)
 
 
+@pytest.mark.parametrize(
+    "tag",
+    ["v1٢.2.3", "v\uff11.2.3", "v1.2.3-1٢", "v1.2.3-\uff112"],
+)
+def test_validate_tag_rejects_non_ascii_digits_in_core_and_prerelease(tag: str) -> None:
+    with pytest.raises(ValueError, match="release tag"):
+        release_notes.validate_tag(tag)
+
+
 def test_create_draft_uses_a_fixed_safe_gh_command(tmp_path: Path) -> None:
     notes = tmp_path / "release.md"
     notes.write_text("### Fixed\nReliable startup.", encoding="utf-8")
