@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,18 @@ import pytest
 from tests._script_module import load_script_module
 
 release_notes = load_script_module("scripts/github_release_notes.py")
+
+
+class RecordingRunner:
+    """Capture gh calls without starting a subprocess."""
+
+    def __init__(self, stdout: str = "") -> None:
+        self.calls: list[tuple[list[str], dict[str, object]]] = []
+        self.stdout = stdout
+
+    def __call__(self, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        self.calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=self.stdout, stderr="")
 
 
 @pytest.mark.parametrize(
@@ -59,6 +73,200 @@ def test_validate_notes_rejects_empty_notes() -> None:
 )
 def test_validate_notes_allows_self_contained_prose(note: str) -> None:
     release_notes.validate_notes(note, source="release.md")
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "v0.26.0",
+        "v1.2.3-rc.1",
+        "v1.2.3-alpha.1+build.20260921",
+        "v12.34.56+build.7",
+    ],
+)
+def test_validate_tag_accepts_semver_release_tags(tag: str) -> None:
+    release_notes.validate_tag(tag)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    ["0.26.0", "v0.26", "vnext", "v1.2.3\n--repo=attacker/repo", "v1.2.3 --draft"],
+)
+def test_validate_tag_rejects_non_semver_and_argument_like_tags(tag: str) -> None:
+    with pytest.raises(ValueError, match="release tag"):
+        release_notes.validate_tag(tag)
+
+
+def test_create_draft_uses_a_fixed_safe_gh_command(tmp_path: Path) -> None:
+    notes = tmp_path / "release.md"
+    notes.write_text("### Fixed\nReliable startup.", encoding="utf-8")
+    runner = RecordingRunner()
+
+    release_notes.create_draft("v0.26.0", notes, runner=runner)
+
+    assert runner.calls == [
+        (
+            [
+                "gh",
+                "release",
+                "create",
+                "v0.26.0",
+                "--repo",
+                "livingstaccato/octowright",
+                "--title",
+                "v0.26.0",
+                "--notes-file",
+                str(notes),
+                "--draft",
+                "--verify-tag",
+            ],
+            {"check": True, "text": True},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tag", "notes_text"),
+    [("vnext", "### Fixed\nReliable startup."), ("v0.26.0", "See #247 for details")],
+)
+def test_create_draft_validates_before_calling_runner(tmp_path: Path, tag: str, notes_text: str) -> None:
+    notes = tmp_path / "release.md"
+    notes.write_text(notes_text, encoding="utf-8")
+    runner = RecordingRunner()
+
+    with pytest.raises(ValueError):
+        release_notes.create_draft(tag, notes, runner=runner)
+
+    assert runner.calls == []
+
+
+def test_fetch_releases_flattens_paginated_gh_api_output() -> None:
+    runner = RecordingRunner(
+        json.dumps(
+            [
+                [{"tag_name": "v0.26.0", "name": "v0.26.0", "body": "First release."}],
+                [{"tag_name": "v0.25.0", "name": "v0.25.0", "body": "Second release."}],
+            ]
+        )
+    )
+
+    assert release_notes.fetch_releases("livingstaccato/octowright", runner=runner) == [
+        {"tag_name": "v0.26.0", "name": "v0.26.0", "body": "First release."},
+        {"tag_name": "v0.25.0", "name": "v0.25.0", "body": "Second release."},
+    ]
+    assert runner.calls == [
+        (
+            [
+                "gh",
+                "api",
+                "--paginate",
+                "--slurp",
+                "repos/livingstaccato/octowright/releases?per_page=100",
+            ],
+            {"check": True, "text": True, "capture_output": True},
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        ["not a page"],
+        [["not a release"]],
+        [[{"tag_name": "v0.26.0"}], [{"tag_name": "v0.26.0"}]],
+    ],
+)
+def test_fetch_releases_rejects_malformed_or_ambiguous_payloads(payload: object) -> None:
+    runner = RecordingRunner(json.dumps(payload))
+
+    with pytest.raises(ValueError):
+        release_notes.fetch_releases("livingstaccato/octowright", runner=runner)
+
+
+def test_audit_remote_accepts_clean_releases() -> None:
+    runner = RecordingRunner(
+        json.dumps(
+            [
+                [
+                    {"tag_name": "v0.26.0", "name": "v0.26.0", "body": "Reliable startup."},
+                    {"tag_name": "v0.25.0", "name": "v0.25.0", "body": "Safer retries."},
+                ]
+            ]
+        )
+    )
+
+    assert release_notes.audit_remote(runner=runner) == 2
+
+
+@pytest.mark.parametrize(
+    "release",
+    [
+        {"tag_name": "v0.26.0", "name": "Release 0.26", "body": "Reliable startup."},
+        {"tag_name": "v0.26.0", "name": "v0.26.0", "body": "  \n"},
+        {"tag_name": "v0.26.0", "name": "v0.26.0", "body": None},
+        {"tag_name": "vnext", "name": "vnext", "body": "Reliable startup."},
+        {"tag_name": "v0.26.0", "name": "v0.26.0", "body": "See #247 for details."},
+    ],
+)
+def test_audit_remote_rejects_invalid_release_metadata(release: dict[str, object]) -> None:
+    runner = RecordingRunner(json.dumps([[release]]))
+
+    with pytest.raises(ValueError):
+        release_notes.audit_remote(runner=runner)
+
+
+def test_main_check_body_reports_success_and_validation_errors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    notes = tmp_path / "release.md"
+    notes.write_text("Reliable startup.", encoding="utf-8")
+
+    assert release_notes.main(["check-body", str(notes)]) == 0
+    assert "validated release note body" in capsys.readouterr().out
+
+    notes.write_text("See #247 for details.", encoding="utf-8")
+    assert release_notes.main(["check-body", str(notes)]) == 1
+    assert "issue reference" in capsys.readouterr().err
+
+
+def test_main_uses_default_repository_for_remote_subcommands(monkeypatch: pytest.MonkeyPatch) -> None:
+    draft_call: dict[str, object] = {}
+    audit_call: dict[str, object] = {}
+
+    def fake_create_draft(tag: str, notes_file: Path, *, repository: str) -> None:
+        draft_call.update(tag=tag, notes_file=notes_file, repository=repository)
+
+    def fake_audit_remote(repository: str) -> int:
+        audit_call["repository"] = repository
+        return 3
+
+    monkeypatch.setattr(release_notes, "create_draft", fake_create_draft)
+    monkeypatch.setattr(release_notes, "audit_remote", fake_audit_remote)
+
+    assert release_notes.main(["create-draft", "v0.26.0", "release.md"]) == 0
+    assert draft_call == {
+        "tag": "v0.26.0",
+        "notes_file": Path("release.md"),
+        "repository": "livingstaccato/octowright",
+    }
+    assert release_notes.main(["audit-remote"]) == 0
+    assert audit_call == {"repository": "livingstaccato/octowright"}
+
+
+def test_cli_entrypoint_runs_check_body_without_gh(tmp_path: Path) -> None:
+    notes = tmp_path / "release.md"
+    notes.write_text("Reliable startup.", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/github_release_notes.py", "check-body", str(notes)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "validated release note body" in result.stdout
 
 
 def test_local_note_paths_includes_changelog_and_sorted_highlights(tmp_path: Path) -> None:
