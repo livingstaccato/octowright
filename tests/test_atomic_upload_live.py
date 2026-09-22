@@ -19,7 +19,7 @@ from urllib.parse import quote
 
 import pytest
 
-from octowright import defaults
+from octowright import defaults, session_manifest
 from octowright.browser_pool import BrowserPool
 from tests.test_engine_matrix_live import _maybe_skip_live_engine
 
@@ -54,8 +54,11 @@ async def test_atomic_upload_selects_file_and_closes_cleanly(
     page_url = f"data:text/html;charset=utf-8,{quote(html, safe='')}"
     report = tmp_path / "report.txt"
     report.write_text("atomic upload", encoding="utf-8")
+    manifest_path = tmp_path / "session-manifest.json"
     monkeypatch.setattr(defaults, "UPLOAD_STAGING_DIR", tmp_path)
     monkeypatch.setattr(defaults, "UPLOAD_EXTRA_ROOTS_RAW", "")
+    monkeypatch.setattr(defaults, "SESSION_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(session_manifest, "SESSION_MANIFEST_PATH", manifest_path)
 
     pool = BrowserPool(recordings_dir=tmp_path / "recordings")
     try:
@@ -66,6 +69,7 @@ async def test_atomic_upload_selects_file_and_closes_cleanly(
             raise
 
         instance_id = launched["instance_id"]
+        assert instance_id in session_manifest.read_manifest(manifest_path)["sessions"]
         session = pool.get(instance_id)
         await session.upload_files(
             paths=[str(report)],
@@ -80,6 +84,7 @@ async def test_atomic_upload_selects_file_and_closes_cleanly(
 
         closed = await pool.close(instance_id)
         assert closed["closed"] is True
+        assert instance_id not in session_manifest.read_manifest(manifest_path)["sessions"]
 
         entries = [json.loads(line) for line in Path(launched["log_path"]).read_text(encoding="utf-8").splitlines()]
         upload_actions = [entry for entry in entries if entry.get("action") == "upload_files"]
