@@ -391,8 +391,11 @@ classifier vocabulary or the credential sink guard.
 **Credential-named arguments in URLs, code and outbound fields.** A
 credential-named argument expanded into `url`, `expression`, `verify_js`,
 `grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
-`paths` entry is refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
-[env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
+`paths` entry is refused by default. The one exemption is a header sent to the
+session's own site: `inject_headers` whose `pattern` names the host of the launch
+URL or persona `base_url` may carry `Bearer {{token}}`. See
+`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in [env-vars.md](env-vars.md) for the full
+name list, match rules and opt-out.
 
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy

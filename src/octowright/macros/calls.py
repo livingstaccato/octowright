@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
+from octowright.macros.substitution import own_site_hosts
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -90,7 +91,7 @@ async def dispatch_macro_call(
         raise RuntimeError(f"{_RECURSION_PREFIX} recursion depth exceeded ({resolved_max_depth}) at {next_chain}")
 
     called = load_macro(called_name)
-    called_actions = substitute(called.get("actions", []), call_args)
+    called_actions = substitute(called.get("actions", []), call_args, trusted_hosts=own_site_hosts(session))
 
     executed, skipped = 1, 0
     for subaction in called_actions:

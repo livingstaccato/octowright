@@ -105,7 +105,7 @@ async def test_dispatch_macro_call_recursion_detected() -> None:
     def _load_macro(name: str) -> dict[str, Any]:
         return {"actions": []}
 
-    def _substitute(actions: list[Any], args: dict[str, Any]) -> list[Any]:
+    def _substitute(actions: list[Any], args: dict[str, Any], **_kwargs: Any) -> list[Any]:
         return actions
 
     async def _dispatch_one(
@@ -136,7 +136,7 @@ async def test_dispatch_macro_call_depth_exceeded() -> None:
     def _load_macro(name: str) -> dict[str, Any]:
         return {"actions": []}
 
-    def _substitute(actions: list[Any], args: dict[str, Any]) -> list[Any]:
+    def _substitute(actions: list[Any], args: dict[str, Any], **_kwargs: Any) -> list[Any]:
         return actions
 
     async def _dispatch_one(
@@ -169,7 +169,7 @@ async def test_dispatch_macro_call_runs_sub_actions() -> None:
     def _load_macro(name: str) -> dict[str, Any]:
         return {"actions": [{"action": "navigate", "url": "https://octowright.com"}]}
 
-    def _substitute(actions: list[Any], args: dict[str, Any]) -> list[Any]:
+    def _substitute(actions: list[Any], args: dict[str, Any], **_kwargs: Any) -> list[Any]:
         return actions
 
     async def _dispatch_one(
@@ -206,7 +206,7 @@ async def test_dispatch_macro_call_uses_default_max_depth_when_none() -> None:
     def _load_macro(name: str) -> dict[str, Any]:
         return {"actions": []}
 
-    def _substitute(actions: list[Any], args: dict[str, Any]) -> list[Any]:
+    def _substitute(actions: list[Any], args: dict[str, Any], **_kwargs: Any) -> list[Any]:
         return actions
 
     async def _dispatch_one(

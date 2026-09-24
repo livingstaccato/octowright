@@ -100,6 +100,10 @@ class BrowserSession(
     log_path: Path
     user_data_dir: Path | None = None
     profile: str | None = None
+    # The persona/explicit ``base_url`` the context was launched with. Kept
+    # because Playwright offers no getter, and the macro header guard
+    # (``substitution.own_site_hosts``) trusts it as operator-chosen.
+    base_url: str | None = None
     stabilize: bool = False
     protected: bool = False
     protected_reason: str = "explicit"

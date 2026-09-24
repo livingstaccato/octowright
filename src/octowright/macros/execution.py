@@ -51,6 +51,7 @@ from octowright.macros.storage import load_macro, write_macro
 from octowright.macros.substitution import (
     SEMANTIC_LOCATOR_KEYS,
     action_kwargs,
+    own_site_hosts,
     strip_non_aria_noise,
     substitute,
 )
@@ -608,7 +609,7 @@ async def _run_macro_impl(
     # nested call's, appended as they execute. Failure payloads and screenshot
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
-    actions = substitute(macro.get("actions", []), effective_args)
+    actions = substitute(macro.get("actions", []), effective_args, trusted_hosts=own_site_hosts(session))
     # Before the first step, so the requests the journey starts are the ones
     # expect_network_clean waits for; a run that never asserts pays nothing.
     enable_tracking = getattr(session, "enable_inflight_tracking", None)

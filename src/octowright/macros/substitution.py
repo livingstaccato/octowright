@@ -9,6 +9,7 @@ import copy
 import os
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from octowright.macros.privacy import is_credential_key
 
@@ -145,7 +146,52 @@ def is_credential_arg(name: str) -> bool:
     return is_credential_key(name)
 
 
-def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = False) -> Any:
+#: Actions whose ``headers`` go only where their ``pattern`` matches.
+#: ``set_extra_http_headers`` is absent on purpose: it rides every request the
+#: page makes, third-party hosts included, so it has no destination to vet.
+_PATTERN_SCOPED_HEADER_ACTIONS = frozenset({"inject_headers", "mock_route"})
+
+#: A pattern names one host only when its host part is spelled out: no
+#: wildcard, no placeholder, no userinfo. ``https://*.example.test/**`` and
+#: ``https://{{host}}/**`` choose the host at match or run time, and
+#: ``https://app.test@attacker.test/`` is attacker.test to a URL parser.
+_LITERAL_PATTERN_HOST = re.compile(r"^https?://([^/?#*{}\[\]@]+)(?:/|$)", re.IGNORECASE)
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def own_site_hosts(session: Any) -> set[str]:
+    """The hosts the operator, not the macro, pointed this session at.
+
+    The launch URL and the persona ``base_url`` are chosen by whoever launched
+    the browser. A host the macro navigates to is not: a poisoned macro could
+    navigate to its own server and then name it. octowright's own new-tab page
+    (a launch with no URL) is not an app either, though a local dev stack on
+    ``localhost`` is.
+    """
+    hosts: set[str] = set()
+    for url in (getattr(session, "url", None), getattr(session, "base_url", None)):
+        if not isinstance(url, str) or not url:
+            continue
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if not host or (host in _LOOPBACK_HOSTS and parts.path.rstrip("/") == "/new-tab"):
+            continue
+        hosts.add(host)
+    return hosts
+
+
+def _headers_reach_own_site(action: dict[str, Any], trusted_hosts: frozenset[str] | set[str]) -> bool:
+    if not trusted_hosts or action.get("action") not in _PATTERN_SCOPED_HEADER_ACTIONS:
+        return False
+    pattern = action.get("pattern", action.get("url_pattern"))
+    match = _LITERAL_PATTERN_HOST.match(pattern) if isinstance(pattern, str) else None
+    return match is not None and match.group(1).rsplit(":", 1)[0].lower() in trusted_hosts
+
+
+def _substitute_value(
+    value: Any, args: dict[str, Any], *, unsafe_sink: bool = False, headers_exempt: bool = False
+) -> Any:
     if isinstance(value, str):
 
         def replacer(match: re.Match[str]) -> str:
@@ -155,15 +201,21 @@ def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = F
             if unsafe_sink and is_credential_arg(key) and credential_sinks_blocked():
                 raise ValueError(
                     f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
-                    "this would send the secret off-machine. Set "
-                    "OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow if that is intended."
+                    "this would send the secret off-machine. A header may carry one through "
+                    "inject_headers whose pattern names the session's own site (its launch URL "
+                    "or persona base_url). Set OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow if that is intended."
                 )
             return str(args[key])
 
         return re.sub(r"\{\{([^}]+)\}\}", replacer, value)
     if isinstance(value, dict):
         return {
-            key: _substitute_value(item, args, unsafe_sink=unsafe_sink or key in CREDENTIAL_UNSAFE_KEYS)
+            key: _substitute_value(
+                item,
+                args,
+                unsafe_sink=unsafe_sink
+                or (key in CREDENTIAL_UNSAFE_KEYS and not (headers_exempt and key == "headers")),
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -171,5 +223,15 @@ def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = F
     return value
 
 
-def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict[str, Any]]:
-    return [_substitute_value(copy.deepcopy(action), args) for action in actions]
+def substitute(
+    actions: list[dict[str, Any]], args: dict[str, Any], *, trusted_hosts: frozenset[str] | set[str] = frozenset()
+) -> list[dict[str, Any]]:
+    """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
+
+    *trusted_hosts* (``own_site_hosts(session)``) is the one exemption: a
+    credential in the ``headers`` of an action whose pattern names one of them.
+    """
+    return [
+        _substitute_value(copy.deepcopy(action), args, headers_exempt=_headers_reach_own_site(action, trusted_hosts))
+        for action in actions
+    ]
