@@ -29,6 +29,7 @@ from octowright.macros import execution
 
 pytestmark = pytest.mark.live_browser
 
+SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
 PAGE = b"""<!doctype html><html><body><h1>Welcome back</h1>
 <input type="password" id="pw" value="hunter2-Correct-Horse!"></body></html>"""
 
@@ -37,7 +38,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith("/slow"):
             time.sleep(3)  # still in flight when the page navigates away
-        self.send_response(200)
+        status = {"/api500": 500, "/missing.png": 404}.get(self.path, 200)
+        self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(PAGE)))
         self.end_headers()
@@ -93,7 +95,7 @@ async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: p
         f"() => {{ fetch('http://127.0.0.1:{port}/').catch(() => {{}}); setTimeout(() => {{ throw new Error('x'); }}); }}"
     )
     await _settle(session)
-    assert session.network_failures_since_mark() == (1, 1), list(session._network_requests)
+    assert session.network_failures_since_mark()[:2] == (1, 1), list(session._network_requests)
 
     _macros(monkeypatch, {"clean": [{"action": "expect_network_clean"}]})
     result = await execution.run_macro(session, "clean")
@@ -139,8 +141,37 @@ async def test_no_text_on_a_rendered_page(session: Any, monkeypatch: pytest.Monk
             "present": [{"action": "expect_no_text", "text": "Welcome"}],
         },
     )
-    await execution.run_macro(session, "absent", {"password": "hunter2-Correct-Horse!"})
+    await execution.run_macro(session, "absent", {"password": SECRET})
     with pytest.raises(RuntimeError) as excinfo:
         await execution.run_macro(session, "present")
     assert "forbidden text" in str(excinfo.value)
     assert "Welcome" not in str(excinfo.value)
+
+
+async def test_http_errors_count_api_failures_not_missing_images(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 500 from an API fails the opt-in check; a 404 image never does."""
+    load = [
+        {
+            "action": "evaluate",
+            "expression": "() => { const i = new Image(); i.src = '/missing.png'; document.body.append(i); }",
+        },
+        {"action": "evaluate", "expression": "() => new Promise((r) => setTimeout(r, 500))"},
+    ]
+    api = [
+        {
+            "action": "evaluate",
+            "expression": "() => fetch('/api500').then(() => new Promise((r) => setTimeout(r, 300)))",
+        }
+    ]
+    _macros(
+        monkeypatch,
+        {
+            "image-only": [*load, {"action": "expect_network_clean", "http_errors": True}],
+            "api-default": [*api, {"action": "expect_network_clean"}],
+            "api-strict": [*api, {"action": "expect_network_clean", "http_errors": True}],
+        },
+    )
+    await execution.run_macro(session, "image-only")
+    await execution.run_macro(session, "api-default")
+    with pytest.raises(RuntimeError, match=r"1 HTTP error\(s\)"):
+        await execution.run_macro(session, "api-strict")

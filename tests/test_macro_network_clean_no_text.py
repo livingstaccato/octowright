@@ -25,7 +25,7 @@ from octowright.macros.runtime import _ACTION_MAP
 from octowright.macros.substitution import substitute
 from octowright.session.core import BrowserSession
 
-SECRET = "hunter2-Correct-Horse!"
+SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
 
 
 @pytest.fixture
@@ -222,3 +222,67 @@ def test_a_credential_may_be_substituted_into_no_text() -> None:
     """Not a navigation or code sink, so the credential guard must let it through."""
     actions = substitute([{"action": "expect_no_text", "text": "{{password}}"}], {"password": SECRET})
     assert actions == [{"action": "expect_no_text", "text": SECRET}]
+
+
+# ---------------------------------------------------------------------------
+# expect_network_clean(http_errors=True)
+# ---------------------------------------------------------------------------
+
+
+def _respond(session: BrowserSession, status: int, resource_type: str = "fetch") -> None:
+    response = MagicMock(status=status, status_text="x")
+    response.request = MagicMock(url="https://x.test/api?token=abc", method="GET", resource_type=resource_type)
+    response.request.headers = {}
+    session._handle_response(response)
+
+
+@pytest.mark.anyio
+async def test_http_errors_are_off_by_default(session: BrowserSession) -> None:
+    _respond(session, 500)
+    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("resource_type", ["document", "fetch", "xhr"])
+@pytest.mark.parametrize("status", [404, 500])
+async def test_http_errors_opt_in_counts_api_and_page_loads(
+    session: BrowserSession, resource_type: str, status: int
+) -> None:
+    _respond(session, status, resource_type)
+    with pytest.raises(RuntimeError) as excinfo:
+        await session.expect_network_clean(http_errors=True)
+    assert "1 HTTP error(s)" in str(excinfo.value)
+    assert "x.test" not in str(excinfo.value) and "token" not in str(excinfo.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("resource_type", ["image", "font", "stylesheet", "media", "other"])
+async def test_http_errors_ignore_cosmetic_resources(session: BrowserSession, resource_type: str) -> None:
+    """A missing favicon or font is not the journey failing."""
+    _respond(session, 404, resource_type)
+    result = await session.expect_network_clean(http_errors=True)
+    assert result == {"failed_requests": 0, "page_errors": 0, "http_errors": 0}
+
+
+@pytest.mark.anyio
+async def test_http_errors_ignore_success_and_redirects(session: BrowserSession) -> None:
+    for status in (200, 204, 301, 304):
+        _respond(session, status)
+    assert (await session.expect_network_clean(http_errors=True))["http_errors"] == 0
+
+
+@pytest.mark.anyio
+async def test_http_errors_respect_the_run_window(session: BrowserSession) -> None:
+    _respond(session, 500)
+    session.mark_network_clean_window()
+    assert (await session.expect_network_clean(http_errors=True))["http_errors"] == 0
+
+
+@pytest.mark.anyio
+async def test_http_errors_option_is_recorded(session: BrowserSession) -> None:
+    await session.expect_network_clean(http_errors=True)
+    session.recorder.record.assert_called_with("expect_network_clean", http_errors=True)
+
+
+def test_lint_accepts_the_http_errors_option() -> None:
+    assert _errors([{"action": "expect_network_clean", "http_errors": True}]) == []

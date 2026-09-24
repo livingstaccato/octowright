@@ -136,20 +136,31 @@ class SessionExpectMixin(SessionLike):
         return result
 
     @gated_operation("browser_expect_network_clean")
-    async def expect_network_clean(self) -> dict[str, int]:
+    async def expect_network_clean(self, http_errors: bool = False) -> dict[str, int]:
         """Assert no failed requests (aborts excepted) and no page errors since the mark.
 
         The mark is the start of the current macro run (see
         ``mark_network_clean_window``). "Failed" is Playwright's
-        ``requestfailed``: the request got no response. An HTTP 4xx/5xx did get
-        one and is not counted here. The error carries counts only, because a
+        ``requestfailed``: the request got no response. ``http_errors=True``
+        also fails on a 4xx/5xx page load or API call (``request_failures.
+        HTTP_ERROR_RESOURCE_TYPES``); off by default because a 4xx is sometimes
+        the answer a journey expects. The error carries counts only, because a
         failed URL or an exception message can carry a credential.
         """
-        failed, page_errors = self.network_failures_since_mark()
-        if failed or page_errors:
-            raise RuntimeError(f"network not clean: {failed} failed request(s), {page_errors} page error(s)")
-        self.recorder.record("expect_network_clean")
-        return {"failed_requests": failed, "page_errors": page_errors}
+        failed, page_errors, http_error_count = self.network_failures_since_mark()
+        counts = {"failed_requests": failed, "page_errors": page_errors}
+        if http_errors:
+            counts["http_errors"] = http_error_count
+        if any(counts.values()):
+            detail = f"{failed} failed request(s), {page_errors} page error(s)"
+            if http_errors:
+                detail += f", {http_error_count} HTTP error(s)"
+            raise RuntimeError(f"network not clean: {detail}")
+        if http_errors:
+            self.recorder.record("expect_network_clean", http_errors=True)
+        else:
+            self.recorder.record("expect_network_clean")
+        return counts
 
     @gated_operation("browser_expect_no_text")
     async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> None:

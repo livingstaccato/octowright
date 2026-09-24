@@ -22,7 +22,7 @@ from octowright.artifacts.script_export import render_macro_cli
 from octowright.request_failures import ABORTED_REQUEST_FAILURES
 from tests.macro_lint.test_cli_export_execution import _FakeContext, _FakePage, _Recorder
 
-SECRET = "hunter2-Correct-Horse!"
+SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]], on_page: Any = None) -> Any:
@@ -133,3 +133,19 @@ def test_a_nested_assertion_still_wires_the_listeners(monkeypatch: pytest.Monkey
     except BaseException:
         pass  # whether `try` exports is not this test's question
     assert {"requestfailed", "pageerror"} <= set(seen)
+
+
+def _server_error(page: _FakePage) -> None:
+    request = types.SimpleNamespace(resource_type="fetch")
+    _fire(page, "response", types.SimpleNamespace(status=500, request=request))
+    _fire(page, "response", types.SimpleNamespace(status=404, request=types.SimpleNamespace(resource_type="image")))
+
+
+def test_http_errors_are_off_by_default_in_the_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _run(monkeypatch, [{"action": "expect_network_clean"}], on_page=_server_error)["executed"] == 2
+
+
+def test_http_errors_opt_in_counts_only_api_and_page_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(BaseException) as excinfo:
+        _run(monkeypatch, [{"action": "expect_network_clean", "http_errors": True}], on_page=_server_error)
+    assert "1 HTTP error(s)" in str(excinfo.value)

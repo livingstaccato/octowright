@@ -19,3 +19,13 @@ from __future__ import annotations
 ABORTED_REQUEST_FAILURES: frozenset[str] = frozenset(
     {"net::ERR_ABORTED", "NS_BINDING_ABORTED", "Load request cancelled"}
 )
+
+#: Resource types whose 4xx/5xx ``expect_network_clean(http_errors=True)``
+#: counts: page loads and API calls, which are what "the journey worked" means.
+#: A missing image, font or favicon is cosmetic and would make the check fail
+#: on pages whose flow is fine.
+HTTP_ERROR_RESOURCE_TYPES: frozenset[str] = frozenset({"document", "fetch", "xhr"})
+
+
+def is_http_error(status: object, resource_type: object) -> bool:
+    return isinstance(status, int) and status >= 400 and resource_type in HTTP_ERROR_RESOURCE_TYPES

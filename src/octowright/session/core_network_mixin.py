@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from provide.telemetry import get_logger
 
 from octowright.http_headers import redact_header_values
-from octowright.request_failures import ABORTED_REQUEST_FAILURES
+from octowright.request_failures import ABORTED_REQUEST_FAILURES, is_http_error
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 
@@ -249,8 +249,8 @@ class SessionNetworkMixin(SessionLike):
         """Start the window ``expect_network_clean`` judges. Called per macro run."""
         self._network_clean_mark = self._network_clean_counts()
 
-    def network_failures_since_mark(self) -> tuple[int, int]:
-        """(failed requests, page errors) since the mark, aborts excluded.
+    def network_failures_since_mark(self) -> tuple[int, int, int]:
+        """(failed requests, page errors, HTTP errors) since the mark, aborts excluded.
 
         The mark is an absolute index into the request stream, so rows the
         deque evicted since then shift nothing; if the mark itself was evicted,
@@ -260,7 +260,8 @@ class SessionNetworkMixin(SessionLike):
         start = max(0, request_mark - self._network_requests_dropped)
         rows = list(self._network_requests)[start:]
         failed = sum(1 for row in rows if row.get("failure") and row["failure"] not in ABORTED_REQUEST_FAILURES)
-        return failed, self.page_error_count - error_mark
+        http_errors = sum(1 for row in rows if is_http_error(row.get("status"), row.get("resource_type")))
+        return failed, self.page_error_count - error_mark, http_errors
 
     def _append_network_request(self, request: dict[str, Any]) -> None:
         if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:

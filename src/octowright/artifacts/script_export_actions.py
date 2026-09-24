@@ -27,7 +27,7 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
-from octowright.request_failures import ABORTED_REQUEST_FAILURES
+from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES
 
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
@@ -35,6 +35,9 @@ STATE_HELPERS = (
     """
 _ABORTED_REQUEST_FAILURES = """
     + repr(sorted(ABORTED_REQUEST_FAILURES))
+    + """
+_HTTP_ERROR_RESOURCE_TYPES = """
+    + repr(sorted(HTTP_ERROR_RESOURCE_TYPES))
     + '''
 
 
@@ -55,8 +58,13 @@ def _watch_network(state: dict[str, Any], page: Any) -> None:
     def _on_error(_error: Any) -> None:
         state["page_errors"] += 1
 
+    def _on_response(response: Any) -> None:
+        if response.status >= 400 and response.request.resource_type in _HTTP_ERROR_RESOURCE_TYPES:
+            state["http_errors"] += 1
+
     page.on("requestfailed", _on_failed)
     page.on("pageerror", _on_error)
+    page.on("response", _on_response)
 
 
 def _page(state: dict[str, Any]) -> Any:
@@ -340,10 +348,12 @@ if "equals" not in action and not result:
 executed += 1
 """,
     "expect_network_clean": """
-if state["failed_requests"] or state["page_errors"]:
-    raise RuntimeError(
-        f"network not clean: {state['failed_requests']} failed request(s), {state['page_errors']} page error(s)"
-    )
+counted = state["http_errors"] if action.get("http_errors") else 0
+if state["failed_requests"] or state["page_errors"] or counted:
+    detail = f"{state['failed_requests']} failed request(s), {state['page_errors']} page error(s)"
+    if action.get("http_errors"):
+        detail += f", {counted} HTTP error(s)"
+    raise RuntimeError(f"network not clean: {detail}")
 executed += 1
 """,
     # The text is usually a secret, so the error never repeats it.

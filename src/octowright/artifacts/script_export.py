@@ -387,6 +387,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
             "dialog_pages": [],
             "failed_requests": 0,
             "page_errors": 0,
+            "http_errors": 0,
             # Text search, so an assertion nested in try/if_selector counts too.
             "watch_network": '"expect_network_clean"' in ACTIONS_JSON,
         }}
