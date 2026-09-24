@@ -89,3 +89,11 @@ def test_file_keys_are_valid_in_persona_yaml(monkeypatch: pytest.MonkeyPatch, tm
     loaded = personas.load_persona("lab")
     assert loaded.credentials == {"password_file": "/run/x"}
     assert personas._credential_names(loaded) == ["password"]
+
+
+def test_the_credential_check_reports_a_file_source(tmp_path: Path) -> None:
+    report = personas.check_credentials(persona(private(tmp_path / "p")))
+    assert report["checked"] == [
+        {"name": "password", "source": "file", "reference": str(tmp_path / "p"), "ok": True, "error": None}
+    ]
+    assert SECRET not in str(report)

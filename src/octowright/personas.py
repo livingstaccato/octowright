@@ -509,14 +509,14 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
     """Try to resolve every declared credential reference WITHOUT raising.
 
     Returns a structured report per field — success/failure + the reference
-    type (env or cmd) and its literal reference (env var name or the shell
-    command). Never includes the resolved secret value.
+    type (env, cmd or file) and its literal reference (env var name, shell
+    command or file path). Never includes the resolved secret value.
 
     Shape:
         {
           "persona": str,
           "checked": [
-              {"name": str, "source": "env"|"cmd", "reference": str, "ok": bool,
+              {"name": str, "source": "env"|"cmd"|"file", "reference": str, "ok": bool,
                "error": str | None},
               ...
           ],
@@ -527,33 +527,9 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
     Fields with both ``_env`` and ``_cmd`` are checked as ``cmd`` only (matching
     ``resolve_credential`` precedence) — the ``_env`` value is ignored.
     """
-    names = _credential_names(persona)
-    checked: list[CredentialCheckEntry] = []
-    for name in names:
-        cmd_key = f"{name}_cmd"
-        env_key = f"{name}_env"
-        if cmd_key in persona.credentials:
-            source = "cmd"
-            reference = persona.credentials[cmd_key]
-        else:
-            source = "env"
-            reference = persona.credentials[env_key]
-        try:
-            resolve_credential(persona, name)
-            checked.append({"name": name, "source": source, "reference": reference, "ok": True, "error": None})
-        except MissingCredential as e:
-            checked.append({"name": name, "source": source, "reference": reference, "ok": False, "error": str(e)})
-
+    checked = [_check_credential(persona, name) for name in _credential_names(persona)]
     total = len(checked)
     passed = sum(1 for c in checked if c["ok"])
-    if total == 0:
-        summary = f"persona {persona.name!r} declares no credentials"
-    else:
-        failing = [c["name"] for c in checked if not c["ok"]]
-        if not failing:
-            summary = f"{passed}/{total} credentials resolved"
-        else:
-            summary = f"{passed}/{total} credentials resolved; failing: {', '.join(failing)}"
     return {
         "persona": persona.name,
         "checked": checked,
@@ -561,5 +537,25 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
         # has nothing to verify. Treat that as ok so callers can use the flag
         # as "no missing creds" rather than "creds exist AND resolve".
         "ok": total == 0 or passed == total,
-        "summary": summary,
+        "summary": _credential_summary(persona.name, checked),
     }
+
+
+def _check_credential(persona: Persona, name: str) -> CredentialCheckEntry:
+    # Same precedence as resolve_credential: cmd, then file, then env.
+    source = next(kind for kind in ("cmd", "file", "env") if f"{name}_{kind}" in persona.credentials)
+    reference = persona.credentials[f"{name}_{source}"]
+    try:
+        resolve_credential(persona, name)
+    except MissingCredential as e:
+        return {"name": name, "source": source, "reference": reference, "ok": False, "error": str(e)}
+    return {"name": name, "source": source, "reference": reference, "ok": True, "error": None}
+
+
+def _credential_summary(persona_name: str, checked: list[CredentialCheckEntry]) -> str:
+    if not checked:
+        return f"persona {persona_name!r} declares no credentials"
+    passed = sum(1 for c in checked if c["ok"])
+    failing = [c["name"] for c in checked if not c["ok"]]
+    summary = f"{passed}/{len(checked)} credentials resolved"
+    return f"{summary}; failing: {', '.join(failing)}" if failing else summary
