@@ -218,20 +218,121 @@ def test_a_login_recording_binds_both_the_fill_and_the_assertion(
     storage = _storage(monkeypatch, tmp_path)
     rows = [
         {"action": "fill", "selector": "#pw", "value": REDACTED_INPUT_PLACEHOLDER},
-        {"action": "expect_no_text", "selector": "body", "text": REDACTED_ASSERTION_TEXT},
+        _assertion_row(SECRET),
     ]
     saved = storage.save_macro(recording_path=_recording(tmp_path, rows), name="m", parameters={"password": SECRET})
     actions = _saved_actions(saved)
     assert actions[0]["value"] == "{{password}}"
     assert actions[1]["text"] == "{{password}}"
+    assert "text_digest" not in actions[1]
 
 
-def test_two_credential_parameters_leave_the_assertion_for_the_author(
+def _assertion_row(text: str | None) -> dict[str, Any]:
+    from octowright.macros.privacy import assertion_text_digest
+
+    row: dict[str, Any] = {"action": "expect_no_text", "selector": "body", "text": REDACTED_ASSERTION_TEXT}
+    if text is not None:
+        row["text_digest"] = assertion_text_digest(text)
+    return row
+
+
+@pytest.mark.anyio
+async def test_expect_no_text_records_a_keyed_digest_not_the_text(session: BrowserSession) -> None:
+    from octowright.macros.privacy import assertion_text_digest
+
+    session.page.evaluate = AsyncMock(return_value={"pieces": ["nothing secret"], "overlay": "", "matched": 1})
+    session._snapshot_leaks = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    await session.expect_no_text(SECRET)
+    kwargs = session.recorder.record.call_args.kwargs
+    assert kwargs["text_digest"] == assertion_text_digest(SECRET)
+    assert SECRET not in json.dumps(kwargs)
+    # Compared as the check compares: case and invisible characters do not matter.
+    assert assertion_text_digest(SECRET.upper() + "\u200b") == kwargs["text_digest"]
+
+
+def test_a_traceback_check_is_not_turned_into_a_password_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Only the marker whose digest matches the password binds to it."""
+    storage = _storage(monkeypatch, tmp_path)
+    rows = [
+        _assertion_row("Traceback"),
+        {"action": "fill", "selector": "#pw", "value": REDACTED_INPUT_PLACEHOLDER},
+        _assertion_row(SECRET),
+    ]
+    saved = storage.save_macro(recording_path=_recording(tmp_path, rows), name="m", parameters={"password": SECRET})
+    actions = _saved_actions(saved)
+    assert actions[0]["text"] == REDACTED_ASSERTION_TEXT
+    assert actions[2]["text"] == "{{password}}"
+    assert all("text_digest" not in action for action in actions)
+    assert any(i.severity == "error" and "redacted" in i.message for i in lint_macro({"name": "m", "actions": actions}))
+
+
+@pytest.mark.parametrize("digest_text", [None, "something else"], ids=["absent", "mismatched"])
+def test_an_unmatched_digest_leaves_the_marker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, digest_text: str | None
+) -> None:
+    """Absent is also what a recording from before a daemon restart looks like to the new key."""
+    storage = _storage(monkeypatch, tmp_path)
+    saved = storage.save_macro(
+        recording_path=_recording(tmp_path, [_assertion_row(digest_text)]), name="m", parameters={"password": SECRET}
+    )
+    assert _saved_actions(saved)[0]["text"] == REDACTED_ASSERTION_TEXT
+
+
+def test_a_recording_from_a_previous_daemon_does_not_bind(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from octowright.macros import privacy
+
+    row = _assertion_row(SECRET)
+    monkeypatch.setattr(privacy, "_ASSERTION_DIGEST_KEY", b"a-new-process-key")
+    storage = _storage(monkeypatch, tmp_path)
+    saved = storage.save_macro(recording_path=_recording(tmp_path, [row]), name="m", parameters={"password": SECRET})
+    assert _saved_actions(saved)[0]["text"] == REDACTED_ASSERTION_TEXT
+
+
+def test_with_two_credential_parameters_the_assertion_binds_to_the_matching_one(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     storage = _storage(monkeypatch, tmp_path)
-    rows = [{"action": "expect_no_text", "selector": "body", "text": REDACTED_ASSERTION_TEXT}]
     saved = storage.save_macro(
-        recording_path=_recording(tmp_path, rows), name="m", parameters={"password": SECRET, "api_token": "t0k3n-xyz"}
+        recording_path=_recording(tmp_path, [_assertion_row("t0k3n-xyz")]),
+        name="m",
+        parameters={"password": SECRET, "api_token": "t0k3n-xyz"},  # pragma: allowlist secret
     )
-    assert _saved_actions(saved)[0]["text"] == REDACTED_ASSERTION_TEXT
+    assert _saved_actions(saved)[0]["text"] == "{{api_token}}"
+
+
+def test_a_non_credential_parameter_binds_when_its_value_matches(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage = _storage(monkeypatch, tmp_path)
+    saved = storage.save_macro(
+        recording_path=_recording(tmp_path, [_assertion_row("123-45-6789")]),
+        name="m",
+        parameters={"forbidden": "123-45-6789"},
+    )
+    assert _saved_actions(saved)[0]["text"] == "{{forbidden}}"
+
+
+# --- failure-context producers log what they swallow -------------------------------------
+
+
+@pytest.mark.parametrize("producer", ["page_errors_tail", "failed_requests_tail"])
+def test_a_failing_failure_context_producer_is_logged_not_silent(
+    monkeypatch: pytest.MonkeyPatch, producer: str
+) -> None:
+    from types import SimpleNamespace
+
+    from octowright.macros import failure_context
+
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(failure_context, "log", SimpleNamespace(debug=lambda event, **kw: events.append((event, kw))))
+
+    class _Broken:
+        @property
+        def page_errors(self) -> list[Any]:
+            raise RuntimeError(f"cannot read {SECRET}")
+
+        def get_network_requests(self, **_kw: Any) -> Any:
+            raise RuntimeError(f"cannot read {SECRET}")
+
+    assert getattr(failure_context, producer)(_Broken()) == []  # type: ignore[arg-type]
+    assert len(events) == 1 and events[0][1] == {"error_type": "RuntimeError"}

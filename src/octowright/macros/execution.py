@@ -30,7 +30,9 @@ from octowright.macros.failure_context import failed_requests_tail as _failed_re
 from octowright.macros.failure_context import page_errors_tail
 from octowright.macros.privacy import (
     PrivacyLedger,
+    assertion_text_args,
     install_sensitive_recorder,
+    session_privacy_ledger,
 )
 from octowright.macros.privacy import (
     blind_scrub_arg_values as _sensitive_arg_values,
@@ -75,8 +77,21 @@ def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...]) -> An
     return _privacy_scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
 
 
-def _redact_args_for_response(args: dict[str, Any]) -> dict[str, Any]:
-    return _privacy_redact_args(args, marker=_REDACTED_MACRO_VALUE)
+def _redact_args_for_response(args: dict[str, Any], assertion_args: frozenset[str] = frozenset()) -> dict[str, Any]:
+    return _privacy_redact_args(args, marker=_REDACTED_MACRO_VALUE, assertion_args=assertion_args)
+
+
+def _macro_assertion_args(name: Any) -> frozenset[str]:
+    """The arguments macro *name* feeds into an expect_no_text, or none if it cannot be read.
+
+    Only for the paths that do not already hold the loaded macro. A macro that
+    cannot be loaded never substituted anything, so nothing is lost by it.
+    """
+    try:
+        return assertion_text_args(load_macro(name).get("actions", []))
+    except Exception as exc:
+        log.debug("octowright.macro.assertion_args_unavailable", macro=str(name), error=repr(exc))
+        return frozenset()
 
 
 _MACRO_RUN = counter(
@@ -243,6 +258,17 @@ async def _dispatch_classified_screenshot(
     raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
 
 
+def _failure_scrub_values(session: SessionLike, run_ledger: PrivacyLedger) -> tuple[str, ...]:
+    """What a failure payload is scrubbed of: this run's values and the session's.
+
+    The session ledger also holds values admitted outside any macro -- a
+    password the input classification hid from a direct ``browser_fill`` -- and
+    the page may have echoed one into the console or a request the payload
+    carries.
+    """
+    return PrivacyLedger((*run_ledger.values, *session_privacy_ledger(session).values)).values
+
+
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
     return run_ledger.values if run_ledger is not None else ()
 
@@ -260,7 +286,7 @@ def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], r
     call_args = action.get("args")
     if not isinstance(call_args, dict):
         return
-    nested = _sensitive_arg_values(call_args)
+    nested = _sensitive_arg_values(call_args, assertion_args=_macro_assertion_args(action.get("name")))
     run_ledger.add(nested)
     install_sensitive_recorder(session, nested)
 
@@ -573,7 +599,10 @@ async def _run_macro_impl(
 ) -> MacroRunResult:
     macro = load_macro(name)
     effective_args = args or {}
-    sensitive_values = _sensitive_arg_values(effective_args)
+    # An argument that IS the forbidden text is sensitive whatever it is named;
+    # the exported CLI reads the same set (privacy.assertion_text_args).
+    assertion_args = assertion_text_args(macro.get("actions", []))
+    sensitive_values = _sensitive_arg_values(effective_args, assertion_args=assertion_args)
     install_sensitive_recorder(session, sensitive_values)
     # What THIS run has admitted for blind scrubbing: its own arguments plus every
     # nested call's, appended as they execute. Failure payloads and screenshot
@@ -602,6 +631,7 @@ async def _run_macro_impl(
             failure: RuntimeError | None = None
             failure_cause: Exception | None = None
             safe_original: str | None = None
+            run_values: tuple[str, ...] = ()
             try:
                 executed_count, skipped_count = await _dispatch_one(
                     session,
@@ -611,7 +641,7 @@ async def _run_macro_impl(
                     run_ledger=run_ledger,
                 )
             except Exception as exc:
-                run_values = run_ledger.values
+                run_values = _failure_scrub_values(session, run_ledger)
                 safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
                 if not run_values:
                     failure_cause = exc
@@ -628,7 +658,7 @@ async def _run_macro_impl(
                     actions=actions,
                     executed=executed,
                     safe_original=safe_original,
-                    sensitive_values=run_ledger.values,
+                    sensitive_values=run_values,
                 )
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
@@ -658,7 +688,7 @@ async def _run_macro_impl(
         "macro": name,
         "executed": executed,
         "skipped": skipped,
-        "args_used": _redact_args_for_response(effective_args),
+        "args_used": _redact_args_for_response(effective_args, assertion_args),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
     }
@@ -708,7 +738,7 @@ async def run_sequence(
                             "macro": name,
                             "ok": False,
                             "error": str(exc),
-                            "args_used": _redact_args_for_response(step_args),
+                            "args_used": _redact_args_for_response(step_args, _macro_assertion_args(name)),
                         }
                     )
                     if stop_on_failure:

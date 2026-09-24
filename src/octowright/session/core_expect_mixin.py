@@ -289,7 +289,15 @@ class SessionExpectMixin(SessionLike):
             leaks = await self._snapshot_leaks(text, timeout)
             if leaks:
                 raise RuntimeError(f"forbidden text ({len(text)} chars) is rendered: {', '.join(leaks)}")
-        self.recorder.record("expect_no_text", selector=selector, text=REDACTED_ASSERTION_TEXT)
+        # The marker, never the text; the keyed digest is what lets save_macro
+        # bind the marker to the parameter it stood for (see
+        # macros.privacy.assertion_text_digest). Local import: macros imports
+        # the session stack.
+        from octowright.macros.privacy import assertion_text_digest
+
+        self.recorder.record(
+            "expect_no_text", selector=selector, text=REDACTED_ASSERTION_TEXT, text_digest=assertion_text_digest(text)
+        )
 
 
 def _check_forbidden_text(text: str) -> None:

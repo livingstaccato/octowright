@@ -8,15 +8,20 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import hmac
 import html
 import json
 import os
 import re
+import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, Literal
 from urllib.parse import quote, quote_plus
+
+from octowright.macros.redaction_text import normalize
 
 ARG_PRIVACY_CLASSIFIER_VERSION = 5
 REDACTED = "<redacted>"
@@ -264,14 +269,57 @@ def _collect_classified_values(
     return set()
 
 
-def classified_arg_values(args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
-    """Classified leaves with their effective tier and value-free-safe path."""
+#: What ``substitute`` expands, so the argument names a macro feeds into a
+#: field are read with the same grammar the substitution uses.
+_PLACEHOLDER_RE = re.compile(r"\{\{([^}]+)\}\}")
+
+
+def assertion_text_args(actions: Any) -> frozenset[str]:
+    """Names of the arguments substituted into an ``expect_no_text`` ``text``, anywhere in *actions*.
+
+    Such an argument is the forbidden text itself -- a national id, a card
+    number, a password -- whatever it is named, so it is classified sensitive by
+    POSITION where every other argument is classified by name. Live replay
+    (``args_used`` and the scrub set) and the exported CLI both read it from
+    here, which is what keeps the two from disagreeing about the same macro.
+    A fill/type argument is deliberately not included: feeding a fill says
+    nothing about the value (``qty``, ``order_id``), and a password field's fill
+    is already redacted by the recorder's input classification.
+    """
+    names: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            if node.get("action") == "expect_no_text" and isinstance(node.get("text"), str):
+                names.update(_PLACEHOLDER_RE.findall(node["text"]))
+            for item in node.values():
+                walk(item)
+
+    walk(actions)
+    return frozenset(names)
+
+
+def _arg_tier(key: object, assertion_args: frozenset[str]) -> PrivacyTier | None:
+    return "credential" if key in assertion_args else _privacy_tier(key)
+
+
+def classified_arg_values(
+    args: Mapping[str, Any], *, assertion_args: frozenset[str] = frozenset()
+) -> tuple[ClassifiedArgValue, ...]:
+    """Classified leaves with their effective tier and value-free-safe path.
+
+    *assertion_args* (see `assertion_text_args`) are credential-tier whatever
+    they are named.
+    """
     values: set[ClassifiedArgValue] = set()
     for key, value in args.items():
         values.update(
             _collect_classified_values(
                 value,
-                inherited=_privacy_tier(key),
+                inherited=_arg_tier(key, assertion_args),
                 path=str(key),
             )
         )
@@ -318,15 +366,20 @@ def blind_scrub_arg_values(
     args: Mapping[str, Any],
     *,
     policy: BlindScrubPolicy | None = None,
+    assertion_args: frozenset[str] = frozenset(),
 ) -> tuple[str, ...]:
     """Values admitted to blind scrubbers under the configured policy."""
     resolved = policy or blind_scrub_policy()
-    classified = classified_arg_values(args)
+    classified = classified_arg_values(args, assertion_args=assertion_args)
     selected = _admitted_classified_values(classified, resolved)
     return tuple(sorted({item.value for item in selected}, key=lambda value: (-len(value), value)))
 
 
 def _serialized_variants(value: str) -> tuple[str, ...]:
+    # Rendered verbatim into every exported macro CLI (artifacts.script_export),
+    # so the generated script and the live scrubber cannot drift apart. It must
+    # therefore stay self-contained: stdlib json/html/quote/quote_plus and
+    # _MAX_ENCODING_DEPTH only.
     variants: set[str] = {
         value,
         json.dumps(value, ensure_ascii=True)[1:-1],
@@ -340,6 +393,13 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
     for _ in range(_MAX_ENCODING_DEPTH):
         frontier = {encoded for item in frontier for encoded in (quote(item, safe=""), quote_plus(item, safe=""))}
         variants.update(frontier)
+    # The markdown cache is markitdown's output, and markitdown's markdownify
+    # backslash-escapes ``*`` and ``_`` in text nodes (its defaults:
+    # escape_asterisks and escape_underscores on, escape_misc off -- checked on
+    # markitdown 0.1.8 / markdownify 1.2.3), so ``Secret_pa*ss`` reaches the
+    # cache as ``Secret\_pa\*ss``. Added after the percent-encoding pass: nothing
+    # percent-encodes markdown, and each variant costs a pattern per write.
+    variants.add(value.replace("*", "\\*").replace("_", "\\_"))
     return tuple(sorted((item for item in variants if item), key=len, reverse=True))
 
 
@@ -436,9 +496,11 @@ def _redact_nested_args(value: Any, marker: str) -> Any:
     return value
 
 
-def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str, Any]:
+def redact_args(
+    args: Mapping[str, Any], *, marker: str = REDACTED, assertion_args: frozenset[str] = frozenset()
+) -> dict[str, Any]:
     redacted = {
-        str(key): marker if is_sensitive_arg_key(key) else _redact_nested_args(value, marker)
+        str(key): marker if is_sensitive_arg_key(key) or key in assertion_args else _redact_nested_args(value, marker)
         for key, value in args.items()
     }
     policy = blind_scrub_policy()
@@ -446,7 +508,41 @@ def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str,
     # existing manifest or result. Structural redaction must remain usable in
     # that mode, with the same alias handling as the replay-safe default.
     blind_policy: BlindScrubPolicy = "credentials" if policy == "reject" else policy
-    return scrub_sensitive_values(redacted, blind_scrub_arg_values(args, policy=blind_policy), marker=marker)
+    return scrub_sensitive_values(
+        redacted,
+        blind_scrub_arg_values(args, policy=blind_policy, assertion_args=assertion_args),
+        marker=marker,
+    )
+
+
+#: Keys the ``expect_no_text`` recording digest. Random per process and never
+#: written anywhere, so a digest in a JSONL on disk cannot be brute-forced
+#: offline against a dictionary of likely passwords; the cost is that only the
+#: daemon that made a recording can bind it (see `assertion_text_digest`).
+_ASSERTION_DIGEST_KEY = secrets.token_bytes(32)
+
+
+def assertion_text_digest(text: str) -> str:
+    """A keyed digest of *text* as ``expect_no_text`` compares it.
+
+    ``expect_no_text`` records its text as a marker, never the text, because it
+    is usually a secret. ``save_macro`` then needs to know WHICH declared
+    parameter a marker stood for -- binding every marker to the one credential
+    parameter turned a recorded ``expect_no_text('Traceback')`` into a password
+    check. The recorder writes this digest beside the marker and save binds a
+    marker only to a parameter whose value digests the same. Normalised with
+    ``redaction_text.normalize``, the comparison the check itself uses, so a
+    parameter spelled with different case or invisible characters still binds.
+    After a daemon restart the key is new, nothing matches, and the marker is
+    left for the author to fill in (``macro_lint`` reports it).
+    """
+    return hmac.new(_ASSERTION_DIGEST_KEY, normalize(text).encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def assertion_digest_matches(value: object, digest: object) -> bool:
+    if not isinstance(value, str) or not value or not isinstance(digest, str):
+        return False
+    return hmac.compare_digest(assertion_text_digest(value), digest)
 
 
 #: The session attribute that owns its scrub set, in the private namespace
@@ -544,7 +640,39 @@ def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = (
     # that renders the password would otherwise put it on disk in cleartext.
     # ``is None`` leaves a mock session (which answers every getattr) alone.
     if getattr(session, "durable_text_scrubber", None) is None:
-        session.durable_text_scrubber = lambda text: (
-            scrub_sensitive_values(text, ledger.values) if ledger.values else text
-        )
+        session.durable_text_scrubber = DurableTextScrubber(ledger)
     return ledger
+
+
+class DurableTextScrubber:
+    """The session's ``durable_text_scrubber``: scrubs page text against its ledger.
+
+    ``active`` lets a caller with work to do BEFORE scrubbing skip it: the
+    websocket sidecar base64-decodes every binary frame to look for a value,
+    and a session that once ran a macro keeps this installed with a ledger that
+    may well be empty.
+    """
+
+    def __init__(self, ledger: PrivacyLedger) -> None:
+        self.ledger = ledger
+
+    @property
+    def active(self) -> bool:
+        return bool(self.ledger.values)
+
+    def __call__(self, text: str) -> str:
+        values = self.ledger.values
+        return scrub_sensitive_values(text, values) if values else text
+
+
+def admit_redacted_input(session: Any, value: str) -> None:
+    """A value the recorder's input classification hid, now kept out of every other durable write.
+
+    ``OCTOWRIGHT_REDACT_INPUTS`` replaces a password field's typed value in the
+    ``fill``/``type`` row, but the page is free to echo it -- a
+    ``console.log``, a request body, a websocket frame, the rendered page --
+    and each of those rows used to persist it in cleartext. Appending to the
+    session ledger (never replacing it) keeps it scrubbed across every later
+    macro run as well.
+    """
+    install_sensitive_recorder(session, [value])

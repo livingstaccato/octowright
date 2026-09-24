@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import keyword
 import re
@@ -14,7 +15,6 @@ from typing import Any
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
-from octowright.macros._redact import _REDACT_VALUE_ACTIONS
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -27,33 +27,21 @@ from octowright.macros.privacy import (
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
+    _serialized_variants,
+    assertion_text_args,
     blind_scrub_arg_values,
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
 
-# The same placeholder syntax substitution.substitute_in_action resolves.
-_PLACEHOLDER = re.compile(r"\{\{([^}]+)\}\}")
-
 
 def _hard_redacted_args(actions: Any) -> list[str]:
-    """Names of the arguments used in a hard-redacted field, anywhere in *actions*."""
-    names: set[str] = set()
+    """Names of the arguments that are the forbidden text of an expect_no_text, anywhere in *actions*.
 
-    def walk(node: Any) -> None:
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-        elif isinstance(node, dict):
-            if node.get("action") in _REDACT_VALUE_ACTIONS:
-                for key in ("value", "text"):
-                    if isinstance(node.get(key), str):
-                        names.update(_PLACEHOLDER.findall(node[key]))
-            for item in node.values():
-                walk(item)
-
-    walk(actions)
-    return sorted(names)
+    The same set live replay treats as sensitive (``privacy.assertion_text_args``),
+    so ``args_used`` and the script's own log agree about one macro.
+    """
+    return sorted(assertion_text_args(actions))
 
 
 def render_macro_cli(
@@ -77,6 +65,9 @@ def render_macro_cli(
     # 20 spaces: inside `for ... in enumerate(ACTIONS)` inside the raw-action
     # handler and cleanup `try`, then `async with`, then the function body.
     dispatch_chain = render_dispatch_chain(" " * 20)
+    # Rendered from the live scrubber's own source rather than hand-mirrored:
+    # the copy had already lost the HTML-escaped spellings.
+    serialized_variants = inspect.getsource(_serialized_variants).rstrip()
 
     return f"""\
 {doc!r}
@@ -85,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
 import os
 import re
@@ -99,8 +91,8 @@ from urllib.parse import quote, quote_plus
 from playwright.async_api import async_playwright
 
 ACTIONS_JSON = {action_json!r}
-# Arguments that feed a field replay always redacts (a fill's value, an
-# expect_no_text's text), whatever they are named.
+# Arguments substituted into an expect_no_text's text: they ARE the forbidden
+# text, so they are redacted whatever they are named (as live replay does).
 _HARD_REDACTED_ARGS = frozenset({hard_redacted_args!r})
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
@@ -293,21 +285,7 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
     return sorted({{item[0] for item in selected}}, key=lambda value: (-len(value), value))
 
 
-def _serialized_variants(value: str) -> list[str]:
-    variants: set[str] = {{
-        value,
-        json.dumps(value, ensure_ascii=True)[1:-1],
-        json.dumps(value, ensure_ascii=False)[1:-1],
-    }}
-    frontier = set(variants)
-    for _ in range(_MAX_ENCODING_DEPTH):
-        frontier = {{
-            encoded
-            for item in frontier
-            for encoded in (quote(item, safe=""), quote_plus(item, safe=""))
-        }}
-        variants.update(frontier)
-    return sorted((item for item in variants if item), key=len, reverse=True)
+{serialized_variants}
 
 
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:

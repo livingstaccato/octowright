@@ -199,7 +199,11 @@ async def test_no_text_rejects_empty_text(session: BrowserSession) -> None:
 async def test_no_text_records_a_marker_not_the_text(session: BrowserSession) -> None:
     _drawn(session)
     await session.expect_no_text(SECRET, selector="#p")
-    session.recorder.record.assert_called_with("expect_no_text", selector="#p", text=REDACTED_ASSERTION_TEXT)
+    from octowright.macros.privacy import assertion_text_digest
+
+    session.recorder.record.assert_called_with(
+        "expect_no_text", selector="#p", text=REDACTED_ASSERTION_TEXT, text_digest=assertion_text_digest(SECRET)
+    )
 
 
 # ---------------------------------------------------------------------------

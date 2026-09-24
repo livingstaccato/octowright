@@ -16,8 +16,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit, urlunsplit
 
+from provide.telemetry import get_logger
+
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
+
+log = get_logger(__name__)
 
 # Failed / non-2xx requests attached to a macro failure payload. A timeout is
 # almost never the bug -- it is the symptom of something the page reported and
@@ -66,7 +70,12 @@ def failed_requests_tail(session: SessionLike) -> list[dict[str, Any]]:
     """
     try:
         rows = session.get_network_requests(limit=None)["requests"]
-    except Exception:
+    except Exception as exc:
+        # Empty rather than raised (module docstring), but logged: the repo's
+        # silent-swallow policy covers teardown and parse-skips, not a
+        # user-facing failure payload quietly missing its network block. The
+        # type only: the message of a session-side failure is not scrubbed here.
+        log.debug("octowright.macro.failure_network_tail_failed", error_type=type(exc).__name__)
         return []
     failed = [row for row in rows if row.get("failure") or (row.get("status") or 0) >= 400]
     return [{**row, "url": payload_url(row.get("url"))} for row in failed[-MACRO_FAILURE_NETWORK_TAIL:]]
@@ -76,6 +85,7 @@ def page_errors_tail(session: SessionLike) -> list[dict[str, Any]]:
     """The newest uncaught page exceptions, as copies."""
     try:
         errors = list(session.page_errors)
-    except Exception:
+    except Exception as exc:
+        log.debug("octowright.macro.failure_page_errors_tail_failed", error_type=type(exc).__name__)
         return []
     return [dict(error) for error in errors[-MACRO_FAILURE_PAGE_ERROR_TAIL:]]

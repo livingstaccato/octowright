@@ -16,7 +16,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_text, reject_unsafe_path
-from octowright.macros.privacy import is_credential_key
+from octowright.macros.privacy import assertion_digest_matches, is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -117,24 +117,37 @@ def _bind_redacted_inputs(
 
 
 def _bind_redacted_assertions(actions: list[dict[str, Any]], param_map: dict[str, str]) -> list[dict[str, Any]]:
-    """Bind a recorded expect_no_text to the single declared credential parameter.
+    """Bind a recorded expect_no_text to the declared parameter whose value it checked.
 
-    Its text is recorded as ``REDACTED_ASSERTION_TEXT`` because it is usually the
-    password the check keeps off screen. With exactly one credential-named
-    parameter that is the intent; with none or several it is left for the author
-    to set, and ``macro_lint`` flags it. Never refused: the assertion does not
-    stop the rest of the recording from replaying.
+    Its text is recorded as ``REDACTED_ASSERTION_TEXT``, never the text, because
+    that is usually the password the check keeps off screen -- but not always:
+    ``expect_no_text('Traceback')`` records the same marker. So the recorder
+    writes a keyed digest beside it (``privacy.assertion_text_digest``) and a
+    marker is bound only to a parameter, credential-named or not, whose value
+    digests the same. Binding every marker to the lone credential parameter
+    silently turned that ``Traceback`` check into a password check.
+
+    The key lives only in the running daemon's memory, so this binds recordings
+    made by the daemon doing the save. After a restart nothing matches, the
+    marker stays, and ``macro_lint`` tells the author to set the text; the same
+    happens when no parameter, or more than one, matches. Never refused: the
+    assertion does not stop the rest of the recording from replaying. The digest
+    itself is dropped from every saved action -- it means nothing to replay, and
+    ``expect_no_text`` takes no such argument.
     """
-    credentials = sorted(name for name in param_map if is_credential_key(name))
-    if len(credentials) != 1:
-        return actions
-    bound = "{{" + credentials[0] + "}}"
     return [
-        {**action, "text": bound}
-        if action.get("action") == "expect_no_text" and action.get("text") == defaults.REDACTED_ASSERTION_TEXT
-        else action
-        for action in actions
+        _bind_assertion(action, param_map) if action.get("action") == "expect_no_text" else action for action in actions
     ]
+
+
+def _bind_assertion(action: dict[str, Any], param_map: dict[str, str]) -> dict[str, Any]:
+    digest = action.get("text_digest")
+    bound = {key: value for key, value in action.items() if key != "text_digest"}
+    if bound.get("text") == defaults.REDACTED_ASSERTION_TEXT:
+        matches = [name for name, value in param_map.items() if assertion_digest_matches(value, digest)]
+        if len(matches) == 1:
+            bound["text"] = "{{" + matches[0] + "}}"
+    return bound
 
 
 def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:
