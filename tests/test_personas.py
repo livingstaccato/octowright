@@ -125,7 +125,7 @@ def test_resolve_cmd_credential(tmp_path, fresh_personas):
 def test_resolve_no_references_raises(tmp_path, fresh_personas):
     _write_persona(tmp_path, "u", {"name": "u"})
     p = fresh_personas.load_persona("u")
-    with pytest.raises(fresh_personas.MissingCredential, match="no email_env or email_cmd"):
+    with pytest.raises(fresh_personas.MissingCredential, match="no email_env, email_cmd or email_file"):
         fresh_personas.resolve_credential(p, "email")
 
 

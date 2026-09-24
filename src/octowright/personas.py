@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shlex
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -135,9 +137,9 @@ _PERSONA_ALLOWED_KEYS: frozenset[str] = frozenset(
 )
 
 # Suffixes valid on credential keys. resolve_credential() only consults
-# ``<name>_env`` / ``<name>_cmd`` pairs, so any other suffix is a typo or
-# spec drift that should fail loudly rather than silently no-op.
-_CREDENTIAL_KEY_SUFFIXES: tuple[str, ...] = ("_env", "_cmd")
+# ``<name>_env`` / ``<name>_cmd`` / ``<name>_file``, so any other suffix is a
+# typo or spec drift that should fail loudly rather than silently no-op.
+_CREDENTIAL_KEY_SUFFIXES: tuple[str, ...] = ("_env", "_cmd", "_file")
 
 
 def _validate_scalar_str_fields(doc: dict[str, Any]) -> None:
@@ -421,16 +423,56 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     return result.stdout.strip()
 
 
+def _read_credential_file(raw_path: str, persona_name: str, cred_name: str) -> str:
+    """Read a credential from a file only its owner can read.
+
+    The rules a secret file has to meet elsewhere: no symlink, no second hard
+    link, the current user as owner, nothing for group or other. Errors name
+    the rule and never the contents.
+    """
+    where = f"persona {persona_name!r} field {cred_name!r}"
+    path = Path(raw_path).expanduser()
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        raise MissingCredential(f"{where}: credential file not found") from None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise MissingCredential(f"{where}: credential file is a symlink") from None
+        raise MissingCredential(f"{where}: credential file cannot be opened") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise MissingCredential(f"{where}: credential file is not a regular file")
+        if info.st_nlink != 1:
+            raise MissingCredential(f"{where}: credential file has another hard link")
+        if info.st_uid != os.getuid():
+            raise MissingCredential(f"{where}: credential file is owned by another user")
+        if info.st_mode & 0o077:
+            raise MissingCredential(f"{where}: credential file is readable by others; chmod 600")
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
+            value = handle.read()
+    finally:
+        os.close(fd)
+    value = value[:-1] if value.endswith("\n") else value
+    if not value:
+        raise MissingCredential(f"{where}: credential file is empty")
+    return value
+
+
 def resolve_credential(persona: Persona, cred_name: str) -> str:
-    """Resolve a credential like 'email' via _env or _cmd references in
-    persona.credentials. *_cmd wins if both are set."""
+    """Resolve a credential like 'email' via _cmd, _file or _env references in
+    persona.credentials, in that order of precedence."""
     creds = persona.credentials
     cmd_key = f"{cred_name}_cmd"
+    file_key = f"{cred_name}_file"
     env_key = f"{cred_name}_env"
     if cmd_key in creds:
         if env_key in creds:
             log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
         return _exec_credential_cmd(creds[cmd_key], persona.name, cred_name)
+    if file_key in creds:
+        return _read_credential_file(creds[file_key], persona.name, cred_name)
     if env_key in creds:
         env_name = creds[env_key]
         value = os.environ.get(env_name)
@@ -438,7 +480,8 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
             raise MissingCredential(f"persona {persona.name!r} field {cred_name!r}: env var {env_name} is unset")
         return value
     raise MissingCredential(
-        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env or {cred_name}_cmd in credentials. "
+        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env, {cred_name}_cmd or {cred_name}_file "
+        "in credentials. "
         f"Add one to {persona_dir(persona.name) / 'profile.yaml'} under `credentials:` "
         f"(e.g. {cred_name}_env: {cred_name.upper()}_VAR or {cred_name}_cmd: 'op read op://…')."
     )
@@ -457,6 +500,8 @@ def _credential_names(persona: Persona) -> list[str]:
             names.add(key[: -len("_env")])
         elif key.endswith("_cmd"):
             names.add(key[: -len("_cmd")])
+        elif key.endswith("_file"):
+            names.add(key[: -len("_file")])
     return sorted(names)
 
 
