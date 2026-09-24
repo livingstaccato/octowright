@@ -149,3 +149,34 @@ def test_http_errors_opt_in_counts_only_api_and_page_loads(monkeypatch: pytest.M
     with pytest.raises(BaseException) as excinfo:
         _run(monkeypatch, [{"action": "expect_network_clean", "http_errors": True}], on_page=_server_error)
     assert "1 HTTP error(s)" in str(excinfo.value)
+
+
+def _refused(page: _FakePage) -> None:
+    _fire(page, "requestfailed", types.SimpleNamespace(failure="net::ERR_CONNECTION_REFUSED"))
+
+
+def test_since_mark_judges_from_the_mark(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In one exported script the run is the whole script, so 'run' and 'mark' differ only by the mark."""
+    actions = [{"action": "mark_network_clean"}, {"action": "expect_network_clean", "since": "mark"}]
+    assert _run(monkeypatch, actions, on_page=_refused)["executed"] == 3
+
+
+def test_since_mark_without_a_mark_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(BaseException, match="mark_network_clean"):
+        _run(monkeypatch, [{"action": "expect_network_clean", "since": "mark"}])
+
+
+def test_the_export_waits_for_a_request_in_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    def pending_then_fails(page: _FakePage) -> None:
+        request = types.SimpleNamespace(resource_type="fetch", failure=None)
+        _fire(page, "request", request)
+
+        async def later() -> None:
+            await asyncio.sleep(0.15)
+            request.failure = "net::ERR_CONNECTION_REFUSED"
+            _fire(page, "requestfailed", request)
+
+        asyncio.get_running_loop().create_task(later())
+
+    with pytest.raises(BaseException, match=r"1 failed request\(s\)"):
+        _run(monkeypatch, [{"action": "expect_network_clean", "settle_timeout_ms": 2000}], on_page=pending_then_fails)

@@ -225,6 +225,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "copies browser failure metadata into the bounded network cache",
     ),
+    "session/core_network_mixin.py:SessionNetworkMixin._handle_request_started": (
+        "event-critical",
+        "reads a browser-emitted request's resource type to track it as in flight",
+    ),
     "browser_pool/crash_recovery.py:_safe_url": (
         "event-critical",
         "captures the crashed page URL synchronously before scheduling durable recovery",

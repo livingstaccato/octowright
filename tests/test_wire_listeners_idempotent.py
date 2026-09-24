@@ -35,6 +35,9 @@ def _fake_session() -> SimpleNamespace:
         _handle_response=lambda *a: None,
         _handle_request_failed=lambda *a: None,
         _handle_page_error=lambda *a: None,
+        _handle_request_started=lambda *a: None,
+        _handle_request_finished=lambda *a: None,
+        _forget_page_requests=lambda *a: None,
         _handle_websocket=lambda *a: None,
         _schedule_markdown_capture=lambda **k: None,
     )

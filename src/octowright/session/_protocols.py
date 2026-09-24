@@ -49,7 +49,11 @@ class SessionLike(Protocol):
     _network_requests_dropped: int
     page_errors: deque[dict[str, Any]]
     page_error_count: int
-    _network_clean_mark: tuple[int, int]
+    _request_failure_count: int
+    _http_error_count: int
+    _network_clean_mark: tuple[int, int, int]
+    _network_clean_explicit_mark: tuple[int, int, int] | None
+    _inflight_requests: dict[Any, Any]
     durable_text_scrubber: Callable[[str], str] | None
     trace: bool
     trace_path: Path | None
@@ -127,7 +131,13 @@ class SessionLike(Protocol):
 
     async def evaluate(self, expression: str) -> Any: ...
 
-    def network_failures_since_mark(self) -> tuple[int, int, int]: ...
+    def network_failures_since(self, since: str = "run") -> tuple[int, int, int]: ...
+
+    def pending_requests(self) -> int: ...
+
+    def _forget_page_requests(self, page: Any) -> None: ...
+
+    def _network_clean_counts(self) -> tuple[int, int, int]: ...
 
     def mark_network_clean_window(self) -> None: ...
 

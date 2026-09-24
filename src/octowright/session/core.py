@@ -223,9 +223,20 @@ class BrowserSession(
     # is what the assertion reads, so eviction cannot hide an error.
     page_errors: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=PAGE_ERROR_LIMIT))
     page_error_count: int = 0
-    # Absolute (request, page-error) counts at the start of the current macro
-    # run; ``expect_network_clean`` judges only what happened after them.
-    _network_clean_mark: tuple[int, int] = (0, 0)
+    # Running totals ``expect_network_clean`` judges. Counted in the event
+    # handlers rather than read back from ``_network_requests``: that deque is a
+    # bounded diagnostic, and a failure it evicted must still count.
+    _request_failure_count: int = 0
+    _http_error_count: int = 0
+    # (request failures, page errors, HTTP errors) at the start of the current
+    # macro run, and at the last ``mark_network_clean`` step (None until one ran).
+    _network_clean_mark: tuple[int, int, int] = (0, 0, 0)
+    _network_clean_explicit_mark: tuple[int, int, int] | None = None
+    # Requests started and not yet finished or failed, with the page that made
+    # them, so ``expect_network_clean`` can wait for them. Bounded (oldest
+    # dropped) because a request whose end event never arrives would otherwise
+    # stay forever.
+    _inflight_requests: dict[Any, Any] = field(default_factory=dict, repr=False)
     # Applied to page-derived text before it is written to disk (the markdown
     # cache). Installed by macros.privacy.install_sensitive_recorder so the
     # session scrubs a macro's credential values without importing the macro

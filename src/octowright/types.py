@@ -160,6 +160,13 @@ class ExpectJsAction(MacroActionBase):
 
 class ExpectNetworkCleanAction(MacroActionBase):
     action: Literal["expect_network_clean"]
+    http_errors: NotRequired[bool]
+    since: NotRequired[Literal["run", "mark"]]
+    settle_timeout_ms: NotRequired[int | None]
+
+
+class MarkNetworkCleanAction(MacroActionBase):
+    action: Literal["mark_network_clean"]
 
 
 class ExpectNoTextAction(MacroActionBase):
@@ -226,6 +233,7 @@ MacroAction = (
     | ExpectSelectorAction
     | ExpectJsAction
     | ExpectNetworkCleanAction
+    | MarkNetworkCleanAction
     | ExpectNoTextAction
     | MockRouteAction
     | UnmockRouteAction

@@ -60,7 +60,7 @@ def _fail(session: BrowserSession, failure: str, url: str = "https://api.test/x?
 @pytest.mark.anyio
 async def test_network_clean_passes_on_a_quiet_page(session: BrowserSession) -> None:
     result = await session.expect_network_clean()
-    assert result == {"failed_requests": 0, "page_errors": 0}
+    assert result == {"failed_requests": 0, "page_errors": 0, "in_flight": 0}
 
 
 @pytest.mark.anyio
@@ -79,7 +79,7 @@ async def test_a_failed_request_fails_with_counts_only(session: BrowserSession) 
 async def test_an_aborted_request_is_not_a_failure(session: BrowserSession, aborted: str) -> None:
     """Navigating away cancels in-flight requests; that is not the page failing."""
     _fail(session, aborted)
-    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0}
+    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0, "in_flight": 0}
 
 
 @pytest.mark.anyio
@@ -97,22 +97,9 @@ async def test_only_failures_after_the_mark_count(session: BrowserSession) -> No
     _fail(session, "net::ERR_CONNECTION_REFUSED")
     session._handle_page_error(Exception("boom"))
     session.mark_network_clean_window()
-    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0}
+    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0, "in_flight": 0}
     _fail(session, "net::ERR_NAME_NOT_RESOLVED")
     with pytest.raises(RuntimeError, match="1 failed request"):
-        await session.expect_network_clean()
-
-
-@pytest.mark.anyio
-async def test_the_mark_survives_deque_eviction(session: BrowserSession) -> None:
-    """The mark is an absolute index; rows evicted since then must not shift it."""
-    from collections import deque
-
-    session._network_requests = deque(maxlen=3)
-    session.mark_network_clean_window()
-    for _ in range(5):
-        _fail(session, "net::ERR_CONNECTION_REFUSED")
-    with pytest.raises(RuntimeError, match="3 failed request"):
         await session.expect_network_clean()
 
 
@@ -239,7 +226,7 @@ def _respond(session: BrowserSession, status: int, resource_type: str = "fetch")
 @pytest.mark.anyio
 async def test_http_errors_are_off_by_default(session: BrowserSession) -> None:
     _respond(session, 500)
-    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0}
+    assert await session.expect_network_clean() == {"failed_requests": 0, "page_errors": 0, "in_flight": 0}
 
 
 @pytest.mark.anyio
@@ -261,7 +248,7 @@ async def test_http_errors_ignore_cosmetic_resources(session: BrowserSession, re
     """A missing favicon or font is not the journey failing."""
     _respond(session, 404, resource_type)
     result = await session.expect_network_clean(http_errors=True)
-    assert result == {"failed_requests": 0, "page_errors": 0, "http_errors": 0}
+    assert result == {"failed_requests": 0, "page_errors": 0, "http_errors": 0, "in_flight": 0}
 
 
 @pytest.mark.anyio

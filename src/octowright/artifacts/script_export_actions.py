@@ -27,7 +27,7 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
-from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES
+from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES, LONG_LIVED_RESOURCE_TYPES
 
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
@@ -38,6 +38,9 @@ _ABORTED_REQUEST_FAILURES = """
     + """
 _HTTP_ERROR_RESOURCE_TYPES = """
     + repr(sorted(HTTP_ERROR_RESOURCE_TYPES))
+    + """
+_LONG_LIVED_RESOURCE_TYPES = """
+    + repr(sorted(LONG_LIVED_RESOURCE_TYPES))
     + '''
 
 
@@ -51,7 +54,15 @@ def _watch_network(state: dict[str, Any], page: Any) -> None:
     if not state["watch_network"]:
         return
 
+    def _on_started(request: Any) -> None:
+        if request.resource_type not in _LONG_LIVED_RESOURCE_TYPES:
+            state["inflight"][id(request)] = page
+
+    def _on_finished(request: Any) -> None:
+        state["inflight"].pop(id(request), None)
+
     def _on_failed(request: Any) -> None:
+        state["inflight"].pop(id(request), None)
         if request.failure and request.failure not in _ABORTED_REQUEST_FAILURES:
             state["failed_requests"] += 1
 
@@ -62,9 +73,33 @@ def _watch_network(state: dict[str, Any], page: Any) -> None:
         if response.status >= 400 and response.request.resource_type in _HTTP_ERROR_RESOURCE_TYPES:
             state["http_errors"] += 1
 
+    page.on("request", _on_started)
+    page.on("requestfinished", _on_finished)
     page.on("requestfailed", _on_failed)
     page.on("pageerror", _on_error)
     page.on("response", _on_response)
+
+
+def _network_counts(state: dict[str, Any]) -> tuple[int, int, int]:
+    return state["failed_requests"], state["page_errors"], state["http_errors"]
+
+
+async def _settle_network(state: dict[str, Any], timeout_ms: int) -> int:
+    """Mirrors the session's settle wait: in-flight requests end, then a quiet interval."""
+    deadline = time.monotonic() + timeout_ms / 1000
+
+    def pending() -> int:
+        for key, page in list(state["inflight"].items()):
+            if page.is_closed():
+                state["inflight"].pop(key, None)
+        return len(state["inflight"])
+
+    while time.monotonic() < deadline:
+        quiet = pending() == 0
+        await asyncio.sleep(min(0.1 if quiet else 0.05, max(0.0, deadline - time.monotonic())))
+        if quiet and pending() == 0:
+            return 0
+    return pending()
 
 
 def _page(state: dict[str, Any]) -> Any:
@@ -347,13 +382,29 @@ if "equals" not in action and not result:
     raise RuntimeError(f"JS assertion failed: got {result!r}")
 executed += 1
 """,
+    # The whole script is one run, so since="run" counts from zero.
     "expect_network_clean": """
-counted = state["http_errors"] if action.get("http_errors") else 0
-if state["failed_requests"] or state["page_errors"] or counted:
-    detail = f"{state['failed_requests']} failed request(s), {state['page_errors']} page error(s)"
+since = action.get("since", "run")
+if since not in ("run", "mark"):
+    raise ValueError(f"unknown since={since!r}; expected 'run' or 'mark'")
+if since == "mark" and state["network_mark"] is None:
+    raise RuntimeError('expect_network_clean(since="mark") needs an earlier mark_network_clean step')
+settle = action.get("settle_timeout_ms")
+settle = 5000 if settle is None else int(settle)
+if settle > 0:
+    await _settle_network(state, settle)
+base = state["network_mark"] if since == "mark" else (0, 0, 0)
+failed, errors, http = (now - then for now, then in zip(_network_counts(state), base))
+counted = http if action.get("http_errors") else 0
+if failed or errors or counted:
+    detail = f"{failed} failed request(s), {errors} page error(s)"
     if action.get("http_errors"):
         detail += f", {counted} HTTP error(s)"
     raise RuntimeError(f"network not clean: {detail}")
+executed += 1
+""",
+    "mark_network_clean": """
+state["network_mark"] = _network_counts(state)
 executed += 1
 """,
     # The text is usually a secret, so the error never repeats it.

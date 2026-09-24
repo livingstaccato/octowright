@@ -56,6 +56,7 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "expect_selector": ("selector",),
     "expect_js": ("expression",),
     "expect_network_clean": (),
+    "mark_network_clean": (),
     "expect_no_text": ("text",),
     "mock_route": ("pattern",),
     "unmock_route": ("pattern",),

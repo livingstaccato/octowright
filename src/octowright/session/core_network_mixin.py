@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from provide.telemetry import get_logger
 
 from octowright.http_headers import redact_header_values
-from octowright.request_failures import ABORTED_REQUEST_FAILURES, is_http_error
+from octowright.request_failures import ABORTED_REQUEST_FAILURES, LONG_LIVED_RESOURCE_TYPES, is_http_error
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 
@@ -40,6 +40,8 @@ NETWORK_BODY_MAX_BYTES_DEFAULT = 2048
 #: Uncaught page exceptions retained per session. Only the count reaches
 #: ``expect_network_clean``; the messages are kept for a human debugging.
 PAGE_ERROR_LIMIT = 200
+#: Requests tracked as in flight at once; the oldest is dropped past this.
+INFLIGHT_REQUEST_LIMIT = 1000
 PAGE_ERROR_TEXT_CHARS = 2000
 _FALSEY = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
@@ -173,6 +175,8 @@ class SessionNetworkMixin(SessionLike):
             "headers": _recorded_headers(request),
         }
         self._append_network_request(row)
+        if is_http_error(response.status, request.resource_type):
+            self._http_error_count += 1
         self._maybe_capture_body(response, row)
 
     def _maybe_capture_body(self, response: Any, row: dict[str, Any]) -> None:
@@ -225,7 +229,20 @@ class SessionNetworkMixin(SessionLike):
         row["body_truncated"] = len(body) > cap
         row["body"] = body[:cap].decode("utf-8", errors="replace")
 
+    def _handle_request_started(self, request: Any, page: Any) -> None:
+        if request.resource_type in LONG_LIVED_RESOURCE_TYPES:
+            return
+        if len(self._inflight_requests) >= INFLIGHT_REQUEST_LIMIT:
+            self._inflight_requests.pop(next(iter(self._inflight_requests)))
+        self._inflight_requests[request] = page
+
+    def _handle_request_finished(self, request: Any) -> None:
+        self._inflight_requests.pop(request, None)
+
     def _handle_request_failed(self, request: Any) -> None:
+        self._inflight_requests.pop(request, None)
+        if request.failure and request.failure not in ABORTED_REQUEST_FAILURES:
+            self._request_failure_count += 1
         self._append_network_request(
             {
                 "url": request.url,
@@ -241,27 +258,38 @@ class SessionNetworkMixin(SessionLike):
         self.page_errors.append({"message": str(error)[:PAGE_ERROR_TEXT_CHARS]})
         self.page_error_count += 1
 
-    def _network_clean_counts(self) -> tuple[int, int]:
-        """Absolute (requests seen, page errors seen) -- the mark's units."""
-        return self._network_requests_dropped + len(self._network_requests), self.page_error_count
+    def _network_clean_counts(self) -> tuple[int, int, int]:
+        """Running (request failures, page errors, HTTP errors) -- the marks' units."""
+        return self._request_failure_count, self.page_error_count, self._http_error_count
 
     def mark_network_clean_window(self) -> None:
-        """Start the window ``expect_network_clean`` judges. Called per macro run."""
+        """Start the per-run window ``expect_network_clean`` judges. Called per macro run."""
         self._network_clean_mark = self._network_clean_counts()
 
-    def network_failures_since_mark(self) -> tuple[int, int, int]:
-        """(failed requests, page errors, HTTP errors) since the mark, aborts excluded.
+    def network_failures_since(self, since: str = "run") -> tuple[int, int, int]:
+        """(request failures, page errors, HTTP errors) since the run start or the explicit mark."""
+        if since == "run":
+            mark = self._network_clean_mark
+        elif since == "mark":
+            if self._network_clean_explicit_mark is None:
+                raise RuntimeError(
+                    'expect_network_clean(since="mark") needs an earlier mark_network_clean step in this session'
+                )
+            mark = self._network_clean_explicit_mark
+        else:
+            raise ValueError(f'unknown since={since!r}; expected "run" or "mark"')
+        now = self._network_clean_counts()
+        return now[0] - mark[0], now[1] - mark[1], now[2] - mark[2]
 
-        The mark is an absolute index into the request stream, so rows the
-        deque evicted since then shift nothing; if the mark itself was evicted,
-        every retained row is newer than it and all are counted.
-        """
-        request_mark, error_mark = self._network_clean_mark
-        start = max(0, request_mark - self._network_requests_dropped)
-        rows = list(self._network_requests)[start:]
-        failed = sum(1 for row in rows if row.get("failure") and row["failure"] not in ABORTED_REQUEST_FAILURES)
-        http_errors = sum(1 for row in rows if is_http_error(row.get("status"), row.get("resource_type")))
-        return failed, self.page_error_count - error_mark, http_errors
+    def _forget_page_requests(self, page: Any) -> None:
+        """A closed page's requests will never finish; stop waiting for them."""
+        for request, owner in list(self._inflight_requests.items()):
+            if owner is page:
+                self._inflight_requests.pop(request, None)
+
+    def pending_requests(self) -> int:
+        """Requests still in flight on pages that are still open."""
+        return len(self._inflight_requests)
 
     def _append_network_request(self, request: dict[str, Any]) -> None:
         if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:

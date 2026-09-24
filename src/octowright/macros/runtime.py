@@ -92,6 +92,7 @@ _ACTION_MAP = {
     "expect_selector": "expect_selector",
     "expect_js": "expect_js",
     "expect_network_clean": "expect_network_clean",
+    "mark_network_clean": "mark_network_clean",
     "expect_no_text": "expect_no_text",
     "mock_route": "mock_route",
     "set_extra_http_headers": "set_extra_http_headers",

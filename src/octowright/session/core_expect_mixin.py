@@ -16,9 +16,17 @@ from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
+#: How long expect_network_clean waits, by default, for in-flight requests to end.
+NETWORK_SETTLE_TIMEOUT_MS = 5000
+#: Quiet time after the last in-flight request ends, for the follow-up it triggers.
+_NETWORK_QUIET_SECONDS = 0.1
 
 
 class SessionExpectMixin(SessionLike):
+    # Written by mark_network_clean below; declared so the assignment does not
+    # narrow the dataclass field's Optional type.
+    _network_clean_explicit_mark: tuple[int, int, int] | None
+
     @gated_operation("browser_expect_poll")
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
         deadline = None if timeout_ms == 0 else time.monotonic() + (timeout_ms / 1000)
@@ -135,19 +143,52 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_js", expression=expression, equals=equals)
         return result
 
-    @gated_operation("browser_expect_network_clean")
-    async def expect_network_clean(self, http_errors: bool = False) -> dict[str, int]:
-        """Assert no failed requests (aborts excepted) and no page errors since the mark.
+    async def _settle_network(self, timeout_ms: int) -> int:
+        """Wait until no request is in flight for a quiet interval; return what is still pending.
 
-        The mark is the start of the current macro run (see
-        ``mark_network_clean_window``). "Failed" is Playwright's
-        ``requestfailed``: the request got no response. ``http_errors=True``
-        also fails on a 4xx/5xx page load or API call (``request_failures.
-        HTTP_ERROR_RESOURCE_TYPES``); off by default because a 4xx is sometimes
-        the answer a journey expects. The error carries counts only, because a
-        failed URL or an exception message can carry a credential.
+        Bounded: a page that long-polls never settles, and the check then judges
+        what has happened so far instead of hanging or failing on a request
+        that has not failed.
         """
-        failed, page_errors, http_error_count = self.network_failures_since_mark()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while time.monotonic() < deadline:
+            if self.pending_requests() == 0:
+                await asyncio.sleep(min(_NETWORK_QUIET_SECONDS, max(0.0, deadline - time.monotonic())))
+                if self.pending_requests() == 0:
+                    return 0
+            else:
+                await asyncio.sleep(min(_WAIT_FOR_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+        return self.pending_requests()
+
+    @gated_operation("browser_mark_network_clean")
+    async def mark_network_clean(self) -> None:
+        """Start the window ``expect_network_clean(since="mark")`` judges; it spans macro runs."""
+        self._network_clean_explicit_mark = self._network_clean_counts()
+        self.recorder.record("mark_network_clean")
+
+    @gated_operation("browser_expect_network_clean")
+    async def expect_network_clean(
+        self, http_errors: bool = False, since: str = "run", settle_timeout_ms: int | None = None
+    ) -> dict[str, int]:
+        """Assert no failed requests (aborts excepted) and no page errors in the window.
+
+        ``since="run"`` (default) judges the current macro run; ``since="mark"``
+        judges everything since the last ``mark_network_clean`` step, across
+        runs, so a separate verify macro can judge the journey before it.
+        "Failed" is Playwright's ``requestfailed``: the request got no response.
+        ``http_errors=True`` also fails on a 4xx/5xx page load or API call
+        (``request_failures.HTTP_ERROR_RESOURCE_TYPES``); off by default because
+        a 4xx is sometimes the answer a journey expects. Requests still in
+        flight are waited for, up to ``settle_timeout_ms`` (``0`` judges at
+        once); any still pending then are reported as ``in_flight``, not failed.
+        The error carries counts only, because a failed URL or an exception
+        message can carry a credential.
+        """
+        if since not in ("run", "mark"):
+            raise ValueError(f'unknown since={since!r}; expected "run" or "mark"')
+        settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
+        in_flight = await self._settle_network(settle) if settle > 0 else self.pending_requests()
+        failed, page_errors, http_error_count = self.network_failures_since(since)
         counts = {"failed_requests": failed, "page_errors": page_errors}
         if http_errors:
             counts["http_errors"] = http_error_count
@@ -156,11 +197,10 @@ class SessionExpectMixin(SessionLike):
             if http_errors:
                 detail += f", {http_error_count} HTTP error(s)"
             raise RuntimeError(f"network not clean: {detail}")
-        if http_errors:
-            self.recorder.record("expect_network_clean", http_errors=True)
-        else:
-            self.recorder.record("expect_network_clean")
-        return counts
+        options = {"http_errors": http_errors, "since": since, "settle_timeout_ms": settle_timeout_ms}
+        defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None}
+        self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
+        return {**counts, "in_flight": in_flight}
 
     @gated_operation("browser_expect_no_text")
     async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> None:

@@ -84,18 +84,15 @@ def _macros(monkeypatch: pytest.MonkeyPatch, macros: dict[str, list[dict[str, An
     monkeypatch.setattr(execution, "load_macro", lambda name: {"name": name, "actions": macros[name]})
 
 
-async def _settle(session: Any) -> None:
-    # Let the page's fire-and-forget fetch fail and its event reach the session.
-    await session.page.wait_for_timeout(500)
+_REFUSED_AND_THROWN = (
+    "() => {{ fetch('http://127.0.0.1:{port}/').catch(() => {{}}); setTimeout(() => {{ throw new Error('x'); }}); }}"
+)
 
 
 async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    port = _closed_port()
-    await session.page.evaluate(
-        f"() => {{ fetch('http://127.0.0.1:{port}/').catch(() => {{}}); setTimeout(() => {{ throw new Error('x'); }}); }}"
-    )
-    await _settle(session)
-    assert session.network_failures_since_mark()[:2] == (1, 1), list(session._network_requests)
+    await session.page.evaluate(_REFUSED_AND_THROWN.format(port=_closed_port()))
+    await session._settle_network(5000)
+    assert session.network_failures_since()[:2] == (1, 1), list(session._network_requests)
 
     _macros(monkeypatch, {"clean": [{"action": "expect_network_clean"}]})
     result = await execution.run_macro(session, "clean")
@@ -103,17 +100,12 @@ async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: p
 
 
 async def test_failures_during_the_run_fail_it(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    port = _closed_port()
+    """No sleep between the step and the check: the settle wait is what must catch the failure."""
     _macros(
         monkeypatch,
         {
             "dirty": [
-                {
-                    "action": "evaluate",
-                    "expression": f"() => {{ fetch('http://127.0.0.1:{port}/').catch(() => {{}}); setTimeout(() => {{ throw new Error('x'); }}); }}",
-                },
-                {"action": "wait_for", "selector": "h1"},
-                {"action": "evaluate", "expression": "() => new Promise((r) => setTimeout(r, 500))"},
+                {"action": "evaluate", "expression": _REFUSED_AND_THROWN.format(port=_closed_port())},
                 {"action": "expect_network_clean"},
             ]
         },
@@ -122,14 +114,31 @@ async def test_failures_during_the_run_fail_it(session: Any, monkeypatch: pytest
         await execution.run_macro(session, "dirty")
 
 
-async def test_navigating_away_mid_request_is_not_a_failure(session: Any, page_url: str) -> None:
-    """Whatever the engine calls an abort, it must be in ABORTED_REQUEST_FAILURES."""
+async def test_a_cancelled_request_is_observed_and_classified_as_an_abort(session: Any) -> None:
+    """Not tautological: the engine must report a cancellation, and it must be one on the list.
+
+    AbortController is the ordinary way an app cancels a fetch, and it is the one
+    cancellation all three engines report (measured: net::ERR_ABORTED,
+    NS_BINDING_ABORTED, "Load request cancelled").
+    """
     session.mark_network_clean_window()
-    await session.page.evaluate("() => { fetch('/slow-never-answers-' + Math.random()); }")
-    await session.page.goto(page_url + "?next")
-    await _settle(session)
+    await session.page.evaluate(
+        "() => { const c = new AbortController();"
+        " fetch('/slow-cancelled', {signal: c.signal}).catch(() => {}); setTimeout(() => c.abort(), 150); }"
+    )
+    await session._settle_network(5000)
     failures = [row["failure"] for row in session._network_requests if row.get("failure")]
-    assert session.network_failures_since_mark()[0] == 0, failures
+    assert failures, "the engine reported no cancellation, so the abort list was not exercised"
+    assert session.network_failures_since()[0] == 0, failures
+
+
+async def test_navigating_away_mid_request_is_not_a_failure(session: Any, page_url: str) -> None:
+    session.mark_network_clean_window()
+    await session.page.evaluate("() => { fetch('/slow-never-answers-' + Math.random()).catch(() => {}); }")
+    await session.page.goto(page_url + "?next")
+    await session._settle_network(5000)
+    failures = [row["failure"] for row in session._network_requests if row.get("failure")]
+    assert session.network_failures_since()[0] == 0, failures
 
 
 async def test_no_text_on_a_rendered_page(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,12 +164,11 @@ async def test_http_errors_count_api_failures_not_missing_images(session: Any, m
             "action": "evaluate",
             "expression": "() => { const i = new Image(); i.src = '/missing.png'; document.body.append(i); }",
         },
-        {"action": "evaluate", "expression": "() => new Promise((r) => setTimeout(r, 500))"},
     ]
     api = [
         {
             "action": "evaluate",
-            "expression": "() => fetch('/api500').then(() => new Promise((r) => setTimeout(r, 300)))",
+            "expression": "() => { fetch('/api500'); }",
         }
     ]
     _macros(

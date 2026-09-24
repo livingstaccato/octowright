@@ -244,6 +244,9 @@ class _FakePage:
         self._log("on", event)
         self.handlers.setdefault(event, []).append(handler)
 
+    def is_closed(self) -> bool:
+        return False
+
     async def inner_text(self, selector: str, **kw: Any) -> str:
         self._log("inner_text", selector)
         return self.rendered_text
@@ -321,7 +324,8 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "expect_selector", "selector": "#ok"},
     {"action": "expect_text", "selector": "#msg", "text": "hello", "mode": "contains"},
     {"action": "expect_js", "expression": "1 === 1"},
-    {"action": "expect_network_clean"},
+    {"action": "mark_network_clean"},
+    {"action": "expect_network_clean", "since": "mark", "settle_timeout_ms": 0},
     {"action": "expect_no_text", "text": "s3cret", "selector": "#profile"},
     {"action": "click_by", "role": "button", "role_name": "Save"},
     {"action": "fill_by", "label": "Email", "value": "a@b.c"},
