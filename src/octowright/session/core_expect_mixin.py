@@ -10,7 +10,7 @@ import re
 import time
 from typing import Any
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
@@ -134,3 +134,36 @@ class SessionExpectMixin(SessionLike):
                 raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
         self.recorder.record("expect_js", expression=expression, equals=equals)
         return result
+
+    @gated_operation("browser_expect_network_clean")
+    async def expect_network_clean(self) -> dict[str, int]:
+        """Assert no failed requests (aborts excepted) and no page errors since the mark.
+
+        The mark is the start of the current macro run (see
+        ``mark_network_clean_window``). "Failed" is Playwright's
+        ``requestfailed``: the request got no response. An HTTP 4xx/5xx did get
+        one and is not counted here. The error carries counts only, because a
+        failed URL or an exception message can carry a credential.
+        """
+        failed, page_errors = self.network_failures_since_mark()
+        if failed or page_errors:
+            raise RuntimeError(f"network not clean: {failed} failed request(s), {page_errors} page error(s)")
+        self.recorder.record("expect_network_clean")
+        return {"failed_requests": failed, "page_errors": page_errors}
+
+    @gated_operation("browser_expect_no_text")
+    async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> None:
+        """Assert *text* does not appear in *selector*'s rendered text (case-sensitive).
+
+        Reads ``innerText``: what the page renders, not input values or
+        attributes. *text* is treated as a secret -- it is usually the password
+        the check exists to keep off screen -- so neither the error nor the
+        recording repeats it.
+        """
+        if not text:
+            raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
+        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
+        rendered: str = await self._target().inner_text(selector, timeout=timeout)
+        if text in rendered:
+            raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}"')
+        self.recorder.record("expect_no_text", selector=selector, text=REDACTED_INPUT_PLACEHOLDER)

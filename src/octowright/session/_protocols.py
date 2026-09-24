@@ -46,6 +46,9 @@ class SessionLike(Protocol):
     extra_http_headers_urls: list[str] | None
     _network_requests: deque[dict[str, Any]]
     _network_requests_dropped: int
+    page_errors: deque[dict[str, Any]]
+    page_error_count: int
+    _network_clean_mark: tuple[int, int]
     trace: bool
     trace_path: Path | None
     har_path: Path | None
@@ -121,6 +124,10 @@ class SessionLike(Protocol):
     async def snapshot(self) -> dict[str, Any]: ...
 
     async def evaluate(self, expression: str) -> Any: ...
+
+    def network_failures_since_mark(self) -> tuple[int, int]: ...
+
+    def mark_network_clean_window(self) -> None: ...
 
     def get_network_requests(
         self,

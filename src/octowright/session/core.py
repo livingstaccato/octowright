@@ -26,7 +26,7 @@ from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
 from octowright.session.core_io_mixin import SessionIOMixin
 from octowright.session.core_locator_mixin import SessionLocatorMixin
-from octowright.session.core_network_mixin import SessionNetworkMixin
+from octowright.session.core_network_mixin import PAGE_ERROR_LIMIT, SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
 from octowright.session.operation.gate import (
@@ -218,6 +218,14 @@ class BrowserSession(
     _websocket_truncated: bool = field(default=False, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
+    # Uncaught page exceptions (Playwright's ``pageerror``), kept in memory for
+    # ``expect_network_clean``. Bounded like the console ring; the running count
+    # is what the assertion reads, so eviction cannot hide an error.
+    page_errors: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=PAGE_ERROR_LIMIT))
+    page_error_count: int = 0
+    # Absolute (request, page-error) counts at the start of the current macro
+    # run; ``expect_network_clean`` judges only what happened after them.
+    _network_clean_mark: tuple[int, int] = (0, 0)
     _last_mcp_navigation: str | None = None
     # Set by _notify_call_timeout when a Playwright call ran past its budget.
     # Deliberately NOT _crashed: the target may still be executing, and the

@@ -25,6 +25,7 @@ from urllib.parse import urlsplit
 from provide.telemetry import get_logger
 
 from octowright.http_headers import redact_header_values
+from octowright.request_failures import ABORTED_REQUEST_FAILURES
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 
@@ -36,6 +37,10 @@ log = get_logger(__name__)
 #: 50KB stack trace -- from riding the MCP transport. Override with
 #: OCTOWRIGHT_NETWORK_BODY_MAX_BYTES; a falsey token disables capture entirely.
 NETWORK_BODY_MAX_BYTES_DEFAULT = 2048
+#: Uncaught page exceptions retained per session. Only the count reaches
+#: ``expect_network_clean``; the messages are kept for a human debugging.
+PAGE_ERROR_LIMIT = 200
+PAGE_ERROR_TEXT_CHARS = 2000
 _FALSEY = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 
@@ -231,6 +236,31 @@ class SessionNetworkMixin(SessionLike):
                 "headers": _recorded_headers(request),
             }
         )
+
+    def _handle_page_error(self, error: Any) -> None:
+        self.page_errors.append({"message": str(error)[:PAGE_ERROR_TEXT_CHARS]})
+        self.page_error_count += 1
+
+    def _network_clean_counts(self) -> tuple[int, int]:
+        """Absolute (requests seen, page errors seen) -- the mark's units."""
+        return self._network_requests_dropped + len(self._network_requests), self.page_error_count
+
+    def mark_network_clean_window(self) -> None:
+        """Start the window ``expect_network_clean`` judges. Called per macro run."""
+        self._network_clean_mark = self._network_clean_counts()
+
+    def network_failures_since_mark(self) -> tuple[int, int]:
+        """(failed requests, page errors) since the mark, aborts excluded.
+
+        The mark is an absolute index into the request stream, so rows the
+        deque evicted since then shift nothing; if the mark itself was evicted,
+        every retained row is newer than it and all are counted.
+        """
+        request_mark, error_mark = self._network_clean_mark
+        start = max(0, request_mark - self._network_requests_dropped)
+        rows = list(self._network_requests)[start:]
+        failed = sum(1 for row in rows if row.get("failure") and row["failure"] not in ABORTED_REQUEST_FAILURES)
+        return failed, self.page_error_count - error_mark
 
     def _append_network_request(self, request: dict[str, Any]) -> None:
         if self._network_requests.maxlen is not None and len(self._network_requests) == self._network_requests.maxlen:

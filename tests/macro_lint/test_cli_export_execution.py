@@ -168,6 +168,8 @@ class _FakePage:
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
         self.context = context or _FakeContext(rec)
+        self.handlers: dict[str, list[Any]] = {}
+        self.rendered_text = "hello world"
 
     def _log(self, name: str, *args: Any, **kw: Any) -> None:
         self._rec.record(name, *args, **kw)
@@ -240,6 +242,11 @@ class _FakePage:
 
     def on(self, event: str, handler: Any) -> None:
         self._log("on", event)
+        self.handlers.setdefault(event, []).append(handler)
+
+    async def inner_text(self, selector: str, **kw: Any) -> str:
+        self._log("inner_text", selector)
+        return self.rendered_text
 
     def frame(self, **kw: Any) -> Any:
         self._log("frame", **kw)
@@ -314,6 +321,8 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "expect_selector", "selector": "#ok"},
     {"action": "expect_text", "selector": "#msg", "text": "hello", "mode": "contains"},
     {"action": "expect_js", "expression": "1 === 1"},
+    {"action": "expect_network_clean"},
+    {"action": "expect_no_text", "text": "s3cret", "selector": "#profile"},
     {"action": "click_by", "role": "button", "role_name": "Save"},
     {"action": "fill_by", "label": "Email", "value": "a@b.c"},
     {"action": "get_text_by", "test_id": "total"},

@@ -53,6 +53,7 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page.on("download", session._handle_download)
     page.on("response", session._handle_response)
     page.on("requestfailed", session._handle_request_failed)
+    page.on("pageerror", session._handle_page_error)
     page.on("websocket", session._handle_websocket)
     page.on("load", lambda: session._schedule_markdown_capture(page=page, force=True))
     # If the close evictor has already attached its per-page handler, wire it

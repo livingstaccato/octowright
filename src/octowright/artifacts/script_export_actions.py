@@ -27,9 +27,38 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
+from octowright.request_failures import ABORTED_REQUEST_FAILURES
+
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
-STATE_HELPERS = '''
+STATE_HELPERS = (
+    """
+_ABORTED_REQUEST_FAILURES = """
+    + repr(sorted(ABORTED_REQUEST_FAILURES))
+    + '''
+
+
+def _watch_network(state: dict[str, Any], page: Any) -> None:
+    """Count what expect_network_clean judges, from the moment a page exists.
+
+    Mirrors the session: a ``requestfailed`` that is not an abort, and every
+    ``pageerror``. Counts only -- the messages are never kept. Lazy like the
+    dialog policy: a macro that never asserts it never touches ``page.on``.
+    """
+    if not state["watch_network"]:
+        return
+
+    def _on_failed(request: Any) -> None:
+        if request.failure and request.failure not in _ABORTED_REQUEST_FAILURES:
+            state["failed_requests"] += 1
+
+    def _on_error(_error: Any) -> None:
+        state["page_errors"] += 1
+
+    page.on("requestfailed", _on_failed)
+    page.on("pageerror", _on_error)
+
+
 def _page(state: dict[str, Any]) -> Any:
     """The active page — what switch_page/close_page/open_url move between."""
     return state["pages"][state["index"]]
@@ -231,6 +260,7 @@ async def _a11y_dragdrop(state: dict[str, Any], action: dict[str, Any]) -> None:
             pass
         raise
 '''
+)
 
 #: ``kind -> dispatch body``. Each body runs with ``action`` and ``state`` in
 #: scope and is responsible for its own ``executed``/``skipped`` bookkeeping.
@@ -307,6 +337,23 @@ if "equals" in action and result != action["equals"]:
     raise RuntimeError(f"JS assertion failed: expected {action['equals']!r}, got {result!r}")
 if "equals" not in action and not result:
     raise RuntimeError(f"JS assertion failed: got {result!r}")
+executed += 1
+""",
+    "expect_network_clean": """
+if state["failed_requests"] or state["page_errors"]:
+    raise RuntimeError(
+        f"network not clean: {state['failed_requests']} failed request(s), {state['page_errors']} page error(s)"
+    )
+executed += 1
+""",
+    # The text is usually a secret, so the error never repeats it.
+    "expect_no_text": """
+forbidden = action["text"]
+if not forbidden:
+    raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
+selector = action.get("selector", "body")
+if forbidden in await _target(state).inner_text(selector, timeout=action.get("timeout_ms")):
+    raise RuntimeError(f"forbidden text ({len(forbidden)} chars) is rendered in {selector!r}")
 executed += 1
 """,
     "click_by": """
@@ -394,6 +441,7 @@ executed += 1
 new_page = await _page(state).context.new_page()
 await new_page.goto(action["url"])
 state["pages"].append(new_page)
+_watch_network(state, new_page)
 if state["dialog_policy"] != "manual":
     _install_dialog_policy(state)
 executed += 1

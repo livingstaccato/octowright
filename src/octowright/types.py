@@ -158,6 +158,17 @@ class ExpectJsAction(MacroActionBase):
     timeout_ms: NotRequired[int | None]
 
 
+class ExpectNetworkCleanAction(MacroActionBase):
+    action: Literal["expect_network_clean"]
+
+
+class ExpectNoTextAction(MacroActionBase):
+    action: Literal["expect_no_text"]
+    text: str
+    selector: NotRequired[str]
+    timeout_ms: NotRequired[int | None]
+
+
 class MockRouteAction(MacroActionBase):
     action: Literal["mock_route"]
     pattern: str
@@ -214,6 +225,8 @@ MacroAction = (
     | ExpectTextAction
     | ExpectSelectorAction
     | ExpectJsAction
+    | ExpectNetworkCleanAction
+    | ExpectNoTextAction
     | MockRouteAction
     | UnmockRouteAction
     | SetDialogPolicyAction

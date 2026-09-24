@@ -457,6 +457,11 @@ async def run_macro(
             instance_id=session.instance_id,
             kind=session.kind,
         ):
+            # expect_network_clean judges this run, not the session's past. An
+            # injected session with no network capture has nothing to mark.
+            mark = getattr(session, "mark_network_clean_window", None)
+            if mark is not None:
+                mark()
             return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
 
 
