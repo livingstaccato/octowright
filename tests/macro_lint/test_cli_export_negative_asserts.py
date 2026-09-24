@@ -14,12 +14,16 @@ from __future__ import annotations
 import asyncio
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
+from octowright.defaults import REDACTED_ASSERTION_TEXT
 from octowright.request_failures import ABORTED_REQUEST_FAILURES
+from octowright.session.rendered_text import ELEMENT_LIMIT
+from tests._macro_artifact_fixtures import _reload, restore_reloaded_defaults
 from tests.macro_lint.test_cli_export_execution import _FakeContext, _FakePage, _Recorder
 
 SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
@@ -341,3 +345,66 @@ def test_the_exports_settle_wait_catches_a_follow_up_inside_the_quiet_interval(
     assert asyncio.run(ns["_settle_network"](state, 2000)) == 0
     assert state["failed_requests"] == 1
     assert 0.47 < clock.elapsed < 0.7
+
+
+# --- the export refuses and reports what replay refuses and reports -------------------
+
+
+def test_the_export_refuses_the_redaction_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Searching for the marker itself would pass while the real value is on screen."""
+
+    def leak(page: _FakePage) -> None:
+        page.rendered_text = f"your password is {SECRET}"
+
+    with pytest.raises(BaseException, match="redacted"):
+        _run(monkeypatch, [{"action": "expect_no_text", "text": REDACTED_ASSERTION_TEXT}], on_page=leak)
+
+
+def test_the_export_renders_the_runtime_marker_constant() -> None:
+    source = render_macro_cli(name="m", macro={"actions": []}, include_evidence=False)
+    assert f"_REDACTED_ASSERTION_TEXT = {REDACTED_ASSERTION_TEXT!r}" in source
+    assert f'"limit": {ELEMENT_LIMIT}' not in source  # the limit is rendered as a constant too
+    assert f"_ELEMENT_LIMIT = {ELEMENT_LIMIT}" in source
+
+
+def _scan_returns(monkeypatch: pytest.MonkeyPatch, result: Any) -> None:
+    async def evaluate(self: _FakePage, expression: str, *args: Any) -> Any:
+        if expression.startswith("({ selector, ownPrefix"):
+            return result
+        return expression != "() => false"
+
+    monkeypatch.setattr(_FakePage, "evaluate", evaluate)
+
+
+def test_a_truncated_scan_is_refused_in_the_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scan_returns(monkeypatch, {"pieces": ["hello"], "matched": 1, "truncated": True})
+    with pytest.raises(BaseException, match=str(ELEMENT_LIMIT)):
+        _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET}])
+
+
+def test_a_main_frame_without_a_result_fails_in_the_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scan_returns(monkeypatch, None)
+    with pytest.raises(BaseException, match="no result"):
+        _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET}])
+
+
+def test_export_macro_cli_refuses_an_unbound_assertion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Refused at export, naming the step, before a script that could never pass is written."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    try:
+        storage.write_macro(
+            name="login",
+            macro={
+                "name": "login",
+                "actions": [
+                    {"action": "navigate", "url": "https://example.test/"},
+                    {"action": "expect_no_text", "text": REDACTED_ASSERTION_TEXT},
+                ],
+            },
+        )
+        with pytest.raises(ValueError, match=r"step 1.*redacted") as excinfo:
+            macro_artifacts.export_macro_cli(name="login")
+        assert "{{parameter}}" in str(excinfo.value)
+        assert not list((tmp_path / "recordings").rglob("*.py"))
+    finally:
+        restore_reloaded_defaults()

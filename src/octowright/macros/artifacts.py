@@ -23,6 +23,7 @@ from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.macros import safe_screenshot
+from octowright.macros.lint import lint_macro
 from octowright.macros.privacy import blind_scrub_arg_values, redact_args, scrub_sensitive_values
 from octowright.macros.storage import load_macro, macro_path
 
@@ -115,6 +116,7 @@ def export_macro_cli(
     include_evidence: bool = True,
 ) -> dict[str, Any]:
     macro = load_macro(name)
+    _refuse_unbound_assertions(name, macro)
     args_used = dict(args or {})
     blind_scrub_arg_values(args_used)
     store = ArtifactStore()
@@ -138,6 +140,25 @@ def export_macro_cli(
     manifest["exports"] = [{"path": str(target), "kind": "python-cli"}]
     write_artifact_manifest(manifest_path, manifest)
     return {"ok": True, "macro": name, "path": str(target), "import_safe": True}
+
+
+def _refuse_unbound_assertions(name: str, macro: dict[str, Any]) -> None:
+    """Refuse a macro whose expect_no_text still holds the recording's redaction marker.
+
+    Replay refuses that step, and so does the exported script, but only once it
+    reaches it; a script that can never pass is not worth writing.
+    """
+    steps = [
+        issue.action_index
+        for issue in lint_macro(macro if "name" in macro else {**macro, "name": name})
+        if issue.severity == "error" and issue.code == "redacted_assertion_text"
+    ]
+    if steps:
+        where = ", ".join(f"step {index}" for index in steps)
+        raise ValueError(
+            f"macro {name!r} cannot be exported: expect_no_text at {where} was recorded with its text "
+            "redacted; set 'text' to the value or a {{parameter}} first"
+        )
 
 
 async def run_macro_artifact(

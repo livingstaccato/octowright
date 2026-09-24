@@ -27,10 +27,11 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
+from octowright.defaults import REDACTED_ASSERTION_TEXT
 from octowright.macros._redact import _REDACT_VALUE_ACTIONS
 from octowright.macros.redaction_text import _INVISIBLE
 from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES, LONG_LIVED_RESOURCE_TYPES
-from octowright.session.rendered_text import COLLECT_RENDERED_TEXT_JS, OWN_OVERLAY_ID_PREFIX
+from octowright.session.rendered_text import COLLECT_RENDERED_TEXT_JS, ELEMENT_LIMIT, FRAME_GONE, OWN_OVERLAY_ID_PREFIX
 
 #: The exact pattern replay normalizes with, rendered into the exported script.
 _INVISIBLE_PATTERN = _INVISIBLE.pattern
@@ -58,6 +59,16 @@ _RENDERED_TEXT_JS = """
 _OWN_OVERLAY_ID_PREFIX = """
     + repr(OWN_OVERLAY_ID_PREFIX)
     + """
+_ELEMENT_LIMIT = """
+    + repr(ELEMENT_LIMIT)
+    + """
+# What a recorded expect_no_text holds in place of its text; replay refuses it.
+_REDACTED_ASSERTION_TEXT = """
+    + repr(REDACTED_ASSERTION_TEXT)
+    + """
+_FRAME_GONE = re.compile("""
+    + repr(FRAME_GONE.pattern)
+    + """, re.IGNORECASE)
 _INVISIBLE = re.compile("""
     + repr(_INVISIBLE_PATTERN)
     + ''')
@@ -463,22 +474,46 @@ executed += 1
 state["network_mark"] = _network_counts(state)
 executed += 1
 """,
-    # The text is usually a secret, so the error never repeats it.
+    # The text is usually a secret, so the error never repeats it. Mirrors
+    # session.core_expect_mixin.expect_no_text, minus Chromium's DOM snapshot
+    # (the export has no CDP session), so a closed shadow root is not checked.
     "expect_no_text": """
 forbidden = action["text"]
 if not forbidden:
     raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
+if forbidden == _REDACTED_ASSERTION_TEXT:
+    raise ValueError(
+        "expect_no_text: this step was recorded with its text redacted; set text to the value "
+        "or a {{parameter}} before running it"
+    )
 selector = action.get("selector", "body")
 needle = _normalize(forbidden)
 target = _target(state)
 frames = getattr(target, "frames", None) if selector == "body" and state["frame"] is None else None
-for scanned in frames if isinstance(frames, list) and frames else [target]:
-    found = await scanned.evaluate(
-        _RENDERED_TEXT_JS, {"selector": selector, "ownPrefix": _OWN_OVERLAY_ID_PREFIX, "limit": 20000}
-    )
-    pieces = found.get("pieces", []) if isinstance(found, dict) else []
+truncated = False
+for position, scanned in enumerate(frames if isinstance(frames, list) and frames else [target]):
+    try:
+        found = await scanned.evaluate(
+            _RENDERED_TEXT_JS, {"selector": selector, "ownPrefix": _OWN_OVERLAY_ID_PREFIX, "limit": _ELEMENT_LIMIT}
+        )
+    except Exception as exc:
+        # A child frame that detaches or navigates mid-scan is skipped, as replay skips it.
+        if position == 0 or not _FRAME_GONE.search(str(exc)):
+            raise
+        continue
+    if not isinstance(found, dict):
+        if position == 0:
+            raise RuntimeError("expect_no_text: the rendered-text scan returned no result for the page")
+        continue
+    pieces = found.get("pieces", [])
     if needle and any(isinstance(p, str) and needle in _normalize(p) for p in pieces):
-        raise RuntimeError(f"forbidden text ({len(forbidden)} chars) is rendered in {selector!r}")
+        raise RuntimeError(f"forbidden text ({len(forbidden)} chars) is rendered in {selector!r} (script scan)")
+    truncated = truncated or bool(found.get("truncated"))
+if truncated:
+    raise RuntimeError(
+        f"expect_no_text: {selector!r} holds more than {_ELEMENT_LIMIT} elements, so it was only partly "
+        "checked and cannot pass; narrow the check with a selector for the region the text would appear in"
+    )
 executed += 1
 """,
     "click_by": """
