@@ -114,6 +114,9 @@ class Persona:
     # title prefix and corner badge. When None, the launcher hash-picks from
     # a curated pool keyed off the persona name (deterministic).
     emoji: str | None = None
+    # PEM roots this persona's Chromium trusts, and only this persona's.
+    # See ``persona_trust``.
+    trusted_roots: list[str] = field(default_factory=list)
 
 
 # Allowed top-level keys in a persona YAML document. Mirrors the Persona
@@ -127,6 +130,7 @@ _PERSONA_ALLOWED_KEYS: frozenset[str] = frozenset(
         "credentials",
         "app",
         "emoji",
+        "trusted_roots",
     }
 )
 
@@ -176,6 +180,17 @@ def _validate_credentials(doc: dict[str, Any]) -> None:
             )
 
 
+def _validate_trusted_roots(doc: dict[str, Any]) -> None:
+    roots = doc.get("trusted_roots")
+    if "trusted_roots" not in doc or roots is None:
+        return
+    if not isinstance(roots, list):
+        raise ValueError(f"persona YAML field 'trusted_roots' must be a list of paths, got {type(roots).__name__}")
+    for i, item in enumerate(roots):
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"persona YAML field 'trusted_roots[{i}]' must be a non-empty path string")
+
+
 def _validate_persona_yaml_doc(doc: Any) -> None:
     """Validate a parsed persona YAML document against the Persona schema.
 
@@ -199,6 +214,7 @@ def _validate_persona_yaml_doc(doc: Any) -> None:
     _validate_scalar_str_fields(doc)
     _validate_default_macros(doc)
     _validate_credentials(doc)
+    _validate_trusted_roots(doc)
     if "app" in doc and doc["app"] is not None and not isinstance(doc["app"], dict):
         raise ValueError(f"persona YAML field 'app' must be a mapping, got {type(doc['app']).__name__}")
 
@@ -234,6 +250,7 @@ def load_persona(name: str) -> Persona:
         credentials=dict(raw.get("credentials") or {}),
         app=dict(raw.get("app") or {}),
         emoji=raw.get("emoji"),
+        trusted_roots=list(raw.get("trusted_roots") or []),
     )
 
 
