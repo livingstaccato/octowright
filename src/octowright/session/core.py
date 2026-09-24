@@ -226,6 +226,11 @@ class BrowserSession(
     # Absolute (request, page-error) counts at the start of the current macro
     # run; ``expect_network_clean`` judges only what happened after them.
     _network_clean_mark: tuple[int, int] = (0, 0)
+    # Applied to page-derived text before it is written to disk (the markdown
+    # cache). Installed by macros.privacy.install_sensitive_recorder so the
+    # session scrubs a macro's credential values without importing the macro
+    # layer -- the recorder is protected the same way, by a wrapper.
+    durable_text_scrubber: Callable[[str], str] | None = field(default=None, repr=False)
     _last_mcp_navigation: str | None = None
     # Set by _notify_call_timeout when a Playwright call ran past its budget.
     # Deliberately NOT _crashed: the target may still be executing, and the

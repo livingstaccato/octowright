@@ -411,6 +411,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_blind_scrub_policy.py",
     "tests/test_macro_listing.py",
     "tests/test_macro_network_clean_no_text.py",
+    "tests/test_markdown_cache_scrubs_macro_secrets.py",
     "tests/test_macro_privacy_vocabulary.py",
     "tests/test_macro_save_authoring.py",
     "tests/test_macro_privacy_value_variants.py",

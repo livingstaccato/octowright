@@ -225,6 +225,13 @@ class SessionIOMixin(SessionLike):
         clean = re.sub(r"\n{3,}", "\n\n", clean)
         return clean.strip()
 
+    async def _durable_markdown(self, html: str) -> str:
+        """Markdown for the on-disk cache, with any macro credential scrubbed out."""
+        markdown = await self._extract_markdown(html)
+        if self.durable_text_scrubber is not None:
+            markdown = self.durable_text_scrubber(markdown)
+        return markdown
+
     @gated_operation("markdown_capture")
     async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None:
         """Render and persist markdown for the current page.
@@ -266,7 +273,7 @@ class SessionIOMixin(SessionLike):
             # navigate/page-load/launch via _schedule_markdown_capture, so the
             # caller is very often not browser_read_markdown at all.
             html = await bounded(target.content(), operation="markdown_capture", timeout=10.0)
-            markdown = await self._extract_markdown(html)
+            markdown = await self._durable_markdown(html)
             temp_path.write_text(markdown, encoding="utf-8")
             temp_path.replace(path)
             self.markdown_path = path

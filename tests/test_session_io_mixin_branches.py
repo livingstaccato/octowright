@@ -63,6 +63,7 @@ def _make_subject(tmp_path: Path) -> SessionIOMixin:
     subj._last_markdown_capture_url = None
     subj._last_markdown_capture_key = None
     subj._pending_markdown_capture = None
+    subj.durable_text_scrubber = None
     subj.console = deque()
     subj.console_count = 0
     subj.pages = []

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import Any, LiteralString, Protocol
@@ -49,6 +50,7 @@ class SessionLike(Protocol):
     page_errors: deque[dict[str, Any]]
     page_error_count: int
     _network_clean_mark: tuple[int, int]
+    durable_text_scrubber: Callable[[str], str] | None
     trace: bool
     trace_path: Path | None
     har_path: Path | None
