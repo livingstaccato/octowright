@@ -389,9 +389,11 @@ class TestSubstitute:
 
     def test_recurses_into_nested_dict(self) -> None:
         """Dict values get recursed: nested {{x}} substituted."""
-        actions: list[dict[str, Any]] = [{"action": "x", "headers": {"Authorization": "Bearer {{token}}"}}]
-        result = substitute(actions, {"token": "abc"})
-        assert result[0]["headers"]["Authorization"] == "Bearer abc"
+        # Not ``headers``: a credential there is now refused as a sink
+        # (test_macro_credential_sinks); this pins recursion only.
+        actions: list[dict[str, Any]] = [{"action": "x", "options": {"greeting": "Hello {{name}}"}}]
+        result = substitute(actions, {"name": "abc"})
+        assert result[0]["options"]["greeting"] == "Hello abc"
 
     def test_recurses_into_nested_list(self) -> None:
         """List values get recursed element-wise."""
@@ -416,10 +418,10 @@ class TestSubstitute:
 
     def test_input_nested_dict_not_mutated(self) -> None:
         """Deep-copy reaches nested dicts — caller's nested data is intact."""
-        nested = {"Authorization": "Bearer {{token}}"}
-        actions: list[dict[str, Any]] = [{"action": "x", "headers": nested}]
-        substitute(actions, {"token": "abc"})
-        assert nested == {"Authorization": "Bearer {{token}}"}
+        nested = {"greeting": "Hello {{name}}"}
+        actions: list[dict[str, Any]] = [{"action": "x", "options": nested}]
+        substitute(actions, {"name": "abc"})
+        assert nested == {"greeting": "Hello {{name}}"}
 
     def test_keyerror_message_includes_available_args_list(self) -> None:
         """KeyError message includes 'available:' and the list of args."""
