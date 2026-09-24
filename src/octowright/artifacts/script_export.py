@@ -33,6 +33,7 @@ from octowright.macros.privacy import (
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
+from octowright.session.rendered_text import resolve_element_limit
 
 
 def _hard_redacted_args(actions: Any) -> list[str]:
@@ -68,6 +69,8 @@ def render_macro_cli(
     # Rendered from the live scrubber's own source rather than hand-mirrored:
     # the copy had already lost the HTML-escaped spellings.
     serialized_variants = inspect.getsource(_serialized_variants).rstrip()
+    # Same reason: expect_no_text's element limit resolves exactly as replay's.
+    element_limit_resolver = inspect.getsource(resolve_element_limit).rstrip()
 
     return f"""\
 {doc!r}
@@ -286,6 +289,9 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 
 
 {serialized_variants}
+
+
+{element_limit_resolver}
 
 
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:

@@ -62,6 +62,7 @@ _OWN_OVERLAY_ID_PREFIX = """
 _ELEMENT_LIMIT = """
     + repr(ELEMENT_LIMIT)
     + """
+ELEMENT_LIMIT = _ELEMENT_LIMIT  # the name the rendered resolve_element_limit reads
 # What a recorded expect_no_text holds in place of its text; replay refuses it.
 _REDACTED_ASSERTION_TEXT = """
     + repr(REDACTED_ASSERTION_TEXT)
@@ -487,6 +488,7 @@ if forbidden == _REDACTED_ASSERTION_TEXT:
         "or a {{parameter}} before running it"
     )
 selector = action.get("selector", "body")
+limit = resolve_element_limit(action.get("element_limit"), os.environ)
 needle = _normalize(forbidden)
 target = _target(state)
 frames = getattr(target, "frames", None) if selector == "body" and state["frame"] is None else None
@@ -494,7 +496,7 @@ truncated = False
 for position, scanned in enumerate(frames if isinstance(frames, list) and frames else [target]):
     try:
         found = await scanned.evaluate(
-            _RENDERED_TEXT_JS, {"selector": selector, "ownPrefix": _OWN_OVERLAY_ID_PREFIX, "limit": _ELEMENT_LIMIT}
+            _RENDERED_TEXT_JS, {"selector": selector, "ownPrefix": _OWN_OVERLAY_ID_PREFIX, "limit": limit}
         )
     except Exception as exc:
         # A child frame that detaches or navigates mid-scan is skipped, as replay skips it.
@@ -511,8 +513,9 @@ for position, scanned in enumerate(frames if isinstance(frames, list) and frames
     truncated = truncated or bool(found.get("truncated"))
 if truncated:
     raise RuntimeError(
-        f"expect_no_text: {selector!r} holds more than {_ELEMENT_LIMIT} elements, so it was only partly "
-        "checked and cannot pass; narrow the check with a selector for the region the text would appear in"
+        f"expect_no_text: {selector!r} holds more than {limit} elements, so it was only partly "
+        "checked and cannot pass; narrow the check with a selector for the region the text would appear "
+        "in, or raise element_limit (or OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT)"
     )
 executed += 1
 """,

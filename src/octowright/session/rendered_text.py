@@ -44,6 +44,24 @@ OWN_OVERLAY_ID_PREFIX = "__octowright_"
 #: nothing is then refused rather than passed on a page it only partly read.
 ELEMENT_LIMIT = 20000
 
+
+def resolve_element_limit(explicit: object, environ: Mapping[str, str]) -> int:
+    """The element limit for one check: the step's ``element_limit``, else the daemon's, else 20000.
+
+    ``OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT`` sets the daemon default. A value that
+    is not a positive integer there keeps ``ELEMENT_LIMIT`` rather than
+    removing the limit or setting one no page can pass; on a step it is refused,
+    since the author asked for something specific. Self-contained (builtins and
+    the module constant only): the exported CLI renders this source verbatim.
+    """
+    if explicit is not None:
+        if isinstance(explicit, bool) or not isinstance(explicit, int) or explicit < 1:
+            raise ValueError(f"expect_no_text: element_limit must be a positive integer, got {explicit!r}")
+        return explicit
+    raw = environ.get("OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT", "").strip()
+    return int(raw) if raw.isdigit() and int(raw) > 0 else ELEMENT_LIMIT
+
+
 #: What Playwright says when a frame detaches or navigates while it is evaluated.
 #: A child frame failing this way is skipped; the main frame failing still fails.
 FRAME_GONE = re.compile(r"detached|context was destroyed|navigat", re.IGNORECASE)
@@ -142,8 +160,8 @@ COLLECT_RENDERED_TEXT_JS = """({ selector, ownPrefix, limit }) => {
 }"""
 
 
-def collect_args(selector: str) -> dict[str, object]:
-    return {"selector": selector, "ownPrefix": OWN_OVERLAY_ID_PREFIX, "limit": ELEMENT_LIMIT}
+def collect_args(selector: str, limit: int = ELEMENT_LIMIT) -> dict[str, object]:
+    return {"selector": selector, "ownPrefix": OWN_OVERLAY_ID_PREFIX, "limit": limit}
 
 
 def contains(pieces: Iterable[object], text: str) -> bool:

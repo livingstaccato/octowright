@@ -382,6 +382,47 @@ def test_a_truncated_scan_is_refused_in_the_export(monkeypatch: pytest.MonkeyPat
         _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET}])
 
 
+def _limit_seen(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    seen: list[Any] = []
+
+    async def evaluate(self: _FakePage, expression: str, *args: Any) -> Any:
+        if expression.startswith("({ selector, ownPrefix"):
+            seen.append(args[0]["limit"])
+            return {"pieces": ["hello"], "matched": 1, "truncated": False}
+        return expression != "() => false"
+
+    monkeypatch.setattr(_FakePage, "evaluate", evaluate)
+    return seen
+
+
+def test_the_export_uses_a_steps_element_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _limit_seen(monkeypatch)
+    _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET, "element_limit": 123}])
+    assert seen == [123]
+
+
+def test_the_export_reads_the_environment_limit_at_run_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT", "77777")
+    seen = _limit_seen(monkeypatch)
+    _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET}])
+    assert seen == [77777]
+
+
+def test_the_export_names_the_limit_that_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    _scan_returns(monkeypatch, {"pieces": ["hello"], "matched": 1, "truncated": True})
+    with pytest.raises(BaseException, match="more than 123 elements"):
+        _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET, "element_limit": 123}])
+
+
+def test_the_export_renders_the_live_limit_resolver() -> None:
+    import inspect
+
+    from octowright.session.rendered_text import resolve_element_limit
+
+    source = render_macro_cli(name="m", macro={"actions": []}, include_evidence=False)
+    assert inspect.getsource(resolve_element_limit).rstrip() in source
+
+
 def test_a_main_frame_without_a_result_fails_in_the_export(monkeypatch: pytest.MonkeyPatch) -> None:
     _scan_returns(monkeypatch, None)
     with pytest.raises(BaseException, match="no result"):

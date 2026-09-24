@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from typing import Any
@@ -22,6 +23,7 @@ from octowright.session.rendered_text import (
     FRAME_GONE,
     collect_args,
     contains,
+    resolve_element_limit,
     snapshot_drawn_text,
 )
 from octowright.session.timeouts import bounded
@@ -231,7 +233,9 @@ class SessionExpectMixin(SessionLike):
         return result
 
     @gated_operation("browser_expect_no_text_scan")
-    async def _scan_drawn_text(self, frames: list[Any], text: str, selector: str, timeout: float) -> dict[str, Any]:
+    async def _scan_drawn_text(
+        self, frames: list[Any], text: str, selector: str, timeout: float, limit: int = ELEMENT_LIMIT
+    ) -> dict[str, Any]:
         """Raise if any frame draws *text*; return what the scan covered.
 
         ``frames[0]`` is the page's main frame, or the one frame the check is
@@ -244,7 +248,7 @@ class SessionExpectMixin(SessionLike):
         for position, frame in enumerate(frames):
             try:
                 found = await bounded(
-                    frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector)),
+                    frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector, limit)),
                     operation="browser_expect_no_text",
                     timeout=timeout,
                 )
@@ -291,7 +295,9 @@ class SessionExpectMixin(SessionLike):
         return contains(snapshot_drawn_text(snapshot), text)
 
     @gated_operation("browser_expect_no_text")
-    async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> dict[str, Any]:
+    async def expect_no_text(
+        self, text: str, selector: str = "body", timeout_ms: int | None = None, element_limit: int | None = None
+    ) -> dict[str, Any]:
         """Assert *text* is not drawn in any element matching *selector*; return what was checked.
 
         Drawn means text a reader can see (``session.rendered_text`` has the
@@ -311,24 +317,28 @@ class SessionExpectMixin(SessionLike):
         is scoped to a selector or a frame) or ``"unsupported"`` (not Chromium).
         ``matched == 0`` passes -- nothing matched, so nothing is drawn -- and
         the result is how a caller tells that from a page checked and clean. A
-        page with more than ``ELEMENT_LIMIT`` elements under the selector is
-        refused unless the text was found: a security check does not pass on a
-        page it only partly read. *text* is treated as a secret, so neither the
+        page with more elements under the selector than the limit is refused
+        unless the text was found: a security check does not pass on a page it
+        only partly read. The limit is *element_limit*, else
+        ``OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT``, else ``ELEMENT_LIMIT``
+        (``rendered_text.resolve_element_limit``). *text* is treated as a secret, so neither the
         error, the result nor the recording repeats it.
         """
         _check_forbidden_text(text)
+        limit = resolve_element_limit(element_limit, os.environ)
         timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
         target = self._target()
         whole_page = selector == "body" and target is self.page
         frames = _frames_to_scan(target, getattr(target, "frames", None) if whole_page else None)
-        result = await self._scan_drawn_text(frames, text, selector, timeout)
+        result = await self._scan_drawn_text(frames, text, selector, timeout, limit)
         result["snapshot"] = "unsupported" if self.kind != "chromium" else "checked" if whole_page else "skipped"
         if result["snapshot"] == "checked" and await self._snapshot_leaks(text, timeout):
             raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}" (DOM snapshot)')
         if result["truncated"]:
             raise RuntimeError(
-                f'expect_no_text: "{selector}" holds more than {ELEMENT_LIMIT} elements, so it was only partly '
-                "checked and cannot pass; narrow the check with a selector for the region the text would appear in"
+                f'expect_no_text: "{selector}" holds more than {limit} elements, so it was only partly '
+                "checked and cannot pass; narrow the check with a selector for the region the text would appear "
+                "in, or raise element_limit (or OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT)"
             )
         # The marker, never the text; the keyed digest is what lets save_macro
         # bind the marker to the parameter it stood for (see
@@ -341,6 +351,8 @@ class SessionExpectMixin(SessionLike):
             selector=selector,
             text=REDACTED_ASSERTION_TEXT,
             text_digest=assertion_text_digest(text),
+            # A step's own limit is an input, so replay keeps it; the default is not recorded.
+            **({"element_limit": element_limit} if element_limit is not None else {}),
             **result,
         )
         return result
