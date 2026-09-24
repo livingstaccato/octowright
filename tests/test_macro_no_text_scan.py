@@ -83,12 +83,15 @@ async def test_other_engines_report_the_snapshot_unsupported(tmp_path: Path) -> 
 
 @pytest.mark.anyio
 async def test_the_recording_carries_the_result_never_the_text(tmp_path: Path) -> None:
+    from octowright.macros.privacy import assertion_text_digest
+
     session = _session(tmp_path)
     await session.expect_no_text(SECRET, selector="body")
     session.recorder.record.assert_called_with(
         "expect_no_text",
         selector="body",
         text=REDACTED_ASSERTION_TEXT,
+        text_digest=assertion_text_digest(SECRET),
         matched=1,
         frames_scanned=1,
         frames_skipped=0,
