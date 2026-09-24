@@ -144,6 +144,34 @@ def test_small_frame_carries_no_truncation_flag(tmp_path: Path, monkeypatch: pyt
     assert "payload_truncated" not in _rows(subj)[-1]
 
 
+def test_the_ceiling_is_read_once_per_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` is resolved once per frame, not per check."""
+    monkeypatch.setenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "4096")
+    calls: list[int] = []
+    real = _io._websocket_max_bytes
+    monkeypatch.setattr(_io, "_websocket_max_bytes", lambda: calls.append(1) or real())
+    subj = _make_subject(tmp_path)
+    subj._append_websocket_cache(direction="framesent", id_=1, url="ws://x", payload=b"ok", payload_size=2)
+    assert len(calls) == 1
+
+
+def test_a_bytes_repr_frame_is_sized_by_the_callers_exact_size(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The caller already decoded the repr; its exact size refuses the frame before any copy.
+
+    ``len(repr) // 4`` fits under the ceiling here, so the estimate let the
+    frame be decoded and base64'd only for the finished line to be refused.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "4096")
+    encoded: list[int] = []
+    real = base64.b64encode
+    monkeypatch.setattr(_io.base64, "b64encode", lambda data, *a: encoded.append(len(data)) or real(data, *a))
+    subj = _make_subject(tmp_path)
+    payload = "b'" + "a" * 5000 + "'"
+    subj._append_websocket_cache(direction="framereceived", id_=1, url="ws://x", payload=payload, payload_size=5000)
+    assert encoded == []
+    assert _rows(subj)[-1]["action"] == "websocket_truncated"
+
+
 # ─── failed-response body ────────────────────────────────────────────────────
 
 

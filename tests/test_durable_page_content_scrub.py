@@ -113,24 +113,44 @@ async def test_capture_create_scrubs_what_it_saves(tmp_path: Path, monkeypatch: 
 # --- an installed scrubber with nothing to scrub costs nothing ---------------------------
 
 
-def test_an_empty_ledger_does_not_decode_binary_frames(
-    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Once any macro ran, the scrubber stays installed; with no values it must not decode every frame."""
-    from octowright.session import core_io_mixin
+def test_an_empty_ledger_does_not_scrub_binary_frames(session: BrowserSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Once any macro ran, the scrubber stays installed; with no values it must not touch every frame."""
+    ledger = install_sensitive_recorder(session, [])
+    scrubber = session.durable_text_scrubber
+    calls: list[str] = []
 
-    install_sensitive_recorder(session, [])
-    calls: list[object] = []
-    real = core_io_mixin.base64.b64decode
-    monkeypatch.setattr(core_io_mixin.base64, "b64decode", lambda data: calls.append(data) or real(data))
-    entry = {"url": "wss://x.test/", "payload_b64": "AAECAw=="}
-    session._scrub_websocket_entry(entry)
+    class _Counting:
+        active = property(lambda _self: scrubber.active)  # type: ignore[union-attr]
+
+        def __call__(self, text: str) -> str:
+            calls.append(text)
+            return scrubber(text)  # type: ignore[misc]
+
+    session.durable_text_scrubber = _Counting()  # type: ignore[assignment]
+    entry: dict[str, object] = {"url": "wss://x.test/"}
+    session._scrub_websocket_entry(entry, b"\x00\x01\x02\x03")
     assert calls == [] and entry == {"url": "wss://x.test/", "payload_b64": "AAECAw=="}
 
-    # ...and the same scrubber decodes and scrubs once the ledger holds a value.
-    session.durable_text_scrubber.ledger.add([SECRET])  # type: ignore[union-attr]
-    import base64
+    # ...and the same scrubber checks the bytes once the ledger holds a value.
+    ledger.add([SECRET])
+    entry = {"url": "wss://x.test/"}
+    session._scrub_websocket_entry(entry, SECRET.encode())
+    assert entry.get("payload_redacted") is True and "payload_b64" not in entry
 
-    entry = {"url": "wss://x.test/", "payload_b64": base64.b64encode(SECRET.encode()).decode()}
-    session._scrub_websocket_entry(entry)
-    assert len(calls) == 1 and entry.get("payload_redacted") is True
+
+def test_a_binary_frame_holding_a_value_is_never_encoded_or_decoded(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scrub check runs on the bytes: no base64 round trip for a frame that is then dropped."""
+    from octowright.session import core_io_mixin
+
+    install_sensitive_recorder(session, [SECRET])
+    seen: list[str] = []
+    for name in ("b64encode", "b64decode"):
+        real = getattr(core_io_mixin.base64, name)
+        monkeypatch.setattr(
+            core_io_mixin.base64, name, lambda data, *a, _n=name, _r=real: seen.append(_n) or _r(data, *a)
+        )
+    session._append_websocket_cache(direction="received", id_="1", url="wss://x.test/", payload=SECRET.encode())
+    assert seen == []
+    assert json.loads(_sidecar(session).splitlines()[-1])["payload_redacted"] is True

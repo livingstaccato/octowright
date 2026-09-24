@@ -106,28 +106,33 @@ class SessionIOMixin(SessionLike):
     _pending_markdown_capture: Any | None
     _last_markdown_capture_error: Exception | None
 
-    def _scrub_websocket_entry(self, entry: dict[str, Any]) -> None:
+    def _scrub_websocket_entry(self, entry: dict[str, Any], payload_bytes: bytes | None = None) -> None:
         """Keep a macro's credential values out of the sidecar, like the recorder does.
 
         A binary frame cannot be edited byte-for-byte safely, so one holding a
         value is not stored at all; its size stays, and ``payload_redacted``
-        says why the bytes are missing.
+        says why the bytes are missing. *payload_bytes* is checked BEFORE it is
+        base64-encoded into ``payload_b64``, so a frame that is then dropped is
+        never encoded, and a kept one is never decoded back to be checked.
         """
         scrub = self.durable_text_scrubber
         # ``active`` is False while the ledger is empty: a session that ever ran
-        # a macro keeps the scrubber installed, and base64- and UTF-8-decoding
-        # every binary frame to scrub it against nothing was the whole cost.
-        if scrub is None or not getattr(scrub, "active", True):
+        # a macro keeps the scrubber installed, and decoding every binary frame
+        # to scrub it against nothing was the whole cost.
+        active = scrub is not None and getattr(scrub, "active", True)
+        if active:
+            assert scrub is not None  # narrowed by ``active``  # nosec B101
+            for key in ("url", "payload_preview", "payload_text"):
+                if isinstance(entry.get(key), str):
+                    entry[key] = scrub(entry[key])
+        if payload_bytes is None:
             return
-        for key in ("url", "payload_preview", "payload_text"):
-            if isinstance(entry.get(key), str):
-                entry[key] = scrub(entry[key])
-        encoded = entry.get("payload_b64")
-        if isinstance(encoded, str):
-            decoded = base64.b64decode(encoded).decode("utf-8", errors="replace")
-            if scrub(decoded) != decoded:
-                del entry["payload_b64"]
+        if active:
+            text = payload_bytes.decode("utf-8", errors="replace")
+            if scrub(text) != text:  # type: ignore[misc]
                 entry["payload_redacted"] = True
+                return
+        entry["payload_b64"] = base64.b64encode(payload_bytes).decode("ascii")
 
     def _websocket_cache_handle(self, now: float) -> Any:
         """The session's append handle on the sidecar, opened on first use."""
@@ -145,7 +150,7 @@ class SessionIOMixin(SessionLike):
         return fh
 
     def _bounded_ws_payload(
-        self, entry: dict[str, Any], payload: Any, payload_size: int | None
+        self, entry: dict[str, Any], payload: Any, payload_size: int | None, *, limit: int, now: float
     ) -> tuple[Any, int | None] | None:
         """Size a frame BEFORE anything copies it; ``None`` means drop it.
 
@@ -153,14 +158,15 @@ class SessionIOMixin(SessionLike):
         on the finished line paid for a frame it then refused. With a ceiling
         set, a frame that cannot fit is refused here; with none, one frame's
         payload is cut to ``WEBSOCKET_FRAME_MAX_BYTES`` and flagged, keeping its
-        true size.
+        true size. *payload_size* is the caller's exact (decoded) size when it
+        has one, and is preferred over the estimate from the raw payload.
         """
-        raw_size = _raw_payload_size(payload)
+        raw_size = payload_size if payload_size is not None else _raw_payload_size(payload)
         if raw_size is None:
             return payload, payload_size
-        if self._ws_frame_cannot_fit(raw_size):
+        if self._ws_frame_cannot_fit(raw_size, limit=limit, now=now):
             return None
-        if _websocket_max_bytes() <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
+        if limit <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
             head = payload[:WEBSOCKET_FRAME_MAX_BYTES]
             entry["payload_truncated"] = True
             return (head if isinstance(head, str) else bytes(head)), (
@@ -179,6 +185,12 @@ class SessionIOMixin(SessionLike):
         payload_size: int | None = None,
     ) -> None:
         """Persist websocket frames in a dedicated cache file."""
+        # Resolved once per frame and passed down: the ceiling is read by the
+        # pre-encode fit check, the per-frame cap and the final line check, and
+        # one time.monotonic() serves the handle's init stamp and the flush.
+        limit = _websocket_max_bytes()
+        now = time.monotonic()
+        payload_bytes: bytes | None = None
         entry: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "action": f"websocket_{direction}",
@@ -186,17 +198,15 @@ class SessionIOMixin(SessionLike):
             "url": url,
         }
         if payload is not None:
-            bounded_payload = self._bounded_ws_payload(entry, payload, payload_size)
+            bounded_payload = self._bounded_ws_payload(entry, payload, payload_size, limit=limit, now=now)
             if bounded_payload is None:
                 return
             payload, payload_size = bounded_payload
             entry["payload_preview"] = payload_preview or ""
             normalized_size = payload_size
-            payload_b64 = None
 
             if isinstance(payload, bytes | bytearray | memoryview):
                 payload_bytes = bytes(payload)
-                payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
             elif isinstance(payload, str) and _looks_like_binary_text(payload):
@@ -205,10 +215,9 @@ class SessionIOMixin(SessionLike):
                 except Exception:
                     decoded = None
                 if isinstance(decoded, bytes | bytearray | memoryview):
-                    decoded_bytes = bytes(decoded)
-                    payload_b64 = base64.b64encode(decoded_bytes).decode("ascii")
+                    payload_bytes = bytes(decoded)
                     if normalized_size is None:
-                        normalized_size = len(decoded_bytes)
+                        normalized_size = len(payload_bytes)
                 else:
                     entry["payload_text"] = payload
             else:
@@ -218,9 +227,9 @@ class SessionIOMixin(SessionLike):
                 if normalized_size is not None
                 else (len(payload) if hasattr(payload, "__len__") else None)
             )
-            if payload_b64 is not None:
-                entry["payload_b64"] = payload_b64
-        self._scrub_websocket_entry(entry)
+        # Also appends ``payload_b64`` (or ``payload_redacted``) last, where it
+        # always sat in the row.
+        self._scrub_websocket_entry(entry, payload_bytes)
         # Keep a single append-mode file handle for the session: high-frequency
         # WS feeds (game servers, market data) can fire thousands of frames
         # per second, and re-opening for every frame burns syscalls and inode
@@ -233,13 +242,9 @@ class SessionIOMixin(SessionLike):
         # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS — imported at
         # module scope above so the hot path doesn't pay a sys.modules
         # lookup per frame.
-        # One time.monotonic() per call, reused for both the elapsed-time
-        # check and (on first write) the init timestamp / (on flush) the
-        # new last_flush stamp.
-        now = time.monotonic()
         fh = self._websocket_cache_handle(now)
         line = json.dumps(entry, ensure_ascii=False) + "\n"
-        if self._ws_over_ceiling(fh, len(line.encode("utf-8"))):
+        if self._ws_over_ceiling(fh, len(line.encode("utf-8")), limit=limit):
             return
         fh.write(line)
         # Both fields are dataclass attributes initialized to 0 / 0.0 and
@@ -255,22 +260,21 @@ class SessionIOMixin(SessionLike):
         else:
             self._websocket_frames_since_flush = frames
 
-    def _ws_frame_cannot_fit(self, raw_size: int) -> bool:
+    def _ws_frame_cannot_fit(self, raw_size: int, *, limit: int, now: float) -> bool:
         """Whether a frame of *raw_size* is refused by the ceiling before encoding.
 
         The raw size is a lower bound on the stored line, so a frame this
         refuses would have been refused anyway -- only now nothing was copied
         to find out. Writes the one-time marker exactly as the late check does.
         """
-        if _websocket_max_bytes() <= 0:
+        if limit <= 0:
             return False
-        return self._ws_over_ceiling(self._websocket_cache_handle(time.monotonic()), raw_size, reserve=False)
+        return self._ws_over_ceiling(self._websocket_cache_handle(now), raw_size, limit=limit, reserve=False)
 
-    def _ws_over_ceiling(self, fh: Any, line_bytes: int, *, reserve: bool = True) -> bool:
-        """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``. Return True if this frame
-        must be dropped because the sidecar reached the ceiling, writing a
+    def _ws_over_ceiling(self, fh: Any, line_bytes: int, *, limit: int, reserve: bool = True) -> bool:
+        """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` (*limit*). Return True if this
+        frame must be dropped because the sidecar reached the ceiling, writing a
         one-time ``websocket_truncated`` marker on the edge. Off → always False."""
-        limit = _websocket_max_bytes()
         if limit <= 0:
             return False
         if self._websocket_truncated:
