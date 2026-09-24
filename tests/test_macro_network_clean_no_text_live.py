@@ -273,8 +273,13 @@ async def test_http_errors_count_api_failures_not_missing_images(session: Any, m
     ],
 )
 async def test_every_rendered_surface_is_checked(session: Any, page_url: str, token: str, selector: str) -> None:
+    """The script scan must catch each one on every engine, Chromium included.
+
+    On Chromium the DOM snapshot runs second and would catch most of these too,
+    so a broken collector hid behind it; the message names the scan that failed.
+    """
     await session.page.goto(page_url + "surfaces")
-    with pytest.raises(RuntimeError, match="forbidden text"):
+    with pytest.raises(RuntimeError, match=r"forbidden text .*\(script scan\)"):
         await session.expect_no_text(token, selector=selector)
 
 
@@ -297,7 +302,7 @@ async def test_a_closed_shadow_root_is_checked_on_chromium(session: Any, page_ur
     await session.page.goto(page_url + "surfaces")
     if session.kind != "chromium":
         pytest.skip("closed shadow roots are only reachable through Chromium's DOM snapshot")
-    with pytest.raises(RuntimeError, match="forbidden text"):
+    with pytest.raises(RuntimeError, match=r"forbidden text .*\(DOM snapshot\)"):
         await session.expect_no_text("TOKEN-CLOSED-SHADOW")
 
 

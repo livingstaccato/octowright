@@ -10,10 +10,20 @@ import re
 import time
 from typing import Any
 
+from playwright.async_api import Error as PlaywrightError
+from provide.telemetry import get_logger
+
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_ASSERTION_TEXT
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
-from octowright.session.rendered_text import COLLECT_RENDERED_TEXT_JS, collect_args, contains
+from octowright.session.rendered_text import (
+    COLLECT_RENDERED_TEXT_JS,
+    ELEMENT_LIMIT,
+    FRAME_GONE,
+    collect_args,
+    contains,
+    snapshot_drawn_text,
+)
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
@@ -21,6 +31,8 @@ _WAIT_FOR_POLL_SECONDS = 0.05
 NETWORK_SETTLE_TIMEOUT_MS = 5000
 #: Quiet time after the last in-flight request ends, for the follow-up it triggers.
 _NETWORK_QUIET_SECONDS = 0.1
+
+log = get_logger(__name__)
 
 
 class SessionExpectMixin(SessionLike):
@@ -219,27 +231,47 @@ class SessionExpectMixin(SessionLike):
         return result
 
     @gated_operation("browser_expect_no_text_scan")
-    async def _scan_drawn_text(self, frames: list[Any], text: str, selector: str, timeout: float) -> str:
-        """Raise if any frame draws *text*; return the text octowright's overlays show."""
-        overlay = ""
-        for frame in frames:
-            found = await bounded(
-                frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector)),
-                operation="browser_expect_no_text",
-                timeout=timeout,
-            )
+    async def _scan_drawn_text(self, frames: list[Any], text: str, selector: str, timeout: float) -> dict[str, Any]:
+        """Raise if any frame draws *text*; return what the scan covered.
+
+        ``frames[0]`` is the page's main frame, or the one frame the check is
+        scoped to, and anything wrong there fails the check. A child frame that
+        detaches or navigates while it is read (an ad rotating, a widget
+        reloading) is skipped and counted, instead of failing a check about the
+        page on a frame that no longer exists.
+        """
+        summary: dict[str, Any] = {"matched": 0, "frames_scanned": 0, "frames_skipped": 0, "truncated": False}
+        for position, frame in enumerate(frames):
+            try:
+                found = await bounded(
+                    frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector)),
+                    operation="browser_expect_no_text",
+                    timeout=timeout,
+                )
+            except PlaywrightError as exc:
+                if position == 0 or not FRAME_GONE.search(str(exc)):
+                    raise
+                log.debug("expect_no_text.frame_skipped", reason="frame_gone")
+                summary["frames_skipped"] += 1
+                continue
             if not isinstance(found, dict):
+                if position == 0:
+                    raise RuntimeError("expect_no_text: the rendered-text scan returned no result for the page")
+                log.debug("expect_no_text.frame_skipped", reason="no_result")
+                summary["frames_skipped"] += 1
                 continue
             if contains(found.get("pieces", []), text):
-                raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}"')
-            overlay += str(found.get("overlay", ""))
-        return overlay
+                raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}" (script scan)')
+            summary["frames_scanned"] += 1
+            summary["matched"] += int(found.get("matched") or 0)
+            summary["truncated"] = summary["truncated"] or bool(found.get("truncated"))
+        return summary
 
     @gated_operation("browser_expect_no_text_snapshot")
-    async def _snapshot_leaks(self, text: str, timeout: float) -> list[str]:
-        """Chromium only: what its DOM snapshot says is drawn, closed shadow roots included."""
+    async def _snapshot_leaks(self, text: str, timeout: float) -> bool:
+        """Chromium only: whether its DOM snapshot draws *text*, closed shadow roots included."""
         # Local import: the macros package imports the session stack.
-        from octowright.macros.rendered_surface import OPAQUE_ELEMENTS, SNAPSHOT_PARAMS, rendered_leaks
+        from octowright.macros.rendered_surface import SNAPSHOT_PARAMS
 
         cdp = await bounded(
             self.page.context.new_cdp_session(self.page), operation="browser_expect_no_text", timeout=timeout
@@ -252,43 +284,52 @@ class SessionExpectMixin(SessionLike):
             )
         finally:
             await cdp.detach()
-        # The snapshot scan was built to refuse screenshots, so two of its reasons
-        # do not mean "this text is drawn". Form values are the in-page scan's to
-        # judge (it knows a password field draws only mask characters). And a
-        # shown iframe/canvas/video is refused there whatever it holds, because
-        # a screenshot cannot see into it; here frames are scanned directly and
-        # a canvas holds no text to compare.
-        opaque = {f"visible {name.lower()}" for name in OPAQUE_ELEMENTS}
-        return [r for r in rendered_leaks(snapshot, [text]) if r != "form value" and r not in opaque]
+        # Drawn text only, overlays left out (see snapshot_drawn_text): the
+        # screenshot scanner's findings err toward refusal, and a check that
+        # failed on Chromium alone for a URL nobody can read would mean a
+        # different thing on each engine.
+        return contains(snapshot_drawn_text(snapshot), text)
 
     @gated_operation("browser_expect_no_text")
-    async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> None:
-        """Assert *text* is not drawn in any element matching *selector*.
+    async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> dict[str, Any]:
+        """Assert *text* is not drawn in any element matching *selector*; return what was checked.
 
-        Drawn means what a reader can see: rendered text of every match, open
-        shadow roots, visible form values and placeholders, and CSS generated
-        content -- in every frame when *selector* is ``body``. Password fields
-        and hidden elements do not count. On Chromium the page's DOM snapshot is
-        also checked, which reaches closed shadow roots. Canvas, video and other
-        pixel-only content cannot be text-checked. Text compares as the
-        screenshot scanner compares (``macros.redaction_text.normalize``):
-        ignoring case, whitespace and invisible characters. No match means
-        nothing is drawn, so it passes. octowright's own overlays are not the
-        page and are skipped. *text* is treated as a secret, so neither the
-        error nor the recording repeats it.
+        Drawn means text a reader can see (``session.rendered_text`` has the
+        full definition): rendered text of every match, open shadow roots,
+        visible form values and placeholders, a broken image's alt text, a
+        select's option labels and CSS generated content -- in every frame when
+        *selector* is ``body``. Password fields, attribute text such as a
+        resource address, and anything not rendered do not count. On Chromium
+        the page's DOM snapshot is also checked, which reaches closed shadow
+        roots; other engines cannot. Canvas, video and other pixel-only content
+        cannot be text-checked. Text compares ignoring case, whitespace and
+        invisible characters (``macros.redaction_text.normalize``). octowright's
+        own overlays are not the page and are left out of both scans.
+
+        Returns ``{matched, frames_scanned, frames_skipped, truncated,
+        snapshot}``, ``snapshot`` being ``"checked"``, ``"skipped"`` (the check
+        is scoped to a selector or a frame) or ``"unsupported"`` (not Chromium).
+        ``matched == 0`` passes -- nothing matched, so nothing is drawn -- and
+        the result is how a caller tells that from a page checked and clean. A
+        page with more than ``ELEMENT_LIMIT`` elements under the selector is
+        refused unless the text was found: a security check does not pass on a
+        page it only partly read. *text* is treated as a secret, so neither the
+        error, the result nor the recording repeats it.
         """
         _check_forbidden_text(text)
         timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
         target = self._target()
         whole_page = selector == "body" and target is self.page
         frames = _frames_to_scan(target, getattr(target, "frames", None) if whole_page else None)
-        overlay = await self._scan_drawn_text(frames, text, selector, timeout)
-        # The snapshot cannot tell octowright's overlays from the page, so skip it
-        # when an overlay itself shows the text rather than fail on our own badge.
-        if whole_page and self.kind == "chromium" and not contains([overlay], text):
-            leaks = await self._snapshot_leaks(text, timeout)
-            if leaks:
-                raise RuntimeError(f"forbidden text ({len(text)} chars) is rendered: {', '.join(leaks)}")
+        result = await self._scan_drawn_text(frames, text, selector, timeout)
+        result["snapshot"] = "unsupported" if self.kind != "chromium" else "checked" if whole_page else "skipped"
+        if result["snapshot"] == "checked" and await self._snapshot_leaks(text, timeout):
+            raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}" (DOM snapshot)')
+        if result["truncated"]:
+            raise RuntimeError(
+                f'expect_no_text: "{selector}" holds more than {ELEMENT_LIMIT} elements, so it was only partly '
+                "checked and cannot pass; narrow the check with a selector for the region the text would appear in"
+            )
         # The marker, never the text; the keyed digest is what lets save_macro
         # bind the marker to the parameter it stood for (see
         # macros.privacy.assertion_text_digest). Local import: macros imports
@@ -296,8 +337,13 @@ class SessionExpectMixin(SessionLike):
         from octowright.macros.privacy import assertion_text_digest
 
         self.recorder.record(
-            "expect_no_text", selector=selector, text=REDACTED_ASSERTION_TEXT, text_digest=assertion_text_digest(text)
+            "expect_no_text",
+            selector=selector,
+            text=REDACTED_ASSERTION_TEXT,
+            text_digest=assertion_text_digest(text),
+            **result,
         )
+        return result
 
 
 def _check_forbidden_text(text: str) -> None:

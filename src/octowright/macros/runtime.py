@@ -143,6 +143,9 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     # as an unexpected kwarg -- it would be passed to the locator builder as
     # though it were a finder.
     "get_text_by": ("result",),
+    # expect_no_text records what it checked (counts and the snapshot state,
+    # never the text), so a vacuous pass is visible in the recording.
+    "expect_no_text": ("matched", "frames_scanned", "frames_skipped", "truncated", "snapshot", "text_digest"),
 }
 
 # Recorded keys that need renaming to match the method's parameter names.

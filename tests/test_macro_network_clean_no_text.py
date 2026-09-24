@@ -144,7 +144,7 @@ def _drawn(session: BrowserSession, *pieces: str) -> AsyncMock:
     """Have the page's rendered-text scan return *pieces*; stub Chromium's snapshot."""
     scan = AsyncMock(return_value={"pieces": list(pieces), "overlay": "", "matched": 1})
     session.page.evaluate = scan
-    session._snapshot_leaks = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    session._snapshot_leaks = AsyncMock(return_value=False)  # type: ignore[method-assign]
     return scan
 
 
@@ -183,8 +183,8 @@ async def test_no_text_scopes_to_a_selector(session: BrowserSession) -> None:
 @pytest.mark.anyio
 async def test_the_snapshot_can_fail_what_script_cannot_see(session: BrowserSession) -> None:
     _drawn(session)
-    session._snapshot_leaks = AsyncMock(return_value=["rendered text"])  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="rendered text"):
+    session._snapshot_leaks = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match=r"\(DOM snapshot\)"):
         await session.expect_no_text(SECRET)
 
 
@@ -201,9 +201,10 @@ async def test_no_text_records_a_marker_not_the_text(session: BrowserSession) ->
     await session.expect_no_text(SECRET, selector="#p")
     from octowright.macros.privacy import assertion_text_digest
 
-    session.recorder.record.assert_called_with(
-        "expect_no_text", selector="#p", text=REDACTED_ASSERTION_TEXT, text_digest=assertion_text_digest(SECRET)
-    )
+    kwargs = session.recorder.record.call_args.kwargs
+    assert session.recorder.record.call_args.args == ("expect_no_text",)
+    assert (kwargs["selector"], kwargs["text"]) == ("#p", REDACTED_ASSERTION_TEXT)
+    assert kwargs["text_digest"] == assertion_text_digest(SECRET)
 
 
 # ---------------------------------------------------------------------------
