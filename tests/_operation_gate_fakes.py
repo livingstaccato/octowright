@@ -44,6 +44,10 @@ class OperationAwareFake:
 
     instance_id = "fake-session"
     kind = "chromium"
+    # What a launch with no URL and no persona leaves on a real session; the
+    # macro header guard (``substitution.own_site_hosts``) reads both.
+    launch_url: str | None = None
+    base_url: str | None = None
 
     def __init__(self) -> None:
         self._test_operation_gate = SessionOperationGate(

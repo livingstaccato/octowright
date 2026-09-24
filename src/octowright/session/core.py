@@ -104,6 +104,11 @@ class BrowserSession(
     # because Playwright offers no getter, and the macro header guard
     # (``substitution.own_site_hosts``) trusts it as operator-chosen.
     base_url: str | None = None
+    # The URL the browser was launched at. Unlike ``url``, which every navigate
+    # rewrites, nothing writes this after launch: the macro header guard trusts
+    # its host as operator-chosen, and a field a macro's own navigate step could
+    # move would let the macro choose it.
+    launch_url: str | None = None
     stabilize: bool = False
     protected: bool = False
     protected_reason: str = "explicit"

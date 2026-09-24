@@ -91,6 +91,9 @@ class TestValidateMacroCallShape:
 class _MinimalSession:
     """Minimal fake BrowserSession for dispatch_macro_call tests."""
 
+    launch_url: str | None = None
+    base_url: str | None = None
+
     async def navigate(self, url: str) -> dict[str, Any]:
         return {"url": url, "title": ""}
 

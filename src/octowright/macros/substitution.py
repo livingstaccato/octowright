@@ -8,10 +8,14 @@ from __future__ import annotations
 import copy
 import os
 import re
-from typing import Any
-from urllib.parse import urlsplit
+from typing import TYPE_CHECKING, Any
+from urllib.parse import SplitResult, urlsplit
 
+from octowright.defaults import new_tab_url
 from octowright.macros.privacy import is_credential_key
+
+if TYPE_CHECKING:
+    from octowright.session._protocols import SessionLike
 
 SEMANTIC_LOCATOR_KEYS = (
     "role",
@@ -157,27 +161,42 @@ _PATTERN_SCOPED_HEADER_ACTIONS = frozenset({"inject_headers", "mock_route"})
 #: ``https://app.test@attacker.test/`` is attacker.test to a URL parser.
 _LITERAL_PATTERN_HOST = re.compile(r"^https?://([^/?#*{}\[\]@]+)(?:/|$)", re.IGNORECASE)
 
-_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+def _is_octowright_new_tab(parts: SplitResult) -> bool:
+    """Whether *parts* is the daemon's own new-tab page, on any loopback spelling."""
+    # Imported here: the exposure module brings the Starlette request stack,
+    # and the substituter is loaded by callers that never serve HTTP.
+    from octowright.http.exposure import is_loopback_host
+
+    own = urlsplit(new_tab_url())
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    return is_loopback_host(parts.hostname) and port == own.port and parts.path.rstrip("/") == own.path
 
 
-def own_site_hosts(session: Any) -> set[str]:
+def own_site_hosts(session: SessionLike) -> set[str]:
     """The hosts the operator, not the macro, pointed this session at.
 
     The launch URL and the persona ``base_url`` are chosen by whoever launched
-    the browser. A host the macro navigates to is not: a poisoned macro could
-    navigate to its own server and then name it. octowright's own new-tab page
-    (a launch with no URL) is not an app either, though a local dev stack on
-    ``localhost`` is.
+    the browser, and both are captured at launch and never written again.
+    ``session.url`` is NOT one of them: it follows every navigate, so reading
+    it let a poisoned macro navigate to its own server and then name it.
+
+    octowright's own new-tab page (a launch with no URL) is not an app, though a
+    local dev stack on ``localhost`` is. An ``OCTOWRIGHT_DEFAULT_URL`` naming
+    the operator's app is operator-chosen like any launch URL, so only the
+    daemon's page is excluded, not whatever the no-URL launch landed on.
     """
     hosts: set[str] = set()
-    for url in (getattr(session, "url", None), getattr(session, "base_url", None)):
+    for url in (session.launch_url, session.base_url):
         if not isinstance(url, str) or not url:
             continue
         parts = urlsplit(url)
         host = (parts.hostname or "").lower()
-        if not host or (host in _LOOPBACK_HOSTS and parts.path.rstrip("/") == "/new-tab"):
-            continue
-        hosts.add(host)
+        if host and not _is_octowright_new_tab(parts):
+            hosts.add(host)
     return hosts
 
 

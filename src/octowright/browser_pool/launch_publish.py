@@ -180,6 +180,7 @@ def _build_session_object(
         kind=kind,
         label=label,
         url=target_url,
+        launch_url=target_url,
         browser=browser,
         context=context,
         page=page,

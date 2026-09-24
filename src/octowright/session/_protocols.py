@@ -21,6 +21,8 @@ class SessionLike(Protocol):
     instance_id: str
     kind: str
     url: str
+    launch_url: str | None
+    base_url: str | None
     page: Page
     pages: list[Page]
     recorder: Recorder

@@ -40,6 +40,16 @@ def set_actual_http_port(port: int) -> None:
 def get_default_url() -> str:
     if os.environ.get("OCTOWRIGHT_DEFAULT_URL"):
         return os.environ["OCTOWRIGHT_DEFAULT_URL"]
+    return new_tab_url()
+
+
+def new_tab_url() -> str:
+    """Octowright's own new-tab page, whatever ``OCTOWRIGHT_DEFAULT_URL`` says.
+
+    Separate from `get_default_url` because some callers need to recognise the
+    daemon's page rather than the operator's chosen landing page: an
+    ``OCTOWRIGHT_DEFAULT_URL`` pointing at the operator's app is that app.
+    """
     port = _bound_http_port if _bound_http_port is not None else int(_DEFAULT_PORT)
     return f"http://127.0.0.1:{port}/new-tab"
 

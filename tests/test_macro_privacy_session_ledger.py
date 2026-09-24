@@ -42,6 +42,9 @@ class _Recorder:
 
 
 class _Session:
+    launch_url: str | None = None
+    base_url: str | None = None
+
     def __init__(self) -> None:
         self.recorder: Any = _Recorder()
 
