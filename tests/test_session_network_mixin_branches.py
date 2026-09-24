@@ -27,6 +27,9 @@ def _make_subject(maxlen: int = 100) -> SessionNetworkMixin:
     """Build a bare SessionNetworkMixin with the deque + counter set up."""
     subj = SessionNetworkMixin.__new__(SessionNetworkMixin)
     subj._network_requests = deque(maxlen=maxlen)
+    subj._inflight_requests = {}
+    subj._request_failure_count = 0
+    subj._http_error_count = 0
     subj._network_requests_dropped = 0
     return subj
 
@@ -166,6 +169,9 @@ class TestAppendDropCounter:
         """If the deque is unbounded (maxlen=None), no drops counted."""
         subj = SessionNetworkMixin.__new__(SessionNetworkMixin)
         subj._network_requests = deque()  # no maxlen
+        subj._inflight_requests = {}
+        subj._request_failure_count = 0
+        subj._http_error_count = 0
         subj._network_requests_dropped = 0
         for i in range(5):
             subj._append_network_request({"url": f"/x{i}"})
