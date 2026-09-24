@@ -388,9 +388,10 @@ posture. This setting also governs diagnostics, automatic and explicit
 screenshots, artifact reports and generated scripts. It does not change the
 classifier vocabulary or the credential sink guard.
 
-**Credential-named arguments in URLs and code.** A credential-named argument
-expanded into `url`, `expression`, `verify_js` or `grabbed_predicate_js` is
-refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+**Credential-named arguments in URLs, code and outbound fields.** A
+credential-named argument expanded into `url`, `expression`, `verify_js`,
+`grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
+`paths` entry is refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
 **Exported scripts** carry their own copy of the classifier, stamped
