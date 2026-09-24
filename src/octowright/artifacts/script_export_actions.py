@@ -75,21 +75,50 @@ def _normalize(text: str) -> str:
     Mirrors the session: a ``requestfailed`` that is not an abort, and every
     ``pageerror``. Counts only -- the messages are never kept. Lazy like the
     dialog policy: a macro that never asserts it never touches ``page.on``.
+
+    Requests in flight map ``id(request)`` to (page, frame, is-navigation); a
+    cross-document commit forgets the replaced document's, as the session does
+    (Chromium never ends a fetch that navigating away cancelled).
     """
     if not state["watch_network"]:
         return
+    inflight = state["inflight"]
+    navigating: set[Any] = set()
 
     def _on_started(request: Any) -> None:
-        if request.resource_type not in _LONG_LIVED_RESOURCE_TYPES:
-            state["inflight"][id(request)] = page
+        if request.resource_type in _LONG_LIVED_RESOURCE_TYPES:
+            return
+        try:
+            frame = request.frame
+        except Exception:  # a service worker's request has no frame
+            frame = None
+        navigation = frame is not None and request.is_navigation_request() is True
+        if navigation:
+            navigating.add(frame)
+        inflight[id(request)] = (page, frame, navigation)
 
     def _on_finished(request: Any) -> None:
-        state["inflight"].pop(id(request), None)
+        inflight.pop(id(request), None)
 
     def _on_failed(request: Any) -> None:
-        state["inflight"].pop(id(request), None)
+        inflight.pop(id(request), None)
         if request.failure and request.failure not in _ABORTED_REQUEST_FAILURES:
             state["failed_requests"] += 1
+
+    def _on_navigated(frame: Any) -> None:
+        if frame not in navigating:
+            return  # same-document (pushState, a fragment): its requests are still live
+        navigating.discard(frame)
+        whole_page = frame is page.main_frame
+        for key, (owner, owner_frame, navigation) in list(inflight.items()):
+            if owner is page and not (navigation and owner_frame is frame) and (whole_page or owner_frame is frame):
+                inflight.pop(key, None)
+
+    def _on_detached(frame: Any) -> None:
+        navigating.discard(frame)
+        for key, (_owner, owner_frame, _navigation) in list(inflight.items()):
+            if owner_frame is frame:
+                inflight.pop(key, None)
 
     def _on_error(_error: Any) -> None:
         state["page_errors"] += 1
@@ -101,6 +130,8 @@ def _normalize(text: str) -> str:
     page.on("request", _on_started)
     page.on("requestfinished", _on_finished)
     page.on("requestfailed", _on_failed)
+    page.on("framenavigated", _on_navigated)
+    page.on("framedetached", _on_detached)
     page.on("pageerror", _on_error)
     page.on("response", _on_response)
 
@@ -114,7 +145,7 @@ async def _settle_network(state: dict[str, Any], timeout_ms: int) -> int:
     deadline = time.monotonic() + timeout_ms / 1000
 
     def pending() -> int:
-        for key, page in list(state["inflight"].items()):
+        for key, (page, _frame, _navigation) in list(state["inflight"].items()):
             if page.is_closed():
                 state["inflight"].pop(key, None)
         return len(state["inflight"])
@@ -533,9 +564,10 @@ executed += 1
 """,
     "open_url": """
 new_page = await _page(state).context.new_page()
+# Watched before the load, or a failure during the tab's first page load is missed.
+_watch_network(state, new_page)
 await new_page.goto(action["url"])
 state["pages"].append(new_page)
-_watch_network(state, new_page)
 if state["dialog_policy"] != "manual":
     _install_dialog_policy(state)
 executed += 1

@@ -231,3 +231,113 @@ def _run_with_args(monkeypatch: pytest.MonkeyPatch, source: str, args: dict[str,
     namespace: dict[str, Any] = {}
     exec(source, namespace)
     return asyncio.run(namespace["run_m"](**args))
+
+
+def test_a_new_tab_is_watched_during_its_first_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_url must watch the tab before goto, or its first load's failures are missed."""
+    original_goto = _FakePage.goto
+
+    async def goto(self: _FakePage, url: str) -> None:
+        await original_goto(self, url)
+        if self.tag.startswith("tab-"):
+            _fire(self, "requestfailed", types.SimpleNamespace(failure="net::ERR_CONNECTION_REFUSED"))
+
+    monkeypatch.setattr(_FakePage, "goto", goto)
+    actions = [{"action": "open_url", "url": "https://x.test/"}, {"action": "expect_network_clean"}]
+    with pytest.raises(BaseException, match=r"1 failed request\(s\)"):
+        _run(monkeypatch, actions)
+
+
+# --- the export's in-flight tracking, driven directly ------------------------------------
+
+
+def _helpers(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    """The generated module's namespace, for calling its helpers without a run."""
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    async_api = types.ModuleType("playwright.async_api")
+    async_api.async_playwright = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
+    source = render_macro_cli(name="m", macro={"actions": [{"action": "expect_network_clean"}]}, include_evidence=False)
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    return namespace
+
+
+class _Page:
+    def __init__(self) -> None:
+        self.handlers: dict[str, list[Any]] = {}
+        self.main_frame = object()
+
+    def on(self, event: str, handler: Any) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def is_closed(self) -> bool:
+        return False
+
+
+def _req(frame: Any, navigation: bool = False) -> Any:
+    return types.SimpleNamespace(
+        resource_type="document" if navigation else "fetch",
+        failure=None,
+        frame=frame,
+        is_navigation_request=lambda: navigation,
+    )
+
+
+def _watched(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], dict[str, Any], _Page]:
+    ns = _helpers(monkeypatch)
+    state: dict[str, Any] = {"watch_network": True, "inflight": {}, "failed_requests": 0, "page_errors": 0}
+    state["http_errors"] = 0
+    page = _Page()
+    ns["_watch_network"](state, page)
+    return ns, state, page
+
+
+def test_the_export_forgets_a_replaced_documents_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chromium never ends a fetch that navigating away cancelled; the commit must."""
+    _ns, state, page = _watched(monkeypatch)
+    fetch, child_fetch, navigation = _req(page.main_frame), _req(object()), _req(page.main_frame, navigation=True)
+    for request in (fetch, child_fetch, navigation):
+        _fire(page, "request", request)
+    _fire(page, "framenavigated", page.main_frame)
+    assert list(state["inflight"]) == [id(navigation)]
+
+
+def test_the_export_keeps_requests_across_a_same_document_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ns, state, page = _watched(monkeypatch)
+    _fire(page, "request", _req(page.main_frame))
+    _fire(page, "framenavigated", page.main_frame)
+    assert len(state["inflight"]) == 1
+
+
+def test_the_export_forgets_a_detached_frames_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    _ns, state, page = _watched(monkeypatch)
+    child = object()
+    _fire(page, "request", _req(child))
+    _fire(page, "request", _req(page.main_frame))
+    _fire(page, "framedetached", child)
+    assert len(state["inflight"]) == 1
+
+
+def test_the_exports_settle_wait_catches_a_follow_up_inside_the_quiet_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same ordering as the session's: a request starting in the quiet interval is waited for."""
+    from tests.test_network_clean_window import FakeClock
+
+    ns, state, page = _watched(monkeypatch)
+    clock = FakeClock()
+    ns["time"], ns["asyncio"] = clock, clock
+    first, follow_up = _req(page.main_frame), _req(page.main_frame)
+    _fire(page, "request", first)
+    clock.at(0.03, lambda: _fire(page, "requestfinished", first))
+    clock.at(0.08, lambda: _fire(page, "request", follow_up))
+
+    def fail() -> None:
+        follow_up.failure = "net::ERR_CONNECTION_REFUSED"
+        _fire(page, "requestfailed", follow_up)
+
+    clock.at(0.47, fail)
+    assert asyncio.run(ns["_settle_network"](state, 2000)) == 0
+    assert state["failed_requests"] == 1
+    assert 0.47 < clock.elapsed < 0.7
