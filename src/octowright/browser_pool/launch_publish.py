@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
-from octowright.browser_pool.launch_helpers import _record_launch_event, base_url_kwargs
+from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import (
     _wire_close_evictor,
     _wire_listeners,
@@ -150,6 +150,7 @@ def _build_session_object(
     kind: str,
     label: str | None,
     target_url: str,
+    base_url: str | None,
     browser: Any,
     context: Any,
     page: Any,
@@ -188,7 +189,7 @@ def _build_session_object(
         log_path=log_path,
         user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
         profile=profile,
-        base_url=base_url_kwargs(profile, launch_options.base_url).get("base_url"),
+        base_url=base_url,
         stabilize=launch_options.stabilize,
         protected=launch_options.protected,
         protected_reason=launch_options.protected_reason,
@@ -234,6 +235,7 @@ async def _prepare_session_before_publication(
     kind: str,
     label: str | None,
     target_url: str,
+    base_url: str | None,
     headless: bool,
     log_path: Path,
     viewport_info: Any,
@@ -296,6 +298,7 @@ async def _prepare_session_before_publication(
         kind=kind,
         label=label,
         target_url=target_url,
+        base_url=base_url,
         browser=browser,
         context=context,
         page=page,

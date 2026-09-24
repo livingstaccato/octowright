@@ -325,6 +325,7 @@ def build_session_for_test(pool: BrowserPool, parts: FakeLaunchParts) -> Browser
         kind=parts.kind,
         label=parts.label,
         target_url=parts.target_url,
+        base_url=None,
         browser=parts.browser,
         context=parts.context,
         page=parts.page,

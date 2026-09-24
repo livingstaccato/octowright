@@ -278,6 +278,7 @@ def _built_session(tmp_path: Any, target_url: str, **overrides: Any) -> Any:
         "kind": "chromium",
         "label": None,
         "target_url": target_url,
+        "base_url": None,
         "browser": None,
         "context": MagicMock(),
         "page": page,
@@ -303,3 +304,9 @@ async def test_the_launch_url_is_captured_at_launch_and_navigate_leaves_it(tmp_p
     await session.navigate("https://attacker.test/")
     assert session.url == "https://attacker.test/"
     assert session.launch_url == "https://app.example.test/"
+
+
+def test_the_session_base_url_is_the_one_the_context_was_launched_with(tmp_path: Any) -> None:
+    """Resolved once in launch_execution and handed down, not re-read from the persona file."""
+    session = _built_session(tmp_path, "https://app.example.test/", base_url="https://api.example.test")
+    assert session.base_url == "https://api.example.test"
