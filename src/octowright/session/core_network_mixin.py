@@ -22,7 +22,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
-from weakref import WeakSet
+from weakref import WeakKeyDictionary
 
 from provide.telemetry import get_logger
 
@@ -192,7 +192,7 @@ def _page_requests(
 class SessionNetworkMixin(SessionLike):
     # Owned by the BrowserSession dataclass; declared for the type checker.
     _inflight_tracking: bool
-    _tracked_pages: WeakSet[Any]
+    _tracked_pages: WeakKeyDictionary[Any, list[tuple[str, Any]]]
     _navigating_frames: dict[Any, Any]
     _inflight_evicted: int
     _inflight_evicted_run_mark: int
@@ -274,12 +274,13 @@ class SessionNetworkMixin(SessionLike):
         row["body"] = body[:cap].decode("utf-8", errors="replace")
 
     def enable_inflight_tracking(self) -> None:
-        """Track requests in flight on every page, now and opened later. Idempotent; never turned off.
+        """Track requests in flight on every page, now and opened later. Idempotent.
 
         Off until something will judge it -- a ``mark_network_clean`` step, a
         macro run that asserts ``expect_network_clean``, or a direct call to it.
         Enabled by that direct call, the settle wait sees only requests started
-        from then on, which is why the other two enable it earlier.
+        from then on, which is why the other two enable it earlier. A macro run
+        turns it off again when it ends (``disable_inflight_tracking``).
         """
         if self._inflight_tracking:
             return
@@ -287,14 +288,46 @@ class SessionNetworkMixin(SessionLike):
         for page in list(self.pages):
             self._track_page_requests(page)
 
+    def disable_inflight_tracking(self) -> bool:
+        """Stop tracking requests in flight, unless a ``mark_network_clean`` window is open.
+
+        Called when a macro run ends, so the cost is paid only while something
+        will judge it. An open mark keeps it on: a verify macro checking
+        ``since="mark"`` judges requests the journey started, and a request
+        started between the two runs while tracking was off would not be waited
+        for. The mark is never closed, so after one the session keeps tracking.
+
+        Entries are dropped with the listeners: nothing would see them end.
+        Returns whether tracking was turned off.
+        """
+        if not self._inflight_tracking or self._network_clean_explicit_mark is not None:
+            return False
+        self._inflight_tracking = False
+        for page, handlers in list(self._tracked_pages.items()):
+            for event, handler in handlers:
+                try:
+                    page.remove_listener(event, handler)
+                except Exception as exc:
+                    # A closed page has no listeners left to remove.
+                    log.debug("octowright.session.inflight_listener_remove_failed", event=event, error=repr(exc))
+        self._tracked_pages.clear()
+        self._inflight_requests.clear()
+        self._navigating_frames.clear()
+        return True
+
     def _track_page_requests(self, page: Any) -> None:
         if page in self._tracked_pages:
             return
-        self._tracked_pages.add(page)
-        page.on("request", lambda request: self._handle_request_started(request, page))
-        page.on("requestfinished", self._handle_request_finished)
-        page.on("framenavigated", lambda frame: self._handle_frame_navigated(frame, page))
-        page.on("framedetached", self._forget_frame_requests)
+        handlers: list[tuple[str, Any]] = [
+            ("request", lambda request: self._handle_request_started(request, page)),
+            ("requestfinished", self._handle_request_finished),
+            ("framenavigated", lambda frame: self._handle_frame_navigated(frame, page)),
+            ("framedetached", self._forget_frame_requests),
+        ]
+        # Kept per page so disable_inflight_tracking can remove exactly these.
+        self._tracked_pages[page] = handlers
+        for event, handler in handlers:
+            page.on(event, handler)
 
     def _handle_request_started(self, request: Any, page: Any) -> None:
         if request.resource_type in LONG_LIVED_RESOURCE_TYPES:

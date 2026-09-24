@@ -41,6 +41,9 @@ class _Page:
     def on(self, event: str, handler: Any) -> None:
         self.handlers.setdefault(event, []).append(handler)
 
+    def remove_listener(self, event: str, handler: Any) -> None:
+        self.handlers[event].remove(handler)
+
     def is_closed(self) -> bool:
         return False
 
@@ -154,6 +157,86 @@ async def test_a_macro_that_asserts_enables_tracking_before_its_first_step(
     monkeypatch.setattr(execution, "_dispatch_one", _recording_dispatch(session, seen))
     await execution.run_macro(session, "outer", {"inner": "verify"})
     assert seen and seen[0] is True
+
+
+# --- tracking switches off when the run that needed it ends -------------------------------
+
+
+_LIFECYCLE = ("request", "requestfinished", "framenavigated", "framedetached")
+
+
+def _tracked_page(session: BrowserSession) -> _Page:
+    page = _Page()
+    session.pages.append(page)  # type: ignore[arg-type]
+    _wire_listeners(session, page)
+    return page
+
+
+@pytest.mark.anyio
+async def test_a_run_that_enabled_tracking_turns_it_off_when_it_ends(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _tracked_page(session)
+    _load(monkeypatch, {"verify": [{"action": "expect_network_clean", "settle_timeout_ms": 0}]})
+    await execution.run_macro(session, "verify")
+    assert not session._inflight_tracking
+    assert not any(page.handlers.get(event) for event in _LIFECYCLE)
+    # The failure counters were never tracking's to remove.
+    assert page.handlers["requestfailed"] and page.handlers["pageerror"]
+
+
+@pytest.mark.anyio
+async def test_a_failed_run_turns_tracking_off_too(session: BrowserSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    _tracked_page(session)
+    _load(
+        monkeypatch,
+        {
+            "m": [
+                {"action": "expect_network_clean", "settle_timeout_ms": 0},
+                {"action": "expect_url", "url": "https://elsewhere.test/"},
+            ]
+        },
+    )
+    with pytest.raises(RuntimeError):
+        await execution.run_macro(session, "m")
+    assert not session._inflight_tracking
+
+
+@pytest.mark.anyio
+async def test_an_open_mark_keeps_tracking_on_across_runs(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A verify macro with since="mark" judges requests the journey started, between runs."""
+    page = _tracked_page(session)
+    _load(monkeypatch, {"journey": [{"action": "mark_network_clean"}]})
+    await execution.run_macro(session, "journey")
+    assert session._inflight_tracking and page.handlers["request"]
+
+
+@pytest.mark.anyio
+async def test_turning_off_forgets_requests_it_can_no_longer_see_end(session: BrowserSession) -> None:
+    page = _tracked_page(session)
+    session.enable_inflight_tracking()
+    page.fire("request", _request(frame=page.main_frame))
+    assert session.pending_requests() == 1
+    assert session.disable_inflight_tracking() is True
+    assert session.pending_requests() == 0
+
+
+def test_re_enabling_after_off_subscribes_once(session: BrowserSession) -> None:
+    page = _tracked_page(session)
+    session.enable_inflight_tracking()
+    session.disable_inflight_tracking()
+    session.enable_inflight_tracking()
+    assert len(page.handlers["request"]) == 1
+
+
+def test_a_page_that_refuses_removal_does_not_stop_the_rest(session: BrowserSession) -> None:
+    closed, open_ = _tracked_page(session), _tracked_page(session)
+    session.enable_inflight_tracking()
+    closed.remove_listener = MagicMock(side_effect=RuntimeError("Target closed"))  # type: ignore[method-assign]
+    assert session.disable_inflight_tracking() is True
+    assert not open_.handlers["request"]
 
 
 def _recording_dispatch(session: BrowserSession, seen: list[bool]) -> Any:

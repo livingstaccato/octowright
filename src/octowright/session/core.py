@@ -13,7 +13,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 from provide.telemetry import get_logger
@@ -245,7 +245,9 @@ class BrowserSession(
     # objects, which a session that never asks should not pay for.
     _inflight_requests: dict[Any, Any] = field(default_factory=dict, repr=False)
     _inflight_tracking: bool = False
-    _tracked_pages: WeakSet[Page] = field(default_factory=WeakSet, repr=False)
+    _tracked_pages: WeakKeyDictionary[Page, list[tuple[str, Any]]] = field(
+        default_factory=WeakKeyDictionary, repr=False
+    )
     # Frames with a navigation request since their last commit, to their page:
     # what tells a cross-document commit from a same-document one.
     _navigating_frames: dict[Any, Any] = field(default_factory=dict, repr=False)

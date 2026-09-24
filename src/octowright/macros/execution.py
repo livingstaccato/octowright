@@ -675,6 +675,11 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
+        # Pass or fail, the run that needed request tracking is over; an open
+        # mark_network_clean window keeps it on for the verify macro after it.
+        disable_tracking = getattr(session, "disable_inflight_tracking", None)
+        if disable_tracking is not None:
+            disable_tracking()
         elapsed_s = await _finish_macro_run(
             session,
             name=name,
