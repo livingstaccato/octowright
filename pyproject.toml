@@ -414,6 +414,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_no_text_scan.py",
     "tests/test_network_clean_window.py",
     "tests/test_network_inflight_tracking.py",
+    "tests/test_macro_header_credentials_own_site.py",
+    "tests/test_macro_no_text_element_limit.py",
     "tests/test_macro_assertion_privacy.py",
     "tests/test_durable_page_content_scrub.py",
     "tests/test_markdown_cache_scrubs_macro_secrets.py",

@@ -610,11 +610,7 @@ async def _run_macro_impl(
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args, trusted_hosts=own_site_hosts(session))
-    # Before the first step, so the requests the journey starts are the ones
-    # expect_network_clean waits for; a run that never asserts pays nothing.
-    enable_tracking = getattr(session, "enable_inflight_tracking", None)
-    if enable_tracking is not None and actions_assert_network_clean(actions, load_macro, substitute):
-        enable_tracking()
+    _start_request_tracking(session, actions)
 
     executed = 0
     skipped = 0
@@ -675,11 +671,7 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
-        # Pass or fail, the run that needed request tracking is over; an open
-        # mark_network_clean window keeps it on for the verify macro after it.
-        disable_tracking = getattr(session, "disable_inflight_tracking", None)
-        if disable_tracking is not None:
-            disable_tracking()
+        _end_request_tracking(session)
         elapsed_s = await _finish_macro_run(
             session,
             name=name,
@@ -698,6 +690,22 @@ async def _run_macro_impl(
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
     }
+
+
+def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]]) -> None:
+    """Before the first step, so the requests the journey starts are the ones
+    expect_network_clean waits for; a run that never asserts pays nothing."""
+    enable_tracking = getattr(session, "enable_inflight_tracking", None)
+    if enable_tracking is not None and actions_assert_network_clean(actions, load_macro, substitute):
+        enable_tracking()
+
+
+def _end_request_tracking(session: SessionLike) -> None:
+    """Pass or fail, the run that needed request tracking is over; an open
+    mark_network_clean window keeps it on for the verify macro after it."""
+    disable_tracking = getattr(session, "disable_inflight_tracking", None)
+    if disable_tracking is not None:
+        disable_tracking()
 
 
 async def run_sequence(
