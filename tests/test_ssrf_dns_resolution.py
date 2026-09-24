@@ -31,9 +31,7 @@ def _answers(*addresses: str) -> Any:
 
     def fake(host: str, *_args: Any, **_kwargs: Any) -> list[Any]:
         calls.append(host)
-        return [
-            (socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 0)) for a in addresses
-        ]
+        return [(socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 0)) for a in addresses]
 
     fake.calls = calls  # type: ignore[attr-defined]
     return fake

@@ -146,7 +146,8 @@ def _client_redirect(target: str) -> str:
     attr = html.escape(target, quote=True)
     # json.dumps leaves "<" alone, so a "</script>" in the Location would close the tag.
     literal = json.dumps(target).replace("<", "\\u003c")
-    return f'<!doctype html><meta http-equiv="refresh" content="0;url={attr}"><script>location.replace({literal})</script>'
+    refresh = f'<meta http-equiv="refresh" content="0;url={attr}">'
+    return f"<!doctype html>{refresh}<script>location.replace({literal})</script>"
 
 
 def _get_overrides(request: Any) -> dict[str, Any]:

@@ -133,8 +133,8 @@ def test_inline_leader_can_still_opt_out(monkeypatch: pytest.MonkeyPatch) -> Non
 class _Stateless:
     """A connection on an embedder's own app: no pairing state attached."""
 
-    class app:  # noqa: N801 - mirrors connection.app
-        class state:  # noqa: N801
+    class app:
+        class state:
             pass
 
     headers: Any = None

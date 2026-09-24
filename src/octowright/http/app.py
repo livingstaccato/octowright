@@ -152,11 +152,14 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     """
     global _session_tracker
 
-    # Pairing credentials belong to this app instance. A new leader/app gets a
-    # fresh state and therefore invalidates every prior code and bearer.
+    import secrets as _secrets
+
     from octowright.http import state as _state_module
     from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState
 
+    # Pairing credentials belong to this app instance. A new leader/app gets a
+    # fresh state and therefore invalidates every prior code and bearer.
+    #
     # A tokenless app -- an inline --no-singleton leader, which has no
     # lockfile to publish a token in -- still gets an anchor: a random one,
     # kept only in memory. Nothing outside this process can present it, but
@@ -164,8 +167,6 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # (octowright_dashboard_url, and the URL `serve` prints at inline
     # startup). Without it the gate had nothing to check against and let
     # every local user read recordings and drive sessions.
-    import secrets as _secrets
-
     dashboard_pairing = DashboardPairingState(
         expected_token=mcp_token or _secrets.token_urlsafe(32), http_mint=bool(mcp_token)
     )
