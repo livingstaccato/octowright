@@ -14,9 +14,10 @@ empty block rather than replacing the real error.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit, urlunsplit
 
 from provide.telemetry import get_logger
+
+from octowright.artifacts.digest import sanitize_url
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -43,19 +44,10 @@ def payload_url(url: Any) -> Any:
     id or an app-generated token rides the query string, and none of those is a
     macro argument, so the argument scrubber never knew to remove it. The path
     is what identifies the failing endpoint; the rest is rarely the diagnosis.
+    The rule is the macro digest's (`digest.sanitize_url`), so the two cannot
+    drift; a non-string is passed through untouched.
     """
-    if not isinstance(url, str):
-        return url
-    try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        if ":" in host:
-            host = f"[{host}]"
-        netloc = f"{host}:{parts.port}" if parts.port else host
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
-    except ValueError:
-        # Unparsable: keep only what precedes any query/fragment/userinfo marker.
-        return url.split("?", 1)[0].split("#", 1)[0].rsplit("@", 1)[-1]
+    return sanitize_url(url) if isinstance(url, str) else url
 
 
 def failed_requests_tail(session: SessionLike) -> list[dict[str, Any]]:

@@ -83,6 +83,13 @@ def test_an_unparsable_url_is_dropped_to_nothing_sensitive() -> None:
     assert "token" not in row["url"]
 
 
+@pytest.mark.parametrize("url", ["http://[::1/bad?token=abc", "https://user:pw@:99999/x", "https://s3cr3t@/x"])
+def test_a_url_with_no_usable_host_is_reported_as_invalid(url: str) -> None:
+    """A netloc with no host or a bad port is not guessed at; the macro digest reports it the same way."""
+    [row] = _failed_requests_tail(_rows(url))
+    assert row["url"] == "(invalid-url)"
+
+
 def test_the_session_deque_itself_is_not_rewritten() -> None:
     session = _rows("https://api.test/x?token=abc")
     _failed_requests_tail(session)
