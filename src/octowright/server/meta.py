@@ -213,7 +213,10 @@ def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
     # The fragment never leaves the browser during navigation.
     result["url"] = f"{base_url.rstrip('/')}/pair#{code}"
     result["pairing_expires_in"] = int(MCP_PAIR_CODE_TTL_SECONDS)
-    result["pairing_hint"] = "single-use link; open it before it expires, or run `octowright dashboard` for a fresh one"
+    result["pairing_hint"] = (
+        "single-use link; open it before it expires, or call octowright_dashboard_url "
+        "(or run `octowright dashboard` against a daemon leader) for a fresh one"
+    )
 
 
 @mcp.tool(

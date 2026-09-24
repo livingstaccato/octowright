@@ -454,6 +454,20 @@ def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _dashboard_pairing_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route tests exercise route behaviour, not the dashboard credential gate.
+
+    Pairing ships ON and, since an inline (tokenless) app got a random anchor,
+    is enforced on every app ``build_app`` makes -- before that, the hundreds
+    of route tests that build a tokenless app passed only because the gate
+    fell open for them, which was the bug. Tests that pin the gate itself
+    ``delenv`` or set this explicitly (``test_dashboard_pairing_default.py``
+    and friends), so a real default-ON regression still fails there.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "off")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_dashboard_pairing_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep one test's built app from lending its pairing store to the next.
 

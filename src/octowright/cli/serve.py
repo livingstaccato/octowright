@@ -429,6 +429,32 @@ def _reap_orphan_session_dirs(no_singleton: bool) -> None:
         _log.info("octowright.session_dirs.reaped", count=len(reaped["removed"]))
 
 
+def _echo_inline_pairing_url(host: str, port: int) -> None:
+    """Print a single-use dashboard pairing URL for an inline leader.
+
+    ``octowright dashboard`` mints through the lockfile's capability token, and
+    an inline leader writes no lockfile, so without this line the only way in
+    would be an MCP client calling ``octowright_dashboard_url``. Stderr, like
+    every other human-facing line here: stdout is the MCP stdio transport.
+    """
+    from octowright.cli.dashboard import _normalized_dashboard_host
+    from octowright.http import state as _http_state
+    from octowright.http.pairing import MCP_PAIR_CODE_TTL_SECONDS, pairing_required
+
+    store = _http_state.dashboard_pairing_store()
+    if not pairing_required() or store is None:
+        return
+    url_host, _loopback = _normalized_dashboard_host(host)
+    # The MCP window, not the CLI's 60s: this line usually lands in an MCP
+    # client's server log, which nobody reads within a minute.
+    code = store.mint_code(ttl=MCP_PAIR_CODE_TTL_SECONDS)
+    click.echo(
+        f"octowright: dashboard pairing URL (single-use, expires in {int(MCP_PAIR_CODE_TTL_SECONDS)}s; "
+        f"call octowright_dashboard_url for a fresh one): http://{url_host}:{port}/pair#{code}",
+        err=True,
+    )
+
+
 async def _run_leader(
     *,
     http_host: str | None,
@@ -480,7 +506,10 @@ async def _run_leader(
     # Generate the bridge capability token once: the SAME value is written to the
     # 0600 lockfile (for the follower to read) and handed to the /mcp guard. A
     # follower (singleton) leader gets a fresh token; --no-singleton (inline)
-    # leaves it empty so the gate is a no-op.
+    # leaves it empty so the /mcp gate is a no-op -- there is no follower to
+    # present one. The DASHBOARD is not left open by that: build_app gives a
+    # tokenless app a random in-memory pairing anchor, and the startup line
+    # below is how an inline operator gets in.
     import secrets as _secrets
 
     leader_token = "" if no_singleton else _secrets.token_urlsafe(32)
@@ -490,6 +519,7 @@ async def _run_leader(
 
         set_actual_http_port(port)
         if no_singleton:
+            _echo_inline_pairing_url(host, port)
             return
         info = _sn.make_leader_info(host, port, token=leader_token)
         _sn.write_lock(info)

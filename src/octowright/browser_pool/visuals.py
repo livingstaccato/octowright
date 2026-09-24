@@ -340,11 +340,11 @@ async def wire_init_scripts(
             .replace("__INSTANCE_ID__", _json.dumps(instance_id))
             # The overlay's links carry no pairing code and cannot be given
             # one -- see the note at their construction in badge.js. This is
-            # the policy only; whether the gate is actually enforced also
-            # depends on the leader having a capability token to pair against
-            # (`pairing_anchor_available`), which is app state this process
-            # has no handle on here. Over-warning costs one grey line; not
-            # warning costs a link that looks broken.
+            # the policy only; every app build_app makes has an anchor to
+            # enforce it against (an inline leader's is random), but an
+            # embedder's app may not, and that is app state this process has
+            # no handle on here. Over-warning costs one grey line; not warning
+            # costs a link that looks broken.
             .replace("__PAIRING_REQUIRED__", _json.dumps(pairing_required()))
         )
         await bounded(

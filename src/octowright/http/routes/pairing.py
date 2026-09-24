@@ -27,11 +27,15 @@ async def pair_mint(request: Request) -> Response:
     same credential the follower presents on /mcp — so only a process that can
     read the 0600 lockfile (the `octowright dashboard` CLI) can mint."""
     pairing = dashboard_pairing_state(request)
-    if pairing is None or not pairing.token_configured:
-        # Inline (--no-singleton) leader: no lockfile, no token — there is no
-        # authenticated minter, so refuse rather than fail open.
+    if pairing is None or not pairing.token_configured or not pairing.http_mint:
+        # Inline (--no-singleton) leader: no lockfile, so no token anyone
+        # outside the process could present here. It mints in-process instead.
         return JSONResponse(
-            {"error": "pairing unavailable: this leader has no capability token (inline/--no-singleton mode)"},
+            {
+                "error": "pairing unavailable over HTTP: this leader has no published capability token "
+                "(inline/--no-singleton mode); use the pairing URL it printed at startup or the "
+                "octowright_dashboard_url MCP tool"
+            },
             status_code=503,
         )
     if not pairing.capability_token_ok(request.headers.get("x-octowright-token")):
