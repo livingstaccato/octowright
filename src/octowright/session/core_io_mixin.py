@@ -8,7 +8,9 @@ from __future__ import annotations
 import ast
 import base64
 import contextlib
+import html as html_lib
 import importlib
+import io
 import json
 import os
 import re
@@ -75,6 +77,26 @@ class SessionIOMixin(SessionLike):
     _pending_markdown_capture: Any | None
     _last_markdown_capture_error: Exception | None
 
+    def _scrub_websocket_entry(self, entry: dict[str, Any]) -> None:
+        """Keep a macro's credential values out of the sidecar, like the recorder does.
+
+        A binary frame cannot be edited byte-for-byte safely, so one holding a
+        value is not stored at all; its size stays, and ``payload_redacted``
+        says why the bytes are missing.
+        """
+        scrub = self.durable_text_scrubber
+        if scrub is None:
+            return
+        for key in ("url", "payload_preview", "payload_text"):
+            if isinstance(entry.get(key), str):
+                entry[key] = scrub(entry[key])
+        encoded = entry.get("payload_b64")
+        if isinstance(encoded, str):
+            decoded = base64.b64decode(encoded).decode("utf-8", errors="replace")
+            if scrub(decoded) != decoded:
+                del entry["payload_b64"]
+                entry["payload_redacted"] = True
+
     def _append_websocket_cache(
         self,
         *,
@@ -123,6 +145,7 @@ class SessionIOMixin(SessionLike):
             )
             if payload_b64 is not None:
                 entry["payload_b64"] = payload_b64
+        self._scrub_websocket_entry(entry)
         # Keep a single append-mode file handle for the session: high-frequency
         # WS feeds (game servers, market data) can fire thousands of frames
         # per second, and re-opening for every frame burns syscalls and inode
@@ -194,24 +217,10 @@ class SessionIOMixin(SessionLike):
         try:
             import inspect
 
-            markitdown_mod = importlib.import_module("markitdown")
-            converter = markitdown_mod.MarkItDown()
-            rendered = converter.convert(html)
+            rendered = _markitdown_convert(importlib.import_module("markitdown"), html)
             if inspect.isawaitable(rendered):
                 rendered = await rendered
-            if isinstance(rendered, str):
-                return rendered
-            if rendered is None:
-                raise ValueError("markitdown conversion returned empty result")
-            for field in ("text", "markdown", "text_content"):
-                candidate = getattr(rendered, field, None)
-                if candidate:
-                    if callable(candidate):
-                        candidate = candidate()
-                    text = str(candidate)
-                    if text.strip():
-                        return text
-            return str(rendered)
+            return _rendered_markdown(rendered)
         except Exception as exc:
             # markitdown is optional. Log the failure so a real bug (e.g. a
             # bad markitdown release) is visible during development, but
@@ -223,7 +232,9 @@ class SessionIOMixin(SessionLike):
         clean = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", html)
         clean = re.sub(r"<[^>]+>", " ", clean)
         clean = re.sub(r"\n{3,}", "\n\n", clean)
-        return clean.strip()
+        # Decoded, like the text markitdown produces: the cache is for reading,
+        # and a scrubber matches a credential's raw spelling, not "&amp;".
+        return html_lib.unescape(clean).strip()
 
     async def _durable_markdown(self, html: str) -> str:
         """Markdown for the on-disk cache, with any macro credential scrubbed out."""
@@ -646,3 +657,31 @@ class SessionIOMixin(SessionLike):
         # this repeatedly pushed out live sockets instead.
         self._register_websocket(socket_id, url, binding_id)
         self.recorder.record("websocket_opened", id=socket_id, url=url)
+
+
+def _markitdown_convert(markitdown_mod: Any, html: str) -> Any:
+    converter = markitdown_mod.MarkItDown()
+    stream_info = getattr(markitdown_mod, "StreamInfo", None)
+    if stream_info is not None and hasattr(converter, "convert_stream"):
+        # convert(str) treats the string as a path or URI (measured on
+        # markitdown 0.1.8: FileNotFoundError), so it never converted HTML at
+        # all; convert_stream is the HTML-string API.
+        return converter.convert_stream(io.BytesIO(html.encode("utf-8")), stream_info=stream_info(extension=".html"))
+    return converter.convert(html)
+
+
+def _rendered_markdown(rendered: Any) -> str:
+    """The text of whatever a markitdown version returned."""
+    if isinstance(rendered, str):
+        return rendered
+    if rendered is None:
+        raise ValueError("markitdown conversion returned empty result")
+    for field in ("text", "markdown", "text_content"):
+        candidate = getattr(rendered, field, None)
+        if candidate:
+            if callable(candidate):
+                candidate = candidate()
+            text = str(candidate)
+            if text.strip():
+                return text
+    return str(rendered)

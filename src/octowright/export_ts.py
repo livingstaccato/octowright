@@ -14,6 +14,7 @@ import json
 from collections.abc import Callable
 
 from octowright._export_shared import (
+    _UNSUPPORTED,
     _has_semantic_locator,
     _launch_viewport,
     _safe_int,
@@ -332,6 +333,14 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     ),
     "expect_js": lambda e: (
         f"  if (!(await page.evaluate({json.dumps(e['expression'])}))) throw new Error('JS mismatch');"
+    ),
+    # Fail closed, as the Python exporter does: macro_export_cli runs both.
+    "expect_network_clean": lambda _e: (
+        f"  throw new Error({json.dumps(_UNSUPPORTED.format(kind='expect_network_clean'))});"
+    ),
+    "expect_no_text": lambda _e: f"  throw new Error({json.dumps(_UNSUPPORTED.format(kind='expect_no_text'))});",
+    "mark_network_clean": lambda _e: (
+        "  // mark_network_clean: only meaningful with expect_network_clean (see macro_export_cli)"
     ),
     "open_url": _ts_open_url,
     "switch_page": _ts_switch_page,

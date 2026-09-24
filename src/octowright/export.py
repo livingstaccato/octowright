@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from octowright._export_shared import (
+    _UNSUPPORTED,
     _has_semantic_locator,
     _launch_viewport,
     _safe_int,
@@ -323,6 +324,15 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     ),
     "expect_js": lambda e: (
         f"        if not await page.evaluate({e['expression']!r}): raise RuntimeError('JS mismatch')"
+    ),
+    # Fail closed: a silently dropped security check lets the script pass on a
+    # leaking or broken page. macro_export_cli runs both.
+    "expect_network_clean": lambda _e: (
+        f"        raise RuntimeError({_UNSUPPORTED.format(kind='expect_network_clean')!r})"
+    ),
+    "expect_no_text": lambda _e: f"        raise RuntimeError({_UNSUPPORTED.format(kind='expect_no_text')!r})",
+    "mark_network_clean": lambda _e: (
+        "        # mark_network_clean: only meaningful with expect_network_clean (see macro_export_cli)"
     ),
     "open_url": _py_open_url,
     "switch_page": _py_switch_page,

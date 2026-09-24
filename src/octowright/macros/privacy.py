@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import functools
+import html
 import json
 import os
 import re
@@ -329,6 +331,10 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
         value,
         json.dumps(value, ensure_ascii=True)[1:-1],
         json.dumps(value, ensure_ascii=False)[1:-1],
+        # Serialized page HTML (page.content(), a raw capture) spells & < > " '
+        # as entities, so a value containing them no longer matches its raw form.
+        html.escape(value, quote=True),
+        html.escape(value, quote=False),
     }
     frontier = set(variants)
     for _ in range(_MAX_ENCODING_DEPTH):
@@ -371,7 +377,16 @@ def sensitive_value_variants(values: Iterable[str]) -> tuple[str, ...]:
 _WORD_BOUNDED_BELOW = 4
 
 
-def _scrub_text(text: str, sensitive_values: tuple[str, ...], marker: str) -> str:
+@functools.lru_cache(maxsize=64)
+def _scrub_patterns(sensitive_values: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+    """The compiled patterns for one ledger state, in the order they must apply.
+
+    Cached because the durable scrubber runs on every capture of a session that
+    admitted a credential, and the variants (JSON, HTML, percent-encoded to a
+    depth) and their regexes were re-derived on each call. The ledger only
+    grows, so each state is compiled once.
+    """
+    patterns: list[re.Pattern[str]] = []
     for sensitive in sensitive_values:
         for variant in _serialized_variants(sensitive):
             pattern = (
@@ -380,8 +395,13 @@ def _scrub_text(text: str, sensitive_values: tuple[str, ...], marker: str) -> st
                 else re.escape(variant)
             )
             # Percent-encoded spellings vary in hex case between producers.
-            flags = re.IGNORECASE if "%" in variant else 0
-            text = re.sub(pattern, marker, text, flags=flags)
+            patterns.append(re.compile(pattern, re.IGNORECASE if "%" in variant else 0))
+    return tuple(patterns)
+
+
+def _scrub_text(text: str, sensitive_values: tuple[str, ...], marker: str) -> str:
+    for pattern in _scrub_patterns(tuple(sensitive_values)):
+        text = pattern.sub(marker, text)
     return text
 
 

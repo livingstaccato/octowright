@@ -69,3 +69,10 @@ def _validate_dialog_policy(policy: object, *, action: str = "set_dialog_policy"
             f"export: action {action!r} has unsupported policy {policy!r}; must be one of {_DIALOG_POLICIES}"
         )
     return str(policy)
+
+
+#: What an exported script says at a step it cannot run, instead of dropping it.
+_UNSUPPORTED = (
+    "{kind} is not supported by browser_export_script: it needs state a linear script "
+    "does not keep. Export with macro_export_cli, which runs it"
+)
