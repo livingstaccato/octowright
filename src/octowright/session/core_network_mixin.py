@@ -39,6 +39,12 @@ log = get_logger(__name__)
 #: 50KB stack trace -- from riding the MCP transport. Override with
 #: OCTOWRIGHT_NETWORK_BODY_MAX_BYTES; a falsey token disables capture entirely.
 NETWORK_BODY_MAX_BYTES_DEFAULT = 2048
+#: Declared ``Content-Length`` above which a failed body is not read at all.
+#: ``response.body()`` materialises the WHOLE body before the cap above slices
+#: it, so a same-origin endpoint answering 500 with a gigabyte forced a
+#: gigabyte into the daemon. Deliberately far above the retained cap: an HTML
+#: error page is commonly tens of KB and its first 2 KiB is still worth having.
+RESPONSE_BODY_READ_MAX_BYTES = 1024 * 1024
 #: Uncaught page exceptions retained per session. Only the count reaches
 #: ``expect_network_clean``; the messages are kept for a human debugging.
 PAGE_ERROR_LIMIT = 200
@@ -103,6 +109,16 @@ def network_body_max_bytes() -> int:
     if value < 0:
         return NETWORK_BODY_MAX_BYTES_DEFAULT
     return value
+
+
+def _declared_length(response: Any) -> int | None:
+    """The response's ``Content-Length``, or ``None`` when absent or unparsable."""
+    headers = getattr(response, "headers", None)
+    raw = headers.get("content-length") if isinstance(headers, dict) else None
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _same_origin(candidate: str, page_url: str) -> bool:
@@ -239,6 +255,16 @@ class SessionNetworkMixin(SessionLike):
         anyone who could act on it -- and a missing body must degrade to
         today's behaviour, not to a broken response record.
         """
+        declared = _declared_length(response)
+        if declared is not None and declared > RESPONSE_BODY_READ_MAX_BYTES:
+            row["body_skipped"] = "too_large"
+            row["body_size"] = declared
+            return
+        # No Content-Length (a chunked response) means the size is unknown
+        # until read, and Playwright offers no ranged or streaming read of a
+        # response body, so such a body is still read whole and then capped.
+        # Content-Length also counts ENCODED bytes: a compressed body under the
+        # ceiling can decode larger. Both are accepted gaps.
         try:
             body = await response.body()
         except Exception as exc:

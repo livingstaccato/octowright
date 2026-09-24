@@ -27,6 +27,7 @@ from provide.telemetry import get_logger
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session import websocket_view
+from octowright.session._constants import CONSOLE_TEXT_MAX_CHARS, WEBSOCKET_FRAME_MAX_BYTES
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
@@ -63,6 +64,34 @@ def _websocket_max_bytes() -> int:
     except ValueError:
         return 0
     return value if value > 0 else 0
+
+
+def _console_text_fields(text: str) -> dict[str, Any]:
+    """The ``text`` of a console row, capped at ``CONSOLE_TEXT_MAX_CHARS``.
+
+    Applied before the row is appended or serialised, so an oversized message
+    costs its prefix, not its full size, everywhere downstream.
+    """
+    if len(text) <= CONSOLE_TEXT_MAX_CHARS:
+        return {"text": text}
+    return {
+        "text": f"{text[:CONSOLE_TEXT_MAX_CHARS]}…[truncated: {len(text)} chars]",
+        "text_truncated": True,
+        "text_length": len(text),
+    }
+
+
+def _raw_payload_size(payload: Any) -> int | None:
+    """A frame's size as received -- a lower bound on what storing it costs."""
+    if isinstance(payload, memoryview):
+        return payload.nbytes
+    if isinstance(payload, str) and _looks_like_binary_text(payload):
+        # A bytes repr ("b'\\x00...'") spends up to four chars per byte, and
+        # the sidecar stores the DECODED bytes, so only a quarter is certain.
+        return len(payload) // 4
+    if isinstance(payload, bytes | bytearray | str):
+        return len(payload)
+    return None
 
 
 if TYPE_CHECKING:
@@ -120,6 +149,22 @@ class SessionIOMixin(SessionLike):
             "url": url,
         }
         if payload is not None:
+            # Size first, before anything copies the payload: base64 alone is
+            # a 4/3 copy, and json.dumps another, so a check on the finished
+            # line (below) paid for a frame it then refused.
+            raw_size = _raw_payload_size(payload)
+            if raw_size is not None and self._ws_frame_cannot_fit(raw_size):
+                return
+            if raw_size is not None and _websocket_max_bytes() <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
+                # No ceiling configured: bound the one frame instead.
+                payload = (
+                    bytes(payload[:WEBSOCKET_FRAME_MAX_BYTES])
+                    if not isinstance(payload, str)
+                    else payload[:WEBSOCKET_FRAME_MAX_BYTES]
+                )
+                entry["payload_truncated"] = True
+                if payload_size is None:
+                    payload_size = raw_size
             entry["payload_preview"] = payload_preview or ""
             normalized_size = payload_size
             payload_b64 = None
@@ -163,21 +208,11 @@ class SessionIOMixin(SessionLike):
         # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS — imported at
         # module scope above so the hot path doesn't pay a sys.modules
         # lookup per frame.
-        if self.websocket_path is None:
-            self.websocket_path = self._websocket_cache_path()
-            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = getattr(self, "_websocket_fh", None)
         # One time.monotonic() per call, reused for both the elapsed-time
         # check and (on first write) the init timestamp / (on flush) the
         # new last_flush stamp.
         now = time.monotonic()
-        if fh is None:
-            fh = self.websocket_path.open("a", encoding="utf-8")
-            self._websocket_fh = fh
-            self._websocket_last_flush_ts = now
-            self._websocket_frames_since_flush = 0
-            self._websocket_bytes = 0
-            self._websocket_truncated = False
+        fh = self._websocket_cache_handle(now)
         line = json.dumps(entry, ensure_ascii=False) + "\n"
         if self._ws_over_ceiling(fh, len(line.encode("utf-8"))):
             return
@@ -195,7 +230,33 @@ class SessionIOMixin(SessionLike):
         else:
             self._websocket_frames_since_flush = frames
 
-    def _ws_over_ceiling(self, fh: Any, line_bytes: int) -> bool:
+    def _websocket_cache_handle(self, now: float) -> Any:
+        """The session's append handle on the sidecar, opened on first use."""
+        if self.websocket_path is None:
+            self.websocket_path = self._websocket_cache_path()
+            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = getattr(self, "_websocket_fh", None)
+        if fh is None:
+            fh = self.websocket_path.open("a", encoding="utf-8")
+            self._websocket_fh = fh
+            self._websocket_last_flush_ts = now
+            self._websocket_frames_since_flush = 0
+            self._websocket_bytes = 0
+            self._websocket_truncated = False
+        return fh
+
+    def _ws_frame_cannot_fit(self, raw_size: int) -> bool:
+        """Whether a frame of *raw_size* is refused by the ceiling before encoding.
+
+        The raw size is a lower bound on the stored line, so a frame this
+        refuses would have been refused anyway -- only now nothing was copied
+        to find out. Writes the one-time marker exactly as the late check does.
+        """
+        if _websocket_max_bytes() <= 0:
+            return False
+        return self._ws_over_ceiling(self._websocket_cache_handle(time.monotonic()), raw_size, reserve=False)
+
+    def _ws_over_ceiling(self, fh: Any, line_bytes: int, *, reserve: bool = True) -> bool:
         """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``. Return True if this frame
         must be dropped because the sidecar reached the ceiling, writing a
         one-time ``websocket_truncated`` marker on the edge. Off → always False."""
@@ -214,7 +275,8 @@ class SessionIOMixin(SessionLike):
             fh.flush()
             self._websocket_truncated = True
             return True
-        self._websocket_bytes += line_bytes
+        if reserve:
+            self._websocket_bytes += line_bytes
         return False
 
     async def _extract_markdown(self, html: str) -> str:
@@ -353,7 +415,7 @@ class SessionIOMixin(SessionLike):
 
     def attach_console(self) -> None:
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, "text": msg.text}
+            entry = {"level": msg.type, **_console_text_fields(msg.text)}
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
@@ -387,7 +449,7 @@ class SessionIOMixin(SessionLike):
 
         # Attach console listener so logs from the new tab are collected.
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, "text": msg.text, "page_index": page_index}
+            entry = {"level": msg.type, **_console_text_fields(msg.text), "page_index": page_index}
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
