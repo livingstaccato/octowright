@@ -15,7 +15,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import safe_screenshot
+from octowright.macros import failure_context, safe_screenshot
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.calls import (
     MAX_MACRO_CALL_DEPTH,
@@ -24,10 +24,6 @@ from octowright.macros.calls import (
     dispatch_plain_action,
 )
 from octowright.macros.descriptions import describe_action
-from octowright.macros.failure_context import MACRO_FAILURE_NETWORK_TAIL as MACRO_FAILURE_NETWORK_TAIL
-from octowright.macros.failure_context import MACRO_FAILURE_PAGE_ERROR_TAIL as MACRO_FAILURE_PAGE_ERROR_TAIL
-from octowright.macros.failure_context import failed_requests_tail as _failed_requests_tail
-from octowright.macros.failure_context import page_errors_tail
 from octowright.macros.privacy import (
     PrivacyLedger,
     assertion_text_args,
@@ -509,8 +505,8 @@ async def _build_failure_payload(
         fix_suggestion = None
         bundle["healing_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
     try:
-        failed_requests = _scrub_sensitive_values(_failed_requests_tail(session), sensitive_values)
-        page_errors = _scrub_sensitive_values(page_errors_tail(session), sensitive_values)
+        failed_requests = _scrub_sensitive_values(failure_context.failed_requests_tail(session), sensitive_values)
+        page_errors = _scrub_sensitive_values(failure_context.page_errors_tail(session), sensitive_values)
     except Exception as secondary:  # defensive around injected session implementations
         failed_requests, page_errors = [], []
         bundle["network_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)

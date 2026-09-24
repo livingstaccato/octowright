@@ -17,7 +17,8 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-from octowright.macros.execution import MACRO_FAILURE_NETWORK_TAIL, _failed_requests_tail
+from octowright.macros.failure_context import MACRO_FAILURE_NETWORK_TAIL
+from octowright.macros.failure_context import failed_requests_tail as _failed_requests_tail
 
 
 def _session(rows: list[dict[str, Any]]) -> MagicMock:

@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.defaults import REDACTED_ASSERTION_TEXT, REDACTED_INPUT_PLACEHOLDER
-from octowright.macros import execution
-from octowright.macros.execution import _failed_requests_tail
+from octowright.macros import execution, failure_context
+from octowright.macros.failure_context import failed_requests_tail as _failed_requests_tail
 from octowright.macros.lint import lint_macro
 from octowright.session.core import BrowserSession
 
@@ -146,7 +146,7 @@ async def test_page_errors_in_the_payload_are_bounded_and_scrubbed(
     with pytest.raises(RuntimeError) as excinfo:
         await execution.run_macro(session, "m", {"password": SECRET})
     errors = excinfo.value.args[0]["page_errors"]
-    assert len(errors) == execution.MACRO_FAILURE_PAGE_ERROR_TAIL
+    assert len(errors) == failure_context.MACRO_FAILURE_PAGE_ERROR_TAIL
     assert SECRET not in json.dumps(errors)
 
 
@@ -335,8 +335,6 @@ def test_a_failing_failure_context_producer_is_logged_not_silent(
     monkeypatch: pytest.MonkeyPatch, producer: str
 ) -> None:
     from types import SimpleNamespace
-
-    from octowright.macros import failure_context
 
     events: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(failure_context, "log", SimpleNamespace(debug=lambda event, **kw: events.append((event, kw))))
