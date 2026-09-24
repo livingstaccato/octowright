@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import SplitResult, urlsplit
 
 from octowright.defaults import new_tab_url
-from octowright.macros.privacy import is_credential_key
+from octowright.macros.privacy import PLACEHOLDER_RE, is_credential_key
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -226,7 +226,7 @@ def _substitute_value(
                 )
             return str(args[key])
 
-        return re.sub(r"\{\{([^}]+)\}\}", replacer, value)
+        return PLACEHOLDER_RE.sub(replacer, value)
     if isinstance(value, dict):
         return {
             key: _substitute_value(

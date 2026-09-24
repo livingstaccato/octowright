@@ -269,9 +269,12 @@ def _collect_classified_values(
     return set()
 
 
-#: What ``substitute`` expands, so the argument names a macro feeds into a
-#: field are read with the same grammar the substitution uses.
-_PLACEHOLDER_RE = re.compile(r"\{\{([^}]+)\}\}")
+#: The ``{{name}}`` placeholder grammar: what ``substitution.substitute``
+#: expands, what the linters and this module read argument names with, and
+#: (rendered as the string) what an exported macro CLI substitutes. Defined
+#: here rather than in ``substitution`` because that module imports this one.
+PLACEHOLDER_PATTERN = r"\{\{([^}]+)\}\}"
+PLACEHOLDER_RE = re.compile(PLACEHOLDER_PATTERN)
 
 
 def assertion_text_args(actions: Any) -> frozenset[str]:
@@ -294,7 +297,7 @@ def assertion_text_args(actions: Any) -> frozenset[str]:
                 walk(item)
         elif isinstance(node, dict):
             if node.get("action") == "expect_no_text" and isinstance(node.get("text"), str):
-                names.update(_PLACEHOLDER_RE.findall(node["text"]))
+                names.update(PLACEHOLDER_RE.findall(node["text"]))
             for item in node.values():
                 walk(item)
 

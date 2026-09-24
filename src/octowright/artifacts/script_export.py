@@ -25,6 +25,7 @@ from octowright.macros.privacy import (
     DEPLURALIZE_MIN_LENGTH,
     FIELD_NAME_PATTERN,
     IDENTITY_TOKEN_TOKENS,
+    PLACEHOLDER_PATTERN,
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
@@ -71,7 +72,6 @@ def render_macro_cli(
     parser_lines = _parser_lines(parameters, args, include_evidence)
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
-    placeholder_re = r"\{\{([^}]+)\}\}"
     evidence_helpers, evidence_setup, _evidence_close = _evidence_render_parts(include_evidence)
     state_helpers = STATE_HELPERS
     # 20 spaces: inside `for ... in enumerate(ACTIONS)` inside the raw-action
@@ -124,7 +124,7 @@ _TIER_RANK = {{"contextual": 1, "identity": 2, "credential": 3}}
 _MAX_ENCODING_DEPTH = 3
 _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
-_PLACEHOLDER_RE = {placeholder_re!r}
+_PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 

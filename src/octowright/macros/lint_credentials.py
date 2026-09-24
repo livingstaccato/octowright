@@ -17,8 +17,9 @@ from __future__ import annotations
 import math
 import re
 
+from octowright.macros.privacy import PLACEHOLDER_RE
+
 _EMAIL_RE = re.compile(r"^[\w.+-]+@[\w-]+\.\w+$")
-_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 _HAS_DIGIT = re.compile(r"\d")
 _HAS_LETTER = re.compile(r"[A-Za-z]")
 _HAS_SPECIAL = re.compile(r"[^A-Za-z0-9]")
@@ -108,4 +109,4 @@ def _looks_like_email(s: str) -> bool:
 
 
 def _is_placeholder(s: str) -> bool:
-    return bool(_PLACEHOLDER_RE.search(s))
+    return bool(PLACEHOLDER_RE.search(s))
