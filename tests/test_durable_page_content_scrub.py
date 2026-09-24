@@ -108,3 +108,29 @@ async def test_capture_create_scrubs_what_it_saves(tmp_path: Path, monkeypatch: 
     )
     await _tools.capture_create("abc", source="text")
     assert SECRET not in str(saved["content"]) and REDACTED in str(saved["content"])
+
+
+# --- an installed scrubber with nothing to scrub costs nothing ---------------------------
+
+
+def test_an_empty_ledger_does_not_decode_binary_frames(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Once any macro ran, the scrubber stays installed; with no values it must not decode every frame."""
+    from octowright.session import core_io_mixin
+
+    install_sensitive_recorder(session, [])
+    calls: list[object] = []
+    real = core_io_mixin.base64.b64decode
+    monkeypatch.setattr(core_io_mixin.base64, "b64decode", lambda data: calls.append(data) or real(data))
+    entry = {"url": "wss://x.test/", "payload_b64": "AAECAw=="}
+    session._scrub_websocket_entry(entry)
+    assert calls == [] and entry == {"url": "wss://x.test/", "payload_b64": "AAECAw=="}
+
+    # ...and the same scrubber decodes and scrubs once the ledger holds a value.
+    session.durable_text_scrubber.ledger.add([SECRET])  # type: ignore[union-attr]
+    import base64
+
+    entry = {"url": "wss://x.test/", "payload_b64": base64.b64encode(SECRET.encode()).decode()}
+    session._scrub_websocket_entry(entry)
+    assert len(calls) == 1 and entry.get("payload_redacted") is True

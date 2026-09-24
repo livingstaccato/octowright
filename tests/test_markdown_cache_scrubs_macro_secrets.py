@@ -161,3 +161,108 @@ def test_scrub_patterns_are_compiled_once_per_ledger_state() -> None:
         privacy.scrub_sensitive_values(f"a {SECRET} b", values)
     info = privacy._scrub_patterns.cache_info()
     assert info.misses == 1 and info.hits == 4
+
+
+# --- markitdown's own escaping ------------------------------------------------------------
+
+MD_SECRET = "Secret_pa*ss_1"  # pragma: allowlist secret -- a fixture, never a real credential
+MD_ESCAPED = "Secret\\_pa\\*ss\\_1"
+
+
+def test_the_scrubber_knows_the_markdown_escaped_spelling() -> None:
+    from octowright.macros.privacy import scrub_sensitive_values
+
+    scrubbed = scrub_sensitive_values(f"Your password is {MD_ESCAPED}.", (MD_SECRET,))
+    assert MD_SECRET not in scrubbed and MD_ESCAPED not in scrubbed and REDACTED in scrubbed
+
+
+@pytest.mark.anyio
+async def test_real_markitdown_output_is_scrubbed(session: BrowserSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through the real converter, which escapes ``_`` and ``*`` (measured on markitdown 0.1.8).
+
+    markitdown is an optional runtime dependency and not in the dev groups, so
+    this skips on a plain checkout; run it with ``uv run --with markitdown``.
+    """
+    pytest.importorskip("markitdown")
+    from octowright.session import core_io_mixin
+
+    monkeypatch.setattr(core_io_mixin, "_MARKITDOWN_CONVERTER", None, raising=False)
+    page = f"<html><body><h1>Account</h1><p>Your password is {MD_SECRET} today.</p></body></html>"
+    # Proof the escape is real, not assumed: unscrubbed, markitdown writes the escaped spelling.
+    assert MD_ESCAPED in await session._extract_markdown(page)
+
+    session.page.content = AsyncMock(return_value=page)
+    install_sensitive_recorder(session, [MD_SECRET])
+    path = await session.capture_markdown(force=True)
+    assert path is not None
+    text = path.read_text(encoding="utf-8")
+    assert "# Account" in text  # markitdown ran, not the regex fallback
+    assert MD_SECRET not in text and MD_ESCAPED not in text and REDACTED in text
+
+
+# --- the conversion is off the event loop ------------------------------------------------
+
+
+def _slow_markitdown(monkeypatch: pytest.MonkeyPatch, seconds: float) -> list[object]:
+    import sys
+    import time
+    from types import SimpleNamespace
+
+    from octowright.session import core_io_mixin
+
+    built: list[object] = []
+
+    class _StreamInfo:
+        def __init__(self, **kw: object) -> None:
+            self.kw = kw
+
+    class _MarkItDown:
+        def __init__(self) -> None:
+            built.append(self)
+
+        def convert_stream(self, stream: object, stream_info: object = None) -> SimpleNamespace:
+            time.sleep(seconds)  # synchronous CPU-bound work, as the real converter is
+            return SimpleNamespace(text_content="# converted")
+
+    monkeypatch.setattr(core_io_mixin, "_MARKITDOWN_CONVERTER", None, raising=False)
+    monkeypatch.setitem(sys.modules, "markitdown", SimpleNamespace(MarkItDown=_MarkItDown, StreamInfo=_StreamInfo))
+    return built
+
+
+@pytest.mark.anyio
+async def test_a_slow_conversion_does_not_block_the_event_loop(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import anyio
+
+    _slow_markitdown(monkeypatch, 0.5)
+    ticks = 0
+    done = False
+
+    async def ticker() -> None:
+        nonlocal ticks
+        while not done:
+            ticks += 1
+            await anyio.sleep(0.01)
+
+    async def capture() -> None:
+        nonlocal done
+        try:
+            path = await session.capture_markdown(force=True)
+            assert path is not None and path.read_text(encoding="utf-8") == "# converted"
+        finally:
+            done = True
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(ticker)
+        tg.start_soon(capture)
+    # On the loop, the ticker would get one turn before the 0.5s sleep and one after.
+    assert ticks >= 10
+
+
+@pytest.mark.anyio
+async def test_the_converter_is_built_once(session: BrowserSession, monkeypatch: pytest.MonkeyPatch) -> None:
+    built = _slow_markitdown(monkeypatch, 0)
+    for _ in range(3):
+        assert await session._extract_markdown("<h1>x</h1>") == "# converted"
+    assert len(built) == 1

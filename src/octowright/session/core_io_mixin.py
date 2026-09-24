@@ -14,11 +14,13 @@ import io
 import json
 import os
 import re
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import anyio.to_thread
 from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
@@ -85,7 +87,10 @@ class SessionIOMixin(SessionLike):
         says why the bytes are missing.
         """
         scrub = self.durable_text_scrubber
-        if scrub is None:
+        # ``active`` is False while the ledger is empty: a session that ever ran
+        # a macro keeps the scrubber installed, and base64- and UTF-8-decoding
+        # every binary frame to scrub it against nothing was the whole cost.
+        if scrub is None or not getattr(scrub, "active", True):
             return
         for key in ("url", "payload_preview", "payload_text"):
             if isinstance(entry.get(key), str):
@@ -213,11 +218,19 @@ class SessionIOMixin(SessionLike):
         return False
 
     async def _extract_markdown(self, html: str) -> str:
-        """Convert HTML to markdown using MarkItDown if available."""
+        """Convert HTML to markdown using MarkItDown if available.
+
+        In a worker thread: the conversion is synchronous CPU work (measured at
+        2.09s for a 760KB page) scheduled after every load and main-frame
+        navigation, and on the event loop it stalled every other session's
+        tools, the dashboard and the MCP transport for that long.
+        """
         try:
             import inspect
 
-            rendered = _markitdown_convert(importlib.import_module("markitdown"), html)
+            # anyio rather than asyncio.to_thread so the trio-parametrised tests
+            # take the same path the asyncio daemon does.
+            rendered = await anyio.to_thread.run_sync(_markitdown_convert, importlib.import_module("markitdown"), html)
             if inspect.isawaitable(rendered):
                 rendered = await rendered
             return _rendered_markdown(rendered)
@@ -659,15 +672,41 @@ class SessionIOMixin(SessionLike):
         self.recorder.record("websocket_opened", id=socket_id, url=url)
 
 
-def _markitdown_convert(markitdown_mod: Any, html: str) -> Any:
+#: One converter per markitdown module object: ``MarkItDown()`` registers
+#: every built-in converter (and probes for magika) on construction, which is
+#: wasted work repeated per navigation. Keyed by the module so a test that
+#: swaps ``sys.modules["markitdown"]`` gets a converter from the module it
+#: installed.
+_MARKITDOWN_CONVERTER: tuple[Any, Any] | None = None
+#: Held for construction AND conversion. markitdown does not document its
+#: converter as thread-safe, and conversions now run in worker threads that
+#: several sessions can start at once. Serialising them costs throughput only
+#: when two pages convert at the same moment; the event loop stays free either way.
+_MARKITDOWN_LOCK = threading.Lock()
+
+
+def _markitdown_converter(markitdown_mod: Any) -> Any:
+    global _MARKITDOWN_CONVERTER
+    cached = _MARKITDOWN_CONVERTER
+    if cached is not None and cached[0] is markitdown_mod:
+        return cached[1]
     converter = markitdown_mod.MarkItDown()
-    stream_info = getattr(markitdown_mod, "StreamInfo", None)
-    if stream_info is not None and hasattr(converter, "convert_stream"):
-        # convert(str) treats the string as a path or URI (measured on
-        # markitdown 0.1.8: FileNotFoundError), so it never converted HTML at
-        # all; convert_stream is the HTML-string API.
-        return converter.convert_stream(io.BytesIO(html.encode("utf-8")), stream_info=stream_info(extension=".html"))
-    return converter.convert(html)
+    _MARKITDOWN_CONVERTER = (markitdown_mod, converter)
+    return converter
+
+
+def _markitdown_convert(markitdown_mod: Any, html: str) -> Any:
+    with _MARKITDOWN_LOCK:
+        converter = _markitdown_converter(markitdown_mod)
+        stream_info = getattr(markitdown_mod, "StreamInfo", None)
+        if stream_info is not None and hasattr(converter, "convert_stream"):
+            # convert(str) treats the string as a path or URI (measured on
+            # markitdown 0.1.8: FileNotFoundError), so it never converted HTML at
+            # all; convert_stream is the HTML-string API.
+            return converter.convert_stream(
+                io.BytesIO(html.encode("utf-8")), stream_info=stream_info(extension=".html")
+            )
+        return converter.convert(html)
 
 
 def _rendered_markdown(rendered: Any) -> str:
