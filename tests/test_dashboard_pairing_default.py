@@ -161,3 +161,19 @@ def test_inline_serve_prints_a_redeemable_pairing_url(capsys: pytest.CaptureFixt
     assert "http://127.0.0.1:6399/pair#" in err
     code = err.split("/pair#", 1)[1].split()[0]
     assert app.state.dashboard_pairing.redeem_code(code) is not None
+
+
+def test_inline_serve_survives_a_failed_mint(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The startup line is a convenience: a mint that fails must not take the bind callback down."""
+    from octowright.cli.serve import _echo_inline_pairing_url
+
+    app = _http.build_app(mcp_token="")
+
+    def _boom(**_kwargs: object) -> str:
+        raise RuntimeError("store unavailable")
+
+    monkeypatch.setattr(app.state.dashboard_pairing, "mint_code", _boom)
+    _echo_inline_pairing_url("127.0.0.1", 6399)
+    assert "/pair#" not in capsys.readouterr().err

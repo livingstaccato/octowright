@@ -438,19 +438,18 @@ def _echo_inline_pairing_url(host: str, port: int) -> None:
     every other human-facing line here: stdout is the MCP stdio transport.
     """
     from octowright.cli.dashboard import _normalized_dashboard_host
-    from octowright.http import state as _http_state
-    from octowright.http.pairing import MCP_PAIR_CODE_TTL_SECONDS, pairing_required
+    from octowright.http.pairing import MCP_PAIR_CODE_TTL_SECONDS
+    from octowright.server.meta import _dashboard_pairing_required, _mint_dashboard_pairing_url
 
-    store = _http_state.dashboard_pairing_store()
-    if not pairing_required() or store is None:
+    if not _dashboard_pairing_required():
         return
     url_host, _loopback = _normalized_dashboard_host(host)
-    # The MCP window, not the CLI's 60s: this line usually lands in an MCP
-    # client's server log, which nobody reads within a minute.
-    code = store.mint_code(ttl=MCP_PAIR_CODE_TTL_SECONDS)
+    url = _mint_dashboard_pairing_url(f"http://{url_host}:{port}")
+    if url is None:
+        return  # logged by the helper; the MCP tool can still mint one
     click.echo(
         f"octowright: dashboard pairing URL (single-use, expires in {int(MCP_PAIR_CODE_TTL_SECONDS)}s; "
-        f"call octowright_dashboard_url for a fresh one): http://{url_host}:{port}/pair#{code}",
+        f"call octowright_dashboard_url for a fresh one): {url}",
         err=True,
     )
 
