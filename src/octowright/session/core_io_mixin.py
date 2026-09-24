@@ -10,11 +10,9 @@ import base64
 import contextlib
 import html as html_lib
 import importlib
-import io
 import json
 import os
 import re
-import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,7 +24,7 @@ from provide.telemetry import get_logger
 
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
-from octowright.session import websocket_view
+from octowright.session import markdown_render, websocket_view
 from octowright.session._constants import CONSOLE_TEXT_MAX_CHARS, WEBSOCKET_FRAME_MAX_BYTES
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
@@ -304,10 +302,12 @@ class SessionIOMixin(SessionLike):
 
             # anyio rather than asyncio.to_thread so the trio-parametrised tests
             # take the same path the asyncio daemon does.
-            rendered = await anyio.to_thread.run_sync(_markitdown_convert, importlib.import_module("markitdown"), html)
+            rendered = await anyio.to_thread.run_sync(
+                markdown_render.markitdown_convert, importlib.import_module("markitdown"), html
+            )
             if inspect.isawaitable(rendered):
                 rendered = await rendered
-            return _rendered_markdown(rendered)
+            return markdown_render.rendered_markdown(rendered)
         except Exception as exc:
             # markitdown is optional. Log the failure so a real bug (e.g. a
             # bad markitdown release) is visible during development, but
@@ -744,57 +744,3 @@ class SessionIOMixin(SessionLike):
         # this repeatedly pushed out live sockets instead.
         self._register_websocket(socket_id, url, binding_id)
         self.recorder.record("websocket_opened", id=socket_id, url=url)
-
-
-#: One converter per markitdown module object: ``MarkItDown()`` registers
-#: every built-in converter (and probes for magika) on construction, which is
-#: wasted work repeated per navigation. Keyed by the module so a test that
-#: swaps ``sys.modules["markitdown"]`` gets a converter from the module it
-#: installed.
-_MARKITDOWN_CONVERTER: tuple[Any, Any] | None = None
-#: Held for construction AND conversion. markitdown does not document its
-#: converter as thread-safe, and conversions now run in worker threads that
-#: several sessions can start at once. Serialising them costs throughput only
-#: when two pages convert at the same moment; the event loop stays free either way.
-_MARKITDOWN_LOCK = threading.Lock()
-
-
-def _markitdown_converter(markitdown_mod: Any) -> Any:
-    global _MARKITDOWN_CONVERTER
-    cached = _MARKITDOWN_CONVERTER
-    if cached is not None and cached[0] is markitdown_mod:
-        return cached[1]
-    converter = markitdown_mod.MarkItDown()
-    _MARKITDOWN_CONVERTER = (markitdown_mod, converter)
-    return converter
-
-
-def _markitdown_convert(markitdown_mod: Any, html: str) -> Any:
-    with _MARKITDOWN_LOCK:
-        converter = _markitdown_converter(markitdown_mod)
-        stream_info = getattr(markitdown_mod, "StreamInfo", None)
-        if stream_info is not None and hasattr(converter, "convert_stream"):
-            # convert(str) treats the string as a path or URI (measured on
-            # markitdown 0.1.8: FileNotFoundError), so it never converted HTML at
-            # all; convert_stream is the HTML-string API.
-            return converter.convert_stream(
-                io.BytesIO(html.encode("utf-8")), stream_info=stream_info(extension=".html")
-            )
-        return converter.convert(html)
-
-
-def _rendered_markdown(rendered: Any) -> str:
-    """The text of whatever a markitdown version returned."""
-    if isinstance(rendered, str):
-        return rendered
-    if rendered is None:
-        raise ValueError("markitdown conversion returned empty result")
-    for field in ("text", "markdown", "text_content"):
-        candidate = getattr(rendered, field, None)
-        if candidate:
-            if callable(candidate):
-                candidate = candidate()
-            text = str(candidate)
-            if text.strip():
-                return text
-    return str(rendered)

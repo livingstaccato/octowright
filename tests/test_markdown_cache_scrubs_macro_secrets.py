@@ -184,9 +184,9 @@ async def test_real_markitdown_output_is_scrubbed(session: BrowserSession, monke
     this skips on a plain checkout; run it with ``uv run --with markitdown``.
     """
     pytest.importorskip("markitdown")
-    from octowright.session import core_io_mixin
+    from octowright.session import markdown_render
 
-    monkeypatch.setattr(core_io_mixin, "_MARKITDOWN_CONVERTER", None, raising=False)
+    monkeypatch.setattr(markdown_render, "_MARKITDOWN_CONVERTER", None, raising=False)
     page = f"<html><body><h1>Account</h1><p>Your password is {MD_SECRET} today.</p></body></html>"
     # Proof the escape is real, not assumed: unscrubbed, markitdown writes the escaped spelling.
     assert MD_ESCAPED in await session._extract_markdown(page)
@@ -208,7 +208,7 @@ def _slow_markitdown(monkeypatch: pytest.MonkeyPatch, seconds: float) -> list[ob
     import time
     from types import SimpleNamespace
 
-    from octowright.session import core_io_mixin
+    from octowright.session import markdown_render
 
     built: list[object] = []
 
@@ -224,7 +224,7 @@ def _slow_markitdown(monkeypatch: pytest.MonkeyPatch, seconds: float) -> list[ob
             time.sleep(seconds)  # synchronous CPU-bound work, as the real converter is
             return SimpleNamespace(text_content="# converted")
 
-    monkeypatch.setattr(core_io_mixin, "_MARKITDOWN_CONVERTER", None, raising=False)
+    monkeypatch.setattr(markdown_render, "_MARKITDOWN_CONVERTER", None, raising=False)
     monkeypatch.setitem(sys.modules, "markitdown", SimpleNamespace(MarkItDown=_MarkItDown, StreamInfo=_StreamInfo))
     return built
 
