@@ -131,6 +131,45 @@ class SessionIOMixin(SessionLike):
                 del entry["payload_b64"]
                 entry["payload_redacted"] = True
 
+    def _websocket_cache_handle(self, now: float) -> Any:
+        """The session's append handle on the sidecar, opened on first use."""
+        if self.websocket_path is None:
+            self.websocket_path = self._websocket_cache_path()
+            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = getattr(self, "_websocket_fh", None)
+        if fh is None:
+            fh = self.websocket_path.open("a", encoding="utf-8")
+            self._websocket_fh = fh
+            self._websocket_last_flush_ts = now
+            self._websocket_frames_since_flush = 0
+            self._websocket_bytes = 0
+            self._websocket_truncated = False
+        return fh
+
+    def _bounded_ws_payload(
+        self, entry: dict[str, Any], payload: Any, payload_size: int | None
+    ) -> tuple[Any, int | None] | None:
+        """Size a frame BEFORE anything copies it; ``None`` means drop it.
+
+        base64 alone is a 4/3 copy and json.dumps another, so the ceiling check
+        on the finished line paid for a frame it then refused. With a ceiling
+        set, a frame that cannot fit is refused here; with none, one frame's
+        payload is cut to ``WEBSOCKET_FRAME_MAX_BYTES`` and flagged, keeping its
+        true size.
+        """
+        raw_size = _raw_payload_size(payload)
+        if raw_size is None:
+            return payload, payload_size
+        if self._ws_frame_cannot_fit(raw_size):
+            return None
+        if _websocket_max_bytes() <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
+            head = payload[:WEBSOCKET_FRAME_MAX_BYTES]
+            entry["payload_truncated"] = True
+            return (head if isinstance(head, str) else bytes(head)), (
+                raw_size if payload_size is None else payload_size
+            )
+        return payload, payload_size
+
     def _append_websocket_cache(
         self,
         *,
@@ -149,22 +188,10 @@ class SessionIOMixin(SessionLike):
             "url": url,
         }
         if payload is not None:
-            # Size first, before anything copies the payload: base64 alone is
-            # a 4/3 copy, and json.dumps another, so a check on the finished
-            # line (below) paid for a frame it then refused.
-            raw_size = _raw_payload_size(payload)
-            if raw_size is not None and self._ws_frame_cannot_fit(raw_size):
+            bounded_payload = self._bounded_ws_payload(entry, payload, payload_size)
+            if bounded_payload is None:
                 return
-            if raw_size is not None and _websocket_max_bytes() <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
-                # No ceiling configured: bound the one frame instead.
-                payload = (
-                    bytes(payload[:WEBSOCKET_FRAME_MAX_BYTES])
-                    if not isinstance(payload, str)
-                    else payload[:WEBSOCKET_FRAME_MAX_BYTES]
-                )
-                entry["payload_truncated"] = True
-                if payload_size is None:
-                    payload_size = raw_size
+            payload, payload_size = bounded_payload
             entry["payload_preview"] = payload_preview or ""
             normalized_size = payload_size
             payload_b64 = None
@@ -229,21 +256,6 @@ class SessionIOMixin(SessionLike):
             self._mark_websocket_flushed(now)
         else:
             self._websocket_frames_since_flush = frames
-
-    def _websocket_cache_handle(self, now: float) -> Any:
-        """The session's append handle on the sidecar, opened on first use."""
-        if self.websocket_path is None:
-            self.websocket_path = self._websocket_cache_path()
-            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = getattr(self, "_websocket_fh", None)
-        if fh is None:
-            fh = self.websocket_path.open("a", encoding="utf-8")
-            self._websocket_fh = fh
-            self._websocket_last_flush_ts = now
-            self._websocket_frames_since_flush = 0
-            self._websocket_bytes = 0
-            self._websocket_truncated = False
-        return fh
 
     def _ws_frame_cannot_fit(self, raw_size: int) -> bool:
         """Whether a frame of *raw_size* is refused by the ceiling before encoding.
