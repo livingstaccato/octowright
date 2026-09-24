@@ -371,9 +371,9 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         """
         if target not in ("tab", "window"):
             raise ValueError(f"target must be 'tab' or 'window', got {target!r}")
-        from octowright.session.core_page_mixin import _reject_unsafe_url
+        from octowright.session.core_page_mixin import reject_unsafe_url_resolved
 
-        _reject_unsafe_url(url)
+        await reject_unsafe_url_resolved(url)
 
         nav_error: str | None = None
         if target == "tab":

@@ -200,6 +200,18 @@ def _reject_unsafe_url(url: str) -> None:
     ssrf.check_navigation_url(stripped)
 
 
+async def reject_unsafe_url_resolved(url: str) -> None:
+    """:func:`_reject_unsafe_url`, plus the policy's DNS check on the host.
+
+    Split out because resolving blocks and every entry point is async: the
+    synchronous guard stays DNS-free for the callers that cannot await
+    (``launch_helpers.base_url_kwargs``), and those are still covered at
+    navigation time, since the per-hop ``ssrf_guard`` resolves every hop.
+    """
+    _reject_unsafe_url(url)
+    await ssrf.check_navigation_url_resolved(_canonicalize_for_guard(url))
+
+
 async def _body_contains_text(session: SessionLike, body: Any, text: str) -> bool:
     # Re-enters the parent's "browser_wait_for" lease reentrantly (same task,
     # so this never queues) rather than assuming the caller already holds it --
@@ -303,7 +315,7 @@ class SessionPageMixin(SessionLike):
 
     @gated_operation("browser_navigate")
     async def navigate(self, url: str) -> dict[str, Any]:
-        _reject_unsafe_url(url)
+        await reject_unsafe_url_resolved(url)
         instance_id = getattr(self, "instance_id", None)
         kind = getattr(self, "kind", None)
         t0 = time.perf_counter()

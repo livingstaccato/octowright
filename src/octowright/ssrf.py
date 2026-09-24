@@ -26,15 +26,43 @@ block for legitimate internal targets. An operator who sets the policy to an
 *unrecognized* token gets the protective mode (their intent was clearly to turn
 something on), not a silent disable.
 
-Scope note: this guards literal-IP and known-name targets synchronously (no DNS).
-A public hostname that *resolves* to a private address (DNS-rebinding SSRF) is not
-covered here — that needs a resolving variant and is tracked separately.
+Two layers, deliberately split:
+
+* :func:`check_navigation_url` is synchronous and classifies the host *as
+  spelled* -- literal IPs in every WHATWG encoding, and the known names above.
+  It never touches DNS, so it is safe from any caller.
+* :func:`check_navigation_url_resolved` is the async entry point every
+  navigation path awaits (tool pre-flight and each redirect hop the
+  ``ssrf_guard`` validates). After the literal check it resolves a
+  non-allowlisted hostname with ``getaddrinfo`` in a worker thread and refuses
+  the URL if **any** answer is non-public -- a browser may connect to whichever
+  address it likes from a multi-answer set. A name that does not resolve is
+  refused (fail closed): an unresolvable name is exactly what a rebinding
+  attacker's short-TTL record looks like between answers, and "could not
+  check" must not read as "checked and public".
+
+What this still cannot close -- the DNS-rebinding window
+--------------------------------------------------------
+Validation and connection are two separate lookups. octowright resolves the
+name, finds it public, and hands the URL to the browser, which performs its
+**own** lookup when it connects. An attacker whose record answers a public
+address to the first query and ``169.254.169.254`` to the second (TTL 0) still
+wins that race. Closing it needs the validated address pinned into the
+browser's connection, and Playwright exposes no such control -- there is no
+per-request resolver override, and Chromium's ``--host-resolver-rules`` is a
+launch-time, whole-browser static map, not a per-navigation pin. So this layer
+raises the bar from "name any private host" to "run a rebinding DNS server and
+win a timing race"; it is not a guarantee. Deployments that need one must
+enforce egress at the network layer (a firewall or an egress proxy that
+resolves once and connects to what it resolved).
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
+import socket
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -247,3 +275,83 @@ def check_navigation_url(url: str) -> None:
     host = normalize_host_for_policy(parts.hostname or "")
     if host and host not in _allowlist() and _host_is_blocked(host):
         raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+
+
+#: The resolver, held at module level so tests can substitute answers without
+#: patching the process-wide ``socket`` module.
+_getaddrinfo = socket.getaddrinfo
+
+
+def _is_literal_ip(host: str) -> bool:
+    """True if ``host`` is an IP address in any spelling a browser accepts."""
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return _parse_whatwg_ipv4(host) is not None
+    return True
+
+
+def _resolved_non_public(host: str) -> list[str]:
+    """Resolve ``host`` and return every answer that is not public.
+
+    Raises ``OSError`` (``socket.gaierror`` included) or ``UnicodeError`` when
+    the name cannot be resolved; the caller turns that into a refusal. Blocking:
+    run it off the event loop.
+    """
+    infos = _getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    flagged: list[str] = []
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]  # drop an IPv6 zone id
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            flagged.append(address)  # an answer we cannot classify is not public
+            continue
+        if _ip_is_non_public(ip):
+            flagged.append(address)
+    return flagged
+
+
+def _host_to_resolve(url: str) -> str | None:
+    """The hostname ``url`` needs resolved under the active policy, if any.
+
+    ``None`` when the policy is off, the scheme is not IP-routable, the host is
+    a literal IP (already classified by the synchronous check) or allowlisted.
+    """
+    if _policy() == "off":
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _CHECKED_SCHEMES:
+        return None
+    host = normalize_host_for_policy(parts.hostname or "")
+    if not host or host in _allowlist() or _is_literal_ip(host):
+        return None
+    return host
+
+
+async def check_navigation_url_resolved(url: str) -> None:
+    """:func:`check_navigation_url`, then refuse a host that RESOLVES non-public.
+
+    The lookup runs in a worker thread: ``getaddrinfo`` blocks, and every
+    caller is on the daemon's event loop. See the module docstring for the
+    rebinding window this cannot close.
+    """
+    check_navigation_url(url)
+    host = _host_to_resolve(url)
+    if host is None:
+        return
+    try:
+        flagged = await asyncio.to_thread(_resolved_non_public, host)
+    except (OSError, UnicodeError) as exc:
+        raise InvalidRequestError(
+            f"SSRF policy block-private refuses navigation to {host!r}: the host could not be resolved "
+            f"({exc}); an unresolvable name is refused rather than assumed public"
+        ) from exc
+    if flagged:
+        raise InvalidRequestError(
+            f"SSRF policy block-private refuses navigation to {host!r}: it resolves to non-public "
+            f"address(es) {sorted(set(flagged))}"
+        )

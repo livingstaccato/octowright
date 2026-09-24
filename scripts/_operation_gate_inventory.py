@@ -41,6 +41,11 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "runs inside the same route callback to resolve redirect hops before the request is released",
     ),
+    "ssrf_guard.py:_handle_non_get": (
+        "event-critical",
+        "runs inside the same route callback: sends a non-GET navigation once and fulfills or aborts it "
+        "before the request is released",
+    ),
     "browser_pool/launch_helpers.py:_is_blank": (
         "launch-time-before-session-publication",
         "reads one handed-back page's url to decide whether navigating it would destroy content",

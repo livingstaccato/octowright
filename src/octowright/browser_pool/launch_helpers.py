@@ -280,7 +280,9 @@ async def install_scoped_header_routes(
         )
 
 
-async def install_context_routes(context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None) -> None:
+async def install_context_routes(
+    context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None, *, engine: str | None = None
+) -> None:
     """Install every launch-time context route, in the ONE order that is correct.
 
     Playwright runs context route handlers **last-registered-first**, and
@@ -296,7 +298,7 @@ async def install_context_routes(context: Any, headers: dict[str, str] | None, u
     and the guard never sees it. The order is the whole point of this helper
     existing rather than two calls at the call site.
     """
-    await install_navigation_guard(context)
+    await install_navigation_guard(context, engine=engine)
     await install_scoped_header_routes(context, headers, url_patterns)
 
 
@@ -440,7 +442,7 @@ async def _open_browser_context(
     # Pre-flight SSRF checks only see the URL that was asked for; a redirect
     # is a different host. No-op unless a policy is enabled. Registration order
     # is load-bearing -- see install_context_routes.
-    await install_context_routes(context, extra_http_headers, extra_http_headers_urls)
+    await install_context_routes(context, extra_http_headers, extra_http_headers_urls, engine=kind)
     return browser, context, page, user_data_dir
 
 

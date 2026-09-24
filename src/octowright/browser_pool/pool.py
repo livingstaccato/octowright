@@ -265,9 +265,9 @@ class BrowserPool:
         # before session tempdirs, Playwright, or recording files are allocated.
         # It raises InvalidRequestError, so launch() records no engine health
         # for it -- see _record_engine_health.
-        from octowright.session.core_page_mixin import _reject_unsafe_url
+        from octowright.session.core_page_mixin import reject_unsafe_url_resolved
 
-        _reject_unsafe_url(target_url)
+        await reject_unsafe_url_resolved(target_url)
 
         # Deletion takes this same key before its in-use check. Holding it from
         # persona/default-url resolution through registration closes both race
