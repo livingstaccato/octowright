@@ -49,6 +49,7 @@ class _Route:
         self.aborted: str | None = None
         self.fell_back = False
         self.fulfilled: _Response | None = None
+        self.fulfilled_body: dict[str, Any] | None = None
 
     async def fetch(self, url: str | None = None, *, max_redirects: int, **overrides: Any) -> _Response:
         assert max_redirects == 0, "a hop must never follow its own redirect"
@@ -58,8 +59,9 @@ class _Route:
         self.fetch_overrides.append(overrides)
         return self.chain[url]
 
-    async def fulfill(self, response: _Response) -> None:
+    async def fulfill(self, response: _Response | None = None, **body: Any) -> None:
         self.fulfilled = response
+        self.fulfilled_body = body or None
 
     async def abort(self, reason: str) -> None:
         self.aborted = reason
@@ -127,7 +129,7 @@ async def test_redirect_loop_is_bounded() -> None:
 
 async def test_non_navigation_request_is_not_chain_checked() -> None:
     route = _Route({})
-    await _handle_route(route, _Request("https://x.test/img.png", navigation=False))
+    await _handle_route(route, _Request("https://x.test/img.png", navigation=False), fulfill_redirects=True)
     assert route.fell_back and route.fetched == []
 
 
@@ -135,7 +137,7 @@ async def test_post_navigation_is_sent_once_and_fulfilled() -> None:
     """Chain-checking a POST must not double-submit the form."""
     request = _Request("https://x.test/login", method="POST")
     route = _Route({"https://x.test/login": _Response(200)}, request)
-    await _handle_route(route, request)
+    await _handle_route(route, request, fulfill_redirects=True)
     assert route.fetched == ["https://x.test/login"]
     assert route.fulfilled is not None and not route.fell_back
 
@@ -145,7 +147,7 @@ async def test_post_redirect_to_a_blocked_host_is_aborted(status: int) -> None:
     """POST -> 30x -> metadata: the browser would follow with a GET."""
     request = _Request("https://x.test/login", method="POST")
     route = _Route({"https://x.test/login": _Response(status, "http://169.254.169.254/latest/meta-data/")}, request)
-    await _handle_route(route, request)
+    await _handle_route(route, request, fulfill_redirects=True)
     assert route.aborted == "blockedbyclient"
     assert route.fetched == ["https://x.test/login"]
     assert route.fulfilled is None
@@ -160,7 +162,7 @@ async def test_post_redirect_chain_is_walked_with_get_and_later_hops_checked() -
         },
         request,
     )
-    await _handle_route(route, request)
+    await _handle_route(route, request, fulfill_redirects=True)
     assert route.aborted == "blockedbyclient"
     assert route.fetched == ["https://x.test/login", "https://x.test/next"]
     assert route.fetch_methods == ["POST", "GET"]
@@ -174,7 +176,7 @@ async def test_clean_post_redirect_is_fulfilled_with_the_3xx() -> None:
     request = _Request("https://x.test/login", method="POST")
     first = _Response(303, "/done")
     route = _Route({"https://x.test/login": first, "https://x.test/done": _Response(200)}, request)
-    await _handle_route(route, request)
+    await _handle_route(route, request, fulfill_redirects=True)
     assert route.fulfilled is first
     assert route.fetch_methods == ["POST", "GET"]
     assert route.aborted is None
@@ -185,7 +187,7 @@ async def test_method_preserving_post_redirect_is_aborted_even_when_public(statu
     """Later hops would re-send the body and never reach this handler."""
     request = _Request("https://x.test/login", method="POST")
     route = _Route({"https://x.test/login": _Response(status, "https://x.test/elsewhere")}, request)
-    await _handle_route(route, request)
+    await _handle_route(route, request, fulfill_redirects=True)
     assert route.aborted == "blockedbyclient"
     assert route.fetched == ["https://x.test/login"]
 
@@ -193,7 +195,7 @@ async def test_method_preserving_post_redirect_is_aborted_even_when_public(statu
 async def test_navigation_url_itself_is_checked() -> None:
     """A page-initiated navigation was never pre-flighted by a tool."""
     route = _Route({})
-    await _handle_route(route, _Request("http://rebind.test/"))
+    await _handle_route(route, _Request("http://rebind.test/"), fulfill_redirects=True)
     assert route.aborted == "blockedbyclient"
     assert route.fetched == []
 
@@ -209,7 +211,7 @@ async def test_blocked_chain_aborts_the_navigation() -> None:
     route = _Route(
         {"https://public.test/": _Response(302, "http://127.0.0.1:9/x")},
     )
-    await _handle_route(route, _Request("https://public.test/"))
+    await _handle_route(route, _Request("https://public.test/"), fulfill_redirects=True)
     assert route.aborted == "blockedbyclient"
     assert not route.fell_back
 
@@ -217,6 +219,22 @@ async def test_blocked_chain_aborts_the_navigation() -> None:
 async def test_clean_chain_hands_the_navigation_back_to_the_browser() -> None:
     """fallback(), not fulfill() -- the browser must own page.url."""
     route = _Route({"https://public.test/": _Response(200)})
-    await _handle_route(route, _Request("https://public.test/"))
+    await _handle_route(route, _Request("https://public.test/"), fulfill_redirects=True)
     assert route.fell_back
     assert route.aborted is None
+
+
+async def test_an_engine_that_cannot_fulfill_a_redirect_gets_a_client_redirect() -> None:
+    """``fulfill_redirects=False`` (WebKit): the validated POST redirect is released as a document."""
+    request = _Request("https://public.test/submit", method="POST")
+    route = _Route(
+        {
+            "https://public.test/submit": _Response(303, "https://public.test/done"),
+            "https://public.test/done": _Response(200),
+        },
+        request,
+    )
+    await _handle_route(route, request, fulfill_redirects=False)
+    assert route.fulfilled is None and route.aborted is None
+    assert route.fulfilled_body is not None and route.fulfilled_body["status"] == 200
+    assert "https://public.test/done" in route.fulfilled_body["body"]

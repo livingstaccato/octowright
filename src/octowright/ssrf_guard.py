@@ -103,9 +103,6 @@ _FOLLOWED_REDIRECTS = frozenset({301, 302, 303, 307, 308})
 #: after a POST is walked with a bodiless GET.
 _BODY_HEADERS = frozenset({"content-type", "content-length"})
 
-#: Engines whose ``route.fulfill`` rejects a redirect status.
-_NO_REDIRECT_FULFILL_ENGINES = frozenset({"webkit"})
-
 
 class RedirectBlocked(ValueError):
     """A hop in the redirect chain is refused by the SSRF policy."""
@@ -160,7 +157,7 @@ def _get_overrides(request: Any) -> dict[str, Any]:
     return {"method": "GET", "headers": headers, "post_data": b""}
 
 
-async def _handle_non_get(route: Any, request: Any, engine: str | None) -> None:
+async def _handle_non_get(route: Any, request: Any, *, fulfill_redirects: bool) -> None:
     """Send a non-GET navigation once, and only release a redirect it can vouch for."""
     try:
         response = await route.fetch(max_redirects=0)
@@ -183,14 +180,13 @@ async def _handle_non_get(route: Any, request: Any, engine: str | None) -> None:
             "request body to later hops this guard cannot see; refused under block-private"
         )
     await _validate_chain(route, target, as_get=_get_overrides(request))
-    if engine in _NO_REDIRECT_FULFILL_ENGINES:
-        # WebKit refuses a 3xx outright ("Route.fulfill: Cannot fulfill with
-        # redirect status: 303"; measured on Playwright 1.62), and the refusal
-        # consumes the route, so it cannot be tried and caught. The POST has
-        # already been sent, so aborting would lose a submission the server
-        # accepted. Hand the page a document that navigates to the validated
-        # target instead: that is a NEW GET navigation, so it comes back
-        # through this guard and is checked again.
+    if not fulfill_redirects:
+        # The engine refuses a 3xx outright (see install_navigation_guard), and
+        # the refusal consumes the route, so it cannot be tried and caught. The
+        # POST has already been sent, so aborting would lose a submission the
+        # server accepted. Hand the page a document that navigates to the
+        # validated target instead: that is a NEW GET navigation, so it comes
+        # back through this guard and is checked again.
         await route.fulfill(status=200, content_type="text/html", body=_client_redirect(target))
         return
     # The browser follows the 3xx itself -- and, per the module docstring,
@@ -199,7 +195,7 @@ async def _handle_non_get(route: Any, request: Any, engine: str | None) -> None:
     await route.fulfill(response=response)
 
 
-async def _handle_route(route: Any, request: Any, *, engine: str | None = None) -> None:
+async def _handle_route(route: Any, request: Any, *, fulfill_redirects: bool) -> None:
     """Abort a navigation whose redirect chain the policy refuses."""
     try:
         if not request.is_navigation_request():
@@ -208,7 +204,7 @@ async def _handle_route(route: Any, request: Any, *, engine: str | None = None) 
         try:
             await _check_hop(request.url)
             if request.method.upper() != "GET":
-                await _handle_non_get(route, request, engine)
+                await _handle_non_get(route, request, fulfill_redirects=fulfill_redirects)
                 return
             await _validate_chain(route, request.url)
         except RedirectBlocked as exc:
@@ -222,25 +218,25 @@ async def _handle_route(route: Any, request: Any, *, engine: str | None = None) 
         log.debug("octowright.ssrf.route_handler_failed", error=repr(exc))
 
 
-async def install_navigation_guard(context: Any, *, engine: str | None = None) -> None:
+async def install_navigation_guard(context: Any, *, fulfill_redirects: bool) -> None:
     """Register the per-hop navigation check on *context*.
 
     No-op unless the SSRF policy is enabled, so the default deployment keeps
-    an uninstrumented context. *engine* (``chromium``/``firefox``/``webkit``)
-    picks how a validated POST redirect is released; when omitted it is read
-    from the context's browser, which a persistent context does not have.
+    an uninstrumented context. *fulfill_redirects* says whether the engine
+    accepts a 3xx in ``route.fulfill``, which decides how a validated POST
+    redirect is released. WebKit does not ("Route.fulfill: Cannot fulfill with
+    redirect status: 303"; measured on Playwright 1.62), so its caller passes
+    False. Required rather than read off ``context.browser``: a persistent
+    context has no browser to ask, and the launch path already knows.
     """
     if not ssrf.policy_enabled():
         return
-    if engine is None:
-        browser = getattr(context, "browser", None)
-        engine = getattr(getattr(browser, "browser_type", None), "name", None)
 
     async def handler(route: Any, request: Any) -> None:
-        await _handle_route(route, request, engine=engine)
+        await _handle_route(route, request, fulfill_redirects=fulfill_redirects)
 
     await bounded(
         context.route("**/*", handler),
         operation="browser_install_navigation_guard",
     )
-    log.debug("octowright.ssrf.navigation_guard_installed", engine=engine)
+    log.debug("octowright.ssrf.navigation_guard_installed", fulfill_redirects=fulfill_redirects)

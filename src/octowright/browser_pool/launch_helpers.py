@@ -281,7 +281,7 @@ async def install_scoped_header_routes(
 
 
 async def install_context_routes(
-    context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None, *, engine: str | None = None
+    context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None, *, fulfill_redirects: bool
 ) -> None:
     """Install every launch-time context route, in the ONE order that is correct.
 
@@ -297,8 +297,11 @@ async def install_context_routes(
     browser actually makes redirects somewhere the policy would have refused,
     and the guard never sees it. The order is the whole point of this helper
     existing rather than two calls at the call site.
+
+    *fulfill_redirects* is the engine capability the guard needs -- see
+    ``install_navigation_guard``.
     """
-    await install_navigation_guard(context, engine=engine)
+    await install_navigation_guard(context, fulfill_redirects=fulfill_redirects)
     await install_scoped_header_routes(context, headers, url_patterns)
 
 
@@ -441,8 +444,12 @@ async def _open_browser_context(
         user_data_dir = None
     # Pre-flight SSRF checks only see the URL that was asked for; a redirect
     # is a different host. No-op unless a policy is enabled. Registration order
-    # is load-bearing -- see install_context_routes.
-    await install_context_routes(context, extra_http_headers, extra_http_headers_urls, engine=kind)
+    # is load-bearing -- see install_context_routes. WebKit's route.fulfill
+    # refuses a redirect status, so the guard releases a POST redirect there
+    # another way.
+    await install_context_routes(
+        context, extra_http_headers, extra_http_headers_urls, fulfill_redirects=kind != "webkit"
+    )
     return browser, context, page, user_data_dir
 
 

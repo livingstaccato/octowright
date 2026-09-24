@@ -326,7 +326,7 @@ class TestGuardOrdering:
             async def route(self, pattern: str, handler: object) -> None:
                 registered.append(pattern)
 
-        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**"])
+        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**"], fulfill_redirects=True)
 
         assert registered == ["**/*", "**/api/**"]
 
@@ -338,7 +338,7 @@ class TestGuardOrdering:
             async def route(self, pattern: str, handler: object) -> None:
                 registered.append(pattern)
 
-        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**", "**/gql"])
+        await install_context_routes(_Context(), {"X-A": "1"}, ["**/api/**", "**/gql"], fulfill_redirects=True)
 
         assert registered[0] == "**/*"
 
