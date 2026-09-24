@@ -383,8 +383,12 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("click", **recorded_kwargs)
 
     @gated_operation("session_input_redaction")
-    async def _is_password_input(self, selector: str) -> bool:
+    async def _is_password_input(self, selector: str, *, when_unknown: bool | None = True) -> bool | None:
         """Best-effort check: does *selector* resolve to a credential input?
+
+        *when_unknown* is the answer when the field cannot be classified:
+        ``True`` (fail closed) by default; ``None`` lets a caller tell "is a
+        credential" apart from "could not tell".
 
         Treats both ``type=password`` AND ``autocomplete in {current-password,
         new-password, one-time-code}`` as credential-bearing so SPAs that
@@ -414,12 +418,12 @@ class SessionPageMixin(SessionLike):
             )
         except Exception as exc:
             log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
-            return True
+            return when_unknown
         # The probe returns {type, ac}. Anything else means the read did not
         # produce a shape we can classify, and an unclassifiable field is
         # treated as a credential -- the safe direction to be wrong in.
         if not isinstance(info, dict):
-            return True
+            return when_unknown
         if info.get("type") == "password":
             return True
         return info.get("ac") in ("current-password", "new-password", "one-time-code")
@@ -433,10 +437,22 @@ class SessionPageMixin(SessionLike):
         mode = _current_redaction_mode()
         if mode == "off":
             return value
-        if mode == "all":
-            return REDACTED_INPUT_PLACEHOLDER
-        # mode == "passwords"
-        if await self._is_password_input(selector):
+        verdict = await self._is_password_input(selector, when_unknown=None)
+        if verdict is True:
+            # Hiding it in the fill row alone is not enough: the page may echo
+            # it into the console, a request, a socket frame or its own text,
+            # and each of those rows is durable too. Admitted to the session
+            # ledger before the page receives it, so the first echo is already
+            # scrubbed. Only a field POSITIVELY classified as a credential is
+            # admitted -- in ``all`` mode too, and not on a failed probe, which
+            # still redacts the row. ``all`` hides every typed value from the
+            # fill row, but blind-scrubbing a search term or a quantity from
+            # every later row would corrupt the recording, not protect it.
+            # Local import: the macros package imports the session stack.
+            from octowright.macros.privacy import admit_redacted_input
+
+            admit_redacted_input(self, value)
+        if mode == "all" or verdict is not False:
             return REDACTED_INPUT_PLACEHOLDER
         return value
 

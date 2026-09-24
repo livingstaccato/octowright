@@ -30,8 +30,11 @@ log = get_logger(__name__)
 
 class SessionLocatorMixin(SessionLike):
     @gated_operation("session_locator_redaction")
-    async def _is_password_locator(self, locator: Any) -> bool:
-        """Best-effort credential check for semantic-locator actions."""
+    async def _is_password_locator(self, locator: Any, *, when_unknown: bool | None = True) -> bool | None:
+        """Best-effort credential check for semantic-locator actions.
+
+        *when_unknown* as in ``core_page_mixin._is_password_input``.
+        """
         try:
             info = await locator.first.evaluate(
                 "el => el ? {"
@@ -43,11 +46,11 @@ class SessionLocatorMixin(SessionLike):
             )
         except Exception as exc:
             log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
-            return True
+            return when_unknown
         # Same contract as the selector probe: {type, ac}, and anything else
         # is treated as a credential rather than guessed at.
         if not isinstance(info, dict):
-            return True
+            return when_unknown
         if info.get("type") == "password":
             return True
         return info.get("ac") in ("current-password", "new-password", "one-time-code")
@@ -59,9 +62,14 @@ class SessionLocatorMixin(SessionLike):
             mode = "passwords"
         if mode == "off":
             return value
-        if mode == "all":
-            return REDACTED_INPUT_PLACEHOLDER
-        if await self._is_password_locator(locator):
+        verdict = await self._is_password_locator(locator, when_unknown=None)
+        if verdict is True:
+            # As core_page_mixin._redacted_or_original: keep the page's own
+            # echoes of it out of every other durable row too.
+            from octowright.macros.privacy import admit_redacted_input
+
+            admit_redacted_input(self, value)
+        if mode == "all" or verdict is not False:
             return REDACTED_INPUT_PLACEHOLDER
         return value
 

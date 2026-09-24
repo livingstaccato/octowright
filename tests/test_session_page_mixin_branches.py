@@ -346,6 +346,19 @@ def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicM
     return locator
 
 
+def _record_mock(subj: Any) -> Any:
+    """The recorder mock the subject was built with.
+
+    Filling a credential field admits its value to the session privacy ledger,
+    which wraps ``subj.recorder`` in the scrubbing ``SensitiveRecorder``; the
+    row the test is about is what reached the recorder underneath.
+    """
+    from octowright.macros.privacy import SensitiveRecorder
+
+    recorder = subj.recorder
+    return (recorder._recorder if isinstance(recorder, SensitiveRecorder) else recorder).record
+
+
 def _make_redaction_subject(tmp_path: Path, input_type: str | None) -> _CombinedMixin:
     """Reusable subject builder for redaction tests."""
     subj = _CombinedMixin()
@@ -377,7 +390,7 @@ class TestInputRedaction:
         # Page got the real value:
         target.type.assert_awaited_once_with("#pw", "hunter2-secret!", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         # Recorder got the redacted placeholder:
-        call = subj.recorder.record.call_args
+        call = _record_mock(subj).call_args
         assert call.args == ("type",)
         assert call.kwargs["text"] == REDACTED_INPUT_PLACEHOLDER
         assert call.kwargs["text"] != "hunter2-secret!"
@@ -394,7 +407,7 @@ class TestInputRedaction:
         await subj.fill("#pw", "hunter2-secret!")
         target = subj._target()
         target.fill.assert_awaited_once_with("#pw", "hunter2-secret!", timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        call = subj.recorder.record.call_args
+        call = _record_mock(subj).call_args
         assert call.args == ("fill",)
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
@@ -404,7 +417,7 @@ class TestInputRedaction:
         monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
         subj = _make_redaction_subject(tmp_path, "text")
         await subj.type_text("#name", "alice", None)
-        call = subj.recorder.record.call_args
+        call = _record_mock(subj).call_args
         assert call.kwargs["text"] == "alice"
 
     @pytest.mark.anyio
@@ -417,7 +430,7 @@ class TestInputRedaction:
         await subj.fill("#name", "alice")
         target = subj._target()
         target.fill.assert_awaited_once_with("#name", "alice", timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        call = subj.recorder.record.call_args
+        call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
     @pytest.mark.anyio
@@ -426,7 +439,7 @@ class TestInputRedaction:
         monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "off")
         subj = _make_redaction_subject(tmp_path, "password")
         await subj.fill("#pw", "hunter2-secret!")
-        call = subj.recorder.record.call_args
+        call = _record_mock(subj).call_args
         assert call.kwargs["value"] == "hunter2-secret!"
 
     @pytest.mark.anyio
