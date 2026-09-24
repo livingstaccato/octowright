@@ -14,6 +14,7 @@ over loopback HTTP because ``file://`` is refused by navigation (see
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -53,6 +54,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith("/slow"):
             time.sleep(3)  # still in flight when the page navigates away
+        if self.path.startswith("/hang"):
+            time.sleep(20)  # never answers within a test
         status = {"/api500": 500, "/missing.png": 404}.get(self.path, 200)
         body = SURFACES if self.path.startswith("/surfaces") else PAGE
         self.send_response(status)
@@ -106,6 +109,7 @@ _REFUSED_AND_THROWN = (
 
 
 async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    session.enable_inflight_tracking()
     await session.page.evaluate(_REFUSED_AND_THROWN.format(port=_closed_port()))
     await session._settle_network(5000)
     assert session.network_failures_since()[:2] == (1, 1), list(session._network_requests)
@@ -137,6 +141,7 @@ async def test_a_cancelled_request_is_observed_and_classified_as_an_abort(sessio
     cancellation all three engines report (measured: net::ERR_ABORTED,
     NS_BINDING_ABORTED, "Load request cancelled").
     """
+    session.enable_inflight_tracking()
     session.mark_network_clean_window()
     await session.page.evaluate(
         "() => { const c = new AbortController();"
@@ -149,12 +154,66 @@ async def test_a_cancelled_request_is_observed_and_classified_as_an_abort(sessio
 
 
 async def test_navigating_away_mid_request_is_not_a_failure(session: Any, page_url: str) -> None:
+    session.enable_inflight_tracking()
     session.mark_network_clean_window()
     await session.page.evaluate("() => { fetch('/slow-never-answers-' + Math.random()).catch(() => {}); }")
     await session.page.goto(page_url + "?next")
     await session._settle_network(5000)
     failures = [row["failure"] for row in session._network_requests if row.get("failure")]
     assert session.network_failures_since()[0] == 0, failures
+
+
+async def _start_hanging_fetch(session: Any) -> None:
+    await session.page.evaluate("() => { fetch('/hang-' + Math.random()).catch(() => {}); }")
+    deadline = time.monotonic() + 5
+    while session.pending_requests() == 0 and time.monotonic() < deadline:
+        await asyncio.sleep(0.02)
+    assert session.pending_requests() == 1, "the fetch never registered as in flight"
+
+
+async def test_a_fetch_cancelled_by_navigation_does_not_hold_the_settle_wait(session: Any, page_url: str) -> None:
+    """Measured on Chromium: the cancelled fetch fires neither requestfinished nor requestfailed.
+
+    Without the commit forgetting it, every later settle wait ran to its full
+    timeout and reported in_flight >= 1; Firefox and WebKit end it themselves.
+    """
+    session.enable_inflight_tracking()
+    await _start_hanging_fetch(session)
+    await session.page.goto(page_url + "?next")
+    started = time.monotonic()
+    result = await session.expect_network_clean(settle_timeout_ms=3000)
+    assert time.monotonic() - started < 2.0, result
+    assert result["in_flight"] == 0 and result["failed_requests"] == 0
+
+
+async def test_a_same_document_navigation_keeps_waiting_for_the_documents_fetch(session: Any) -> None:
+    """pushState fires framenavigated too, but the document -- and its fetch -- live on."""
+    session.enable_inflight_tracking()
+    await _start_hanging_fetch(session)
+    await session.page.evaluate("() => history.pushState({}, '', '/spa-route')")
+    result = await session.expect_network_clean(settle_timeout_ms=500)
+    assert result["in_flight"] == 1
+
+
+async def test_a_macro_that_asserts_tracks_from_its_first_step(
+    session: Any, page_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run enables tracking before dispatch, so the check waits for the step's request."""
+    assert not session._inflight_tracking
+    _macros(
+        monkeypatch,
+        {
+            "slow": [
+                {"action": "evaluate", "expression": "() => { fetch('/slow-then-refused').catch(() => {}); }"},
+                {"action": "expect_network_clean", "settle_timeout_ms": 10000},
+            ]
+        },
+    )
+    started = time.monotonic()
+    await execution.run_macro(session, "slow")
+    # /slow answers after 3s: the check returning sooner would mean it never waited.
+    assert time.monotonic() - started >= 2.5
+    assert session._inflight_tracking
 
 
 async def test_no_text_on_a_rendered_page(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

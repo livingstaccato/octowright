@@ -18,9 +18,9 @@ returns before the POST it started has failed.
 
 from __future__ import annotations
 
-import asyncio
-import time
+import heapq
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -30,6 +30,7 @@ import pytest
 from octowright.macros import execution
 from octowright.macros.lint import lint_macro
 from octowright.macros.runtime import _ACTION_MAP
+from octowright.session import core_expect_mixin
 from octowright.session.core import BrowserSession
 
 
@@ -38,6 +39,7 @@ def session(tmp_path: Path) -> BrowserSession:
     page = AsyncMock()
     page.url = "https://octowright.com/"
     page.is_closed = MagicMock(return_value=False)
+    page.on = MagicMock()
     return BrowserSession(
         instance_id="test",
         kind="chromium",
@@ -147,69 +149,144 @@ def test_the_mark_step_replays_and_lints() -> None:
 # --- in-flight requests are waited for ---------------------------------------------------
 
 
+class FakeClock:
+    """Stands in for a module's ``time`` and ``asyncio``: a sleep advances it and fires what is due.
+
+    The settle wait's edges are 50ms and 100ms apart, which a real clock under
+    load cannot hold a test to. Event offsets are kept off the 50ms poll grid so
+    float accumulation cannot decide which side of a boundary they land on.
+    """
+
+    def __init__(self) -> None:
+        self.start = self.now = 0.0
+        self._due: list[tuple[float, int, Callable[[], None]]] = []
+
+    @property
+    def elapsed(self) -> float:
+        return self.now - self.start
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def at(self, offset: float, action: Callable[[], None]) -> None:
+        heapq.heappush(self._due, (self.start + offset, len(self._due), action))
+
+    async def sleep(self, delay: float) -> None:
+        target = self.now + max(0.0, delay)
+        while self._due and self._due[0][0] <= target:
+            due, _, action = heapq.heappop(self._due)
+            self.now = max(self.now, due)
+            action()
+        self.now = target
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
+    fake = FakeClock()
+    monkeypatch.setattr(core_expect_mixin, "time", fake)
+    monkeypatch.setattr(core_expect_mixin, "asyncio", fake)
+    return fake
+
+
+def _refuse(session: BrowserSession, request: MagicMock) -> Callable[[], None]:
+    def fail() -> None:
+        request.failure = "net::ERR_CONNECTION_REFUSED"
+        session._handle_request_failed(request)
+
+    return fail
+
+
 @pytest.mark.anyio
-async def test_a_request_that_fails_while_the_check_waits_is_counted(session: BrowserSession) -> None:
+async def test_a_request_that_fails_while_the_check_waits_is_counted(session: BrowserSession, clock: FakeClock) -> None:
     pending = _request()
     session._handle_request_started(pending, session.page)
-
-    async def fail_later() -> None:
-        await asyncio.sleep(0.15)
-        pending.failure = "net::ERR_CONNECTION_REFUSED"
-        session._handle_request_failed(pending)
-
-    task = asyncio.ensure_future(fail_later())
+    clock.at(0.17, _refuse(session, pending))
     with pytest.raises(RuntimeError, match=r"1 failed request\(s\)"):
         await session.expect_network_clean(settle_timeout_ms=2000)
-    await task
 
 
 @pytest.mark.anyio
-async def test_a_request_that_never_finishes_is_reported_not_failed(session: BrowserSession) -> None:
-    session._handle_request_started(_request(), session.page)
-    started = time.monotonic()
+async def test_a_follow_up_started_inside_the_quiet_interval_is_waited_for(
+    session: BrowserSession, clock: FakeClock
+) -> None:
+    """The quiet interval exists for this: the request a finished one triggers."""
+    first, follow_up = _request(), _request()
+    session._handle_request_started(first, session.page)
+    clock.at(0.03, lambda: session._handle_request_finished(first))
+    clock.at(0.08, lambda: session._handle_request_started(follow_up, session.page))  # inside 0.05..0.15
+    clock.at(0.47, _refuse(session, follow_up))
+    with pytest.raises(RuntimeError, match=r"1 failed request\(s\)"):
+        await session.expect_network_clean(settle_timeout_ms=2000)
+    assert 0.47 < clock.elapsed < 0.7
+
+
+@pytest.mark.anyio
+async def test_the_quiet_interval_is_cut_at_the_deadline(session: BrowserSession, clock: FakeClock) -> None:
+    request = _request()
+    session._handle_request_started(request, session.page)
+    clock.at(0.12, lambda: session._handle_request_finished(request))
     result = await session.expect_network_clean(settle_timeout_ms=150)
-    assert time.monotonic() - started < 1.5
+    assert result["in_flight"] == 0
+    assert clock.elapsed == pytest.approx(0.15)
+
+
+@pytest.mark.anyio
+async def test_a_follow_up_in_the_last_quiet_interval_is_reported_in_flight(
+    session: BrowserSession, clock: FakeClock
+) -> None:
+    first, follow_up = _request(), _request()
+    session._handle_request_started(first, session.page)
+    clock.at(0.12, lambda: session._handle_request_finished(first))
+    clock.at(0.14, lambda: session._handle_request_started(follow_up, session.page))
+    result = await session.expect_network_clean(settle_timeout_ms=150)
+    assert result["in_flight"] == 1 and result["failed_requests"] == 0
+    assert clock.elapsed == pytest.approx(0.15)
+
+
+@pytest.mark.anyio
+async def test_a_request_that_never_finishes_is_reported_not_failed(session: BrowserSession, clock: FakeClock) -> None:
+    session._handle_request_started(_request(), session.page)
+    result = await session.expect_network_clean(settle_timeout_ms=150)
+    assert clock.elapsed == pytest.approx(0.15)
     assert result["in_flight"] == 1 and result["failed_requests"] == 0
 
 
 @pytest.mark.anyio
-async def test_settle_zero_judges_immediately(session: BrowserSession) -> None:
+async def test_settle_zero_judges_immediately(session: BrowserSession, clock: FakeClock) -> None:
     session._handle_request_started(_request(), session.page)
-    started = time.monotonic()
-    await session.expect_network_clean(settle_timeout_ms=0)
-    assert time.monotonic() - started < 0.1
+    result = await session.expect_network_clean(settle_timeout_ms=0)
+    assert clock.elapsed == 0 and result["in_flight"] == 1
 
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("resource_type", ["eventsource", "websocket", "media"])
-async def test_long_lived_streams_are_not_waited_for(session: BrowserSession, resource_type: str) -> None:
+async def test_long_lived_streams_are_not_waited_for(
+    session: BrowserSession, clock: FakeClock, resource_type: str
+) -> None:
     session._handle_request_started(_request(resource_type), session.page)
-    started = time.monotonic()
     result = await session.expect_network_clean(settle_timeout_ms=3000)
-    assert time.monotonic() - started < 1.0 and result["in_flight"] == 0
+    assert clock.elapsed == pytest.approx(0.1) and result["in_flight"] == 0
 
 
 @pytest.mark.anyio
-async def test_a_finished_request_stops_the_wait(session: BrowserSession) -> None:
+async def test_a_finished_request_stops_the_wait(session: BrowserSession, clock: FakeClock) -> None:
     request = _request()
     session._handle_request_started(request, session.page)
     session._handle_request_finished(request)
-    started = time.monotonic()
     await session.expect_network_clean(settle_timeout_ms=3000)
-    assert time.monotonic() - started < 1.0
+    assert clock.elapsed == pytest.approx(0.1)
 
 
 @pytest.mark.anyio
-async def test_a_closed_pages_requests_are_not_waited_for(session: BrowserSession) -> None:
+async def test_a_closed_pages_requests_are_not_waited_for(session: BrowserSession, clock: FakeClock) -> None:
     closed = MagicMock()
     session._handle_request_started(_request(), closed)
     session._handle_request_started(_request(), session.page)
     session._forget_page_requests(closed)
     assert session.pending_requests() == 1
     session._forget_page_requests(session.page)
-    started = time.monotonic()
     await session.expect_network_clean(settle_timeout_ms=3000)
-    assert time.monotonic() - started < 1.0
+    assert clock.elapsed == pytest.approx(0.1)
 
 
 def test_in_flight_tracking_is_bounded(session: BrowserSession) -> None:
@@ -222,9 +299,10 @@ def test_listeners_track_request_lifecycle(session: BrowserSession) -> None:
     from octowright.browser_pool.listeners import _wire_listeners
 
     page = MagicMock()
+    session.enable_inflight_tracking()
     _wire_listeners(session, page)
     events = {call.args[0] for call in page.on.call_args_list}
-    assert {"request", "requestfinished", "requestfailed", "pageerror", "close"} <= events
+    assert {"request", "requestfinished", "requestfailed", "pageerror", "close", "framenavigated"} <= events
 
 
 # --- run_macro resets the per-run window (no browser needed) ----------------------------

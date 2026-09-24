@@ -27,6 +27,8 @@ class SessionExpectMixin(SessionLike):
     # Written by mark_network_clean below; declared so the assignment does not
     # narrow the dataclass field's Optional type.
     _network_clean_explicit_mark: tuple[int, int, int] | None
+    _inflight_evicted: int
+    _inflight_evicted_explicit_mark: int
 
     @gated_operation("browser_expect_poll")
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
@@ -164,7 +166,10 @@ class SessionExpectMixin(SessionLike):
     @gated_operation("browser_mark_network_clean")
     async def mark_network_clean(self) -> None:
         """Start the window ``expect_network_clean(since="mark")`` judges; it spans macro runs."""
+        # A mark means a check will follow, so the journey's requests are waited for.
+        self.enable_inflight_tracking()
         self._network_clean_explicit_mark = self._network_clean_counts()
+        self._inflight_evicted_explicit_mark = self._inflight_evicted
         self.recorder.record("mark_network_clean")
 
     @gated_operation("browser_expect_network_clean")
@@ -182,11 +187,17 @@ class SessionExpectMixin(SessionLike):
         a 4xx is sometimes the answer a journey expects. Requests still in
         flight are waited for, up to ``settle_timeout_ms`` (``0`` judges at
         once); any still pending then are reported as ``in_flight``, not failed.
+        Tracking what is in flight starts at a ``mark_network_clean`` step or a
+        macro run containing this check; called outside both, this call starts
+        it and so waits only for requests started from now. Requests dropped
+        from that bounded tracking are reported as ``in_flight_untracked`` (only
+        when there are any): they may still be running after the wait returns.
         The error carries counts only, because a failed URL or an exception
         message can carry a credential.
         """
         if since not in ("run", "mark"):
             raise ValueError(f'unknown since={since!r}; expected "run" or "mark"')
+        self.enable_inflight_tracking()
         settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
         in_flight = await self._settle_network(settle) if settle > 0 else self.pending_requests()
         failed, page_errors, http_error_count = self.network_failures_since(since)
@@ -201,7 +212,11 @@ class SessionExpectMixin(SessionLike):
         options = {"http_errors": http_errors, "since": since, "settle_timeout_ms": settle_timeout_ms}
         defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None}
         self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
-        return {**counts, "in_flight": in_flight}
+        result = {**counts, "in_flight": in_flight}
+        untracked = self.untracked_requests_since(since)
+        if untracked > 0:
+            result["in_flight_untracked"] = untracked
+        return result
 
     @gated_operation("browser_expect_no_text_scan")
     async def _scan_drawn_text(self, frames: list[Any], text: str, selector: str, timeout: float) -> str:

@@ -225,6 +225,20 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "copies browser failure metadata into the bounded network cache",
     ),
+    "session/core_network_mixin.py:SessionNetworkMixin.enable_inflight_tracking": (
+        "cached-property-only",
+        "iterates Octowright's own cached session.pages list to hand each page to "
+        "_track_page_requests; no Playwright I/O of its own",
+    ),
+    "session/core_network_mixin.py:SessionNetworkMixin._track_page_requests": (
+        "event-critical",
+        "attaches passive request/requestfinished/framenavigated/framedetached listeners; runs "
+        "from the popup wiring event and from operations already holding the session's lease",
+    ),
+    "session/core_network_mixin.py:SessionNetworkMixin._handle_frame_navigated": (
+        "event-critical",
+        "reads the navigated page's cached main_frame to forget a replaced document's in-flight requests",
+    ),
     "session/core_network_mixin.py:SessionNetworkMixin._handle_request_started": (
         "event-critical",
         "reads a browser-emitted request's resource type to track it as in flight",

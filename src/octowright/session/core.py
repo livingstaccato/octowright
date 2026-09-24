@@ -232,11 +232,23 @@ class BrowserSession(
     # macro run, and at the last ``mark_network_clean`` step (None until one ran).
     _network_clean_mark: tuple[int, int, int] = (0, 0, 0)
     _network_clean_explicit_mark: tuple[int, int, int] | None = None
-    # Requests started and not yet finished or failed, with the page that made
-    # them, so ``expect_network_clean`` can wait for them. Bounded (oldest
-    # dropped) because a request whose end event never arrives would otherwise
-    # stay forever.
+    # Requests started and not yet finished or failed, each mapped to
+    # (page, frame, is-navigation), so ``expect_network_clean`` can wait for
+    # them. Bounded (oldest dropped, and counted in ``_inflight_evicted``)
+    # because a request whose end event never arrives would otherwise stay
+    # forever. Only populated once ``_inflight_tracking`` is on: subscribing to
+    # every request's start and end costs protocol traffic and pins Request
+    # objects, which a session that never asks should not pay for.
     _inflight_requests: dict[Any, Any] = field(default_factory=dict, repr=False)
+    _inflight_tracking: bool = False
+    _tracked_pages: WeakSet[Page] = field(default_factory=WeakSet, repr=False)
+    # Frames with a navigation request since their last commit, to their page:
+    # what tells a cross-document commit from a same-document one.
+    _navigating_frames: dict[Any, Any] = field(default_factory=dict, repr=False)
+    _inflight_evicted: int = 0
+    # _inflight_evicted at the run window's start and at the last mark step.
+    _inflight_evicted_run_mark: int = 0
+    _inflight_evicted_explicit_mark: int = 0
     # Applied to page-derived text before it is written to disk (the markdown
     # cache). Installed by macros.privacy.install_sensitive_recorder so the
     # session scrubs a macro's credential values without importing the macro

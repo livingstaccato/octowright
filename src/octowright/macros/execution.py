@@ -17,7 +17,12 @@ from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros import safe_screenshot
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
-from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
+from octowright.macros.calls import (
+    MAX_MACRO_CALL_DEPTH,
+    actions_assert_network_clean,
+    dispatch_macro_call,
+    dispatch_plain_action,
+)
 from octowright.macros.descriptions import describe_action
 from octowright.macros.failure_context import MACRO_FAILURE_NETWORK_TAIL as MACRO_FAILURE_NETWORK_TAIL
 from octowright.macros.failure_context import MACRO_FAILURE_PAGE_ERROR_TAIL as MACRO_FAILURE_PAGE_ERROR_TAIL
@@ -575,6 +580,11 @@ async def _run_macro_impl(
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args)
+    # Before the first step, so the requests the journey starts are the ones
+    # expect_network_clean waits for; a run that never asserts pays nothing.
+    enable_tracking = getattr(session, "enable_inflight_tracking", None)
+    if enable_tracking is not None and actions_assert_network_clean(actions, load_macro, substitute):
+        enable_tracking()
 
     executed = 0
     skipped = 0

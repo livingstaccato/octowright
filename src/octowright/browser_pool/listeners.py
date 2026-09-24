@@ -52,10 +52,13 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page.on("dialog", session._handle_dialog)
     page.on("download", session._handle_download)
     page.on("response", session._handle_response)
-    page.on("request", lambda request: session._handle_request_started(request, page))
     page.on("close", lambda: session._forget_page_requests(page))
-    page.on("requestfinished", session._handle_request_finished)
     page.on("requestfailed", session._handle_request_failed)
+    # Request start/end tracking is lazy (``enable_inflight_tracking``); once a
+    # session has it, every page it opens later gets it too. The failure
+    # counters above stay unconditional so a failure is never missed.
+    if getattr(session, "_inflight_tracking", False):
+        session._track_page_requests(page)
     page.on("pageerror", session._handle_page_error)
     page.on("websocket", session._handle_websocket)
     page.on("load", lambda: session._schedule_markdown_capture(page=page, force=True))

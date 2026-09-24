@@ -32,6 +32,7 @@ SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, neve
 def session(tmp_path: Path) -> BrowserSession:
     page = AsyncMock()
     page.url = "https://octowright.com/"
+    page.on = MagicMock()  # Page.on is synchronous; an AsyncMock one leaks unawaited coroutines
     return BrowserSession(
         instance_id="test",
         kind="chromium",

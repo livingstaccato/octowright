@@ -6,7 +6,8 @@
 """Network-event capture for ``BrowserSession``.
 
 Hooks Playwright's ``response`` and ``requestfailed`` page events into the
-session's bounded request deque, and exposes ``get_network_requests`` for
+session's bounded request deque, tracks requests in flight (lazily, once
+``expect_network_clean`` will ask), and exposes ``get_network_requests`` for
 the dashboard / MCP tools to read back filtered slices with cursor-based
 pagination.
 
@@ -21,6 +22,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
+from weakref import WeakSet
 
 from provide.telemetry import get_logger
 
@@ -123,6 +125,14 @@ def _same_origin(candidate: str, page_url: str) -> bool:
     return bool(left.scheme) and (left.scheme, left.netloc) == (right.scheme, right.netloc)
 
 
+def _request_frame(request: Any) -> Any:
+    """The frame that made *request*, or None: a service worker's request has none and raises."""
+    try:
+        return request.frame
+    except Exception:
+        return None
+
+
 def _project_request(row: dict[str, Any], include_headers: bool) -> dict[str, Any]:
     """One returned row: a COPY, with headers dropped unless asked for.
 
@@ -164,6 +174,14 @@ def _page_requests(
 
 
 class SessionNetworkMixin(SessionLike):
+    # Owned by the BrowserSession dataclass; declared for the type checker.
+    _inflight_tracking: bool
+    _tracked_pages: WeakSet[Any]
+    _navigating_frames: dict[Any, Any]
+    _inflight_evicted: int
+    _inflight_evicted_run_mark: int
+    _inflight_evicted_explicit_mark: int
+
     def _handle_response(self, response: Any) -> None:
         request = response.request
         row: dict[str, Any] = {
@@ -229,15 +247,76 @@ class SessionNetworkMixin(SessionLike):
         row["body_truncated"] = len(body) > cap
         row["body"] = body[:cap].decode("utf-8", errors="replace")
 
+    def enable_inflight_tracking(self) -> None:
+        """Track requests in flight on every page, now and opened later. Idempotent; never turned off.
+
+        Off until something will judge it -- a ``mark_network_clean`` step, a
+        macro run that asserts ``expect_network_clean``, or a direct call to it.
+        Enabled by that direct call, the settle wait sees only requests started
+        from then on, which is why the other two enable it earlier.
+        """
+        if self._inflight_tracking:
+            return
+        self._inflight_tracking = True
+        for page in list(self.pages):
+            self._track_page_requests(page)
+
+    def _track_page_requests(self, page: Any) -> None:
+        if page in self._tracked_pages:
+            return
+        self._tracked_pages.add(page)
+        page.on("request", lambda request: self._handle_request_started(request, page))
+        page.on("requestfinished", self._handle_request_finished)
+        page.on("framenavigated", lambda frame: self._handle_frame_navigated(frame, page))
+        page.on("framedetached", self._forget_frame_requests)
+
     def _handle_request_started(self, request: Any, page: Any) -> None:
         if request.resource_type in LONG_LIVED_RESOURCE_TYPES:
             return
+        frame = _request_frame(request)
+        navigation = frame is not None and request.is_navigation_request() is True
+        if navigation:
+            self._navigating_frames[frame] = page
         if len(self._inflight_requests) >= INFLIGHT_REQUEST_LIMIT:
             self._inflight_requests.pop(next(iter(self._inflight_requests)))
-        self._inflight_requests[request] = page
+            # Still running, just no longer watched: reported, so a settle that
+            # returns early is not mistaken for one that saw everything end.
+            self._inflight_evicted += 1
+        self._inflight_requests[request] = (page, frame, navigation)
 
     def _handle_request_finished(self, request: Any) -> None:
         self._inflight_requests.pop(request, None)
+
+    def _handle_frame_navigated(self, frame: Any, page: Any) -> None:
+        """Forget the requests of a document this commit replaced.
+
+        They can no longer finish observably: measured on Chromium, a fetch
+        cancelled by navigating away fires neither ``requestfinished`` nor
+        ``requestfailed``, so without this every later settle wait ran to its
+        timeout. Only a cross-document commit -- one preceded by a navigation
+        request for the frame -- replaces anything; ``history.pushState`` and a
+        fragment change fire this event too, and that document's fetches are
+        still live. The navigation request itself is kept (its body may still
+        be streaming), and a main-frame commit replaces every frame of the page.
+        """
+        if self._navigating_frames.pop(frame, None) is None:
+            return
+        try:
+            whole_page = frame is page.main_frame
+        except Exception:
+            whole_page = False
+        for request, (owner, owner_frame, navigation) in list(self._inflight_requests.items()):
+            if owner is not page or (navigation and owner_frame is frame):
+                continue
+            if whole_page or owner_frame is frame:
+                self._inflight_requests.pop(request, None)
+
+    def _forget_frame_requests(self, frame: Any) -> None:
+        """A detached frame's requests will never finish; stop waiting for them."""
+        self._navigating_frames.pop(frame, None)
+        for request, (_page, owner_frame, _navigation) in list(self._inflight_requests.items()):
+            if owner_frame is frame:
+                self._inflight_requests.pop(request, None)
 
     def _handle_request_failed(self, request: Any) -> None:
         self._inflight_requests.pop(request, None)
@@ -265,6 +344,12 @@ class SessionNetworkMixin(SessionLike):
     def mark_network_clean_window(self) -> None:
         """Start the per-run window ``expect_network_clean`` judges. Called per macro run."""
         self._network_clean_mark = self._network_clean_counts()
+        self._inflight_evicted_run_mark = self._inflight_evicted
+
+    def untracked_requests_since(self, since: str = "run") -> int:
+        """Requests evicted from in-flight tracking since the window's start; *since* as validated above."""
+        mark = self._inflight_evicted_run_mark if since == "run" else self._inflight_evicted_explicit_mark
+        return self._inflight_evicted - mark
 
     def network_failures_since(self, since: str = "run") -> tuple[int, int, int]:
         """(request failures, page errors, HTTP errors) since the run start or the explicit mark."""
@@ -283,9 +368,12 @@ class SessionNetworkMixin(SessionLike):
 
     def _forget_page_requests(self, page: Any) -> None:
         """A closed page's requests will never finish; stop waiting for them."""
-        for request, owner in list(self._inflight_requests.items()):
+        for request, (owner, _frame, _navigation) in list(self._inflight_requests.items()):
             if owner is page:
                 self._inflight_requests.pop(request, None)
+        for frame, owner in list(self._navigating_frames.items()):
+            if owner is page:
+                self._navigating_frames.pop(frame, None)
 
     def pending_requests(self) -> int:
         """Requests still in flight on pages that are still open."""
