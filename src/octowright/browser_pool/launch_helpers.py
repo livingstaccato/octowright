@@ -410,6 +410,12 @@ async def _open_browser_context(
             # "Restore pages?" bubble covering the page we just navigated to.
             # See restore_prompt.
             clear_crash_restore_prompt(pdir)
+            # Scoped trust: a persona's roots reach its own Chromium only.
+            # Applied here because the daemon and `octowright test` both open
+            # persistent contexts through this function. See persona_trust.
+            from octowright.persona_trust import persona_trust_launch_kwargs
+
+            launch_kwargs = {**launch_kwargs, **persona_trust_launch_kwargs(profile, kind)}
         else:
             user_data_dir = session_user_data_dir
         context = await browser_type.launch_persistent_context(
