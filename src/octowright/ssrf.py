@@ -201,24 +201,21 @@ def _parse_whatwg_ipv4(host: str) -> ipaddress.IPv4Address | None:
         return None
 
 
-def _host_is_blocked(host: str) -> bool:
-    """True if ``host`` is a non-public literal IP, or a blocked hostname
-    (``localhost`` / ``*.localhost`` / a well-known metadata name).
+def _literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """``host`` as an IP address in any spelling a browser accepts, else ``None``.
 
     Checks the strict dotted-quad/IPv6 form first, then falls back to the
     WHATWG (browser) IPv4 parser: every engine octowright drives resolves
     decimal/hex/octal/shorthand IPv4 forms (e.g. ``2130706433`` ==
     ``127.0.0.1``) before connecting, so those forms must be classified the
     same as their dotted-quad equivalent rather than mistaken for a hostname.
+    The one parse serves both layers, so the literal check and the DNS check
+    cannot disagree about whether a host is an address.
     """
     try:
-        ip = ipaddress.ip_address(host)
+        return ipaddress.ip_address(host)
     except ValueError:
-        whatwg_ip = _parse_whatwg_ipv4(host)
-        if whatwg_ip is not None:
-            return _ip_is_non_public(whatwg_ip)
-        return host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")
-    return _ip_is_non_public(ip)
+        return _parse_whatwg_ipv4(host)
 
 
 #: Non-ASCII code points UTS46 maps to ``.`` before a browser parses the host.
@@ -256,39 +253,55 @@ def normalize_host_for_policy(host: str) -> str:
     return mapped.lower()
 
 
+def _policy_host(url: str) -> str | None:
+    """The normalized host of ``url`` the active policy has to classify, if any.
+
+    ``None`` when the policy is off, ``url`` does not parse (the downstream
+    navigate will fail anyway; don't mask that with an SSRF error), the scheme
+    is not IP-routable, there is no host, or the host is allowlisted.
+    """
+    if _policy() == "off":
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _CHECKED_SCHEMES:
+        return None
+    host = normalize_host_for_policy(parts.hostname or "")
+    if not host or host in _allowlist():
+        return None
+    return host
+
+
+def _refuse_as_spelled(host: str) -> bool:
+    """Refuse ``host`` if it is a non-public literal IP or a blocked hostname
+    (``localhost`` / ``*.localhost`` / a well-known metadata name).
+
+    Returns whether ``host`` is a literal IP -- one that passed here has been
+    fully classified, so there is nothing left for DNS to answer.
+    """
+    ip = _literal_ip(host)
+    blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else _ip_is_non_public(ip)
+    if blocked:
+        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+    return ip is not None
+
+
 def check_navigation_url(url: str) -> None:
     """Raise ``ValueError`` if the active SSRF policy refuses ``url``.
 
     A no-op when the policy is ``off`` (default) or the URL is not http(s).
     Allowlisted hosts always pass.
     """
-    if _policy() == "off":
-        return
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        # Unparsable here means the downstream navigate will fail anyway; don't
-        # mask that with an SSRF error.
-        return
-    if parts.scheme.lower() not in _CHECKED_SCHEMES:
-        return
-    host = normalize_host_for_policy(parts.hostname or "")
-    if host and host not in _allowlist() and _host_is_blocked(host):
-        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+    host = _policy_host(url)
+    if host is not None:
+        _refuse_as_spelled(host)
 
 
 #: The resolver, held at module level so tests can substitute answers without
 #: patching the process-wide ``socket`` module.
 _getaddrinfo = socket.getaddrinfo
-
-
-def _is_literal_ip(host: str) -> bool:
-    """True if ``host`` is an IP address in any spelling a browser accepts."""
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        return _parse_whatwg_ipv4(host) is not None
-    return True
 
 
 def _resolved_non_public(host: str) -> list[str]:
@@ -312,26 +325,6 @@ def _resolved_non_public(host: str) -> list[str]:
     return flagged
 
 
-def _host_to_resolve(url: str) -> str | None:
-    """The hostname ``url`` needs resolved under the active policy, if any.
-
-    ``None`` when the policy is off, the scheme is not IP-routable, the host is
-    a literal IP (already classified by the synchronous check) or allowlisted.
-    """
-    if _policy() == "off":
-        return None
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return None
-    if parts.scheme.lower() not in _CHECKED_SCHEMES:
-        return None
-    host = normalize_host_for_policy(parts.hostname or "")
-    if not host or host in _allowlist() or _is_literal_ip(host):
-        return None
-    return host
-
-
 async def check_navigation_url_resolved(url: str) -> None:
     """:func:`check_navigation_url`, then refuse a host that RESOLVES non-public.
 
@@ -339,9 +332,8 @@ async def check_navigation_url_resolved(url: str) -> None:
     caller is on the daemon's event loop. See the module docstring for the
     rebinding window this cannot close.
     """
-    check_navigation_url(url)
-    host = _host_to_resolve(url)
-    if host is None:
+    host = _policy_host(url)
+    if host is None or _refuse_as_spelled(host):
         return
     try:
         flagged = await asyncio.to_thread(_resolved_non_public, host)

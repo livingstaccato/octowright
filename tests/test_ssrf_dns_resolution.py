@@ -121,3 +121,38 @@ async def test_navigate_preflight_resolves(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(ssrf, "_getaddrinfo", _answers("169.254.169.254"))
     with pytest.raises(InvalidRequestError, match="non-public"):
         await reject_unsafe_url_resolved("http://private.attacker.test/")
+
+
+def _count_calls(monkeypatch: pytest.MonkeyPatch, module: Any, name: str) -> list[object]:
+    calls: list[object] = []
+    real = getattr(module, name)
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, spy)
+    return calls
+
+
+@pytest.mark.usefixtures("policy_on")
+@pytest.mark.parametrize("url", ["https://example.com/path", "http://93.184.216.34/"])
+async def test_the_resolving_check_normalizes_the_host_once(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    """The literal and DNS layers share one parse, so they cannot classify a host differently."""
+    monkeypatch.setattr(ssrf, "_getaddrinfo", _answers("93.184.216.34"))
+    calls = _count_calls(monkeypatch, ssrf, "normalize_host_for_policy")
+    await ssrf.check_navigation_url_resolved(url)
+    assert len(calls) == 1
+
+
+@pytest.mark.usefixtures("policy_on")
+async def test_navigate_preflight_checks_the_host_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tool entry point runs the scheme guard and ONE host check, not the sync one twice."""
+    from octowright.session import core_page_mixin
+
+    monkeypatch.setattr(ssrf, "_getaddrinfo", _answers("93.184.216.34"))
+    normalized = _count_calls(monkeypatch, ssrf, "normalize_host_for_policy")
+    canonicalized = _count_calls(monkeypatch, core_page_mixin, "_canonicalize_for_guard")
+    await core_page_mixin.reject_unsafe_url_resolved("https://example.com/")
+    assert len(normalized) == 1
+    assert len(canonicalized) == 1

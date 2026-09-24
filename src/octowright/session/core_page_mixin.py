@@ -164,17 +164,17 @@ def _canonicalize_for_guard(url: str) -> str:
     return url.strip(_C0_OR_SPACE).translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
 
 
-def _reject_unsafe_url(url: str) -> None:
-    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
-    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
-    navigation entry point (navigate / open_url / launch) and macro replay
-    routes through here, so one call covers them all.
+def _check_url_shape(url: str) -> str | None:
+    """The scheme half of :func:`_reject_unsafe_url`, without the host check.
 
-    The type is load-bearing, not decoration: ``BrowserPool.launch``
-    classifies by ``isinstance``, so a sibling check added here as a plain
-    ``raise ValueError(...)`` would be filed as an engine fault and recreate
-    issue #214. ``tests/test_launch_guard_classification.py`` scans this
-    function by name for that."""
+    Returns the canonical spelling the host policy must then classify, or
+    ``None`` for a host-relative path, which has no host of its own. Split out
+    so the async entry point can hand that one spelling to the resolving check
+    instead of running the synchronous host check and then the resolving one,
+    which repeats it.
+
+    Raises ``InvalidRequestError``, never a bare ``ValueError`` -- see
+    :func:`_reject_unsafe_url`."""
     if not isinstance(url, str) or not url:
         raise InvalidRequestError("navigate url must be a non-empty string")
     stripped = _canonicalize_for_guard(url)
@@ -189,7 +189,7 @@ def _reject_unsafe_url(url: str) -> None:
     # spelling of an authority, and `_canonicalize_for_guard` folds them all into
     # the `//` form before we get here (see its docstring).
     if stripped.startswith("/") and not stripped.startswith("//"):
-        return
+        return None
     scheme, sep, _rest = stripped.partition(":")
     if not sep:
         raise InvalidRequestError(f"navigate url missing scheme: {url!r}")
@@ -197,7 +197,23 @@ def _reject_unsafe_url(url: str) -> None:
         raise InvalidRequestError(
             f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})"
         )
-    ssrf.check_navigation_url(stripped)
+    return stripped
+
+
+def _reject_unsafe_url(url: str) -> None:
+    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
+    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
+    navigation entry point (navigate / open_url / launch) and macro replay
+    routes through here, so one call covers them all.
+
+    The type is load-bearing, not decoration: ``BrowserPool.launch``
+    classifies by ``isinstance``, so a sibling check added here as a plain
+    ``raise ValueError(...)`` would be filed as an engine fault and recreate
+    issue #214. ``tests/test_launch_guard_classification.py`` scans this
+    function and :func:`_check_url_shape` by name for that."""
+    canonical = _check_url_shape(url)
+    if canonical is not None:
+        ssrf.check_navigation_url(canonical)
 
 
 async def reject_unsafe_url_resolved(url: str) -> None:
@@ -207,9 +223,11 @@ async def reject_unsafe_url_resolved(url: str) -> None:
     synchronous guard stays DNS-free for the callers that cannot await
     (``launch_helpers.base_url_kwargs``), and those are still covered at
     navigation time, since the per-hop ``ssrf_guard`` resolves every hop.
+    The resolving check includes the synchronous one, so it runs alone here.
     """
-    _reject_unsafe_url(url)
-    await ssrf.check_navigation_url_resolved(_canonicalize_for_guard(url))
+    canonical = _check_url_shape(url)
+    if canonical is not None:
+        await ssrf.check_navigation_url_resolved(canonical)
 
 
 async def _body_contains_text(session: SessionLike, body: Any, text: str) -> bool:

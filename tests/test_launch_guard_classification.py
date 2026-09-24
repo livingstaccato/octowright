@@ -54,6 +54,7 @@ GUARD_TARGETS: tuple[tuple[str, str | None], ...] = (
     ("url_patterns.py", None),
     ("http_headers.py", None),
     ("session/core_page_mixin.py", "_reject_unsafe_url"),
+    ("session/core_page_mixin.py", "_check_url_shape"),
     ("browser_pool/options.py", None),
     ("browser_pool/launch_helpers.py", None),
     ("browser_pool/launch_execution.py", None),
@@ -117,9 +118,10 @@ def test_the_function_scope_excludes_the_rest_of_its_module() -> None:
     module = ast.parse((SRC / "session/core_page_mixin.py").read_text(encoding=SOURCE_ENCODING))
     assert _raises_bare_value_error(module), "module has unrelated ValueError raises; premise of this test"
 
-    scope = _scope(module, "_reject_unsafe_url")
-    assert scope is not None
-    assert _raises_bare_value_error(scope) == []
+    for function in ("_reject_unsafe_url", "_check_url_shape"):
+        scope = _scope(module, function)
+        assert scope is not None
+        assert _raises_bare_value_error(scope) == []
 
 
 def test_the_scan_would_catch_the_regression_it_was_written_for() -> None:
