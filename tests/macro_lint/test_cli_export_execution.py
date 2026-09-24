@@ -218,6 +218,8 @@ class _FakePage:
         """a11y_dragdrop's verify_js/verify_text_contains land here too --
         same ``"() => false"`` sentinel as ``_FakeLocator.evaluate``."""
         self._log("evaluate", expression)
+        if expression.startswith("({ selector, ownPrefix"):
+            return {"pieces": [self.rendered_text], "overlay": "", "matched": 1}
         return expression != "() => false"
 
     async def wait_for_selector(self, selector: str, **kw: Any) -> _FakeHandle:

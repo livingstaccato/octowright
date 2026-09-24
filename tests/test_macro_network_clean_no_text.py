@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.browser_pool.listeners import _wire_listeners
-from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
+from octowright.defaults import REDACTED_ASSERTION_TEXT
 from octowright.macros.lint import lint_macro
 from octowright.macros.runtime import _ACTION_MAP
 from octowright.macros.substitution import substitute
@@ -139,17 +139,24 @@ def test_pageerror_is_wired_on_every_page(session: BrowserSession) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _drawn(session: BrowserSession, *pieces: str) -> AsyncMock:
+    """Have the page's rendered-text scan return *pieces*; stub Chromium's snapshot."""
+    scan = AsyncMock(return_value={"pieces": list(pieces), "overlay": "", "matched": 1})
+    session.page.evaluate = scan
+    session._snapshot_leaks = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    return scan
+
+
 @pytest.mark.anyio
 async def test_no_text_passes_when_absent(session: BrowserSession) -> None:
-    session.page.inner_text = AsyncMock(return_value="Welcome back")
+    scan = _drawn(session, "Welcome back")
     await session.expect_no_text(SECRET)
-    session.page.inner_text.assert_awaited_once()
-    assert session.page.inner_text.call_args.args[0] == "body"
+    assert scan.call_args.args[1]["selector"] == "body"
 
 
 @pytest.mark.anyio
 async def test_no_text_fails_without_repeating_the_text(session: BrowserSession) -> None:
-    session.page.inner_text = AsyncMock(return_value=f"Your password is {SECRET}")
+    _drawn(session, f"Your password is {SECRET}")
     with pytest.raises(RuntimeError) as excinfo:
         await session.expect_no_text(SECRET)
     assert SECRET not in str(excinfo.value)
@@ -157,16 +164,27 @@ async def test_no_text_fails_without_repeating_the_text(session: BrowserSession)
 
 
 @pytest.mark.anyio
-async def test_no_text_is_case_sensitive(session: BrowserSession) -> None:
-    session.page.inner_text = AsyncMock(return_value=SECRET.upper())
-    await session.expect_no_text(SECRET)
+async def test_no_text_ignores_case_and_invisible_characters(session: BrowserSession) -> None:
+    """The screenshot scanner's comparison: a security check errs toward failing."""
+    _drawn(session, SECRET.upper().replace("-", "-\u200b"))
+    with pytest.raises(RuntimeError, match="forbidden text"):
+        await session.expect_no_text(SECRET)
 
 
 @pytest.mark.anyio
 async def test_no_text_scopes_to_a_selector(session: BrowserSession) -> None:
-    session.page.inner_text = AsyncMock(return_value="")
+    scan = _drawn(session)
     await session.expect_no_text(SECRET, selector="#profile")
-    assert session.page.inner_text.call_args.args[0] == "#profile"
+    assert scan.call_args.args[1]["selector"] == "#profile"
+    session._snapshot_leaks.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_the_snapshot_can_fail_what_script_cannot_see(session: BrowserSession) -> None:
+    _drawn(session)
+    session._snapshot_leaks = AsyncMock(return_value=["rendered text"])  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="rendered text"):
+        await session.expect_no_text(SECRET)
 
 
 @pytest.mark.anyio
@@ -177,10 +195,10 @@ async def test_no_text_rejects_empty_text(session: BrowserSession) -> None:
 
 
 @pytest.mark.anyio
-async def test_no_text_records_a_placeholder_not_the_text(session: BrowserSession) -> None:
-    session.page.inner_text = AsyncMock(return_value="")
+async def test_no_text_records_a_marker_not_the_text(session: BrowserSession) -> None:
+    _drawn(session)
     await session.expect_no_text(SECRET, selector="#p")
-    session.recorder.record.assert_called_with("expect_no_text", selector="#p", text=REDACTED_INPUT_PLACEHOLDER)
+    session.recorder.record.assert_called_with("expect_no_text", selector="#p", text=REDACTED_ASSERTION_TEXT)
 
 
 # ---------------------------------------------------------------------------

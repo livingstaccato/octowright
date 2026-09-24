@@ -14,6 +14,7 @@ from typing import Any
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from octowright.macros._redact import _REDACT_VALUE_ACTIONS
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -31,6 +32,29 @@ from octowright.macros.privacy import (
     scrub_sensitive_values,
 )
 
+# The same placeholder syntax substitution.substitute_in_action resolves.
+_PLACEHOLDER = re.compile(r"\{\{([^}]+)\}\}")
+
+
+def _hard_redacted_args(actions: Any) -> list[str]:
+    """Names of the arguments used in a hard-redacted field, anywhere in *actions*."""
+    names: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            if node.get("action") in _REDACT_VALUE_ACTIONS:
+                for key in ("value", "text"):
+                    if isinstance(node.get(key), str):
+                        names.update(_PLACEHOLDER.findall(node[key]))
+            for item in node.values():
+                walk(item)
+
+    walk(actions)
+    return sorted(names)
+
 
 def render_macro_cli(
     *,
@@ -43,6 +67,7 @@ def render_macro_cli(
     fn_name = _function_name(name)
     signature = _signature(parameters, include_evidence)
     action_json = json.dumps(macro.get("actions", []), indent=2)
+    hard_redacted_args = _hard_redacted_args(macro.get("actions", []))
     parser_lines = _parser_lines(parameters, args, include_evidence)
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
@@ -65,6 +90,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -73,6 +99,9 @@ from urllib.parse import quote, quote_plus
 from playwright.async_api import async_playwright
 
 ACTIONS_JSON = {action_json!r}
+# Arguments that feed a field replay always redacts (a fill's value, an
+# expect_no_text's text), whatever they are named.
+_HARD_REDACTED_ARGS = frozenset({hard_redacted_args!r})
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
 _SUBSTRING_TOKENS = {tuple(sorted(SUBSTRING_TOKENS))!r}
@@ -161,7 +190,7 @@ def _redact_nested_args(value: Any) -> Any:
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     redacted = {{
         str(key): "<redacted>"
-        if _is_sensitive_arg_key(key)
+        if _is_sensitive_arg_key(key) or key in _HARD_REDACTED_ARGS
         else _redact_nested_args(value)
         for key, value in args.items()
     }}
@@ -315,7 +344,7 @@ def _redact_action(
     sensitive_values: list[str],
 ) -> dict[str, Any]:
     redacted = {{key: _redact_value(value, sensitive_values) for key, value in action.items()}}
-    if redacted.get("action") in {{"fill", "type", "fill_by"}}:
+    if redacted.get("action") in _REDACT_VALUE_ACTIONS:
         for key in ("value", "text"):
             if key in redacted:
                 redacted[key] = "<redacted>"
@@ -363,6 +392,10 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
     sensitive_values = _blind_scrub_arg_values(args)
+    sensitive_values = sorted(
+        set(sensitive_values) | {{str(v) for k, v in args.items() if k in _HARD_REDACTED_ARGS and v}},
+        key=lambda value: (-len(value), value),
+    )
 {evidence_setup}    print(json.dumps({{"event": "args", "args": _redact_args(args)}}, sort_keys=True))
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)

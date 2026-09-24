@@ -103,6 +103,7 @@ def _bind_redacted_inputs(
     the recording; every other case is ambiguous and refused, the way replay
     already refuses a redacted header rather than failing confusingly later.
     """
+    actions = _bind_redacted_assertions(actions, param_map)
     redacted = _redacted_fields(actions)
     if not redacted:
         return actions
@@ -113,6 +114,27 @@ def _bind_redacted_inputs(
         return actions
     fields = ", ".join(_field_label(actions[i], i) for i, _key in redacted)
     raise ValueError(_redaction_refusal(fields, len(redacted), candidates))
+
+
+def _bind_redacted_assertions(actions: list[dict[str, Any]], param_map: dict[str, str]) -> list[dict[str, Any]]:
+    """Bind a recorded expect_no_text to the single declared credential parameter.
+
+    Its text is recorded as ``REDACTED_ASSERTION_TEXT`` because it is usually the
+    password the check keeps off screen. With exactly one credential-named
+    parameter that is the intent; with none or several it is left for the author
+    to set, and ``macro_lint`` flags it. Never refused: the assertion does not
+    stop the rest of the recording from replaying.
+    """
+    credentials = sorted(name for name in param_map if is_credential_key(name))
+    if len(credentials) != 1:
+        return actions
+    bound = "{{" + credentials[0] + "}}"
+    return [
+        {**action, "text": bound}
+        if action.get("action") == "expect_no_text" and action.get("text") == defaults.REDACTED_ASSERTION_TEXT
+        else action
+        for action in actions
+    ]
 
 
 def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:

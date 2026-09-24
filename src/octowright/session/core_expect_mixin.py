@@ -10,9 +10,10 @@ import re
 import time
 from typing import Any
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_ASSERTION_TEXT
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
+from octowright.session.rendered_text import COLLECT_RENDERED_TEXT_JS, collect_args, contains
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
@@ -202,19 +203,90 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
         return {**counts, "in_flight": in_flight}
 
+    @gated_operation("browser_expect_no_text_scan")
+    async def _scan_drawn_text(self, frames: list[Any], text: str, selector: str, timeout: float) -> str:
+        """Raise if any frame draws *text*; return the text octowright's overlays show."""
+        overlay = ""
+        for frame in frames:
+            found = await bounded(
+                frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector)),
+                operation="browser_expect_no_text",
+                timeout=timeout,
+            )
+            if not isinstance(found, dict):
+                continue
+            if contains(found.get("pieces", []), text):
+                raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}"')
+            overlay += str(found.get("overlay", ""))
+        return overlay
+
+    @gated_operation("browser_expect_no_text_snapshot")
+    async def _snapshot_leaks(self, text: str, timeout: float) -> list[str]:
+        """Chromium only: what its DOM snapshot says is drawn, closed shadow roots included."""
+        # Local import: the macros package imports the session stack.
+        from octowright.macros.rendered_surface import OPAQUE_ELEMENTS, SNAPSHOT_PARAMS, rendered_leaks
+
+        cdp = await bounded(
+            self.page.context.new_cdp_session(self.page), operation="browser_expect_no_text", timeout=timeout
+        )
+        try:
+            snapshot = await bounded(
+                cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS),
+                operation="browser_expect_no_text",
+                timeout=timeout,
+            )
+        finally:
+            await cdp.detach()
+        # The snapshot scan was built to refuse screenshots, so two of its reasons
+        # do not mean "this text is drawn". Form values are the in-page scan's to
+        # judge (it knows a password field draws only mask characters). And a
+        # shown iframe/canvas/video is refused there whatever it holds, because
+        # a screenshot cannot see into it; here frames are scanned directly and
+        # a canvas holds no text to compare.
+        opaque = {f"visible {name.lower()}" for name in OPAQUE_ELEMENTS}
+        return [r for r in rendered_leaks(snapshot, [text]) if r != "form value" and r not in opaque]
+
     @gated_operation("browser_expect_no_text")
     async def expect_no_text(self, text: str, selector: str = "body", timeout_ms: int | None = None) -> None:
-        """Assert *text* does not appear in *selector*'s rendered text (case-sensitive).
+        """Assert *text* is not drawn in any element matching *selector*.
 
-        Reads ``innerText``: what the page renders, not input values or
-        attributes. *text* is treated as a secret -- it is usually the password
-        the check exists to keep off screen -- so neither the error nor the
-        recording repeats it.
+        Drawn means what a reader can see: rendered text of every match, open
+        shadow roots, visible form values and placeholders, and CSS generated
+        content -- in every frame when *selector* is ``body``. Password fields
+        and hidden elements do not count. On Chromium the page's DOM snapshot is
+        also checked, which reaches closed shadow roots. Canvas, video and other
+        pixel-only content cannot be text-checked. Text compares as the
+        screenshot scanner compares (``macros.redaction_text.normalize``):
+        ignoring case, whitespace and invisible characters. No match means
+        nothing is drawn, so it passes. octowright's own overlays are not the
+        page and are skipped. *text* is treated as a secret, so neither the
+        error nor the recording repeats it.
         """
-        if not text:
-            raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
-        timeout = timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS
-        rendered: str = await self._target().inner_text(selector, timeout=timeout)
-        if text in rendered:
-            raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}"')
-        self.recorder.record("expect_no_text", selector=selector, text=REDACTED_INPUT_PLACEHOLDER)
+        _check_forbidden_text(text)
+        timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
+        target = self._target()
+        whole_page = selector == "body" and target is self.page
+        frames = _frames_to_scan(target, getattr(target, "frames", None) if whole_page else None)
+        overlay = await self._scan_drawn_text(frames, text, selector, timeout)
+        # The snapshot cannot tell octowright's overlays from the page, so skip it
+        # when an overlay itself shows the text rather than fail on our own badge.
+        if whole_page and self.kind == "chromium" and not contains([overlay], text):
+            leaks = await self._snapshot_leaks(text, timeout)
+            if leaks:
+                raise RuntimeError(f"forbidden text ({len(text)} chars) is rendered: {', '.join(leaks)}")
+        self.recorder.record("expect_no_text", selector=selector, text=REDACTED_ASSERTION_TEXT)
+
+
+def _check_forbidden_text(text: str) -> None:
+    if not text:
+        raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
+    if text == REDACTED_ASSERTION_TEXT:
+        raise ValueError(
+            "expect_no_text: this step was recorded with its text redacted; set text to the value "
+            "or a {{parameter}} before replaying it"
+        )
+
+
+def _frames_to_scan(target: Any, frames: Any) -> list[Any]:
+    """Every frame when the check is about the whole page (*frames* given); otherwise only the target."""
+    return list(frames) if isinstance(frames, list) and frames else [target]

@@ -493,6 +493,11 @@ HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 #                     user-supplied value may be confidential.
 INPUT_REDACTION_MODE = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
 REDACTED_INPUT_PLACEHOLDER = "<redacted:password>"
+# What a recorded expect_no_text writes in place of its text, which is usually a
+# secret. Deliberately NOT the placeholder above: save_macro binds that one to a
+# credential parameter as a single redacted input field, and an assertion
+# sharing it made every recording containing one either unsavable or ambiguous.
+REDACTED_ASSERTION_TEXT = "<redacted:forbidden-text>"
 
 # Env var name controlling whether ``.py`` scenario files are loadable.
 # ``.py`` scenarios run arbitrary Python at module import; default OFF so a

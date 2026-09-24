@@ -34,16 +34,32 @@ PAGE = b"""<!doctype html><html><body><h1>Welcome back</h1>
 <input type="password" id="pw" value="hunter2-Correct-Horse!"></body></html>"""
 
 
+#: One page per surface a forbidden text can be rendered on; each token appears once.
+SURFACES = b"""<!doctype html><html><head><style>#gen::after { content: "TOKEN-GENERATED"; }</style></head><body>
+<div class="message">hello</div><div class="message">TOKEN-SECOND-MATCH</div>
+<div id="open-host"></div><div id="closed-host"></div><div id="gen"></div>
+<input type="text" value="TOKEN-TEXT-INPUT"><input placeholder="TOKEN-PLACEHOLDER">
+<input type="password" value="TOKEN-PASSWORD-INPUT">
+<p>TOKEN-ZERO&#8203;WIDTH</p>
+<div style="display:none">TOKEN-HIDDEN</div>
+<iframe srcdoc="<p>TOKEN-IFRAME</p>"></iframe>
+<script>
+document.getElementById("open-host").attachShadow({mode: "open"}).innerHTML = "<span>TOKEN-OPEN-SHADOW</span>";
+document.getElementById("closed-host").attachShadow({mode: "closed"}).innerHTML = "<span>TOKEN-CLOSED-SHADOW</span>";
+</script></body></html>"""
+
+
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.startswith("/slow"):
             time.sleep(3)  # still in flight when the page navigates away
         status = {"/api500": 500, "/missing.png": 404}.get(self.path, 200)
+        body = SURFACES if self.path.startswith("/surfaces") else PAGE
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(PAGE)))
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(PAGE)
+        self.wfile.write(body)
 
     def log_message(self, *_args: object) -> None:
         return
@@ -183,3 +199,56 @@ async def test_http_errors_count_api_failures_not_missing_images(session: Any, m
     await execution.run_macro(session, "api-default")
     with pytest.raises(RuntimeError, match=r"1 HTTP error\(s\)"):
         await execution.run_macro(session, "api-strict")
+
+
+@pytest.mark.parametrize(
+    ("token", "selector"),
+    [
+        ("TOKEN-SECOND-MATCH", ".message"),  # every match, not just the first
+        ("TOKEN-OPEN-SHADOW", "body"),
+        ("TOKEN-TEXT-INPUT", "body"),  # a drawn form value
+        ("TOKEN-PLACEHOLDER", "body"),
+        ("TOKEN-ZEROWIDTH", "body"),  # split by a zero-width character
+        ("TOKEN-IFRAME", "body"),  # the page means every frame
+        ("TOKEN-GENERATED", "body"),  # CSS generated content
+    ],
+)
+async def test_every_rendered_surface_is_checked(session: Any, page_url: str, token: str, selector: str) -> None:
+    await session.page.goto(page_url + "surfaces")
+    with pytest.raises(RuntimeError, match="forbidden text"):
+        await session.expect_no_text(token, selector=selector)
+
+
+@pytest.mark.parametrize("token", ["TOKEN-HIDDEN", "TOKEN-PASSWORD-INPUT"])
+async def test_what_is_not_drawn_passes(session: Any, page_url: str, token: str) -> None:
+    await session.page.goto(page_url + "surfaces")
+    await session.expect_no_text(token)
+
+
+async def test_a_missing_selector_passes_immediately(session: Any, page_url: str) -> None:
+    """Nothing matched, so nothing is rendered; the opposite of a timeout."""
+    await session.page.goto(page_url + "surfaces")
+    started = time.monotonic()
+    await session.expect_no_text("TOKEN-SECOND-MATCH", selector="#error-banner")
+    assert time.monotonic() - started < 3
+
+
+async def test_a_closed_shadow_root_is_checked_on_chromium(session: Any, page_url: str) -> None:
+    """Script cannot reach a closed root; Chromium's DOM snapshot can, other engines cannot."""
+    await session.page.goto(page_url + "surfaces")
+    if session.kind != "chromium":
+        pytest.skip("closed shadow roots are only reachable through Chromium's DOM snapshot")
+    with pytest.raises(RuntimeError, match="forbidden text"):
+        await session.expect_no_text("TOKEN-CLOSED-SHADOW")
+
+
+async def test_octowrights_own_overlay_text_is_not_the_page(session: Any, page_url: str) -> None:
+    """The corner badge shows the session label; a check for that text must not fail on it."""
+    await session.page.goto(page_url + "surfaces")
+    badge = await session.page.evaluate(
+        "() => { const b = document.getElementById('__octowright_badge__'); return b ? b.innerText : ''; }"
+    )
+    if not badge.strip():
+        pytest.skip("no badge text on this page to collide with")
+    word = max(badge.split(), key=len)
+    await session.expect_no_text(word)

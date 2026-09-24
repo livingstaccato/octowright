@@ -27,7 +27,13 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
+from octowright.macros._redact import _REDACT_VALUE_ACTIONS
+from octowright.macros.redaction_text import _INVISIBLE
 from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES, LONG_LIVED_RESOURCE_TYPES
+from octowright.session.rendered_text import COLLECT_RENDERED_TEXT_JS, OWN_OVERLAY_ID_PREFIX
+
+#: The exact pattern replay normalizes with, rendered into the exported script.
+_INVISIBLE_PATTERN = _INVISIBLE.pattern
 
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
@@ -41,10 +47,29 @@ _HTTP_ERROR_RESOURCE_TYPES = """
     + """
 _LONG_LIVED_RESOURCE_TYPES = """
     + repr(sorted(LONG_LIVED_RESOURCE_TYPES))
-    + '''
+    + """
+# Action kinds whose text/value is always redacted in logs, as replay redacts them.
+_REDACT_VALUE_ACTIONS = """
+    + repr(sorted(_REDACT_VALUE_ACTIONS))
+    + """
+_RENDERED_TEXT_JS = """
+    + repr(COLLECT_RENDERED_TEXT_JS)
+    + """
+_OWN_OVERLAY_ID_PREFIX = """
+    + repr(OWN_OVERLAY_ID_PREFIX)
+    + """
+_INVISIBLE = re.compile("""
+    + repr(_INVISIBLE_PATTERN)
+    + ''')
 
 
-def _watch_network(state: dict[str, Any], page: Any) -> None:
+def _normalize(text: str) -> str:
+    """Mirrors octowright.macros.redaction_text.normalize, which replay compares with."""
+    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", text)).casefold()
+
+
+'''
+    + '''def _watch_network(state: dict[str, Any], page: Any) -> None:
     """Count what expect_network_clean judges, from the moment a page exists.
 
     Mirrors the session: a ``requestfailed`` that is not an abort, and every
@@ -413,8 +438,16 @@ forbidden = action["text"]
 if not forbidden:
     raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
 selector = action.get("selector", "body")
-if forbidden in await _target(state).inner_text(selector, timeout=action.get("timeout_ms")):
-    raise RuntimeError(f"forbidden text ({len(forbidden)} chars) is rendered in {selector!r}")
+needle = _normalize(forbidden)
+target = _target(state)
+frames = getattr(target, "frames", None) if selector == "body" and state["frame"] is None else None
+for scanned in frames if isinstance(frames, list) and frames else [target]:
+    found = await scanned.evaluate(
+        _RENDERED_TEXT_JS, {"selector": selector, "ownPrefix": _OWN_OVERLAY_ID_PREFIX, "limit": 20000}
+    )
+    pieces = found.get("pieces", []) if isinstance(found, dict) else []
+    if needle and any(isinstance(p, str) and needle in _normalize(p) for p in pieces):
+        raise RuntimeError(f"forbidden text ({len(forbidden)} chars) is rendered in {selector!r}")
 executed += 1
 """,
     "click_by": """

@@ -180,3 +180,54 @@ def test_the_export_waits_for_a_request_in_flight(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(BaseException, match=r"1 failed request\(s\)"):
         _run(monkeypatch, [{"action": "expect_network_clean", "settle_timeout_ms": 2000}], on_page=pending_then_fails)
+
+
+def test_the_export_never_prints_the_forbidden_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Hard-redacted by action kind, like replay: a non-credential parameter name must not matter."""
+    canary = "ACCT-9911-SECRET-CANARY"
+    source = render_macro_cli(
+        name="m",
+        macro={"parameters": ["canary"], "actions": [{"action": "expect_no_text", "text": "{{canary}}"}]},
+        include_evidence=False,
+    )
+    assert "expect_no_text" in source
+    try:
+        _run_with_args(monkeypatch, source, {"canary": canary})
+    except BaseException:
+        pass
+    assert canary not in capsys.readouterr().out
+
+
+def _run_with_args(monkeypatch: pytest.MonkeyPatch, source: str, args: dict[str, str]) -> Any:
+    rec = _Recorder()
+
+    class _Browser:
+        def __init__(self) -> None:
+            self.context = _FakeContext(rec)
+
+        async def new_page(self) -> _FakePage:
+            return _FakePage(rec, context=self.context)
+
+        async def close(self) -> None:
+            return None
+
+    class _Chromium:
+        async def launch(self, *, headless: bool) -> _Browser:
+            return _Browser()
+
+    class _Ctx:
+        async def __aenter__(self) -> Any:
+            return types.SimpleNamespace(chromium=_Chromium())
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    async_api = types.ModuleType("playwright.async_api")
+    async_api.async_playwright = lambda: _Ctx()  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "playwright", types.ModuleType("playwright"))
+    monkeypatch.setitem(sys.modules, "playwright.async_api", async_api)
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    return asyncio.run(namespace["run_m"](**args))
