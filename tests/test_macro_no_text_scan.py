@@ -13,6 +13,7 @@ away mid-scan, and the snapshot's definition of drawn text.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -290,3 +291,14 @@ def test_attributes_are_not_drawn_text() -> None:
     snap.element("IMG", body, src=f"/img?t={SECRET}", alt="logo")
     snap.text("Welcome", snap.element("P", body, **{"data-token": SECRET}))
     assert all(SECRET not in piece for piece in snapshot_drawn_text(snap.result()))
+
+def test_a_deep_snapshot_tree_is_walked_in_linear_time() -> None:
+    """The ancestor walk's cycle guard is a set: a list made a deep chain quadratic."""
+    from octowright.session.rendered_text import _overlay_nodes
+
+    depth = 60000
+    # Node 0 is the deepest, so the first walk climbs the whole chain unmemoised.
+    nodes = {"parentIndex": [*range(1, depth), -1], "attributes": [[] for _ in range(depth)]}
+    began = time.monotonic()
+    assert _overlay_nodes(nodes, lambda _index: "") == set()
+    assert time.monotonic() - began < 2.0

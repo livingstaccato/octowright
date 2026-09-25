@@ -76,11 +76,13 @@ def _overlay_nodes(nodes: Mapping[str, Any], string: Any) -> set[int]:
 
 def _within(start: int, parents: Sequence[int], known: dict[int, bool]) -> bool:
     """Whether *start* has a known-overlay ancestor-or-self, memoising the chain walked."""
-    chain: list[int] = []
+    # A set, not a list: it is also the guard against a malformed snapshot's
+    # parent cycle, checked once per step of a chain that can be deep.
+    chain: set[int] = set()
     node = start
     # Walk up to a settled node or the root; a shadow root's parent is its host.
     while 0 <= node < len(parents) and node not in known and node not in chain:
-        chain.append(node)
+        chain.add(node)
         node = parents[node]
     inside = known.get(node, False)
     known.update(dict.fromkeys(chain, inside))
