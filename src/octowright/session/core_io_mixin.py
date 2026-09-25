@@ -337,6 +337,7 @@ class SessionIOMixin(SessionLike):
         # and a scrubber matches a credential's raw spelling, not "&amp;".
         return html_lib.unescape(clean).strip()
 
+    @gated_operation("markdown_capture")
     async def _refuse_oversized_document(self, target: Any) -> None:
         """Raise ``MarkdownCaptureTooLarge`` when the page says its HTML is over the cap.
 

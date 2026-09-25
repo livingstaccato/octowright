@@ -61,7 +61,8 @@ def test_a_typed_password_inside_a_longer_word_is_left_alone() -> None:
 def test_a_typed_password_echoed_as_its_own_token_is_scrubbed() -> None:
     session, inner = _typed(TYPED)
 
-    session.recorder.record("console", text="login pw=admin ok", body='{"password":"admin"}')
+    echoed = '{"password":"admin"}'  # pragma: allowlist secret -- a fixture
+    session.recorder.record("console", text="login pw=admin ok", body=echoed)
 
     fields = inner.rows[-1][1]
     assert fields["text"] == "login pw=<redacted> ok"
