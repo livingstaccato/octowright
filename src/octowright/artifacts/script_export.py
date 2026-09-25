@@ -451,7 +451,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
             # An assertion nested in try/if_selector counts too.
             "watch_network": {watch_network!r},
         }}
+        state["sensitive_values"] = sensitive_values
         _watch_network(state, page)
+        _watch_context(state, page)
         executed = 0
         skipped = 0
         failure = None

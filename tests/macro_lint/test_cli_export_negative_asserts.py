@@ -12,6 +12,7 @@ text. Driven through the generated script against the recording fake page.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import types
 from pathlib import Path
@@ -193,10 +194,23 @@ def test_the_export_waits_for_a_request_in_flight(monkeypatch: pytest.MonkeyPatc
         _run(monkeypatch, [{"action": "expect_network_clean", "settle_timeout_ms": 2000}], on_page=pending_then_fails)
 
 
+def _events(out: str, event: str) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in (json.loads(line) for line in out.splitlines() if line.startswith("{"))
+        if row.get("event") == event
+    ]
+
+
+@pytest.mark.parametrize("leaks", [False, True])
 def test_the_export_never_prints_the_forbidden_text(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], leaks: bool
 ) -> None:
-    """Hard-redacted by action kind, like replay: a non-credential parameter name must not matter."""
+    """Hard-redacted by action kind, like replay: a non-credential parameter name must not matter.
+
+    Asserts the action line was printed -- redacted -- rather than only that the
+    canary is absent, which a run that failed before logging would also satisfy.
+    """
     canary = "ACCT-9911-SECRET-CANARY"
     source = render_macro_cli(
         name="m",
@@ -204,11 +218,25 @@ def test_the_export_never_prints_the_forbidden_text(
         include_evidence=False,
     )
     assert "expect_no_text" in source
-    try:
-        _run_with_args(monkeypatch, source, {"canary": canary})
-    except BaseException:
-        pass
-    assert canary not in capsys.readouterr().out
+    if leaks:
+        monkeypatch.setattr(_FakePage, "__init__", _with_rendered_text(_FakePage.__init__, f"card {canary}"))
+        with pytest.raises(RuntimeError, match="forbidden text") as excinfo:
+            _run_with_args(monkeypatch, source, {"canary": canary})
+        assert canary not in str(excinfo.value)
+    else:
+        assert _run_with_args(monkeypatch, source, {"canary": canary})["executed"] == 1
+    out = capsys.readouterr().out
+    assert canary not in out
+    (logged,) = [row for row in _events(out, "action") if row["action"]["action"] == "expect_no_text"]
+    assert logged["action"]["text"] == "<redacted>"
+
+
+def _with_rendered_text(init: Any, text: str) -> Any:
+    def patched(self: _FakePage, *args: Any, **kwargs: Any) -> None:
+        init(self, *args, **kwargs)
+        self.rendered_text = text
+
+    return patched
 
 
 def _run_with_args(monkeypatch: pytest.MonkeyPatch, source: str, args: dict[str, str]) -> Any:
@@ -532,3 +560,80 @@ def test_the_export_refusal_finds_a_nested_marker_and_says_what_lint_says() -> N
     assert sorted(i.action_index for i in issues) == [1, 3]
     _refuse_unbound_assertions("m", {"actions": actions[4:]})  # a bound step is not refused
     _refuse_unbound_assertions("m", {"actions": "not a list"})
+
+
+def test_a_popup_the_page_opens_is_watched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replay wires every page the context opens (``_register_popup``); an OAuth popup's refused XHR fails it."""
+
+    def popup_fails(page: _FakePage) -> None:
+        popup = page.context.open("popup")
+        _fire(popup, "requestfailed", _Req(failure="net::ERR_CONNECTION_REFUSED"))
+
+    with pytest.raises(BaseException, match=r"network not clean: 1 failed request\(s\)"):
+        _run(monkeypatch, [{"action": "expect_network_clean"}], on_page=popup_fails)
+
+
+def test_a_new_tab_is_counted_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """open_url watches its tab and the context's page event reports it too: one failure, not two."""
+    original_goto = _FakePage.goto
+
+    async def goto(self: _FakePage, url: str) -> None:
+        await original_goto(self, url)
+        if self.tag.startswith("tab-"):
+            _fire(self, "requestfailed", _Req(failure="net::ERR_CONNECTION_REFUSED"))
+
+    monkeypatch.setattr(_FakePage, "goto", goto)
+    actions = [{"action": "open_url", "url": "https://x.test/"}, {"action": "expect_network_clean"}]
+    with pytest.raises(BaseException, match=r"network not clean: 1 failed request\(s\)"):
+        _run(monkeypatch, actions)
+
+
+def test_a_request_pending_at_the_deadline_is_printed(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Still a pass -- the export means what replay means -- but no longer a silent one."""
+
+    def pending(page: _FakePage) -> None:
+        _fire(page, "request", _Req(resource_type="fetch", failure=None))
+
+    result = _run(monkeypatch, [{"action": "expect_network_clean", "settle_timeout_ms": 0}], on_page=pending)
+    assert result["executed"] == 2
+    out = capsys.readouterr().out
+    (assertion,) = _events(out, "assertion")
+    assert assertion == {
+        "event": "assertion",
+        "index": 1,
+        "action": "expect_network_clean",
+        "failed_requests": 0,
+        "page_errors": 0,
+        "in_flight": 1,
+        "warning": "1 request(s) still in flight when the settle wait ended were not judged",
+    }
+    assert [row["warning"] for row in _events(out, "warning")] == [assertion["warning"]]
+
+
+def test_a_clean_network_check_prints_no_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _run(monkeypatch, [{"action": "expect_network_clean", "settle_timeout_ms": 0}])
+    out = capsys.readouterr().out
+    assert _events(out, "assertion")[0]["in_flight"] == 0
+    assert _events(out, "warning") == []
+
+
+@pytest.mark.parametrize(("selector", "warned"), [("#error-banner", True), ("body", False)])
+def test_a_selector_that_matched_nothing_prints_a_warning(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], selector: str, warned: bool
+) -> None:
+    def nothing_matches(page: _FakePage) -> None:
+        page.matched = 0
+
+    action = {"action": "expect_no_text", "text": SECRET, "selector": selector}
+    assert _run(monkeypatch, [action], on_page=nothing_matches)["executed"] == 2
+    out = capsys.readouterr().out
+    (assertion,) = _events(out, "assertion")
+    assert assertion["matched"] == 0 and assertion["selector"] == selector
+    warnings = [row["warning"] for row in _events(out, "warning")]
+    expected = [f"selector {selector!r} matched no element, so no text was checked"] if warned else []
+    assert warnings == expected
+    assert SECRET not in out

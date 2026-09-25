@@ -30,6 +30,7 @@ from __future__ import annotations
 import inspect
 
 from octowright import request_failures
+from octowright.assertion_warnings import assertion_warning
 from octowright.macros._redact import _REDACT_VALUE_ACTIONS
 
 
@@ -60,6 +61,7 @@ def _network_helpers() -> str:
         request_failures.NetworkLedger,
         request_failures.settle_network,
     )
+    sources += (assertion_warning,)
     return constants + frozensets + "\n\n" + "\n\n\n".join(inspect.getsource(obj).rstrip() for obj in sources)
 
 
@@ -83,6 +85,12 @@ _REDACT_VALUE_ACTIONS = """
     """
     if not state["watch_network"]:
         return
+    # Once per page: open_url watches its tab before goto, and the context's
+    # page event (_watch_context) reports that same tab too.
+    watched = state.setdefault("watched_pages", [])
+    if any(seen is page for seen in watched):
+        return
+    watched.append(page)
     ledger = state["network"]
     page.on("request", lambda request: ledger.request_started(request, page))
     page.on("requestfinished", ledger.request_finished)
@@ -92,6 +100,29 @@ _REDACT_VALUE_ACTIONS = """
     page.on("close", lambda: ledger.page_closed(page))
     page.on("pageerror", ledger.page_error)
     page.on("response", ledger.response)
+
+
+def _watch_context(state: dict[str, Any], page: Any) -> None:
+    """Watch every page *page*'s context opens later -- a popup or a target=_blank tab included.
+
+    Live replay wires the same listeners on each such page (the context's
+    ``page`` event, ``_register_popup``), so a request that fails in an OAuth
+    popup fails the run there; without this it passed here.
+    """
+    if state["watch_network"]:
+        page.context.on("page", lambda opened: _watch_network(state, opened))
+
+
+def _report_assertion(state: dict[str, Any], index: int, kind: str, observation: dict[str, Any]) -> None:
+    """Print what a passing check saw, as macro_run returns it, and a warning line for a caveat."""
+    record = {"event": "assertion", "index": index, "action": kind, **observation}
+    warning = assertion_warning(kind, observation)
+    if warning is not None:
+        record["warning"] = warning
+    print(json.dumps(_redact_value(record, state["sensitive_values"]), sort_keys=True))
+    if warning is not None:
+        line = {"event": "warning", "index": index, "action": kind, "warning": warning}
+        print(json.dumps(_redact_value(line, state["sensitive_values"]), sort_keys=True))
 
 
 def _page(state: dict[str, Any]) -> Any:
@@ -379,9 +410,12 @@ executed += 1
 window = state["network"].window(action.get("since", "run"))
 settle = action.get("settle_timeout_ms")
 settle = NETWORK_SETTLE_TIMEOUT_MS if settle is None else int(settle)
-if settle > 0:
-    await settle_network(state["network"].pending, settle)
-state["network"].judge(window, bool(action.get("http_errors")))
+in_flight = await settle_network(state["network"].pending, settle) if settle > 0 else state["network"].pending()
+observation = {**state["network"].judge(window, bool(action.get("http_errors"))), "in_flight": in_flight}
+untracked = state["network"].since(window)[3]
+if untracked > 0:
+    observation["in_flight_untracked"] = untracked
+_report_assertion(state, index, kind, observation)
 executed += 1
 """,
     "mark_network_clean": """
@@ -409,6 +443,7 @@ for position, scanned in enumerate(target.frames if selector == "body" and state
     fold_frame_result(summary, position, found, forbidden, selector)
 if summary["truncated"]:
     raise RuntimeError(truncation_message(selector, limit))
+_report_assertion(state, index, kind, {**summary, "selector": selector})
 executed += 1
 """,
     "click_by": """
@@ -497,7 +532,8 @@ executed += 1
 """,
     "open_url": """
 new_page = await _page(state).context.new_page()
-# Watched before the load, or a failure during the tab's first page load is missed.
+# Watched before the load, or a failure during the tab's first page load is
+# missed; a no-op when the context's page event already did it.
 _watch_network(state, new_page)
 await new_page.goto(action["url"])
 state["pages"].append(new_page)

@@ -145,12 +145,22 @@ class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.pages: list[_FakePage] = []
+        self.handlers: dict[str, list[Any]] = {}
+
+    def on(self, event: str, handler: Any) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def open(self, tag: str) -> _FakePage:
+        """A page the context opened itself (a popup): the ``page`` event fires, as Playwright's does."""
+        page = _FakePage(self._rec, tag=tag, context=self)
+        self.pages.append(page)
+        for handler in self.handlers.get("page", []):
+            handler(page)
+        return page
 
     async def new_page(self) -> _FakePage:
         self._rec.record("context.new_page")
-        page = _FakePage(self._rec, tag=f"tab-{len(self.pages)}", context=self)
-        self.pages.append(page)
-        return page
+        return self.open(f"tab-{len(self.pages)}")
 
     async def route(self, pattern: str, handler: Any) -> None:
         """`inject_headers` routes on the CONTEXT, matching the live session --
@@ -171,6 +181,7 @@ class _FakePage:
         self.context = context or _FakeContext(rec)
         self.handlers: dict[str, list[Any]] = {}
         self.rendered_text = "hello world"
+        self.matched = 1  # how many elements the rendered-text scan says the selector matched
         # A real page lists its main frame first; this fake stands in for both.
         self.frames = [self]
 
@@ -225,7 +236,7 @@ class _FakePage:
         same ``"() => false"`` sentinel as ``_FakeLocator.evaluate``."""
         self._log("evaluate", expression)
         if expression.startswith("({ selector, ownPrefix"):
-            return {"pieces": [self.rendered_text], "overlay": "", "matched": 1}
+            return {"pieces": [self.rendered_text], "overlay": "", "matched": self.matched}
         return expression != "() => false"
 
     async def wait_for_selector(self, selector: str, **kw: Any) -> _FakeHandle:
