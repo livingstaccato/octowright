@@ -14,7 +14,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright import defaults
+from octowright import defaults, personas, sequences
 from octowright import macros as macro_mod
 from octowright._paths import reject_unsafe_path
 from octowright.mcp_types import TestSuiteCaseResult, TestSuiteResult
@@ -45,6 +45,8 @@ async def run_suite(
     out_path: str | None = None,
     pool: Any,
     max_parallel: int = 1,
+    persona: str | None = None,
+    redact_errors: bool = False,
 ) -> TestSuiteResult:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
@@ -81,14 +83,14 @@ async def run_suite(
                 label=f"test-{t['name']}",
                 viewport_w=1280,
                 viewport_h=800,
-                profile=None,
+                profile=persona,
             )
             iid = launch_result["instance_id"]
             session = pool.get(iid)
             await macro_mod.run_macro(session=session, name=t["name"], args={})
         except Exception as e:
             ok = False
-            err = repr(e)
+            err = redact_error(e) if redact_errors else repr(e)
         finally:
             if iid is not None:
                 try:
@@ -151,6 +153,96 @@ async def run_suite(
     }
 
 
+def redact_error(exc: BaseException) -> str:
+    """A failure line that carries no exception text.
+
+    octowright's macro failures raise ``RuntimeError(payload)``; the payload
+    names the macro, the step and the action, which is enough to find the fault
+    and is never derived from page content or arguments. Anything else is
+    reduced to its type, because an exception message can quote a typed value.
+    """
+    payload = exc.args[0] if exc.args else None
+    if isinstance(payload, dict) and "macro" in payload and "failed_at_step" in payload:
+        action = payload.get("failed_action") or {}
+        kind = action.get("action", "?") if isinstance(action, dict) else "?"
+        return f"macro {payload['macro']} failed at step {payload['failed_at_step']} ({kind})"
+    return type(exc).__name__
+
+
+async def run_sequence_file(
+    *,
+    sequence: Path,
+    kind: str,
+    persona: str | None,
+    artifacts: Path | None,
+    redact_errors: bool,
+    out_path: str | None,
+    pool: Any,
+) -> TestSuiteResult:
+    """Run a macro sequence file in one browser of *persona*, as a test suite.
+
+    The same walk as ``macro_run_sequence`` with ``stop_on_failure=True``, kept
+    as its own loop because that call raises on a failure and discards the
+    steps that had already passed, which the JUnit report needs.
+
+    Every reference is resolved before anything launches, so a sequence naming a
+    credential its persona cannot supply fails without a browser. The sequence
+    stops at the first failing macro; later steps are reported skipped, never
+    as passed or as failures of their own. One JUnit testcase per step.
+    """
+    steps = sequences.load_sequence(Path(sequence))
+    persona_obj = personas.load_persona(persona) if persona else None
+    names, args_list = sequences.resolve_steps(steps, persona=persona_obj, artifacts=artifacts)
+    if artifacts is not None:
+        Path(artifacts).mkdir(parents=True, exist_ok=True)
+
+    results: list[TestSuiteCaseResult] = []
+    launched = await pool.launch(
+        kind=kind,
+        url="about:blank",
+        headed=False,
+        label=f"sequence-{Path(sequence).stem}",
+        viewport_w=1280,
+        viewport_h=800,
+        profile=persona,
+    )
+    iid = launched["instance_id"]
+    try:
+        session = pool.get(iid)
+        failed = False
+        for name, args in zip(names, args_list, strict=True):
+            if failed:
+                results.append({"name": name, "ok": False, "error": "not run", "duration": 0.0, "skipped": True})
+                continue
+            start = datetime.now(UTC)
+            try:
+                await macro_mod.run_macro(session=session, name=name, args=args)
+                results.append({"name": name, "ok": True, "error": None, "duration": _since(start)})
+            except Exception as exc:
+                failed = True
+                error = redact_error(exc) if redact_errors else str(exc)
+                results.append({"name": name, "ok": False, "error": error, "duration": _since(start)})
+    finally:
+        await pool.close(iid, force=True)
+
+    passed = sum(1 for r in results if r["ok"])
+    report_path = Path(out_path) if out_path else _default_report_path()
+    report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="suite report path")
+    _write_junit(results, report_path, kind=kind)
+    log.info("octowright.runner.sequence_finished", total=len(results), passed=passed, report=str(report_path))
+    return {
+        "total": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+        "report_path": str(report_path),
+        "results": results,
+    }
+
+
+def _since(start: datetime) -> float:
+    return (datetime.now(UTC) - start).total_seconds()
+
+
 def _default_report_path() -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     return Path.cwd() / f"octowright-report-{stamp}.xml"
@@ -162,21 +254,28 @@ def _write_junit(results: list[TestSuiteCaseResult], path: Path, *, kind: str) -
         {
             "name": "octowright",
             "tests": str(len(results)),
-            "failures": str(sum(1 for r in results if not r["ok"])),
+            "failures": str(sum(1 for r in results if not r["ok"] and not r.get("skipped"))),
+            "skipped": str(sum(1 for r in results if r.get("skipped"))),
             "time": str(sum(r["duration"] for r in results)),
         },
     )
     for r in results:
-        case = ET.SubElement(
-            suite,
-            "testcase",
-            {
-                "classname": f"octowright.{kind}",
-                "name": r["name"],
-                "time": str(r["duration"]),
-            },
-        )
-        if not r["ok"]:
-            fail = ET.SubElement(case, "failure", {"message": r["error"] or "failed"})
-            fail.text = r["error"] or "failed"
+        _junit_case(suite, r, kind=kind)
     ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=True)
+
+
+def _junit_case(suite: ET.Element, r: TestSuiteCaseResult, *, kind: str) -> None:
+    case = ET.SubElement(
+        suite,
+        "testcase",
+        {
+            "classname": f"octowright.{kind}",
+            "name": r["name"],
+            "time": str(r["duration"]),
+        },
+    )
+    if r.get("skipped"):
+        ET.SubElement(case, "skipped", {"message": r["error"] or "not run"})
+    elif not r["ok"]:
+        fail = ET.SubElement(case, "failure", {"message": r["error"] or "failed"})
+        fail.text = r["error"] or "failed"

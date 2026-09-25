@@ -118,6 +118,8 @@ class TestSuiteCaseResult(TypedDict, total=False):
     # The test is still reported as ok=True; this carries the close-error repr
     # so callers can surface it as a soft warning.
     teardown_warning: str
+    # Present on sequence steps that never ran because an earlier step failed.
+    skipped: bool
 
 
 class TestSuiteResult(TypedDict):

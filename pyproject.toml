@@ -504,6 +504,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_persona_cred_file.py",
     "tests/test_persona_trust.py",
     "tests/test_persona_trusted_roots.py",
+    "tests/test_sequences.py",
+    "tests/test_runner_sequence.py",
     "tests/test_personas_branches.py",
     "tests/test_personas_loader.py",
     "tests/test_pill.py",
