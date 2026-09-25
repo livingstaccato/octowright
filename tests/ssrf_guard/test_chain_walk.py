@@ -23,6 +23,7 @@ from octowright.ssrf_guard import MAX_REDIRECT_HOPS, _handle_route, _HopCounter
 class _Response:
     def __init__(self, status: int, location: str | None = None) -> None:
         self.status = status
+        self.status_text = "Found" if 300 <= status < 400 else "OK"
         self.headers = {"location": location} if location else {}
 
 

@@ -65,7 +65,10 @@ Known costs, deliberately accepted (this only runs under an opt-in policy):
 
 * **A redirecting navigation's ``goto`` returns the client-redirect document's
   synthetic 200**, not the 3xx chain, and ``response.request.redirected_from``
-  is empty. ``page.url`` and the page itself are the final ones.
+  is empty. ``page.url`` and the page itself are the final ones. The real
+  chain is kept on the session's network rows instead: each hop's row carries
+  its real 3xx ``status``, ``redirect_location`` and
+  ``served_as: "client_redirect"`` (``client_redirect_of``).
 * **A method-preserving redirect of a form submission is refused** under
   ``block-private``, even to a public host.
 * **Every WebSocket message is relayed through the Playwright driver** once a
@@ -137,6 +140,20 @@ def _client_redirect(target: str) -> str:
     return f"<!doctype html>{refresh}<script>location.replace({literal})</script>"
 
 
+#: The redirect each client-redirected navigation really got, keyed by its
+#: request. The browser saw a 200; the session's ``response`` listener reads
+#: this so the recorded row keeps the real chain (``client_redirect_of``).
+_CLIENT_REDIRECTS: weakref.WeakKeyDictionary[Any, dict[str, Any]] = weakref.WeakKeyDictionary()
+
+
+def client_redirect_of(request: Any) -> dict[str, Any] | None:
+    """``{status, status_text, location}`` of the redirect the guard answered *request* for, else None."""
+    try:
+        return _CLIENT_REDIRECTS.get(request)
+    except TypeError:  # a request double that cannot be weakly referenced
+        return None
+
+
 class _HopCounter:
     """Consecutive guard-issued redirects per frame.
 
@@ -196,6 +213,7 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None
             "request body to a hop this guard could only check by submitting it again; refused under block-private"
         )
     hops.step(request, target)
+    _CLIENT_REDIRECTS[request] = {"status": response.status, "status_text": response.status_text, "location": target}
     # A NEW navigation, which comes back through this handler -- see the
     # module docstring for why the 3xx itself is never handed to the browser.
     await route.fulfill(status=200, content_type="text/html", body=_client_redirect(target))
