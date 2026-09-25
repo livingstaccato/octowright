@@ -292,6 +292,25 @@ def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
     yield
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[None]:
+    """Fail, rather than skip, a live test whose required engine would not run.
+
+    Off unless ``OCTOWRIGHT_REQUIRE_LIVE_ENGINES`` is set; ``tests/_live_engines``
+    decides which skips count and why.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if not report.skipped or call.excinfo is None:
+        return
+    from tests._live_engines import ENV_VAR, engine_skip_failure, required_engines
+
+    message = engine_skip_failure(item, call.excinfo.value, required_engines(os.environ.get(ENV_VAR)))
+    if message is not None:
+        report.outcome = "failed"
+        report.longrepr = message
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Remove the breadcrumb on any run that reaches the end under its own power.
 
