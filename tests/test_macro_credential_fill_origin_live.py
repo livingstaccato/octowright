@@ -85,9 +85,7 @@ async def _run(monkeypatch: pytest.MonkeyPatch, session: Any, actions: list[dict
     return await execution.run_macro(session, "m", {"password": SECRET})
 
 
-async def test_a_fill_on_the_launch_origin_types_the_credential(
-    session: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_a_fill_on_the_launch_origin_types_the_credential(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     await _run(monkeypatch, session, [FILL])
     assert await session.page.input_value("#pw") == SECRET
 
