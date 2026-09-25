@@ -29,7 +29,7 @@ from octowright.macros.substitution import (
     substitute,
 )
 
-OWN = frozenset({"app.example.test"})
+OWN = frozenset({("https", "app.example.test", 443)})
 SECRET = {"password": "hunter2"}  # pragma: allowlist secret (synthetic fixture)
 
 
@@ -52,7 +52,7 @@ def _split(kind: str, first: str, second: str) -> dict[str, Any]:
 )
 def test_two_spellings_that_disagree_are_refused(kind: str, first: str, second: str) -> None:
     with pytest.raises(ValueError, match="both 'pattern' and 'url_pattern'"):
-        substitute([_split(kind, first, second)], SECRET, trusted_hosts=OWN)
+        substitute([_split(kind, first, second)], SECRET, trusted_origins=OWN)
 
 
 @pytest.mark.parametrize("kind", ["inject_headers", "mock_route"])
@@ -60,7 +60,7 @@ def test_the_substituted_action_carries_only_the_spelling_replay_uses(kind: str)
     [action] = substitute(
         [{"action": kind, "pattern": "https://app.example.test/**", "headers": {"A": "Bearer {{password}}"}}],
         SECRET,
-        trusted_hosts=OWN,
+        trusted_origins=OWN,
     )
     assert "pattern" not in action
     assert action["url_pattern"] == "https://app.example.test/**"
@@ -69,7 +69,7 @@ def test_the_substituted_action_carries_only_the_spelling_replay_uses(kind: str)
 @pytest.mark.parametrize("kind", ["inject_headers", "mock_route"])
 def test_two_spellings_that_agree_collapse_to_one(kind: str) -> None:
     same = "https://app.example.test/**"
-    [action] = substitute([_split(kind, same, same)], SECRET, trusted_hosts=OWN)
+    [action] = substitute([_split(kind, same, same)], SECRET, trusted_origins=OWN)
     assert action["url_pattern"] == same
     assert "pattern" not in action
 

@@ -429,7 +429,7 @@ async def test_a_replacement_keeps_the_original_launch_url(monkeypatch: pytest.M
     """The replacement opens where the page WAS, but the operator launched elsewhere.
 
     ``launch_url`` is what the macro header guard trusts as the session's own
-    site (``substitution.own_site_hosts``). Taking the current page URL as the
+    site (``substitution.own_site_origins``). Taking the current page URL as the
     replacement's launch URL would let a macro navigate to its own server,
     wait for a relaunch, and then name that server as the own site.
     """

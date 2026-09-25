@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from octowright.macros.nesting import MacroLoader, iter_nested_actions
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
-from octowright.macros.substitution import own_site_hosts
+from octowright.macros.substitution import own_site_origins
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -66,7 +66,7 @@ async def dispatch_macro_call(
         raise RuntimeError(f"{_RECURSION_PREFIX} recursion depth exceeded ({resolved_max_depth}) at {next_chain}")
 
     called = load_macro(called_name)
-    called_actions = substitute(called.get("actions", []), call_args, trusted_hosts=own_site_hosts(session))
+    called_actions = substitute(called.get("actions", []), call_args, trusted_origins=own_site_origins(session))
 
     executed, skipped = 1, 0
     for subaction in called_actions:

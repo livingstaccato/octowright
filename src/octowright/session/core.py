@@ -104,7 +104,7 @@ class BrowserSession(
     profile: str | None = None
     # The persona/explicit ``base_url`` the context was launched with. Kept
     # because Playwright offers no getter, and the macro header guard
-    # (``substitution.own_site_hosts``) trusts it as operator-chosen.
+    # (``substitution.own_site_origins``) trusts it as operator-chosen.
     base_url: str | None = None
     # The URL the browser was launched at. Unlike ``url``, which every navigate
     # rewrites, nothing writes this after launch: the macro header guard trusts

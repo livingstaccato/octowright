@@ -463,7 +463,7 @@ class RelaunchSnapshot:
     target_url: str
     # Where the operator launched the original, which the replacement keeps:
     # ``target_url`` is where the page is NOW, and the macro header guard
-    # (``substitution.own_site_hosts``) must not come to trust a host a macro
+    # (``substitution.own_site_origins``) must not come to trust a host a macro
     # navigated to just because the browser was relaunched there.
     launch_url: str | None = None
 

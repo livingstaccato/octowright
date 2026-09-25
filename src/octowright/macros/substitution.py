@@ -12,7 +12,7 @@ from urllib.parse import SplitResult, urlsplit
 # so the exported CLI runs the same rules; the first two are re-exported here.
 from octowright.credential_sinks import CREDENTIAL_UNSAFE_KEYS as CREDENTIAL_UNSAFE_KEYS
 from octowright.credential_sinks import credential_sinks_blocked as credential_sinks_blocked
-from octowright.credential_sinks import expand_actions
+from octowright.credential_sinks import Origin, expand_actions, url_origin
 from octowright.defaults import new_tab_url
 from octowright.macros.privacy import PLACEHOLDER_RE, is_credential_key
 
@@ -124,39 +124,41 @@ def _is_octowright_new_tab(parts: SplitResult) -> bool:
     return is_loopback_host(parts.hostname) and port == own.port and parts.path.rstrip("/") == own.path
 
 
-def own_site_hosts(session: SessionLike) -> set[str]:
-    """The hosts the operator, not the macro, pointed this session at.
+def own_site_origins(session: SessionLike) -> set[Origin]:
+    """The origins the operator, not the macro, pointed this session at.
 
     The launch URL and the persona ``base_url`` are chosen by whoever launched
     the browser, and both are captured at launch and never written again.
     ``session.url`` is NOT one of them: it follows every navigate, so reading
     it let a poisoned macro navigate to its own server and then name it.
 
+    An origin, not a host: trusting ``localhost`` for a launch at
+    ``http://localhost:3000`` also trusted whatever listened on
+    ``localhost:45678``, and another local user can be that listener.
+
     octowright's own new-tab page (a launch with no URL) is not an app, though a
     local dev stack on ``localhost`` is. An ``OCTOWRIGHT_DEFAULT_URL`` naming
     the operator's app is operator-chosen like any launch URL, so only the
     daemon's page is excluded, not whatever the no-URL launch landed on.
     """
-    hosts: set[str] = set()
+    origins: set[Origin] = set()
     for url in (session.launch_url, session.base_url):
-        if not isinstance(url, str) or not url:
-            continue
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        if host and not _is_octowright_new_tab(parts):
-            hosts.add(host)
-    return hosts
+        origin = url_origin(url)
+        if origin is not None and not _is_octowright_new_tab(urlsplit(str(url))):
+            origins.add(origin)
+    return origins
 
 
 def substitute(
-    actions: list[dict[str, Any]], args: dict[str, Any], *, trusted_hosts: frozenset[str] | set[str] = frozenset()
+    actions: list[dict[str, Any]], args: dict[str, Any], *, trusted_origins: frozenset[Origin] | set[Origin] = frozenset()
 ) -> list[dict[str, Any]]:
     """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
 
-    *trusted_hosts* (``own_site_hosts(session)``) is the one exemption: a
-    credential in the ``headers`` of an action whose pattern names one of them.
-    The rules are ``octowright.credential_sinks``'s, shared with the exported CLI.
+    *trusted_origins* (``own_site_origins(session)``) is the one exemption: a
+    credential in the ``headers`` of an action whose pattern spells out one of
+    them. The rules are ``octowright.credential_sinks``'s, shared with the
+    exported CLI.
     """
     return expand_actions(
-        actions, args, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, trusted_hosts=trusted_hosts
+        actions, args, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, trusted_origins=trusted_origins
     )

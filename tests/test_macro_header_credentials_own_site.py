@@ -23,10 +23,10 @@ from urllib.parse import urlsplit
 import pytest
 
 from octowright.defaults import get_default_url, new_tab_url
-from octowright.macros.substitution import own_site_hosts, substitute
+from octowright.macros.substitution import own_site_origins, substitute
 
 TOKEN = {"token": "t0k3n-abc"}  # pragma: allowlist secret (synthetic fixture)
-OWN = frozenset({"app.example.test"})
+OWN = frozenset({("https", "app.example.test", 443)})
 
 
 def _inject(pattern: str, header: str = "Bearer {{token}}") -> list[dict[str, object]]:
@@ -35,10 +35,10 @@ def _inject(pattern: str, header: str = "Bearer {{token}}") -> list[dict[str, ob
 
 @pytest.mark.parametrize(
     "pattern",
-    ["https://app.example.test/**", "https://app.example.test/api/*", "http://APP.example.test:8443/**"],
+    ["https://app.example.test/**", "https://app.example.test/api/*", "https://APP.example.test:443/**"],
 )
 def test_a_credential_header_to_the_own_site_is_allowed(pattern: str) -> None:
-    [action] = substitute(_inject(pattern), TOKEN, trusted_hosts=OWN)
+    [action] = substitute(_inject(pattern), TOKEN, trusted_origins=OWN)
     assert action["headers"] == {"Authorization": "Bearer t0k3n-abc"}
 
 
@@ -51,14 +51,18 @@ def test_a_credential_header_to_the_own_site_is_allowed(pattern: str) -> None:
         "https://app.example.test.attacker.test/**",
         "https://app.example.test@attacker.test/**",
         "https://{{host}}/**",  # the macro would choose the host at run time
+        "http://app.example.test/**",  # same host, another scheme
+        "https://app.example.test:8443/**",  # same host, another port
+        "app.example.test/**",  # no scheme: not an origin
+        "https://app.example.test\\@attacker.test/**",
     ],
 )
 def test_a_credential_header_anywhere_else_is_refused(pattern: str) -> None:
     with pytest.raises(ValueError, match="credential arg"):
-        substitute(_inject(pattern), {**TOKEN, "host": "app.example.test"}, trusted_hosts=OWN)
+        substitute(_inject(pattern), {**TOKEN, "host": "app.example.test"}, trusted_origins=OWN)
 
 
-def test_no_trusted_hosts_refuses_as_before() -> None:
+def test_no_trusted_origins_refuses_as_before() -> None:
     with pytest.raises(ValueError, match="credential arg"):
         substitute(_inject("https://app.example.test/**"), TOKEN)
 
@@ -66,14 +70,27 @@ def test_no_trusted_hosts_refuses_as_before() -> None:
 def test_set_extra_http_headers_rides_every_host_and_stays_refused() -> None:
     actions = [{"action": "set_extra_http_headers", "headers": {"Authorization": "Bearer {{token}}"}}]
     with pytest.raises(ValueError, match="inject_headers"):
-        substitute(actions, TOKEN, trusted_hosts=OWN)
+        substitute(actions, TOKEN, trusted_origins=OWN)
 
 
 def test_a_mocked_body_stays_refused_even_on_the_own_site() -> None:
     """The exemption is for headers only; a mock body can be code the page runs."""
     actions = [{"action": "mock_route", "pattern": "https://app.example.test/**", "body": "{{token}}"}]
     with pytest.raises(ValueError, match="credential arg"):
-        substitute(actions, TOKEN, trusted_hosts=OWN)
+        substitute(actions, TOKEN, trusted_origins=OWN)
+
+
+def test_another_port_on_the_launch_host_is_not_the_own_site() -> None:
+    """c-0001: comparing hostnames trusted every port on localhost.
+
+    A launch at http://localhost:3000 exempted a header for
+    http://localhost:45678/**, where another local user may be listening.
+    """
+    own = frozenset({("http", "localhost", 3000)})
+    with pytest.raises(ValueError, match="credential arg"):
+        substitute(_inject("http://localhost:45678/**"), TOKEN, trusted_origins=own)
+    [action] = substitute(_inject("http://localhost:3000/**"), TOKEN, trusted_origins=own)
+    assert action["headers"] == {"Authorization": "Bearer t0k3n-abc"}
 
 
 def test_the_own_site_is_the_launch_url_and_the_base_url() -> None:
@@ -81,7 +98,7 @@ def test_the_own_site_is_the_launch_url_and_the_base_url() -> None:
         launch_url = "https://app.example.test/login"
         base_url = "https://api.example.test"
 
-    assert own_site_hosts(_Session()) == {"app.example.test", "api.example.test"}  # type: ignore[arg-type]
+    assert own_site_origins(_Session()) == {("https", "app.example.test", 443), ("https", "api.example.test", 443)}  # type: ignore[arg-type]
 
 
 def test_octowrights_own_new_tab_page_is_not_an_own_site() -> None:
@@ -91,7 +108,7 @@ def test_octowrights_own_new_tab_page_is_not_an_own_site() -> None:
         launch_url = new_tab_url()
         base_url = "http://localhost:3000"  # a local dev stack is a real own site
 
-    assert own_site_hosts(_Session()) == {"localhost"}  # type: ignore[arg-type]
+    assert own_site_origins(_Session()) == {("http", "localhost", 3000)}  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize("host", ["localhost", "[::1]"])
@@ -102,7 +119,7 @@ def test_the_new_tab_page_on_another_loopback_spelling_is_not_an_own_site(host: 
         launch_url = f"http://{host}:{port}/new-tab/"
         base_url = None
 
-    assert own_site_hosts(_Session()) == set()  # type: ignore[arg-type]
+    assert own_site_origins(_Session()) == set()  # type: ignore[arg-type]
 
 
 def test_an_operator_default_url_is_an_own_site(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,7 +134,7 @@ def test_an_operator_default_url_is_an_own_site(monkeypatch: pytest.MonkeyPatch)
         launch_url = get_default_url()
         base_url = None
 
-    assert own_site_hosts(_Session()) == {"app.example.test"}  # type: ignore[arg-type]
+    assert own_site_origins(_Session()) == {("https", "app.example.test", 443)}  # type: ignore[arg-type]
 
 
 def test_the_current_page_url_is_not_an_own_site() -> None:
@@ -126,7 +143,7 @@ def test_the_current_page_url_is_not_an_own_site() -> None:
         url = "https://attacker.test/"
         base_url = None
 
-    assert own_site_hosts(_Session()) == {"app.example.test"}  # type: ignore[arg-type]
+    assert own_site_origins(_Session()) == {("https", "app.example.test", 443)}  # type: ignore[arg-type]
 
 
 # --- run_macro hands the session's own site to substitution ------------------------------

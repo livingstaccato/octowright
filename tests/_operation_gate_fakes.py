@@ -45,7 +45,7 @@ class OperationAwareFake:
     instance_id = "fake-session"
     kind = "chromium"
     # What a launch with no URL and no persona leaves on a real session; the
-    # macro header guard (``substitution.own_site_hosts``) reads both.
+    # macro header guard (``substitution.own_site_origins``) reads both.
     launch_url: str | None = None
     base_url: str | None = None
     # Installed by the first macro run (``privacy.install_sensitive_recorder``).

@@ -42,7 +42,7 @@ from octowright.macros.storage import load_macro, write_macro
 from octowright.macros.substitution import (
     SEMANTIC_LOCATOR_KEYS,
     action_kwargs,
-    own_site_hosts,
+    own_site_origins,
     strip_non_aria_noise,
     substitute,
 )
@@ -614,7 +614,7 @@ async def _run_macro_impl(
     # nested call's, appended as they execute. Failure payloads and screenshot
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
-    actions = substitute(macro.get("actions", []), effective_args, trusted_hosts=own_site_hosts(session))
+    actions = substitute(macro.get("actions", []), effective_args, trusted_origins=own_site_origins(session))
     _start_request_tracking(session, actions, macros)
 
     executed = 0

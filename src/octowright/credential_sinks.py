@@ -31,6 +31,7 @@ import os
 import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 # Action fields that either leave the machine or execute code. A credential
 # expanded into one of these is exfiltration, not automation:
@@ -119,32 +120,73 @@ def canonical_aliases(kind: str, fields: dict[str, Any]) -> dict[str, Any]:
 #: page makes, third-party hosts included, so it has no destination to vet.
 PATTERN_SCOPED_HEADER_ACTIONS = frozenset({"inject_headers", "mock_route"})
 
-#: A pattern names one host only when its host part is spelled out: no
-#: wildcard, no placeholder, no userinfo. ``https://*.example.test/**`` and
-#: ``https://{{host}}/**`` choose the host at match or run time, and
-#: ``https://app.test@attacker.test/`` is attacker.test to a URL parser.
-_LITERAL_PATTERN_HOST = re.compile(r"^https?://([^/?#*{}\[\]@]+)(?:/|$)", re.IGNORECASE)
+#: An origin as the guard compares it: scheme, normalized host, effective port.
+Origin = tuple[str, str, int]
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def headers_reach_trusted_site(action: dict[str, Any], trusted_hosts: frozenset[str] | set[str]) -> bool:
-    """Whether *action*'s headers go only to one of *trusted_hosts*.
+def url_origin(url: object) -> Origin | None:
+    """The origin of *url*, or None for anything that is not an http(s) URL with a host.
+
+    The host is lowercased and loses a trailing dot; a missing port becomes the
+    scheme's default, so ``https://app.test`` and ``https://app.test:443`` are
+    one origin while ``http://localhost:3000`` and ``http://localhost:45678``
+    are two. Comparing hostnames alone let a macro exempt a header for
+    whichever local process listened on another port.
+    """
+    if not isinstance(url, str) or not url:
+        return None
+    try:
+        parts = urlsplit(url.strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower().rstrip(".")
+    if scheme not in _DEFAULT_PORTS or not host:
+        return None
+    return scheme, host, port if port is not None else _DEFAULT_PORTS[scheme]
+
+
+def format_origin(origin: Origin) -> str:
+    scheme, host, port = origin
+    shown = f"[{host}]" if ":" in host else host
+    return f"{scheme}://{shown}" if port == _DEFAULT_PORTS.get(scheme) else f"{scheme}://{shown}:{port}"
+
+
+#: A pattern names one origin only when its scheme and host are spelled out: no
+#: wildcard, no placeholder, no userinfo, no backslash. ``https://*.example.test/**``
+#: and ``https://{{host}}/**`` choose the host at match or run time,
+#: ``https://app.test@attacker.test/`` is attacker.test to a URL parser, and
+#: ``**/api/**`` names no origin at all. A port is optional and, when absent, is
+#: the scheme's default -- which is also what the pattern matches in a browser.
+_LITERAL_PATTERN_ORIGIN = re.compile(r"^(https?://[^/?#*{}\[\]@\\\s]+)(?:/|$)", re.IGNORECASE)
+
+
+def pattern_origin(pattern: object) -> Origin | None:
+    match = _LITERAL_PATTERN_ORIGIN.match(pattern) if isinstance(pattern, str) else None
+    return url_origin(match.group(1)) if match is not None else None
+
+
+def headers_reach_trusted_origin(action: dict[str, Any], trusted_origins: frozenset[Origin] | set[Origin]) -> bool:
+    """Whether *action*'s headers go only to one of *trusted_origins*.
 
     *action* must already be alias-canonical, so the pattern read here is the
     one replay installs.
     """
-    if not trusted_hosts or action.get("action") not in PATTERN_SCOPED_HEADER_ACTIONS:
+    if not trusted_origins or action.get("action") not in PATTERN_SCOPED_HEADER_ACTIONS:
         return False
-    pattern = action.get("url_pattern")
-    match = _LITERAL_PATTERN_HOST.match(pattern) if isinstance(pattern, str) else None
-    return match is not None and match.group(1).rsplit(":", 1)[0].lower() in trusted_hosts
+    origin = pattern_origin(action.get("url_pattern"))
+    return origin is not None and origin in trusted_origins
 
 
 def _sink_refusal(key: str) -> ValueError:
     return ValueError(
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
         "this would send the secret off-machine. A header may carry one through "
-        "inject_headers whose pattern names the session's own site (its launch URL "
-        f"or persona base_url). Set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+        "inject_headers whose pattern spells out the session's own origin -- scheme, host "
+        f"and port of its launch URL or persona base_url. Set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
     )
 
 
@@ -155,12 +197,12 @@ class _Expander:
         *,
         is_credential: Callable[[str], bool],
         placeholder: re.Pattern[str],
-        trusted_hosts: frozenset[str] | set[str],
+        trusted_origins: frozenset[Origin] | set[Origin],
     ) -> None:
         self.args = args
         self.is_credential = is_credential
         self.placeholder = placeholder
-        self.trusted_hosts = trusted_hosts
+        self.trusted_origins = trusted_origins
         self.blocked = credential_sinks_blocked()
 
     def text(self, value: str, *, unsafe_sink: bool) -> str:
@@ -176,7 +218,7 @@ class _Expander:
 
     def action(self, node: dict[str, Any]) -> dict[str, Any]:
         node = canonical_aliases(str(node.get("action")), node)
-        headers_exempt = headers_reach_trusted_site(node, self.trusted_hosts)
+        headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
         return {
             key: self.value(
                 item,
@@ -209,15 +251,15 @@ def expand_actions(
     *,
     is_credential: Callable[[str], bool],
     placeholder: re.Pattern[str] | str,
-    trusted_hosts: frozenset[str] | set[str] = frozenset(),
+    trusted_origins: frozenset[Origin] | set[Origin] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
 
     Every action comes back alias-canonical (see `canonical_aliases`), so the
-    guard and the dispatcher read the same field. *trusted_hosts* is the one
+    guard and the dispatcher read the same field. *trusted_origins* is the one
     exemption: a credential in the ``headers`` of an action whose pattern names
-    one of them.
+    one of them, scheme, host and port.
     """
     compiled = re.compile(placeholder) if isinstance(placeholder, str) else placeholder
-    expander = _Expander(args, is_credential=is_credential, placeholder=compiled, trusted_hosts=trusted_hosts)
+    expander = _Expander(args, is_credential=is_credential, placeholder=compiled, trusted_origins=trusted_origins)
     return [expander.value(copy.deepcopy(action)) for action in actions]
