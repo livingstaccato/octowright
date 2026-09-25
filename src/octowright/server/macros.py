@@ -157,7 +157,9 @@ def macro_export_cli(
         "snapshot) are skipped. Pass `slowmo_ms` to insert a per-action delay (after the "
         "status pill updates, before the action dispatches) so a human can follow along; "
         "default comes from OCTOWRIGHT_MACRO_SLOWMO_MS. Returns {macro, executed, skipped, "
-        "args_used, slowmo_ms}."
+        "args_used, slowmo_ms}, plus `assertions` when the macro ran expect_network_clean or "
+        "expect_no_text: what each saw, with a `warning` on a pass that judged less than asked "
+        "(requests still in flight, a selector that matched nothing)."
     ),
 )
 async def macro_run(

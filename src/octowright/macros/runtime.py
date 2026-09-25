@@ -16,6 +16,7 @@ from octowright._paths import reject_unsafe_path
 from octowright._tracing import span
 from octowright.credential_sinks import REPLAY_RENAME_KEYS, canonical_aliases
 from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
+from octowright.macros.assertion_results import observe
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -188,7 +189,7 @@ async def _dispatch_standard(
         await getattr(session, method_name)(screenshot_path)
         return 1, 0
     kwargs = _normalize_replay_kwargs(kind, kwargs)
-    await getattr(session, method_name)(**kwargs)
+    observe(kind, kwargs, await getattr(session, method_name)(**kwargs))
     return 1, 0
 
 

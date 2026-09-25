@@ -17,6 +17,7 @@ from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros import failure_context, safe_screenshot
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
+from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
     MAX_MACRO_CALL_DEPTH,
     actions_assert_network_clean,
@@ -631,9 +632,11 @@ async def _run_macro_impl(
     macro_started = time.monotonic()
     completed_ok = False
     audit, audit_token = begin_fill_audit()
+    assertions, collecting = begin_collecting()
     try:
         for index, action in enumerate(actions):
             audit.step = index
+            assertions.step = index
             failure: RuntimeError | None = None
             failure_cause: Exception | None = None
             safe_original: str | None = None
@@ -667,6 +670,7 @@ async def _run_macro_impl(
                     safe_original=safe_original,
                     sensitive_values=run_values,
                 )
+                payload.update(assertions.fields(lambda v, values=run_values: _scrub_sensitive_values(v, values)))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
@@ -681,6 +685,7 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
+        end_collecting(collecting)
         end_fill_audit(audit_token)
         _end_request_tracking(session)
         elapsed_s = await _finish_macro_run(
@@ -700,6 +705,7 @@ async def _run_macro_impl(
         "args_used": _redact_args_for_response(effective_args, privacy),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
+        **assertions.fields(lambda v: _scrub_sensitive_values(v, run_ledger.values)),
     }
     if audit.offsite:  # warn mode let a credential onto a foreign origin
         result["credential_fill_offsite"] = audit.offsite
