@@ -670,7 +670,7 @@ async def _run_macro_impl(
                     safe_original=safe_original,
                     sensitive_values=run_values,
                 )
-                payload.update(assertions.fields(lambda v, values=run_values: _scrub_sensitive_values(v, values)))
+                payload.update(assertions.fields(run_values))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
@@ -705,7 +705,7 @@ async def _run_macro_impl(
         "args_used": _redact_args_for_response(effective_args, privacy),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
-        **assertions.fields(lambda v: _scrub_sensitive_values(v, run_ledger.values)),
+        **assertions.fields(run_ledger.values),
     }
     if audit.offsite:  # warn mode let a credential onto a foreign origin
         result["credential_fill_offsite"] = audit.offsite

@@ -188,3 +188,14 @@ async def test_a_failed_run_reports_the_checks_that_passed_before_it(
     payload = excinfo.value.args[0]
     assert payload["failed_at_step"] == 2
     assert [o["in_flight"] for o in payload["assertions"]] == [1]
+
+
+@pytest.mark.anyio
+async def test_a_secret_substituted_into_the_selector_is_scrubbed(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _scan_matches(session, 0)
+    _load(monkeypatch, [{"action": "expect_no_text", "text": "{{secret}}", "selector": "[data-x='{{secret}}']"}])
+    result = await execution.run_macro(session, "m", {"secret": SECRET})
+    assert result["assertions"][0]["matched"] == 0
+    assert SECRET not in repr(result["assertions"])

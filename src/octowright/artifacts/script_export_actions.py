@@ -60,8 +60,9 @@ def _network_helpers() -> str:
         request_failures.request_frame,
         request_failures.NetworkLedger,
         request_failures.settle_network,
+        # How a passing check's caveat is worded, shared with macro_run.
+        assertion_warning,
     )
-    sources += (assertion_warning,)
     return constants + frozensets + "\n\n" + "\n\n\n".join(inspect.getsource(obj).rstrip() for obj in sources)
 
 

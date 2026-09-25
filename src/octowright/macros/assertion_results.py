@@ -20,11 +20,13 @@ sees every step, however deep. A run nested inside another collects its own.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from contextvars import ContextVar, Token
 from typing import Any
 
 from octowright.assertion_warnings import assertion_warning
+from octowright.macros._redact import _REDACTED_MACRO_VALUE
+from octowright.macros.privacy import scrub_sensitive_values
+from octowright.mcp_types import MacroAssertionFields
 
 #: The checks whose result says more than pass/fail.
 OBSERVED_ASSERTIONS = frozenset({"expect_network_clean", "expect_no_text"})
@@ -47,9 +49,16 @@ class AssertionResults:
             observation["warning"] = warning
         self.observations.append(observation)
 
-    def fields(self, scrub: Callable[[Any], Any]) -> dict[str, Any]:
-        """``{"assertions": [...]}`` for a result or failure payload, or nothing when no check ran."""
-        return {"assertions": scrub([dict(o) for o in self.observations])} if self.observations else {}
+    def fields(self, sensitive_values: tuple[str, ...]) -> MacroAssertionFields:
+        """``{"assertions": [...]}`` for a result or failure payload, or nothing when no check ran.
+
+        Scrubbed of the run's sensitive values like the rest of that payload: a
+        selector is macro text, and a substituted argument can land in it.
+        """
+        if not self.observations:
+            return {}
+        copies = [dict(o) for o in self.observations]
+        return {"assertions": scrub_sensitive_values(copies, sensitive_values, marker=_REDACTED_MACRO_VALUE)}
 
 
 _CURRENT: ContextVar[AssertionResults | None] = ContextVar("octowright_macro_assertions", default=None)

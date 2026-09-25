@@ -65,8 +65,8 @@ def test_the_switch_names_the_engines_it_requires(raw: str | None, expected: fro
 
 def test_an_unknown_engine_name_is_refused_rather_than_ignored() -> None:
     """A typo would otherwise silently require nothing."""
-    with pytest.raises(pytest.UsageError, match="chromum"):
-        required_engines("chromum")
+    with pytest.raises(pytest.UsageError, match="chromiumm"):
+        required_engines("chromiumm")
 
 
 def test_a_launch_failure_turned_into_a_skip_fails_when_required() -> None:

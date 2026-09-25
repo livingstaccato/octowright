@@ -59,6 +59,12 @@ class MacroListEntry(TypedDict):
     action_count: int
 
 
+class MacroAssertionFields(TypedDict, total=False):
+    # What each expect_network_clean / expect_no_text step saw, with a
+    # ``warning`` on a pass that judged less than asked; only when one ran.
+    assertions: list[dict[str, Any]]
+
+
 class MacroRunResult(TypedDict):
     macro: str
     executed: int
@@ -69,9 +75,7 @@ class MacroRunResult(TypedDict):
     # Present only when OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn let a
     # credential be typed onto a foreign origin: step, action and origin, never the value.
     credential_fill_offsite: NotRequired[list[dict[str, Any]]]
-    # What each expect_network_clean / expect_no_text step saw, with a
-    # ``warning`` on a pass that judged less than asked; only when one ran.
-    assertions: NotRequired[list[dict[str, Any]]]
+    assertions: NotRequired[list[dict[str, Any]]]  # see MacroAssertionFields
 
 
 class MacroSequenceStep(TypedDict, total=False):
