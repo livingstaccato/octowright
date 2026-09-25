@@ -197,7 +197,10 @@ CASES: dict[str, Case] = {
     "close_page": (lambda s, _p: _open_then_switch_then_close(s), ["0"]),
     "switch_frame": (lambda s, _p: _switch_frame(s), ["sentinel-frame"]),
     "reset_frame": (lambda s, _p: _switch_frame(s), ["= page"]),
-    "mock_route": (lambda s, _p: _mock_then_unmock(s), ["**/sentinel-mock/**", "201", "sentinel-body", "text/sentinel"]),
+    "mock_route": (
+        lambda s, _p: _mock_then_unmock(s),
+        ["**/sentinel-mock/**", "201", "sentinel-body", "text/sentinel"],
+    ),
     "unmock_route": (lambda s, _p: _mock_then_unmock(s), ["**/sentinel-mock/**"]),
     "set_dialog_policy": (lambda s, _p: s.set_dialog_policy("dismiss"), ["dismiss"]),
     "set_input_files": (lambda s, p: s.set_input_files("#sentinel-input", [p]), ["#sentinel-input", "{path}"]),
@@ -209,7 +212,7 @@ EXCLUDED = {
     "launch": "built from the pool's _record_launch_event in every case below, not a session method",
     "screenshot": "writes a file through the real page; the path contract is covered by test_export.py",
     "resize": "viewport_ops needs a measured window; its row is width/height ints, covered by test_export.py",
-    "expect_text": "needs an element handle; its mode field is covered by test_expect_modes_follow_the_row",
+    "expect_text": "needs an element handle; its mode field is covered by test_the_export_keeps_what_the_assertion_meant",
     "expect_no_text": "needs a frame scan; the exporters refuse it outright (see _UNSUPPORTED)",
     "if": "macro control flow: written by a macro author, never by the recorder",
     "if_not": "macro control flow: written by a macro author, never by the recorder",
@@ -242,9 +245,7 @@ async def _recorded(tmp_path: Path, kind: str) -> tuple[list[dict[str, Any]], li
 
 @pytest.mark.parametrize("fmt", ["python", "ts"])
 @pytest.mark.parametrize("kind", sorted(CASES))
-async def test_the_exported_source_carries_what_the_recorder_wrote(
-    staging: Path, kind: str, fmt: str
-) -> None:
+async def test_the_exported_source_carries_what_the_recorder_wrote(staging: Path, kind: str, fmt: str) -> None:
     rows, expected = await _recorded(staging, kind)
     log = staging / "r.jsonl"
     entries = [_launch_row(staging), *rows]
@@ -289,3 +290,58 @@ def test_a_row_naming_two_different_patterns_is_refused(tmp_path: Path, fmt: str
     row = {"action": kind, "pattern": "https://app.test/**", "url_pattern": "https://evil.test/**"}
     with pytest.raises(ValueError, match="conflicting"):
         _export_rows(tmp_path, [row], fmt)
+
+
+async def _element_session(tmp_path: Path, inner_text: str) -> BrowserSession:
+    session = _session(tmp_path)
+    element = MagicMock()
+    element.inner_text = AsyncMock(return_value=inner_text)
+    session.page.wait_for_selector = AsyncMock(return_value=element)
+    session.page.query_selector = AsyncMock(return_value=None)
+    return session
+
+
+#: (drive, python fragment, ts fragment): a recorded field that changes what
+#: the assertion MEANS, so carrying the values through is not enough.
+MEANING_CASES: dict[str, tuple[Callable[[BrowserSession], Awaitable[Any]], str, str]] = {
+    "expect_selector-absent": (
+        lambda s: s.expect_selector("#gone", present=False),
+        "if await page.locator('#gone').count() > 0: raise",
+        'if (await page.locator("#gone").count() > 0) throw',
+    ),
+    "expect_js-equals": (
+        lambda s: s.expect_js("sentinelCount()", equals=True),
+        "if await page.evaluate('sentinelCount()') != True: raise",
+        'if (JSON.stringify(await page.evaluate("sentinelCount()")) !== JSON.stringify(true)) throw',
+    ),
+    "expect_text-equals": (
+        lambda s: s.expect_text("#t", "exact words", mode="equals"),
+        "if await page.locator('#t').inner_text() != 'exact words': raise",
+        'if ((await page.locator("#t").innerText()) !== "exact words") throw',
+    ),
+    "expect_text-regex": (
+        lambda s: s.expect_text("#t", "ex.ct", mode="regex"),
+        "if not __import__('re').search('ex.ct', await page.locator('#t').inner_text()): raise",
+        'if (!new RegExp("ex.ct").test(await page.locator("#t").innerText())) throw',
+    ),
+    "wait_for-expression": (
+        lambda s: s.wait_for(None, None, 1000, expression="sentinelReady()"),
+        "await page.wait_for_function('sentinelReady()')",
+        'await page.waitForFunction("sentinelReady()");',
+    ),
+}
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+@pytest.mark.parametrize("case", sorted(MEANING_CASES))
+async def test_the_export_keeps_what_the_assertion_meant(tmp_path: Path, case: str, fmt: str) -> None:
+    """``present=False`` exported as a presence check inverted the assertion."""
+    drive, py_fragment, ts_fragment = MEANING_CASES[case]
+    session = await _element_session(tmp_path, "exact words")
+    await drive(session)
+    kind = case.split("-", 1)[0]
+    rows = [row for row in _rows(session.recorder) if row["action"] == kind]
+    source = _export_rows(tmp_path, rows, fmt)
+    if fmt == "python":
+        compile(source, "<exported>", "exec")
+    assert (py_fragment if fmt == "python" else ts_fragment) in source, source

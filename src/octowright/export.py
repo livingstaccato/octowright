@@ -236,6 +236,8 @@ def _py_wait_for(entry: dict) -> str:
             f"'t => document.body && document.body.innerText.includes(t)', "
             f"arg={entry['text']!r})"
         )
+    if entry.get("expression"):
+        return f"        await page.wait_for_function({entry['expression']!r})"
     return "        await page.wait_for_load_state('networkidle')"
 
 
@@ -265,6 +267,34 @@ def _py_cond_while(e: dict) -> str | None:
     if a in ("if_not", "while_not"):
         c = f"not ({c})"
     return f"        {p}{c}:"
+
+
+# The recorded mode/present/equals fields change what an assertion means, as
+# they do in the session method that wrote the row: ignoring ``present=False``
+# exported an absence check as a presence check.
+
+
+def _py_expect_text(entry: dict) -> str:
+    text, actual = entry["text"], f"await page.locator({entry['selector']!r}).inner_text()"
+    mode = entry.get("mode", "contains")
+    if mode == "equals":
+        check = f"{actual} != {text!r}"
+    elif mode == "regex":
+        check = f"not __import__('re').search({text!r}, {actual})"
+    else:
+        check = f"{text!r} not in {actual}"
+    return f"        if {check}: raise RuntimeError('Text mismatch')"
+
+
+def _py_expect_selector(entry: dict) -> str:
+    comparison = "== 0" if entry.get("present", True) else "> 0"
+    return f"        if await page.locator({entry['selector']!r}).count() {comparison}: raise RuntimeError('Selector mismatch')"
+
+
+def _py_expect_js(entry: dict) -> str:
+    result = f"await page.evaluate({entry['expression']!r})"
+    check = f"not {result}" if entry.get("equals") is None else f"{result} != {entry['equals']!r}"
+    return f"        if {check}: raise RuntimeError('JS mismatch')"
 
 
 def _py_mock_route(entry: dict) -> str:
@@ -333,15 +363,9 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
             else f"        if {e['pattern']!r} not in page.url: raise RuntimeError('URL mismatch')"
         )
     ),
-    "expect_text": lambda e: (
-        f"        if {e['text']!r} not in await page.locator({e['selector']!r}).inner_text(): raise RuntimeError('Text mismatch')"
-    ),
-    "expect_selector": lambda e: (
-        f"        if await page.locator({e['selector']!r}).count() == 0: raise RuntimeError('Selector mismatch')"
-    ),
-    "expect_js": lambda e: (
-        f"        if not await page.evaluate({e['expression']!r}): raise RuntimeError('JS mismatch')"
-    ),
+    "expect_text": _py_expect_text,
+    "expect_selector": _py_expect_selector,
+    "expect_js": _py_expect_js,
     # Fail closed: a silently dropped security check lets the script pass on a
     # leaking or broken page. macro_export_cli runs both.
     "expect_network_clean": lambda _e: (
@@ -359,9 +383,7 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "mock_route": _py_mock_route,
     "unmock_route": lambda e: f"        await page.unroute({_route_pattern(e)!r})",
     "set_dialog_policy": _py_set_dialog_policy,
-    "set_input_files": lambda e: (
-        f"        await page.set_input_files({e['selector']!r}, {_input_file_paths(e)!r})"
-    ),
+    "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {_input_file_paths(e)!r})",
     "upload_files": _py_upload_files,
     "if": _py_cond_while,
     "if_not": _py_cond_while,

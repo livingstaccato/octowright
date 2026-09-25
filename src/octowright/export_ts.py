@@ -269,6 +269,8 @@ def _ts_wait_for(entry: dict) -> str:
             f"(t) => document.body && document.body.innerText.includes(t), "
             f"{json.dumps(entry['text'])});"
         )
+    if entry.get("expression"):
+        return f"  await page.waitForFunction({json.dumps(entry['expression'])});"
     return "  await page.waitForLoadState('networkidle');"
 
 
@@ -281,6 +283,34 @@ def _ts_select_option(entry: dict) -> str:
     if entry.get("index") is not None:
         return f"  await page.selectOption({sel}, {{ index: {entry['index']} }});"
     return f"  await page.selectOption({sel});"
+
+
+# See export._py_expect_text: mode/present/equals change what the check means.
+
+
+def _ts_expect_text(entry: dict) -> str:
+    text, read = json.dumps(entry["text"]), f"await page.locator({json.dumps(entry['selector'])}).innerText()"
+    mode = entry.get("mode", "contains")
+    if mode == "equals":
+        check = f"({read}) !== {text}"
+    elif mode == "regex":
+        check = f"!new RegExp({text}).test({read})"
+    else:
+        check = f"!({read}).includes({text})"
+    return f"  if ({check}) throw new Error('Text mismatch');"
+
+
+def _ts_expect_selector(entry: dict) -> str:
+    comparison = "=== 0" if entry.get("present", True) else "> 0"
+    return f"  if (await page.locator({json.dumps(entry['selector'])}).count() {comparison}) throw new Error('Selector mismatch');"
+
+
+def _ts_expect_js(entry: dict) -> str:
+    result = f"await page.evaluate({json.dumps(entry['expression'])})"
+    if entry.get("equals") is None:
+        return f"  if (!({result})) throw new Error('JS mismatch');"
+    # Structural, as the session's Python ``!=`` is: ``!==`` compares object identity.
+    return f"  if (JSON.stringify({result}) !== JSON.stringify({json.dumps(entry['equals'])})) throw new Error('JS mismatch');"
 
 
 def _ts_mock_route(entry: dict) -> str:
@@ -341,15 +371,9 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
             else f"  if (!page.url().includes({json.dumps(e['pattern'])})) throw new Error('URL mismatch');"
         )
     ),
-    "expect_text": lambda e: (
-        f"  if (!(await page.locator({json.dumps(e['selector'])}).innerText()).includes({json.dumps(e['text'])})) throw new Error('Text mismatch');"
-    ),
-    "expect_selector": lambda e: (
-        f"  if (await page.locator({json.dumps(e['selector'])}).count() === 0) throw new Error('Selector mismatch');"
-    ),
-    "expect_js": lambda e: (
-        f"  if (!(await page.evaluate({json.dumps(e['expression'])}))) throw new Error('JS mismatch');"
-    ),
+    "expect_text": _ts_expect_text,
+    "expect_selector": _ts_expect_selector,
+    "expect_js": _ts_expect_js,
     # Fail closed, as the Python exporter does: macro_export_cli runs both.
     "expect_network_clean": lambda _e: (
         f"  throw new Error({json.dumps(_UNSUPPORTED.format(kind='expect_network_clean'))});"
