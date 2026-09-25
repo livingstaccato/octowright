@@ -213,7 +213,8 @@ async def test_a_macro_that_asserts_tracks_from_its_first_step(
     await execution.run_macro(session, "slow")
     # /slow answers after 3s: the check returning sooner would mean it never waited.
     assert time.monotonic() - started >= 2.5
-    assert session._inflight_tracking
+    # And the run that needed it turned it off again as it ended.
+    assert not session._inflight_tracking
 
 
 async def test_no_text_on_a_rendered_page(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -59,7 +59,7 @@ def session() -> _FakeSession:
 def failing_step(monkeypatch: pytest.MonkeyPatch) -> None:
     """A one-action macro whose only action raises."""
     monkeypatch.setattr(_execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#a"}]})
-    monkeypatch.setattr(_execution, "substitute", lambda actions, _args: actions)
+    monkeypatch.setattr(_execution, "substitute", lambda actions, _args, **_kw: actions)
 
     async def _boom(*_a: Any, **_kw: Any) -> tuple[int, int]:
         raise RuntimeError("step failed")
@@ -154,7 +154,7 @@ async def test_the_run_outcome_log_and_metric_carry_the_run_on_both_paths(
 ) -> None:
     """Status, counts and slowmo must reach the operator-visible sinks."""
     monkeypatch.setattr(_execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#a"}]})
-    monkeypatch.setattr(_execution, "substitute", lambda actions, _args: actions)
+    monkeypatch.setattr(_execution, "substitute", lambda actions, _args, **_kw: actions)
 
     logged: list[tuple[str, dict[str, Any]]] = []
 
