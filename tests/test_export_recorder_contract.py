@@ -129,6 +129,7 @@ async def _open_then_switch_then_close(s: BrowserSession) -> None:
 async def _switch_frame(s: BrowserSession) -> None:
     frame = MagicMock(url="https://frame.test/", name="sentinel-frame")
     frame.name = "sentinel-frame"
+    frame.set_input_files = AsyncMock()
     s.page.frames = [s.page, frame]
     s.page.frame = MagicMock(return_value=frame)
     await s.switch_frame(name="sentinel-frame")
@@ -425,3 +426,22 @@ def test_an_infinite_number_is_refused_as_a_value_error(tmp_path: Path, fmt: str
     log.write_text("\n".join(json.dumps(r) for r in rows).replace('"index": 1', '"index": Infinity') + "\n")
     with pytest.raises(ValueError, match="index"):
         export_script(log, tmp_path / f"o.{fmt}", fmt=fmt)
+
+
+@pytest.mark.parametrize(
+    ("fmt", "expected"),
+    [
+        ("python", "await _upload_target.locator('#sentinel-input').set_input_files("),
+        ("ts", 'await uploadTarget.locator("#sentinel-input").setInputFiles('),
+    ],
+)
+async def test_set_input_files_exports_into_the_selected_frame(staging: Path, fmt: str, expected: str) -> None:
+    """The session method targets the active frame, so the exported line must too."""
+    session = _session(staging)
+    path = _upload_file(staging)
+    await _switch_frame(session)
+    session.recorder.record.reset_mock()
+    await session.switch_frame(name="sentinel-frame")
+    await session.set_input_files("#sentinel-input", [path])
+    source = _export_rows(staging, _rows(session.recorder), fmt)
+    assert expected in source.split("sentinel-frame", 1)[1]

@@ -1072,7 +1072,7 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
     assert "lambda route: route.fulfill(status=200, body='hi')" in src
     assert "await page.unroute('*')" in src
     assert "lambda dialog, _policy='accept': asyncio.create_task(getattr(dialog, _policy)())" in src
-    assert "await page.set_input_files('input', ['/tmp/x'])" in src
+    assert "await _upload_target.locator('input').set_input_files(['/tmp/x'])" in src
     assert "if await page.locator('#foo').count() > 0:" in src
     assert "    await page.click('#bar')" in src
 

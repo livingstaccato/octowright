@@ -384,7 +384,12 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "mock_route": _py_mock_route,
     "unmock_route": lambda e: f"        await page.unroute({_route_pattern(e)!r})",
     "set_dialog_policy": _py_set_dialog_policy,
-    "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {_input_file_paths(e)!r})",
+    # _upload_target, not page: the session method resolves the selector in the
+    # active frame. Through locator() because a selector-switched frame is a
+    # FrameLocator, which has no set_input_files of its own.
+    "set_input_files": lambda e: (
+        f"        await _upload_target.locator({e['selector']!r}).set_input_files({_input_file_paths(e)!r})"
+    ),
     "upload_files": _py_upload_files,
     "if": _py_cond_while,
     "if_not": _py_cond_while,

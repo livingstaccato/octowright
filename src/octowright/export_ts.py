@@ -392,7 +392,7 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "unmock_route": lambda e: f"  await page.unroute({json.dumps(_route_pattern(e))});",
     "set_dialog_policy": _ts_set_dialog_policy,
     "set_input_files": lambda e: (
-        f"  await page.setInputFiles({json.dumps(e['selector'])}, {json.dumps(_input_file_paths(e))});"
+        f"  await uploadTarget.locator({json.dumps(e['selector'])}).setInputFiles({json.dumps(_input_file_paths(e))});"
     ),
     "upload_files": _ts_upload_files,
     "if": _ts_cond_while,
