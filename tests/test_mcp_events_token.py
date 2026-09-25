@@ -90,3 +90,17 @@ def test_mcp_events_route_rejects_missing_and_wrong_token() -> None:
     with TestClient(app) as client:
         assert client.get("/api/mcp-events").status_code == 403
         assert client.get("/api/mcp-events", headers={"X-Octowright-Token": "nope"}).status_code == 403
+
+
+def test_inline_leader_refuses_an_unauthenticated_subscriber(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An inline ``--no-singleton`` leader has no capability token, so the token
+    gate is a no-op there. The route was also pairing-exempt, which left the
+    crash/close/driver stream -- instance ids, labels, persona and profile
+    names, log paths -- open to any local user. With no token to demand it
+    must fall back to the dashboard pairing gate every other inline route has.
+    """
+    monkeypatch.delenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", raising=False)
+    client = TestClient(build_app(mcp_token=""))
+    response = client.get("/api/mcp-events")
+    assert response.status_code == 401
+    assert client.get("/api/mcp-events", headers={"x-octowright-token": ""}).status_code == 401

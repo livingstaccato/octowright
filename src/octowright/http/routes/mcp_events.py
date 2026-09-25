@@ -130,10 +130,14 @@ def routes(*, mcp_token: str = "") -> list[Route]:
     # Host/origin guard OUTSIDE (reject non-loopback first), token check INSIDE —
     # matching the /mcp guard ordering.
     #
-    # pairing_exempt: this follower-only channel already demands the capability
-    # token, which is strictly stronger than a dashboard bearer (it requires
-    # reading the 0600 lockfile). Layering the pairing gate in front would only
-    # change the refusal a follower sees from 403 to 401 without adding any
-    # authorization, and the browser dashboard never calls this route.
-    endpoint = guard_sensitive_http(_require_token(mcp_events_endpoint, mcp_token), pairing_exempt=True)
+    # pairing_exempt only when there IS a token: this follower-only channel then
+    # already demands the capability token, which is strictly stronger than a
+    # dashboard bearer (it requires reading the 0600 lockfile), and layering
+    # the pairing gate in front would only change the refusal a follower sees
+    # from 403 to 401 without adding any authorization. An inline
+    # (--no-singleton) leader has no token, so ``_require_token`` is a no-op
+    # and exempting the route left the stream open to any local user; there
+    # the pairing gate is the only credential, exactly as for every other
+    # inline route (it also accepts the in-memory anchor as a token).
+    endpoint = guard_sensitive_http(_require_token(mcp_events_endpoint, mcp_token), pairing_exempt=bool(mcp_token))
     return [Route("/api/mcp-events", endpoint, methods=["GET"])]
