@@ -440,10 +440,16 @@ async def test_a_replacement_keeps_the_original_launch_url(monkeypatch: pytest.M
     )
     source.page.url = "https://attacker.test/landing"
     pool._sessions["old01"] = source
-    replacement = SimpleNamespace(launch_url="https://attacker.test/landing", set_protected_state=AsyncMock())
+    replacement = SimpleNamespace(launch_url=None, set_protected_state=AsyncMock())
+    seen_while_listed: list[str | None] = []
 
     async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        # As the real launch does: build the session from the options, then
+        # publish it -- where browser_list and a concurrent macro_run can see it
+        # -- all before returning (c-0015).
+        replacement.launch_url = kwargs.get("trusted_launch_url") or kwargs.get("url")
         pool._sessions["new01"] = replacement
+        seen_while_listed.append(pool._sessions["new01"].launch_url)
         return {"instance_id": "new01", "kind": kwargs["kind"], "url": kwargs.get("url"), "log_path": "/tmp/n.jsonl"}
 
     monkeypatch.setattr(pool, "launch", _fake_launch)
@@ -451,4 +457,5 @@ async def test_a_replacement_keeps_the_original_launch_url(monkeypatch: pytest.M
         await pool.handoff("old01", headed=False)
     else:
         await pool.relaunch_fluid("old01")
+    assert seen_while_listed == ["https://app.example.test/"]
     assert replacement.launch_url == "https://app.example.test/"

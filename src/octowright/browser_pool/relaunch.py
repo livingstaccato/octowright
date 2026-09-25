@@ -118,14 +118,11 @@ async def _launch_from_snapshot(
         session=snapshot.profile is None and snapshot.user_data_dir is not None,
         protected=snapshot.protected,
         disable_automation_controlled=snapshot.disable_automation_controlled,
+        # The replacement opens at the page's current URL but trusts the
+        # original's (RelaunchSnapshot.launch_url). Passed in, not assigned
+        # afterwards: pool.launch publishes the session before it returns.
+        trusted_launch_url=snapshot.launch_url,
     )
-    # The replacement opened at the page's current URL; its trusted launch URL
-    # is still the original's (see RelaunchSnapshot.launch_url). Set before the
-    # new instance id is returned to anyone who could run a macro on it.
-    if snapshot.launch_url is not None:
-        # A replacement already gone has nothing left to trust.
-        with contextlib.suppress(KeyError):
-            pool.get(result["instance_id"]).launch_url = snapshot.launch_url
     return result
 
 

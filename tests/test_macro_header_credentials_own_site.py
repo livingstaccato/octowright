@@ -327,3 +327,32 @@ def test_the_session_base_url_is_the_one_the_context_was_launched_with(tmp_path:
     """Resolved once in launch_execution and handed down, not re-read from the persona file."""
     session = _built_session(tmp_path, "https://app.example.test/", base_url="https://api.example.test")
     assert session.base_url == "https://api.example.test"
+
+
+def test_a_relaunch_builds_its_session_with_the_original_launch_url(tmp_path: Any) -> None:
+    """c-0015: the replacement is published inside pool.launch, so it must be BUILT trusted right.
+
+    Handoff/relaunch open the replacement at the page's current URL, which a
+    macro may have chosen. Correcting ``launch_url`` after ``pool.launch``
+    returned left the session listed, and macro-runnable, with the macro's URL
+    as its own site in between.
+    """
+    from octowright.browser_pool.options import LaunchOptions
+
+    session = _built_session(
+        tmp_path,
+        "https://attacker.test/landing",
+        launch_options=LaunchOptions(protected=False, trusted_launch_url="https://app.example.test/"),
+    )
+    assert session.url == "https://attacker.test/landing"
+    assert session.launch_url == "https://app.example.test/"
+
+
+def test_a_launch_record_cannot_name_a_trusted_launch_url() -> None:
+    """A JSONL relaunch reads only what the recording may choose; this is not one of them."""
+    from octowright.browser_pool.options import LaunchOptions
+
+    options = LaunchOptions.from_launch_record(
+        {"kind": "chromium", "url": "https://a.test/", "trusted_launch_url": "x"}
+    )
+    assert options.trusted_launch_url is None

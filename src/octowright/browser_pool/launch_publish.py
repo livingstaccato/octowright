@@ -181,7 +181,9 @@ def _build_session_object(
         kind=kind,
         label=label,
         url=target_url,
-        launch_url=target_url,
+        # A handoff/relaunch replacement opens at the page's current URL but
+        # trusts the original's (LaunchOptions.trusted_launch_url).
+        launch_url=launch_options.trusted_launch_url or target_url,
         browser=browser,
         context=context,
         page=page,
