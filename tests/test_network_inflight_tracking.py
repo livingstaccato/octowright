@@ -425,3 +425,27 @@ async def test_since_mark_without_a_mark_fails_before_waiting(session: BrowserSe
     page.fire("request", _request(page.main_frame))  # would hold a settle wait to its timeout
     with pytest.raises(RuntimeError, match="mark_network_clean"):
         await session.expect_network_clean(since="mark", settle_timeout_ms=60_000)
+
+
+def test_a_refused_removal_logs_under_a_structlog_style_logger(
+    session: BrowserSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """structlog's methods take the message as ``event``, so ``event=`` as a field raises.
+
+    It passed alone and failed after a test configured structlog, and in
+    ``run_macro``'s finally block that TypeError would replace the run's result.
+    """
+    import octowright.session.core_network_mixin as mixin
+
+    logged: list[str] = []
+
+    class _Logger:
+        def debug(self, event: str, **_kw: Any) -> None:
+            logged.append(event)
+
+    monkeypatch.setattr(mixin, "log", _Logger())
+    closed = _tracked_page(session)
+    session.enable_inflight_tracking()
+    closed.remove_listener = MagicMock(side_effect=RuntimeError("Target closed"))  # type: ignore[method-assign]
+    assert session.disable_inflight_tracking() is True
+    assert logged

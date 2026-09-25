@@ -342,7 +342,7 @@ class SessionNetworkMixin(SessionLike):
                     page.remove_listener(event, handler)
                 except Exception as exc:
                     # A closed page has no listeners left to remove.
-                    log.debug("octowright.session.inflight_listener_remove_failed", event=event, error=repr(exc))
+                    log.debug("octowright.session.inflight_listener_remove_failed", page_event=event, error=repr(exc))
         self._tracked_pages.clear()
         self._network.clear_inflight()
         return True
