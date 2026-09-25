@@ -883,6 +883,7 @@ async def test_handoff_close_fallback_awaits_in_flight_external_close(monkeypatc
     monkeypatch.setattr(relaunch, "_await_in_flight_close", _fake_await_in_flight_close)
 
     source = SimpleNamespace(
+        launch_url=None,
         kind="chromium",
         label="l",
         profile=None,

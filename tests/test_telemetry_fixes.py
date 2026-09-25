@@ -567,6 +567,7 @@ def _telemetry_fake_source(
 
     gate = SessionOperationGate(instance_id, kind)
     source = SimpleNamespace(
+        launch_url=None,
         instance_id=instance_id,
         kind=kind,
         profile=profile,
@@ -630,6 +631,7 @@ class TestHandoffSpan:
         exporter = _setup_span_exporter(monkeypatch)
         pool = BrowserPool()
         pool._sessions["old02"] = SimpleNamespace(
+            launch_url=None,
             instance_id="old02",
             kind="chromium",
             profile=None,

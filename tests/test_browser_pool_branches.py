@@ -79,6 +79,7 @@ def _fake_session(
 
     gate = SessionOperationGate(instance_id, kind)
     session = SimpleNamespace(
+        launch_url=None,
         instance_id=instance_id,
         kind=kind,
         label=label,
