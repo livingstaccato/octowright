@@ -243,23 +243,30 @@ class SessionExpectMixin(SessionLike):
     ) -> dict[str, Any]:
         """Raise if any frame draws *text*; return what the scan covered.
 
-        ``frames[0]`` is the page's main frame, or the one frame the check is
-        scoped to; the rules are ``drawn_text``'s, which the exported CLI shares.
+        Frames are read concurrently (a page of ads is many frames) and judged
+        in order by ``drawn_text``'s rules, which the exported CLI shares: the
+        first frame that fails decides the error, as a sequential scan would.
         """
-        summary = new_scan_summary()
-        for position, frame in enumerate(frames):
-            try:
-                found = await bounded(
+        results = await asyncio.gather(
+            *(
+                bounded(
                     frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector, limit)),
                     operation="browser_expect_no_text",
                     timeout=timeout,
                 )
-            except PlaywrightError as exc:
-                if not skip_gone_frame(summary, position, frame.is_detached(), exc):
-                    raise
+                for frame in frames
+            ),
+            return_exceptions=True,
+        )
+        summary = new_scan_summary()
+        for position, (frame, found) in enumerate(zip(frames, results, strict=True)):
+            if isinstance(found, BaseException):
+                if not isinstance(found, PlaywrightError) or not skip_gone_frame(
+                    summary, position, frame.is_detached(), found
+                ):
+                    raise found
                 log.debug("expect_no_text.frame_skipped", reason="frame_gone")
-                continue
-            if not fold_frame_result(summary, position, found, text, selector):
+            elif not fold_frame_result(summary, position, found, text, selector):
                 log.debug("expect_no_text.frame_skipped", reason="no_result")
         return summary
 

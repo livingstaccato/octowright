@@ -13,6 +13,7 @@ away mid-scan, and the snapshot's definition of drawn text.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,40 @@ async def test_a_child_frame_that_goes_away_is_skipped(tmp_path: Path, message: 
     assert (result["frames_scanned"], result["frames_skipped"]) == (2, 1)
 
 
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+@pytest.mark.anyio
+async def test_frames_are_read_concurrently_and_judged_in_order(tmp_path: Path) -> None:
+    """Each frame's read waits for all to start, so a sequential scan would time out here."""
+    started = 0
+    all_started = asyncio.Event()
+
+    def reading(*pieces: str) -> MagicMock:
+        frame = _frame()
+
+        async def evaluate(*_args: Any) -> dict[str, Any]:
+            nonlocal started
+            started += 1
+            if started == 3:
+                all_started.set()
+            await all_started.wait()
+            return {"pieces": list(pieces), "matched": 1, "truncated": False}
+
+        frame.evaluate = evaluate
+        return frame
+
+    # The later child also draws it and also fails; the first in frame order names the error.
+    failing = _frame()
+    failing.evaluate = AsyncMock(side_effect=PlaywrightError("SyntaxError: unexpected token"))
+    session = _session(tmp_path, frames=[reading("main"), reading(f"ad {SECRET}"), reading("widget")])
+    result = await session.expect_no_text("not drawn anywhere", timeout_ms=2000)
+    assert result["frames_scanned"] == 3
+    started = 0
+    all_started.clear()
+    session = _session(tmp_path, frames=[reading("main"), reading(f"ad {SECRET}"), reading("x"), failing])
+    with pytest.raises(RuntimeError, match=r"\(script scan\)"):
+        await session.expect_no_text(SECRET, timeout_ms=2000)
+
+
 @pytest.mark.anyio
 async def test_the_main_frame_going_away_still_fails(tmp_path: Path) -> None:
     main = _frame()
@@ -291,6 +326,7 @@ def test_attributes_are_not_drawn_text() -> None:
     snap.element("IMG", body, src=f"/img?t={SECRET}", alt="logo")
     snap.text("Welcome", snap.element("P", body, **{"data-token": SECRET}))
     assert all(SECRET not in piece for piece in snapshot_drawn_text(snap.result()))
+
 
 def test_a_deep_snapshot_tree_is_walked_in_linear_time() -> None:
     """The ancestor walk's cycle guard is a set: a list made a deep chain quadratic."""
