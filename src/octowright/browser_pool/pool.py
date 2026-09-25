@@ -38,7 +38,11 @@ from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_bro
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
 from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
-from octowright.browser_pool.visuals import _tile_args_for_chromium
+from octowright.browser_pool.visuals import (
+    VIEWPORT_TOKEN_ACTIONS,
+    _tile_args_for_chromium,
+    viewport_action_token_for,
+)
 from octowright.defaults import RECORDINGS_DIR, SUPPORTED_KINDS, get_default_url
 from octowright.profile_lifecycle import profile_lifecycle_lock, profile_names_match
 from octowright.request_errors import InvalidRequestError
@@ -386,21 +390,14 @@ class BrowserPool:
             # every page in the context -- init-script-injected code and
             # page-loaded (including hostile/third-party) code share the same
             # global object, so there is no caller-identity check at the
-            # binding layer itself. The per-launch capability token is the
-            # identity check: only the trusted init script (viewport_pill.js)
-            # has it, held purely in its own closure and never assigned to
-            # ``window``, so it isn't discoverable by page-script enumeration.
-            # Applied uniformly to every action (not just the destructive
-            # ``relaunch-fluid``) -- simpler and more defensible than
-            # special-casing.
-            token = payload.get("token")
-            if not isinstance(token, str) or not hmac.compare_digest(token, session.viewport_action_token):
-                raise ValueError("invalid viewport action token")
+            # binding layer itself. A per-action capability token is the
+            # identity check for everything that changes the browser: only the
+            # trusted init script (viewport_pill.js) has the tokens, and it
+            # sends one only from a trusted click. ``state`` is read-only and
+            # takes none -- the pill asks for it on every resize, and whatever
+            # the pill sends is readable by page script (see
+            # ``viewport_action_token_for``).
             action = payload.get("action")
-            if action == "sync":
-                return await session.viewport_sync()
-            if action == "relaunch-fluid":
-                return await self.relaunch_fluid(session.instance_id)
             if action == "state":
                 # The pill's init script is injected once and re-run on every
                 # document with the values baked in at LAUNCH, so a mode or
@@ -415,7 +412,15 @@ class BrowserPool:
                     "inset_w": session.viewport_frame_inset_w,
                     "inset_h": session.viewport_frame_inset_h,
                 }
-            raise ValueError(f"unknown viewport action: {action!r}")
+            if action not in VIEWPORT_TOKEN_ACTIONS:
+                raise ValueError(f"unknown viewport action: {action!r}")
+            token = payload.get("token")
+            expected = viewport_action_token_for(session.viewport_action_token, action)
+            if not isinstance(token, str) or not hmac.compare_digest(token, expected):
+                raise ValueError("invalid viewport action token")
+            if action == "sync":
+                return await session.viewport_sync()
+            return await self.relaunch_fluid(session.instance_id)
 
         # Bounded: `expose_binding` takes no timeout of its own, and a target
         # that has stopped answering never returns from it. Measured against a
