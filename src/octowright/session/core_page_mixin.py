@@ -542,6 +542,17 @@ class SessionPageMixin(SessionLike):
     @gated_operation("browser_screenshot")
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A session that admitted a value to its privacy ledger -- a typed
+        # password, a macro credential -- may be rendering it; raw pixels are a
+        # copy no text scrub reaches. Local import: macros imports the session.
+        from octowright.macros.privacy import SESSION_PRIVACY_LEDGER_ATTR, SessionPrivacyLedger
+
+        ledger = getattr(self, SESSION_PRIVACY_LEDGER_ATTR, None)
+        if isinstance(ledger, SessionPrivacyLedger) and ledger.values:
+            from octowright.macros import safe_screenshot
+
+            await safe_screenshot.ledger_screenshot(self, path, ledger.values)
+            return path
 
         # Atomic write via the shared helper — defeats the symlink-swap
         # window between the caller's containment check and Playwright's

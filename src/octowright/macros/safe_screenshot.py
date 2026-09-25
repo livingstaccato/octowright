@@ -289,3 +289,28 @@ async def redacted_screenshot(
         if recorder is not None:
             recorder.record("screenshot", path=str(target))
     return 1, 0
+
+
+async def ledger_screenshot(session: Any, path: Path, sensitive_values: tuple[str, ...]) -> None:
+    """``BrowserSession.screenshot`` for a session whose privacy ledger holds values.
+
+    The generic ``browser_screenshot`` wrote raw pixels and never consulted the
+    ledger, so a password filled through a browser tool -- or a macro credential
+    -- that the page rendered back reached a PNG, while the macro path refused
+    the same screenshot. It now takes the macro path's boundary: a caller's
+    installed handler if there is one, otherwise :func:`redacted_screenshot`,
+    which redacts, proves nothing is rendered, and refuses on an engine it
+    cannot prove that on. It does not consult ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS``:
+    that ``refuse`` default governs a macro run, and applied here it would make
+    every screenshot after a login fail. ``OCTOWRIGHT_REDACT_INPUTS=off`` keeps
+    typed values out of the ledger and so restores the raw screenshot.
+
+    *path* was already chosen and contained by the caller, so it is its own root.
+    """
+    action = {"action": "screenshot", "path": str(path)}
+    handler = installed_handler(session)
+    if handler is not None:
+        if await handler(action=action, sensitive_values=sensitive_values) is None:
+            raise RuntimeError("the session's screenshot privacy handler refused the screenshot")
+        return
+    await redacted_screenshot(session, action, sensitive_values, root=path.parent)

@@ -149,3 +149,24 @@ async def test_the_live_console_and_network_buffers_are_scrubbed_too(
     assert row["body"] == f'{{"error": "rejected {REDACTED}"}}'
     assert SECRET not in json.dumps(list(session.console))
     assert SECRET not in json.dumps(session.get_network_requests(limit=None, include_headers=True))
+
+
+async def test_a_screenshot_after_a_password_fill_takes_the_privacy_boundary(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page renders the typed value ("You typed ..."). Chromium redacts and
+    proves it before capturing; the other engines cannot prove it, so they
+    refuse and leave no file -- never a raw PNG holding the password."""
+    monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+    await session.fill("#pw", SECRET)
+    target = Path(session.log_path).with_suffix(".png")
+
+    if session.kind == "chromium":
+        await session.screenshot(target)
+        assert target.exists() and target.stat().st_size > 0
+        echoed = await session.page.evaluate("() => document.getElementById('echo').textContent")
+        assert echoed == f"You typed {SECRET}", "the page must be restored after the capture"
+    else:
+        with pytest.raises(RuntimeError, match="refused"):
+            await session.screenshot(target)
+        assert not target.exists()
