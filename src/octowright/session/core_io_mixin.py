@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import ast
 import base64
 import contextlib
 import html as html_lib
@@ -23,10 +22,15 @@ from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
 from octowright._json_text import dumps_utf8_safe
+from octowright._wire_utils import decode_binary_text as _decode_binary_text
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session import markdown_render, websocket_view
-from octowright.session._constants import CONSOLE_TEXT_MAX_CHARS, WEBSOCKET_FRAME_MAX_BYTES
+from octowright.session._constants import (
+    BINARY_TEXT_PARSE_MAX_CHARS,
+    CONSOLE_TEXT_MAX_CHARS,
+    WEBSOCKET_FRAME_MAX_BYTES,
+)
 from octowright.session._protocols import SessionLike
 from octowright.session.input_redaction import live_scrubbed
 from octowright.session.operation.gate import gated_operation
@@ -92,25 +96,6 @@ def _raw_payload_size(payload: Any) -> int | None:
     if isinstance(payload, bytes | bytearray | str):
         return len(payload)
     return None
-
-
-#: Longest ``b'...'`` text frame parsed back to bytes. A bytes repr spends up
-#: to four chars per byte, so this admits every frame whose decoded bytes could
-#: fit ``WEBSOCKET_FRAME_MAX_BYTES``. The text is page-controlled and
-#: ``ast.literal_eval`` runs on the event loop: an uncapped parse of a 50-100 MB
-#: frame stalled the daemon. A longer frame is kept as (capped) text instead.
-BINARY_TEXT_PARSE_MAX_CHARS = 4 * WEBSOCKET_FRAME_MAX_BYTES + 3
-
-
-def _decode_binary_text(payload: Any) -> bytes | None:
-    """The bytes a ``b'...'`` text frame spells, or ``None`` (not one, unparsable, or too long)."""
-    if not _looks_like_binary_text(payload) or len(payload) > BINARY_TEXT_PARSE_MAX_CHARS:
-        return None
-    try:
-        parsed = ast.literal_eval(payload)
-    except Exception:
-        return None
-    return bytes(parsed) if isinstance(parsed, bytes | bytearray) else None
 
 
 if TYPE_CHECKING:
@@ -229,7 +214,7 @@ class SessionIOMixin(SessionLike):
                 payload_bytes = bytes(payload)
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
-            elif (decoded := _decode_binary_text(payload)) is not None:
+            elif (decoded := _decode_binary_text(payload, max_chars=BINARY_TEXT_PARSE_MAX_CHARS)) is not None:
                 payload_bytes = decoded
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
@@ -340,6 +325,22 @@ class SessionIOMixin(SessionLike):
         # and a scrubber matches a credential's raw spelling, not "&amp;".
         return html_lib.unescape(clean).strip()
 
+    async def _refuse_oversized_document(self, target: Any) -> None:
+        """Raise ``MarkdownCaptureTooLarge`` when the page says its HTML is over the cap.
+
+        Best-effort: a measurement that fails or returns something unexpected
+        leaves the decision to the check on the HTML actually read.
+        """
+        try:
+            length = await bounded(
+                target.evaluate(markdown_render.DOCUMENT_HTML_LENGTH_JS), operation="markdown_capture", timeout=10.0
+            )
+        except Exception as exc:
+            log.debug("octowright.markdown.size_probe_failed", error=repr(exc))
+            return
+        if isinstance(length, int) and not isinstance(length, bool):
+            markdown_render.check_html_size(length)
+
     async def _durable_markdown(self, html: str) -> str:
         """Markdown for the on-disk cache, with any macro credential scrubbed out."""
         markdown = await self._extract_markdown(html)
@@ -387,9 +388,16 @@ class SessionIOMixin(SessionLike):
             # honest label here: this runs automatically after nearly every
             # navigate/page-load/launch via _schedule_markdown_capture, so the
             # caller is very often not browser_read_markdown at all.
+            await self._refuse_oversized_document(target)
             html = await bounded(target.content(), operation="markdown_capture", timeout=10.0)
+            # Checked again on what was actually returned: the page can grow
+            # between the measurement and the read, and the measurement may
+            # have failed. ``del`` so the HTML is not held beside its markdown.
+            markdown_render.check_html_size(len(html))
             markdown = await self._durable_markdown(html)
-            temp_path.write_text(markdown, encoding="utf-8")
+            del html
+            # "replace": a lone surrogate from the page must not lose the cache.
+            temp_path.write_text(markdown, encoding="utf-8", errors="replace")
             temp_path.replace(path)
             self.markdown_path = path
             self._last_markdown_capture_url = current_url
@@ -661,7 +669,7 @@ class SessionIOMixin(SessionLike):
                 )
                 # Parsed ONCE per frame and shared by both previews and the
                 # sidecar, which each used to parse the full payload again.
-                decoded = _decode_binary_text(payload)
+                decoded = _decode_binary_text(payload, max_chars=BINARY_TEXT_PARSE_MAX_CHARS)
                 shown = decoded if decoded is not None else payload
                 self.recorder.record(
                     f"websocket_{direction}",

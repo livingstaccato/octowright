@@ -15,6 +15,10 @@ import io
 import threading
 from typing import Any
 
+from provide.telemetry import get_logger
+
+_log = get_logger(__name__)
+
 #: One converter per markitdown module object: ``MarkItDown()`` registers
 #: every built-in converter (and probes for magika) on construction, which is
 #: wasted work repeated per navigation. Keyed by the module so a test that
@@ -67,3 +71,27 @@ def rendered_markdown(rendered: Any) -> str:
             if text.strip():
                 return text
     return str(rendered)
+
+
+#: Characters of page HTML the markdown cache will convert. Capture runs after
+#: nearly every load, unasked, and conversion is ~2.7s per MB in the leader
+#: every session shares; a remote page building a huge DOM and firing ``load``
+#: made the leader serialise, convert and write all of it. Above this the
+#: capture is skipped and recorded as a ``markdown_cache_error``. 2 MiB covers
+#: ordinary documentation and article pages several times over.
+MARKDOWN_CAPTURE_MAX_HTML_CHARS = 2 * 1024 * 1024
+#: Measured IN the page, so an oversized DOM is refused before ``content()``
+#: copies it into this process. UTF-16 units, close enough to characters.
+DOCUMENT_HTML_LENGTH_JS = "() => document.documentElement ? document.documentElement.outerHTML.length : 0"
+
+
+class MarkdownCaptureTooLarge(RuntimeError):
+    """The page's HTML is over ``MARKDOWN_CAPTURE_MAX_HTML_CHARS``; nothing was converted."""
+
+
+def check_html_size(length: int) -> None:
+    if length > MARKDOWN_CAPTURE_MAX_HTML_CHARS:
+        _log.info("octowright.markdown.capture_skipped_too_large", html_chars=length)
+        raise MarkdownCaptureTooLarge(
+            f"page HTML is too large to cache as markdown ({length} chars, limit {MARKDOWN_CAPTURE_MAX_HTML_CHARS})"
+        )

@@ -20,7 +20,6 @@ from typing import Any
 
 import pytest
 
-from octowright.session import core_io_mixin
 from octowright.session._constants import WEBSOCKET_FRAME_MAX_BYTES
 from tests._websocket_fakes import FakeSocket, io_mixin_session, sidecar_rows
 
@@ -34,7 +33,7 @@ def evals(monkeypatch: pytest.MonkeyPatch) -> list[int]:
         sizes.append(len(node_or_string))
         return real(node_or_string)
 
-    monkeypatch.setattr(core_io_mixin.ast, "literal_eval", counting)
+    monkeypatch.setattr(ast, "literal_eval", counting)
     return sizes
 
 

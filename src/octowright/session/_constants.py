@@ -37,3 +37,9 @@ CONSOLE_TEXT_MAX_CHARS = 16_000
 #: full before anything looked at its size. Longer payloads keep this prefix;
 #: the row still carries the true ``payload_size`` and ``payload_truncated``.
 WEBSOCKET_FRAME_MAX_BYTES = 256 * 1024
+#: Longest ``b'...'`` text frame parsed back to bytes. A bytes repr spends up
+#: to four chars per byte, so this admits every frame whose decoded bytes could
+#: fit ``WEBSOCKET_FRAME_MAX_BYTES``. The text is page-controlled and
+#: ``ast.literal_eval`` runs on the event loop: an uncapped parse of a 50-100 MB
+#: frame stalled the daemon. A longer frame is kept as (capped) text instead.
+BINARY_TEXT_PARSE_MAX_CHARS = 4 * WEBSOCKET_FRAME_MAX_BYTES + 3
