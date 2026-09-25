@@ -32,7 +32,6 @@ from octowright.macros.privacy import (
     TOKEN_TOKENS,
     MacroArgPrivacy,
     _serialized_variants,
-    blind_scrub_arg_values,
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
@@ -62,11 +61,12 @@ def render_macro_cli(
     action_json = json.dumps(macro.get("actions", []), indent=2)
     # The macro's positional privacy -- the same view live replay builds -- so
     # ``args_used`` and the script's own log agree about one macro.
-    hard_redacted_args = sorted(MacroArgPrivacy.for_macro(macro.get("actions", [])).assertion_args)
+    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    hard_redacted_args = sorted(privacy.assertion_args)
     # Decided at render time by the predicate replay uses; a text search of
     # ACTIONS_JSON also matched the string inside a selector or a typed value.
     watch_network = actions_assert_network_clean(macro.get("actions", []))
-    parser_lines = _parser_lines(parameters, args, include_evidence)
+    parser_lines = _parser_lines(parameters, args, include_evidence, privacy)
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
     evidence_helpers, evidence_setup, _evidence_close = _evidence_render_parts(include_evidence)
@@ -546,10 +546,10 @@ def _identifier(value: str) -> str:
     return cleaned
 
 
-def _parser_line(parameter: tuple[str, str], args: dict[str, Any] | None) -> str:
+def _parser_line(parameter: tuple[str, str], args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
     original, ident = parameter
     flag = re.sub(r"[^A-Za-z0-9-]+", "-", original.strip()).strip("-") or ident.replace("_", "-")
-    default = _safe_default(original, args)
+    default = _safe_default(original, args, privacy)
     return f"    parser.add_argument('--{flag}', dest='{ident}', default={default!r})"
 
 
@@ -560,8 +560,13 @@ def _signature(parameters: list[tuple[str, str]], include_evidence: bool) -> str
     return ", ".join(fn_params)
 
 
-def _parser_lines(parameters: list[tuple[str, str]], args: dict[str, Any] | None, include_evidence: bool) -> str:
-    parser_lines = "\n".join(_parser_line(param, args) for param in parameters)
+def _parser_lines(
+    parameters: list[tuple[str, str]],
+    args: dict[str, Any] | None,
+    include_evidence: bool,
+    privacy: MacroArgPrivacy,
+) -> str:
+    parser_lines = "\n".join(_parser_line(param, args, privacy) for param in parameters)
     if include_evidence:
         parser_lines = _append_parser_line(
             parser_lines,
@@ -587,12 +592,17 @@ def _append_parser_line(existing: str, line: str) -> str:
     return f"{existing}\n{line}" if existing else line
 
 
-def _safe_default(param: str, args: dict[str, Any] | None) -> str:
-    if is_sensitive_arg_key(param):
+def _safe_default(param: str, args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
+    """A default the script may carry in its source: never a classified value.
+
+    Classified the way live replay classifies it (``privacy``), so an argument
+    the macro feeds to ``expect_no_text`` is never baked in, whatever its name.
+    """
+    if is_sensitive_arg_key(param) or param in privacy.assertion_args:
         return ""
     value = (args or {}).get(param, "")
     rendered = str(value) if value is not None else ""
-    scrubbed = scrub_sensitive_values(rendered, blind_scrub_arg_values(args or {}))
+    scrubbed = scrub_sensitive_values(rendered, privacy.blind_scrub(args or {}))
     return rendered if scrubbed == rendered else ""
 
 

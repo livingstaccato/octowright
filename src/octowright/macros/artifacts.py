@@ -24,7 +24,7 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import blind_scrub_arg_values, redact_args, scrub_sensitive_values
+from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -39,7 +39,8 @@ def _cap_macro(name: str) -> str:
 def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     macro = load_macro(name)
     args_used = dict(args or {})
-    blind_scrub_arg_values(args_used)
+    privacy = _privacy(macro)
+    privacy.blind_scrub(args_used)
     missing_args = _missing_args(macro, args_used)
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
@@ -65,7 +66,7 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         "ok": not missing_args,
         "macro": name,
         "missing_args": missing_args,
-        "args_used": redact_args(args_used),
+        "args_used": privacy.redact(args_used),
         "paths": {
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),
@@ -118,7 +119,8 @@ def export_macro_cli(
     macro = load_macro(name)
     _refuse_unbound_assertions(name, macro)
     args_used = dict(args or {})
-    blind_scrub_arg_values(args_used)
+    privacy = _privacy(macro)
+    privacy.blind_scrub(args_used)
     store = ArtifactStore()
     target = store.resolve_macro_export_path(name, out_path)
     write_macro_cli(path=target, name=name, macro=macro, args=args_used, include_evidence=include_evidence)
@@ -185,7 +187,10 @@ async def run_macro_artifact(
     async with session.operation("macro_artifact_run"):
         macro = load_macro(name)
         args_used = dict(args or {})
-        sensitive_values = blind_scrub_arg_values(args_used)
+        # The view macro_run builds: an expect_no_text argument is secret
+        # whatever it is named, so every record below uses it, not the name alone.
+        privacy = _privacy(macro)
+        sensitive_values = privacy.blind_scrub(args_used)
         store = ArtifactStore()
         artifact_dir = store.macro_dir(name)
         runs_dir = artifact_dir / "runs"
@@ -249,7 +254,7 @@ async def run_macro_artifact(
             status=status,
             instance_id=str(getattr(session, "instance_id", "")),
             macro=name,
-            args_used=args_used,
+            args_used=privacy.redact(args_used),
             executed=executed,
             skipped=skipped,
             error=error,
@@ -389,7 +394,8 @@ def _manifest_for_plan(
         artifact_type="macro",
         name=name,
         source={"type": "macro", "path": str(macro_path(name))},
-        parameters=redact_args(args_used),
+        # The macro's own view, as macro_run uses: not the name-only one.
+        parameters=_privacy(macro).redact(args_used),
         metadata={
             "description": macro.get("description"),
             "action_count": len(macro.get("actions", [])) if isinstance(macro.get("actions"), list) else 0,
@@ -439,7 +445,7 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         "artifact_type": manifest.get("artifact_type"),
         "name": manifest.get("name"),
         "source": manifest.get("source"),
-        "parameters": redact_args(manifest.get("parameters") or {}),
+        "parameters": _listing_privacy(manifest.get("name")).redact(manifest.get("parameters") or {}),
         "created_at": manifest.get("created_at"),
         "updated_at": manifest.get("updated_at"),
         "latest_run": manifest.get("latest_run"),
@@ -448,6 +454,24 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         "metadata": manifest.get("metadata", {}),
         "path": str(contained_path),
     }
+
+
+def _privacy(macro: dict[str, Any]) -> MacroArgPrivacy:
+    return MacroArgPrivacy.for_macro(macro.get("actions", []))
+
+
+def _listing_privacy(name: Any) -> MacroArgPrivacy:
+    """The macro's view for a stored manifest, which may predate positional redaction.
+
+    A macro that is gone or unreadable falls back to name-only: the manifest
+    is still listed, and a value written by a current octowright is already
+    redacted on disk.
+    """
+    try:
+        return _privacy(load_macro(str(name)))
+    except Exception:  # A listing must not fail over one unreadable macro.
+        log.debug("octowright.artifacts.listing_privacy_fallback", macro=str(name)[:100])
+        return MacroArgPrivacy()
 
 
 def _all_macro_manifests(store: ArtifactStore) -> list[Path]:

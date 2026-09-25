@@ -235,8 +235,9 @@ def test_a_cli_flag_is_derived_from_the_parameter_name_not_the_identifier() -> N
     CLI away from what the macro author wrote.
     """
     from octowright.artifacts.script_export import _parser_line
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    line = _parser_line(("2fa code", "arg_2fa_code"), None)
+    line = _parser_line(("2fa code", "arg_2fa_code"), None, MacroArgPrivacy())
 
     assert "'--2fa-code'" in line
     assert "dest='arg_2fa_code'" in line
