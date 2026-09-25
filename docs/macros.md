@@ -421,6 +421,13 @@ recording `credential_fill_offsite: [{step, action, origin}]` in the run result;
 `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` turns this and every other credential
 check off.
 
+**Exported scripts enforce the live guards.** A script from `macro_export_cli`
+refuses a credential in a URL, code or outbound field, types a credential only
+on an origin passed as `--trusted-origin` (or listed in the step's
+`allowed_origins`), and uploads only from the upload staging directory or
+`OCTOWRIGHT_UPLOAD_ROOTS` -- the same rules `macro_run` applies, rendered from
+the same source.
+
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy
 when they run. A script exported by an older octowright keeps the classifier

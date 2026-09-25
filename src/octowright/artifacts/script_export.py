@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from octowright import drawn_text
+from octowright import credential_sinks, defaults, drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
@@ -35,16 +35,17 @@ from octowright.macros.privacy import (
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
+from octowright.session.upload_paths import check_upload_path, upload_roots
 
 
-def _drawn_text_source() -> str:
-    """``octowright.drawn_text`` as script source: everything after its ``__future__`` import.
+def _module_source(module: Any) -> str:
+    """A standard-library-only module as script source: everything after its ``__future__`` import.
 
     The script opens with that import itself, and it may only appear first.
     """
-    _header, marker, body = inspect.getsource(drawn_text).partition("from __future__ import annotations\n")
+    _header, marker, body = inspect.getsource(module).partition("from __future__ import annotations\n")
     if not marker:
-        raise RuntimeError("octowright.drawn_text must import annotations from __future__ to be rendered")
+        raise RuntimeError(f"{module.__name__} must import annotations from __future__ to be rendered")
     return body.strip()
 
 
@@ -79,7 +80,14 @@ def render_macro_cli(
     serialized_variants = inspect.getsource(_serialized_variants).rstrip()
     # Same reason, whole module: expect_no_text's collector, comparison, limit,
     # frame rules and messages are the ones replay runs (see drawn_text).
-    drawn_text_source = _drawn_text_source()
+    drawn_text_source = _module_source(drawn_text)
+    # And the credential-sink guard: the sink set, alias rules, own-origin
+    # exemption and credential-fill origin check that macro_run enforces. The
+    # script substituted with a bare re.sub before, so it ran what replay refused.
+    credential_sinks_source = _module_source(credential_sinks)
+    # The live upload allowlist, so an exported set_input_files cannot read a
+    # file macro_run would refuse (~/.ssh/id_rsa).
+    upload_source = inspect.getsource(upload_roots).rstrip() + "\n\n\n" + inspect.getsource(check_upload_path).rstrip()
 
     return f"""\
 {doc!r}
@@ -124,6 +132,9 @@ _MAX_ENCODING_DEPTH = 3
 _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
+# Where the exporting octowright stages uploads; OCTOWRIGHT_UPLOAD_STAGING_DIR
+# and OCTOWRIGHT_UPLOAD_ROOTS at run time adjust it exactly as they do live.
+_UPLOAD_STAGING_DIR_DEFAULT = {str(defaults.UPLOAD_STAGING_DIR)!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 
@@ -305,6 +316,24 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 {drawn_text_source}
 
 
+{credential_sinks_source}
+
+
+{upload_source}
+
+
+def _is_credential_arg(key: str) -> bool:
+    return _privacy_tier(key) == "credential"
+
+
+def _upload_paths(paths: Any) -> list[str]:
+    roots = upload_roots(
+        Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", _UPLOAD_STAGING_DIR_DEFAULT)),
+        os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", ""),
+    )
+    return [str(check_upload_path(path, roots)) for path in paths or []]
+
+
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
     if isinstance(value, str):
         redacted = value
@@ -346,22 +375,6 @@ def _redact_action(
     return redacted
 
 
-def _resolve(value: Any, args: dict[str, str]) -> Any:
-    if isinstance(value, str):
-        def repl(match: re.Match[str]) -> str:
-            key = match.group(1)
-            if key not in args:
-                raise KeyError(f"placeholder {{{{key}}}} has no matching CLI argument")
-            return str(args[key])
-
-        return re.sub(_PLACEHOLDER_RE, repl, value)
-    if isinstance(value, dict):
-        return {{key: _resolve(item, args) for key, item in value.items()}}
-    if isinstance(value, list):
-        return [_resolve(item, args) for item in value]
-    return value
-
-
 # Resolve a semantic (ARIA) locator, mirroring session/locators.build_locator.
 # `exact` is forwarded because dropping it silently changes WHICH element the
 # script acts on: Playwright renders exact matching as a case-sensitive
@@ -383,6 +396,19 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
     raise RuntimeError(f"action has no ARIA locator: {{action!r}}")
 
 {state_helpers}
+
+def _check_credential_fill(state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any) -> None:
+    # The live rule (offsite_credential_origin), read off the frame the fill
+    # lands in, immediately before the step.
+    shown = offsite_credential_origin(action, getattr(_target(state), "url", ""), trusted)
+    if shown is None:
+        return
+    if credential_fill_mode() != "warn":
+        raise credential_fill_refusal(action, shown)
+    record = {{"event": "credential_fill_offsite", "index": index, "action": action.get("action"), "origin": shown}}
+    print(json.dumps(record, sort_keys=True), file=sys.stderr)
+
+
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
@@ -392,6 +418,14 @@ async def {fn_name}({signature}) -> dict[str, int]:
         key=lambda value: (-len(value), value),
     )
 {evidence_setup}    print(json.dumps({{"event": "args", "args": _redact_args(args)}}, sort_keys=True))
+    # --trusted-origin plays the part a live session's launch URL does: the one
+    # origin a credential header may go to and a credential may be typed on.
+    trusted = parse_allowed_origins(list(trusted_origins))
+    # Expanded whole before the browser opens, as macro_run does, so a refused
+    # sink leaves nothing half done.
+    actions = expand_actions(
+        ACTIONS, args, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE, trusted_origins=trusted
+    )
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
@@ -425,8 +459,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
         result = None
         try:
             try:
-                for index, raw_action in enumerate(ACTIONS):
-                    action = _resolve(raw_action, args)
+                for index, action in enumerate(actions):
                     kind = action.get("action")
                     log_record = {{
                         "event": "action",
@@ -436,6 +469,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
                     print(json.dumps(log_record, sort_keys=True))
                     if evidence is not None:
                         evidence.record(log_record)
+                    _check_credential_fill(state, index, action, trusted)
                     if kind in _LIFECYCLE_SKIP:
                         skipped += 1
 {dispatch_chain}
@@ -557,6 +591,7 @@ def _signature(parameters: list[tuple[str, str]], include_evidence: bool) -> str
     fn_params = [f"{ident}: str = ''" for _original, ident in parameters]
     if include_evidence:
         fn_params.append("evidence_dir: str = ''")
+    fn_params.append("trusted_origins: tuple[str, ...] = ()")
     return ", ".join(fn_params)
 
 
@@ -572,13 +607,19 @@ def _parser_lines(
             parser_lines,
             "    parser.add_argument('--evidence-dir', default='', help='Optional directory for result/evidence logs')",
         )
-    return parser_lines or "    pass"
+    return _append_parser_line(
+        parser_lines,
+        "    parser.add_argument('--trusted-origin', action='append', default=[], "
+        "help='Origin (scheme://host[:port]) the macro may send a credential header to and type a "
+        "credential on; repeatable')",
+    )
 
 
 def _call_args(parameters: list[tuple[str, str]], include_evidence: bool) -> list[str]:
     call_args = [f"{ident}=ns.{ident}" for _original, ident in parameters]
     if include_evidence:
         call_args.append("evidence_dir=ns.evidence_dir")
+    call_args.append("trusted_origins=tuple(ns.trusted_origin)")
     return call_args
 
 

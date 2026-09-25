@@ -24,6 +24,7 @@ import asyncio
 import re
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -368,7 +369,27 @@ _EVERY_ACTION: list[dict[str, Any]] = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _upload_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uploads obey the live allowlist, so the fixture's files live in the staging dir.
+
+    The actions name them relatively, and the script resolves them from the
+    working directory, as live replay does.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(tmp_path))
+    monkeypatch.delenv("OCTOWRIGHT_UPLOAD_ROOTS", raising=False)
+
+
+def _staged(*names: str) -> list[str]:
+    """What the script hands Playwright for *names*: the resolved staged path."""
+    return [str(Path(name).resolve()) for name in names]
+
+
 def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]]) -> tuple[dict[str, int], _Recorder]:
+    for action in actions:
+        for name in action.get("paths") or action.get("files") or []:
+            Path(name).write_text("staged", encoding="utf-8")
     rec = _Recorder()
     _install(monkeypatch, rec)
     source = render_macro_cli(name="everything", macro={"actions": actions}, include_evidence=False)
@@ -426,8 +447,8 @@ def test_recorded_field_spellings_reach_the_right_parameters(monkeypatch: pytest
     _result, rec = _run(monkeypatch, _EVERY_ACTION)
     assert rec.args_for("drag_and_drop") == ("#a", "#b")
     assert rec.args_for("route") == ("**/api/*",)
-    assert rec.args_for("set_input_files") == ("#file", ["a.txt"])
-    assert rec.args_for("file_chooser.set_files") == (["b.txt"],)
+    assert rec.args_for("set_input_files") == ("#file", _staged("a.txt"))
+    assert rec.args_for("file_chooser.set_files") == (_staged("b.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 321}
     assert rec.kwargs_for("select_option") == {"value": "NL"}
     assert rec.args_for("set_viewport_size") == ({"width": 1280, "height": 800},)
@@ -461,7 +482,7 @@ def test_upload_files_arms_clicks_awaits_and_sets_in_order(
     assert relevant == ["file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"]
     assert rec.kwargs_for("file_chooser.arm") == {"timeout": 246}
     assert rec.kwargs_for(expected_click) == {"timeout": 246}
-    assert rec.args_for("file_chooser.set_files") == (["first.txt", "second.txt"],)
+    assert rec.args_for("file_chooser.set_files") == (_staged("first.txt", "second.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
 
 
@@ -503,7 +524,7 @@ def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
     assert "locator.resolve:main" not in names
     assert names.count("locator.click:css:frame") == 1
     assert "locator.click:css:main" not in names
-    assert rec.args_for("file_chooser.set_files") == (["inside-frame.txt"],)
+    assert rec.args_for("file_chooser.set_files") == (_staged("inside-frame.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 357}
 
 

@@ -469,10 +469,13 @@ await _a11y_dragdrop(state, action)
 executed += 1
 """,
     "set_input_files": """
-await _target(state).set_input_files(action["selector"], action.get("paths") or action.get("files") or [])
+# The live upload allowlist (session.upload_paths), resolved paths and all.
+await _target(state).set_input_files(action["selector"], _upload_paths(action.get("paths") or action.get("files")))
 executed += 1
 """,
     "upload_files": """
+# Checked before the chooser opens, as live upload_files does.
+paths = _upload_paths(action["paths"])
 target = _target(state)
 trigger = target.locator(action["selector"]) if action.get("selector") is not None else _locator(target, action)
 timeout = action.get("timeout_ms")
@@ -481,7 +484,7 @@ if timeout is None or timeout == 0:
 async with _page(state).expect_file_chooser(timeout=timeout) as chooser_info:
     await trigger.click(timeout=timeout)
 chooser = await chooser_info.value
-await chooser.set_files(action["paths"], timeout=timeout)
+await chooser.set_files(paths, timeout=timeout)
 executed += 1
 """,
     "resize": """
