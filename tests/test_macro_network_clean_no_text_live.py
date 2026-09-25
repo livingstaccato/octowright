@@ -318,3 +318,28 @@ async def test_octowrights_own_overlay_text_is_not_the_page(session: Any, page_u
         pytest.skip("no badge text on this page to collide with")
     word = max(badge.split(), key=len)
     await session.expect_no_text(word)
+
+
+async def test_a_pass_on_a_request_still_in_flight_says_so(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check judges without a request that outlives the settle wait -- and macro_run now reports it."""
+    _macros(
+        monkeypatch,
+        {
+            "hanging": [
+                {"action": "evaluate", "expression": "() => { fetch('/hang').catch(() => {}); }"},
+                {"action": "expect_network_clean", "settle_timeout_ms": 300},
+            ]
+        },
+    )
+    result = await execution.run_macro(session, "hanging")
+    assert result["executed"] == 2  # semantics unchanged: pending is not failed
+    (observation,) = result["assertions"]
+    assert observation["in_flight"] >= 1, observation
+    assert "still in flight" in observation["warning"]
+
+
+async def test_a_selector_that_matches_nothing_says_so(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    _macros(monkeypatch, {"stale": [{"action": "expect_no_text", "text": SECRET, "selector": "#error-banner"}]})
+    (observation,) = (await execution.run_macro(session, "stale"))["assertions"]
+    assert observation["matched"] == 0
+    assert observation["warning"] == "selector '#error-banner' matched no element, so no text was checked"
