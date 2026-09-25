@@ -16,13 +16,13 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+from octowright.session.input_redaction import CREDENTIAL_FIELD_JS, classify_credential_field, recorded_input_value
 from octowright.session.operation.gate import gated_operation
 
 log = get_logger(__name__)
@@ -30,48 +30,22 @@ log = get_logger(__name__)
 
 class SessionLocatorMixin(SessionLike):
     @gated_operation("session_locator_redaction")
-    async def _is_password_locator(self, locator: Any, *, when_unknown: bool | None = True) -> bool | None:
+    async def _is_password_locator(self, locator: Any) -> bool | None:
         """Best-effort credential check for semantic-locator actions.
 
-        *when_unknown* as in ``core_page_mixin._is_password_input``.
+        Same contract as ``core_page_mixin._is_password_input``: ``None`` when
+        the field cannot be classified.
         """
         try:
-            info = await locator.first.evaluate(
-                "el => el ? {"
-                "  type: el.type ? String(el.type).toLowerCase() : '',"
-                "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
-                "    || (el.getAttribute && el.getAttribute('autocomplete')"
-                "         ? String(el.getAttribute('autocomplete')).toLowerCase() : '')"
-                "} : {type: '', ac: ''}"
-            )
+            info = await locator.first.evaluate(CREDENTIAL_FIELD_JS)
         except Exception as exc:
             log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
-            return when_unknown
-        # Same contract as the selector probe: {type, ac}, and anything else
-        # is treated as a credential rather than guessed at.
-        if not isinstance(info, dict):
-            return when_unknown
-        if info.get("type") == "password":
-            return True
-        return info.get("ac") in ("current-password", "new-password", "one-time-code")
+            return None
+        return classify_credential_field(info)
 
     @gated_operation("session_locator_redaction")
     async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
-        mode = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower()
-        if mode not in {"off", "all", "passwords"}:
-            mode = "passwords"
-        if mode == "off":
-            return value
-        verdict = await self._is_password_locator(locator, when_unknown=None)
-        if verdict is True:
-            # As core_page_mixin._redacted_or_original: keep the page's own
-            # echoes of it out of every other durable row too.
-            from octowright.macros.privacy import admit_redacted_input
-
-            admit_redacted_input(self, value)
-        if mode == "all" or verdict is not False:
-            return REDACTED_INPUT_PLACEHOLDER
-        return value
+        return await recorded_input_value(self, value, lambda: self._is_password_locator(locator))
 
     @gated_operation("session_locator_resolve")
     async def _locator(self, **finders: Any) -> Any:

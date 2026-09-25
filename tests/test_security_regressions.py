@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from octowright import personas
+from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
 from octowright.session.core_page_mixin import SessionPageMixin
 from tests._operation_gate_fakes import OperationAwareFake
 
@@ -32,8 +33,12 @@ class _SessionWithFailingLookup(OperationAwareFake, SessionPageMixin):
 
 
 @pytest.mark.anyio
-async def test_password_lookup_failure_fails_closed() -> None:
-    assert await _SessionWithFailingLookup()._is_password_input("#password") is True
+async def test_password_lookup_failure_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed probe cannot classify the field, and an unclassified field is recorded redacted."""
+    monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+    session = _SessionWithFailingLookup()
+    assert await session._is_password_input("#password") is None
+    assert await session._redacted_or_original("#password", "hunter2") == REDACTED_INPUT_PLACEHOLDER
 
 
 def test_load_persona_rejects_invalid_yaml_shape(tmp_path, monkeypatch) -> None:
