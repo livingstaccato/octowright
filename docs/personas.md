@@ -63,7 +63,8 @@ Field reference:
 | `default_url` | URL `browser_launch profile=dante` opens when no `url` is given, **and** the context's Playwright `base_url` — see "Host-relative macros" below. |
 | `default_macros` | List of macro names to run automatically after launch (e.g. login flow). |
 | `emoji` | Override for the auto-picked title-bar persona emoji. |
-| `credentials` | References to env vars (`*_env`) or shell commands (`*_cmd`) — never the secrets themselves. |
+| `credentials` | References to env vars (`*_env`), shell commands (`*_cmd`) or private files (`*_file`) — never the secrets themselves. |
+| `trusted_roots` | PEM root certificates this persona's Chromium trusts, and only this persona's. See "Trusted roots" below. |
 | `app` | Domain metadata for macros and scenarios. Mostly free-form, with one key Octowright reads itself: `app.hosts`, a list that `resolve` scores a persona against when suggesting one for a URL. |
 
 ## Host-relative macros
@@ -97,7 +98,8 @@ nothing declared where the macro was meant to point.
 ## Credentials workflow
 
 Credentials are stored as **references**, never secrets. Each entry uses one of
-two suffixes:
+three suffixes. When more than one is set for a name, `_cmd` wins, then
+`_file`, then `_env`.
 
 - `<name>_env: VAR_NAME` — read from the named environment variable at use-time.
 - `<name>_cmd: "command argv-form"` — exec the command directly and capture
@@ -109,6 +111,12 @@ two suffixes:
   token whose `-c` argument carries the shell logic the cmd author signed
   off on. The trust boundary stays explicit because the persona YAML
   itself names the shell binary.
+- `<name>_file: /path/to/file` — read the file at use-time. It must be a
+  regular file with one hard link, owned by the current user, with no group or
+  other permissions (`chmod 600`), and not a symlink. One trailing newline is
+  stripped; an empty file is refused. Errors name the rule that failed, never
+  the contents. Suited to a secret dropped on tmpfs for the length of a
+  session.
 
 ### Pre-flight check
 
@@ -126,6 +134,33 @@ values are never included in the report.**
 
 This catches the classic "logged in 6 of 7 windows, then discovered the env var
 was unset on #7" failure mode before any browser launches.
+
+## Trusted roots
+
+A persona can trust a private CA without that CA reaching any other browser:
+
+```yaml
+name: lab
+default_url: https://lab.internal:18081
+trusted_roots:
+  - ~/.config/octowright/profiles/lab/root.pem
+```
+
+Chromium on Linux reads trust from `$HOME/.pki/nssdb`, so importing a private
+root there trusts it in every browser the user runs. Instead, on every
+Chromium launch of this persona, octowright rebuilds a private NSS store under
+the persona's directory holding exactly the listed roots (with `certutil`,
+from `libnss3-tools`), and starts that Chromium with `HOME` pointed at it.
+
+- The store is rebuilt from the files on every launch, so replacing
+  `root.pem` is all a rotated root needs, and a removed root stops being
+  trusted.
+- A missing or non-PEM file, or a missing `certutil`, fails the launch before
+  a browser starts.
+- Chromium only: launching such a persona with Firefox or WebKit is refused,
+  never silently launched without the trust it asked for.
+- Nothing relaxes verification. A certificate the listed roots did not issue
+  still fails.
 
 ## Window title and corner badge
 
