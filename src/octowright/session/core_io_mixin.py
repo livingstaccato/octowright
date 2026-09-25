@@ -22,6 +22,7 @@ import anyio.to_thread
 from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
+from octowright._json_text import dumps_utf8_safe
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
 from octowright.session import markdown_render, websocket_view
@@ -242,7 +243,7 @@ class SessionIOMixin(SessionLike):
         # module scope above so the hot path doesn't pay a sys.modules
         # lookup per frame.
         fh = self._websocket_cache_handle(now)
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        line = dumps_utf8_safe(entry) + "\n"
         if self._ws_over_ceiling(fh, len(line.encode("utf-8")), limit=limit):
             return
         fh.write(line)

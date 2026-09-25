@@ -16,6 +16,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright._json_text import dumps_utf8_safe
 from octowright.plugins.errors import ControlBudgetExceededError
 
 log = get_logger(__name__)
@@ -146,7 +147,9 @@ class Recorder:
         if self._truncated:  # ceiling already hit — drop silently (marker already written)
             return
         entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        # Not a bare json.dumps: a lone surrogate from the page made the write
+        # raise, losing the row and failing the tool that recorded it.
+        line = dumps_utf8_safe(entry) + "\n"
         if self._max_bytes:
             encoded = len(line.encode("utf-8"))
             if self._bytes_written + encoded > self._max_bytes:
@@ -169,7 +172,7 @@ class Recorder:
         if action not in CONTROL_ACTIONS:
             raise ValueError(f"{action!r} is not a control action")
         entry = {"ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"), "action": action, **fields}
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
+        line = dumps_utf8_safe(entry) + "\n"
         encoded = len(line.encode("utf-8"))
         if self._control_bytes + encoded > CONTROL_BUDGET_BYTES:
             raise ControlBudgetExceededError(
