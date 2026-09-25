@@ -193,7 +193,7 @@ def read_registered_artifacts(log_path: Path, recordings_dir: Path) -> list[Regi
     double the file size). This is called per ``GET /api/sessions/{id}`` for a
     plugin session and per artifact fetch, and a streaming-output plugin is
     exactly the case that grows one recording without bound (see
-    ``OCTOWRIGHT_RECORDING_MAX_BYTES``, off by default). Opened in binary and
+    ``OCTOWRIGHT_RECORDING_MAX_BYTES``, a generous 512 MiB by default). Opened in binary and
     decoded per line, not via a text-mode handle, so a torn write mid-multibyte
     sequence raises ``UnicodeDecodeError`` scoped to the one line it broke
     (caught below) instead of a text iterator that can't isolate the bad byte

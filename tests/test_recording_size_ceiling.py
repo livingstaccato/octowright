@@ -5,11 +5,10 @@
 
 """Per-recording byte ceiling (disk-fill DoS guard).
 
-OCTOWRIGHT_RECORDING_MAX_BYTES is OFF by default (unbounded, back-compat). When
-set to a positive byte count, the recorder stops appending once the file would
-exceed it, writing a single ``recording_truncated`` marker so replay/export see
-the cut. Mirrors the opt-in posture of OCTOWRIGHT_MIN_FREE_MEMORY_MB /
-OCTOWRIGHT_IDLE_GRACE.
+OCTOWRIGHT_RECORDING_MAX_BYTES is ON by default at a generous 512 MiB (see
+tests/test_disk_ceiling_defaults.py). Once the file would exceed the ceiling the
+recorder stops appending, writing a single ``recording_truncated`` marker so
+replay/export see the cut.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ def _read_lines(path: Path) -> list[dict]:
     return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
-def test_unbounded_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_the_default_ceiling_does_not_cut_an_ordinary_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("OCTOWRIGHT_RECORDING_MAX_BYTES", raising=False)
     rec = Recorder(tmp_path / "r.jsonl")
     for i in range(200):
@@ -38,7 +37,7 @@ def test_unbounded_by_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     assert not any(r["action"] == "recording_truncated" for r in rows)
 
 
-@pytest.mark.parametrize("disable_token", ["0", "off", "never", "none", "disabled", "-1"])
+@pytest.mark.parametrize("disable_token", ["0", "off", "never", "none", "disabled"])
 def test_falsey_tokens_disable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, disable_token: str) -> None:
     monkeypatch.setenv("OCTOWRIGHT_RECORDING_MAX_BYTES", disable_token)
     rec = Recorder(tmp_path / "r.jsonl")

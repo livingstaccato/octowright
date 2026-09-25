@@ -45,29 +45,38 @@ _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", 
 #: survives a churny page.
 WEBSOCKET_REGISTRY_MAX = 64
 #: Chars of a frame preview written to the MAIN session JSONL. The sidecar
-#: keeps a long one (that is the file the read tools serve from); this file has
-#: no ceiling on by default and is read by ``browser_tail_recording``, the
+#: keeps a long one (that is the file the read tools serve from); this file's
+#: only ceiling is a generous 512 MiB and it is read by ``browser_tail_recording``, the
 #: dashboard event stream and ``capture_create(kind="recording")``, none of
 #: which asked about websockets. It was ``""`` for every frame until payload
 #: capture was fixed, so nothing had ever measured what a real one costs there.
 WEBSOCKET_RECORD_PREVIEW_CHARS = 128
 
 
+#: Per-session websocket sidecar ceiling when ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``
+#: is unset. Frames are page-driven, so a socket pushing forever could otherwise
+#: fill the recordings disk.
+WEBSOCKET_MAX_BYTES_DEFAULT = 256 * 1024 * 1024
+
+
 def _websocket_max_bytes() -> int:
     """``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` — per-session WS sidecar byte ceiling.
 
-    OFF (0) by default. A positive value stops appending frames once the sidecar
-    file would exceed it, writing a single ``websocket_truncated`` marker so
-    replay/inspection see the cut. Falsey/unparsable/non-positive keeps it off.
+    ON by default at ``WEBSOCKET_MAX_BYTES_DEFAULT``. Once the sidecar would
+    exceed it, frames stop being appended and a single ``websocket_truncated``
+    marker records the cut. ``0`` or a falsey token removes it; an unparsable
+    or negative value falls back to the default, not to unbounded.
     """
     raw = os.environ.get("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "").strip().lower()
+    if not raw:
+        return WEBSOCKET_MAX_BYTES_DEFAULT
     if raw in _BYTE_LIMIT_OFF_TOKENS:
         return 0
     try:
         value = int(raw)
     except ValueError:
-        return 0
-    return value if value > 0 else 0
+        return WEBSOCKET_MAX_BYTES_DEFAULT
+    return value if value > 0 else WEBSOCKET_MAX_BYTES_DEFAULT
 
 
 def _console_text_fields(text: str) -> dict[str, Any]:
@@ -161,7 +170,7 @@ class SessionIOMixin(SessionLike):
 
         base64 alone is a 4/3 copy and json.dumps another, so the ceiling check
         on the finished line paid for a frame it then refused. With a ceiling
-        set, a frame that cannot fit is refused here; with none, one frame's
+        set, a frame that cannot fit is refused here; either way, one frame's
         payload is cut to ``WEBSOCKET_FRAME_MAX_BYTES`` and flagged, keeping its
         true size. *payload_size* is the caller's exact (decoded) size when it
         has one, and is preferred over the estimate from the raw payload.
@@ -171,7 +180,10 @@ class SessionIOMixin(SessionLike):
             return payload, payload_size
         if self._ws_frame_cannot_fit(raw_size, limit=limit, now=now):
             return None
-        if limit <= 0 and raw_size > WEBSOCKET_FRAME_MAX_BYTES:
+        # Applied with a ceiling set too: the ceiling is ON by default now, and
+        # only cutting when it was off would have let one frame of up to the
+        # whole ceiling be base64-copied and serialised on the event loop.
+        if raw_size > WEBSOCKET_FRAME_MAX_BYTES:
             head = payload[:WEBSOCKET_FRAME_MAX_BYTES]
             entry["payload_truncated"] = True
             return (head if isinstance(head, str) else bytes(head)), (

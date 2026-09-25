@@ -51,26 +51,35 @@ CONTROL_ACTIONS: frozenset[str] = frozenset(
 CONTROL_BUDGET_BYTES = 64 * 1024
 
 
+#: Per-recording byte ceiling when ``OCTOWRIGHT_RECORDING_MAX_BYTES`` is unset.
+#: Generous -- hours of an ordinary session are a few MB -- but finite, because
+#: the rows are page-driven and a remote page logging in a loop could otherwise
+#: fill the recordings disk from one open tab.
+RECORDING_MAX_BYTES_DEFAULT = 512 * 1024 * 1024
+
+
 def _recording_max_bytes() -> int:
     """Per-recording byte ceiling, or 0 (unbounded) when disabled.
 
     A long-lived session — or a hostile page spewing console output — can grow
     its JSONL recording without bound and fill the disk. ``OCTOWRIGHT_RECORDING_MAX_BYTES``
     caps it: once the file would exceed the ceiling the recorder writes a single
-    ``recording_truncated`` marker and stops appending. **OFF by default**
-    (unbounded), mirroring ``OCTOWRIGHT_MIN_FREE_MEMORY_MB`` /
-    ``OCTOWRIGHT_IDLE_GRACE``: silently dropping recorded actions is a behavior
-    change an operator must opt into. A non-positive / falsey / unparsable
-    value keeps it off.
+    ``recording_truncated`` marker and stops appending; the browser keeps
+    working. **ON by default** at ``RECORDING_MAX_BYTES_DEFAULT``. A positive
+    byte count sets it; ``0`` or a falsey token removes it. An unparsable or
+    negative value falls back to the DEFAULT, not to unbounded: a typo must not
+    silently remove a disk guard.
     """
     raw = os.environ.get("OCTOWRIGHT_RECORDING_MAX_BYTES", "").strip().lower()
-    if not raw or raw in _PRIVATE_OFF:
+    if not raw:
+        return RECORDING_MAX_BYTES_DEFAULT
+    if raw in _PRIVATE_OFF:
         return 0
     try:
         value = int(raw)
     except ValueError:
-        return 0
-    return value if value > 0 else 0
+        return RECORDING_MAX_BYTES_DEFAULT
+    return value if value > 0 else RECORDING_MAX_BYTES_DEFAULT
 
 
 def _recordings_private() -> bool:
@@ -213,8 +222,8 @@ class Recorder:
 #: single ``?since=0`` on a recording that has grown for hours pull the whole
 #: file into the leader — the process that owns every live browser — and then
 #: multiply it by parsing every line into dicts.
-#: Recordings have no ceiling by default (``OCTOWRIGHT_RECORDING_MAX_BYTES`` is
-#: off), so nothing else bounded it. Every caller already loops on the returned
+#: A recording may legitimately reach its 512 MiB ceiling
+#: (``OCTOWRIGHT_RECORDING_MAX_BYTES``), or have none, so that does not bound it. Every caller already loops on the returned
 #: cursor, so a window costs an extra round trip, not correctness. 8 MiB is
 #: ~40k typical events per call. (defaults.py is at its LOC ceiling.)
 _TAIL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024

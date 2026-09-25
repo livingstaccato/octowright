@@ -166,8 +166,8 @@ adding a fourth.
 
 **The recorded preview is short; the sidecar's is not.** Fixing the payload
 read gave that field content for the first time, and it is written to the MAIN
-session JSONL as well as the sidecar -- a file with no ceiling on by default
-(`OCTOWRIGHT_RECORDING_MAX_BYTES`) that `browser_tail_recording`, the dashboard
+session JSONL as well as the sidecar -- a file whose only ceiling is a generous
+512 MiB (`OCTOWRIGHT_RECORDING_MAX_BYTES`) that `browser_tail_recording`, the dashboard
 event stream and `capture_create(kind="recording")` all read on behalf of
 callers who never asked about websockets. The main recording gets
 `WEBSOCKET_RECORD_PREVIEW_CHARS`; the sidecar keeps the long preview, since

@@ -31,8 +31,8 @@ DEFAULT_PREVIEW_CHARS = 4000
 #: that rides the MCP transport.
 CONSOLE_TEXT_MAX_CHARS = 16_000
 
-#: Bytes of one websocket frame's payload stored in the sidecar when no
-#: ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` ceiling is configured. Without it one
+#: Bytes of one websocket frame's payload stored in the sidecar, whatever the
+#: ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` ceiling. Without it one
 #: frame from a firehose was copied, base64-expanded (x4/3) and json.dumps'd in
 #: full before anything looked at its size. Longer payloads keep this prefix;
 #: the row still carries the true ``payload_size`` and ``payload_truncated``.
