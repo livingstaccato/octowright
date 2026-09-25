@@ -226,7 +226,13 @@ async def run_sequence_file(
         await pool.close(iid, force=True)
 
     passed = sum(1 for r in results if r["ok"])
-    report_path = Path(out_path) if out_path else _default_report_path()
+    if out_path:
+        report_path = Path(out_path)
+    elif artifacts is not None:
+        # The evidence and its report stay together, under the recordings root.
+        report_path = Path(artifacts) / "octowright-report.xml"
+    else:
+        report_path = _default_report_path()
     report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="suite report path")
     _write_junit(results, report_path, kind=kind)
     log.info("octowright.runner.sequence_finished", total=len(results), passed=passed, report=str(report_path))

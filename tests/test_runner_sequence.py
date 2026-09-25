@@ -225,3 +225,24 @@ def test_suite_redacts_errors_when_asked(recordings: Path) -> None:
         result = run(runner.run_suite(kind="chromium", pool=pool, redact_errors=True, out_path=str(report)))
     assert result["results"][0]["error"] == "ValueError"
     assert PLANTED not in report.read_text()
+
+
+def test_without_out_the_report_lands_in_the_artifacts_directory(
+    tmp_path: Path, recordings: Path, lab_persona: str
+) -> None:
+    pool, calls = fake_pool(), []
+    artifacts = recordings / "run"
+    with patch("octowright.runner.macro_mod.run_macro", side_effect=failing_second(calls)):
+        result = run(
+            runner.run_sequence_file(
+                sequence=sequence_file(tmp_path, THREE_STEPS[:1]),
+                kind="chromium",
+                persona=lab_persona,
+                artifacts=artifacts,
+                redact_errors=False,
+                out_path=None,
+                pool=pool,
+            )
+        )
+    assert result["report_path"] == str(artifacts / "octowright-report.xml")
+    assert (artifacts / "octowright-report.xml").is_file()
