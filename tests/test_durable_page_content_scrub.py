@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from octowright.macros.privacy import REDACTED, install_sensitive_recorder
+from octowright.macros.privacy import REDACTED, DurableTextScrubber, PrivacyLedger, install_sensitive_recorder
 from octowright.server import captures as _tools
 from octowright.session.core import BrowserSession
 from tests._operation_gate_fakes import OperationAwareFake
@@ -96,7 +96,7 @@ async def test_capture_create_scrubs_what_it_saves(tmp_path: Path, monkeypatch: 
     s.page.title = AsyncMock(return_value="x")
     s.page.locator.return_value.inner_text = AsyncMock(return_value=f"Your password is {SECRET}")
     s._target = MagicMock(return_value=s.page)
-    s.durable_text_scrubber = lambda text: text.replace(SECRET, REDACTED)
+    s.durable_text_scrubber = DurableTextScrubber(PrivacyLedger([SECRET]))
     pool = MagicMock()
     pool.get.return_value = s
     monkeypatch.setattr(_tools, "pool", pool)

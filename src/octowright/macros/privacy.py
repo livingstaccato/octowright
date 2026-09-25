@@ -641,8 +641,7 @@ def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = (
         session.recorder = SensitiveRecorder(recorder, ledger)
     # The markdown cache is the other durable write of page content; a page
     # that renders the password would otherwise put it on disk in cleartext.
-    # ``is None`` leaves a mock session (which answers every getattr) alone.
-    if getattr(session, "durable_text_scrubber", None) is None:
+    if session.durable_text_scrubber is None:
         session.durable_text_scrubber = DurableTextScrubber(ledger)
     return ledger
 

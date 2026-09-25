@@ -21,7 +21,7 @@ Other test modules rely on this shape verbatim (several reach
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import LiteralString
+from typing import Any, LiteralString
 
 from octowright.session.operation.gate import (
     USE_DEFAULT,
@@ -48,6 +48,8 @@ class OperationAwareFake:
     # macro header guard (``substitution.own_site_hosts``) reads both.
     launch_url: str | None = None
     base_url: str | None = None
+    # Installed by the first macro run (``privacy.install_sensitive_recorder``).
+    durable_text_scrubber: Any = None
 
     def __init__(self) -> None:
         self._test_operation_gate = SessionOperationGate(

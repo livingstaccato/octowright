@@ -119,17 +119,16 @@ class SessionIOMixin(SessionLike):
         # ``active`` is False while the ledger is empty: a session that ever ran
         # a macro keeps the scrubber installed, and decoding every binary frame
         # to scrub it against nothing was the whole cost.
-        active = scrub is not None and getattr(scrub, "active", True)
-        if active:
-            assert scrub is not None  # narrowed by ``active``  # nosec B101
+        live = scrub if scrub is not None and scrub.active else None
+        if live is not None:
             for key in ("url", "payload_preview", "payload_text"):
                 if isinstance(entry.get(key), str):
-                    entry[key] = scrub(entry[key])
+                    entry[key] = live(entry[key])
         if payload_bytes is None:
             return
-        if active:
+        if live is not None:
             text = payload_bytes.decode("utf-8", errors="replace")
-            if scrub(text) != text:  # type: ignore[misc]
+            if live(text) != text:
                 entry["payload_redacted"] = True
                 return
         entry["payload_b64"] = base64.b64encode(payload_bytes).decode("ascii")

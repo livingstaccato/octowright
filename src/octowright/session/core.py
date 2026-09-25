@@ -74,6 +74,7 @@ _VIEWPORT_MODE_UNKNOWN = "unknown"
 
 if TYPE_CHECKING:  # pragma: no cover - import-time-only assertion
     from octowright.browser_pool.viewport import ViewportMode as _ViewportMode
+    from octowright.macros.privacy import DurableTextScrubber
 
     # Compile-time assertion that the literal default still matches the enum.
     _: str = _ViewportMode.UNKNOWN.value
@@ -264,7 +265,7 @@ class BrowserSession(
     # cache). Installed by macros.privacy.install_sensitive_recorder so the
     # session scrubs a macro's credential values without importing the macro
     # layer -- the recorder is protected the same way, by a wrapper.
-    durable_text_scrubber: Callable[[str], str] | None = field(default=None, repr=False)
+    durable_text_scrubber: DurableTextScrubber | None = field(default=None, repr=False)
     _last_mcp_navigation: str | None = None
     # Set by _notify_call_timeout when a Playwright call ran past its budget.
     # Deliberately NOT _crashed: the target may still be executing, and the

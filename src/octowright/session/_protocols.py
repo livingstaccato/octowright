@@ -6,15 +6,17 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, LiteralString, Protocol
+from typing import TYPE_CHECKING, Any, LiteralString, Protocol
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
 from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
+
+if TYPE_CHECKING:
+    from octowright.macros.privacy import DurableTextScrubber
 
 
 class SessionLike(Protocol):
@@ -56,7 +58,7 @@ class SessionLike(Protocol):
     _network_clean_mark: tuple[int, int, int]
     _network_clean_explicit_mark: tuple[int, int, int] | None
     _inflight_requests: dict[Any, Any]
-    durable_text_scrubber: Callable[[str], str] | None
+    durable_text_scrubber: DurableTextScrubber | None
     trace: bool
     trace_path: Path | None
     har_path: Path | None

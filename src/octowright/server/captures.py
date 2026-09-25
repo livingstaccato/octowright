@@ -148,8 +148,8 @@ async def capture_create(
         content, meta = await _capture_content(session, source, expression)
         # A capture is a durable copy of page content: a credential a macro typed
         # and the page echoed must not reach disk, as with the recorder.
-        scrub = getattr(session, "durable_text_scrubber", None)
-        if callable(scrub) and isinstance(content, str):
+        scrub = session.durable_text_scrubber
+        if scrub is not None and isinstance(content, str):
             content = scrub(content)
         result = _captures.save_capture(
             kind=source,
