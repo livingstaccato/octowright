@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
@@ -18,7 +19,12 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.http.discovery import _find_recording_for, _live_summary_from_launch, _read_first_launch
 from octowright.http.exposure import guard_sensitive_http
-from octowright.http.recording_sidecars import is_recording_sidecar
+from octowright.http.recording_sidecars import (
+    is_failure_dump,
+    is_recording_sidecar,
+    remove_contained_dir,
+    session_artifact_dirs,
+)
 
 
 async def recording_delete(request: Request) -> JSONResponse:
@@ -35,19 +41,54 @@ async def recording_delete(request: Request) -> JSONResponse:
     if jsonl is None:
         return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
 
-    deleted: list[str] = []
+    removed, files_removed, dirs_removed = _remove_session_artifacts(sid, jsonl, state.RECORDINGS_DIR)
+    state.log.info("recording_deleted", session_id=sid, files=files_removed, dirs=dirs_removed)
+    await publish_dashboard_invalidation("sessions")
+    return JSONResponse(
+        {
+            "deleted": True,
+            "session_id": sid,
+            "files_removed": files_removed,
+            "dirs_removed": dirs_removed,
+            # Relative to the recordings root, so the answer names what went
+            # without handing the dashboard an absolute path.
+            "removed": removed,
+        }
+    )
+
+
+def _remove_session_artifacts(sid: str, jsonl: Path, root: Path) -> tuple[list[str], int, int]:
+    """Every artefact the session wrote, removed: ``(removed, files, dirs)``.
+
+    Only the JSONL's stem-named sidecars went before, and the response still
+    said ``deleted: True`` while the video, downloads, frame cache and failure
+    dumps -- the parts most likely to hold what someone wanted gone -- stayed.
+    Each path comes from a producer's naming convention and is contained under
+    the recordings root (``recording_sidecars.remove_contained_dir``). A path
+    that fails to go is logged and left, like before; the rest still go.
+    """
+    removed: list[str] = []
+    files = 0
     stem = jsonl.stem
     for f in jsonl.parent.iterdir():
-        if is_recording_sidecar(f.name, stem):
-            try:
-                f.unlink()
-                deleted.append(f.name)
-            except OSError as e:
-                state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
-
-    state.log.info("recording_deleted", session_id=sid, files=len(deleted))
-    await publish_dashboard_invalidation("sessions")
-    return JSONResponse({"deleted": True, "session_id": sid, "files_removed": len(deleted)})
+        if not (is_recording_sidecar(f.name, stem) or is_failure_dump(f.name, sid)) or not f.is_file():
+            continue
+        try:
+            f.unlink()
+        except OSError as e:
+            state.log.warning("recording_delete.unlink_failed", file=str(f), error=str(e))
+            continue
+        files += 1
+        removed.append(f.name)
+    dirs = 0
+    for directory in session_artifact_dirs(root, sid, stem):
+        try:
+            if remove_contained_dir(directory, root):
+                dirs += 1
+                removed.append(directory.relative_to(root).as_posix())
+        except OSError as e:
+            state.log.warning("recording_delete.rmtree_failed", dir=str(directory), error=str(e))
+    return removed, files, dirs
 
 
 def _relaunch_kwargs_from_record(launch: dict[str, Any]) -> dict[str, Any]:

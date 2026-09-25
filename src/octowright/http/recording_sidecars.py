@@ -12,6 +12,8 @@ inflated by the comment block enumerating every legitimate producer.
 from __future__ import annotations
 
 import re
+import shutil
+from pathlib import Path
 
 # Sidecar filenames legitimately produced next to a recording's JSONL. The
 # full set is:
@@ -56,3 +58,43 @@ def is_recording_sidecar(filename: str, stem: str) -> bool:
     if tail in RECORDING_SIDECAR_SUFFIXES:
         return True
     return RECORDING_SIDECAR_ROTATIONS.match(tail) is not None
+
+
+def is_failure_dump(filename: str, session_id: str) -> bool:
+    """``{instance_id}-fail-{ts}.html`` / ``.png`` from ``core_ops_mixin``'s diagnostic bundle."""
+    return (
+        filename.startswith(f"{session_id}-fail-")
+        and filename.endswith((".html", ".png"))
+        and "/" not in filename
+        and "\\" not in filename
+    )
+
+
+def session_artifact_dirs(root: Path, session_id: str, stem: str) -> list[Path]:
+    """Per-session directories under the recordings root, by producer convention.
+
+    * ``videos/{stem}/``           -- ``launch_helpers._build_video_kwargs``
+    * ``downloads/{instance_id}/`` -- ``session/downloads.save_download``
+    * ``.frame-cache/{instance_id}/`` -- ``http/routes/media._frame_cache_path``
+    """
+    return [root / "videos" / stem, root / "downloads" / session_id, root / ".frame-cache" / session_id]
+
+
+def remove_contained_dir(candidate: Path, root: Path) -> bool:
+    """Remove *candidate* when it lies under *root*; ``True`` if something was removed.
+
+    A symlink is unlinked, never followed: a same-user link planted as
+    ``downloads/<id>`` must not turn a delete into an rmtree of its target.
+    Otherwise the resolved path must stay inside the resolved root, so a
+    ``..`` or a symlinked PARENT cannot walk the delete out of it.
+    """
+    if candidate.is_symlink():
+        candidate.unlink()
+        return True
+    if not candidate.is_dir():
+        return False
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(root.resolve()) or resolved == root.resolve():
+        return False
+    shutil.rmtree(resolved)
+    return True
