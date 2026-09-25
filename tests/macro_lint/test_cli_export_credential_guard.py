@@ -97,7 +97,9 @@ def test_an_identity_arg_in_a_url_still_works(monkeypatch: pytest.MonkeyPatch) -
 def test_sinks_allow_turns_the_guard_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
     _result, rec = _run(
-        monkeypatch, [{"action": "navigate", "url": "https://api.test/?k={{api_key}}"}], {"api_key": "k1"}
+        monkeypatch,
+        [{"action": "navigate", "url": "https://api.test/?k={{api_key}}"}],
+        {"api_key": "k1"},  # pragma: allowlist secret
     )
     assert rec.args_for("goto") == ("https://api.test/?k=k1",)
 

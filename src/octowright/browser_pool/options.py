@@ -331,11 +331,14 @@ class LaunchOptions:
             raise InvalidRequestError("har_mode must be one of ['full', 'minimal']")
         if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
             raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
-        if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
-            raise InvalidRequestError("trusted_launch_url must be a string")
         self._validate_browser_selection()
         self._validate_engine_specific_options()
         self._validate_headers()
+        self._validate_trusted_launch_url()
+
+    def _validate_trusted_launch_url(self) -> None:
+        if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
+            raise InvalidRequestError("trusted_launch_url must be a string")
 
     def _validate_engine_specific_options(self) -> None:
         if not isinstance(self.disable_automation_controlled, bool):
