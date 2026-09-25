@@ -290,9 +290,14 @@ async def test_a_closed_pages_requests_are_not_waited_for(session: BrowserSessio
 
 
 def test_in_flight_tracking_is_bounded(session: BrowserSession) -> None:
-    for _ in range(5000):
-        session._network.request_started(_request(), session.page)
-    assert len(session._network.inflight) <= 1000
+    """Bounded, and still tracking: an empty map would satisfy ``<= limit`` too."""
+    requests = [_request() for _ in range(5000)]
+    for request in requests:
+        session._network.request_started(request, session.page)
+    assert session._network.pending() == request_failures.INFLIGHT_REQUEST_LIMIT
+    assert session._network.evicted == 5000 - request_failures.INFLIGHT_REQUEST_LIMIT
+    # The oldest were dropped, the newest kept.
+    assert list(session._network.inflight) == requests[-request_failures.INFLIGHT_REQUEST_LIMIT :]
 
 
 def test_listeners_track_request_lifecycle(session: BrowserSession) -> None:
