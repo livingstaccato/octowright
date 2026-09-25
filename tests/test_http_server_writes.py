@@ -1055,6 +1055,28 @@ def test_post_session_relaunch_422_when_no_launch_record(
     assert r.status_code == 422
 
 
+def test_post_session_relaunch_422_names_an_invalid_launch_record(
+    client: TestClient,
+    fakes: dict[str, Any],
+    isolated_recordings: Path,
+) -> None:
+    """A record LaunchOptions refuses is the recording's fault, not the server's.
+
+    Building the kwargs sat above the try, so the InvalidRequestError escaped
+    every handler and the client got a bare 500 with the reason nowhere in it.
+    """
+    pool: _FakePool = fakes["pool"]
+    _write_recording(
+        isolated_recordings,
+        "badHarMode01",
+        {"kind": "chromium", "url": "https://octowright.com", "har": True, "har_mode": "everything"},
+    )
+    r = client.post("/api/sessions/badHarMode01/relaunch")
+    assert r.status_code == 422
+    assert "har_mode" in r.json()["error"]
+    assert pool.launch_calls == []
+
+
 def test_post_session_relaunch_passes_video_flag(
     client: TestClient,
     fakes: dict[str, Any],

@@ -112,7 +112,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
     pick up persisted cookies / localStorage automatically.
 
     409 if the session is still live; 404 if no recording exists; 422 if the
-    JSONL has no parseable launch record.
+    JSONL has no parseable launch record or one the launch options refuse.
     """
     sid = request.path_params["id"]
     pool = state.pool
@@ -133,10 +133,17 @@ async def session_relaunch(request: Request) -> JSONResponse:
             status_code=422,
         )
 
-    launch_kwargs = _relaunch_kwargs_from_record(launch)
-
     try:
+        # Inside the try, as sessions.py's launch route does: LaunchOptions
+        # validation raises InvalidRequestError (a ValueError) for a record it
+        # refuses, and above the try that escaped every handler -- Starlette is
+        # built with no exception_handlers -- as a bare 500 with the offending
+        # field nowhere in the body. A record the options refuse, like one
+        # with no launch row, is unprocessable (422), not a server fault.
+        launch_kwargs = _relaunch_kwargs_from_record(launch)
         result = await pool.launch(**launch_kwargs)
+    except ValueError as e:
+        return JSONResponse({"error": f"recording for {sid!r} cannot be relaunched: {e}"}, status_code=422)
     except Exception as e:
         state.log.exception("octowright.http.session_relaunch_failed", session_id=sid)
         return JSONResponse({"error": f"relaunch failed: {e}"}, status_code=500)
