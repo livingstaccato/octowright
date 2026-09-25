@@ -24,17 +24,12 @@ from octowright.macros.calls import (
     dispatch_plain_action,
 )
 from octowright.macros.descriptions import describe_action
+from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
+    MacroArgPrivacy,
     PrivacyLedger,
-    assertion_text_args,
     install_sensitive_recorder,
     session_privacy_ledger,
-)
-from octowright.macros.privacy import (
-    blind_scrub_arg_values as _sensitive_arg_values,
-)
-from octowright.macros.privacy import (
-    redact_args as _privacy_redact_args,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
@@ -74,21 +69,22 @@ def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...]) -> An
     return _privacy_scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
 
 
-def _redact_args_for_response(args: dict[str, Any], assertion_args: frozenset[str] = frozenset()) -> dict[str, Any]:
-    return _privacy_redact_args(args, marker=_REDACTED_MACRO_VALUE, assertion_args=assertion_args)
+def _redact_args_for_response(args: dict[str, Any], privacy: MacroArgPrivacy) -> dict[str, Any]:
+    return privacy.redact(args, marker=_REDACTED_MACRO_VALUE)
 
 
-def _macro_assertion_args(name: Any) -> frozenset[str]:
-    """The arguments macro *name* feeds into an expect_no_text, or none if it cannot be read.
+def _macro_privacy(macros: RunMacros, name: Any) -> MacroArgPrivacy:
+    """How macro *name* classifies its arguments, or by name alone if it cannot be read.
 
-    Only for the paths that do not already hold the loaded macro. A macro that
-    cannot be loaded never substituted anything, so nothing is lost by it.
+    A macro that cannot be loaded never substituted anything, so nothing is
+    lost by it. Read through the run's *macros*, so the dispatch that follows
+    does not read the file again.
     """
     try:
-        return assertion_text_args(load_macro(name).get("actions", []))
+        return MacroArgPrivacy.for_macro(macros(str(name)).get("actions", []))
     except Exception as exc:
         log.debug("octowright.macro.assertion_args_unavailable", macro=str(name), error=repr(exc))
-        return frozenset()
+        return MacroArgPrivacy()
 
 
 _MACRO_RUN = counter(
@@ -270,7 +266,9 @@ def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
     return run_ledger.values if run_ledger is not None else ()
 
 
-def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], run_ledger: PrivacyLedger) -> None:
+def _collect_nested_call_privacy(
+    session: SessionLike, action: dict[str, Any], run_ledger: PrivacyLedger, macros: RunMacros
+) -> None:
     """Classify a nested call's own arguments where it executes.
 
     Parent substitution has already run, so these are the values the child will
@@ -283,7 +281,7 @@ def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], r
     call_args = action.get("args")
     if not isinstance(call_args, dict):
         return
-    nested = _sensitive_arg_values(call_args, assertion_args=_macro_assertion_args(action.get("name")))
+    nested = _macro_privacy(macros, action.get("name")).blind_scrub(call_args)
     run_ledger.add(nested)
     install_sensitive_recorder(session, nested)
 
@@ -296,19 +294,20 @@ async def _dispatch_nested_call(
     max_depth: int,
     slowmo_ms: int,
     run_ledger: PrivacyLedger | None,
+    macros: RunMacros,
 ) -> tuple[int, int]:
     if invocation_stack is None:
         raise RuntimeError("macro_call can only execute in a macro context with an invocation stack")
     ledger = run_ledger if run_ledger is not None else PrivacyLedger()
-    _collect_nested_call_privacy(session, action, ledger)
+    _collect_nested_call_privacy(session, action, ledger, macros)
     return await dispatch_macro_call(
         session,
         action,
         invocation_stack=invocation_stack,
         max_depth=max_depth,
-        load_macro=load_macro,
+        load_macro=macros,
         substitute=substitute,
-        dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, **kw),
+        dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, macros=macros, **kw),
     )
 
 
@@ -320,8 +319,10 @@ async def _dispatch_one(
     max_depth: int | None = None,
     slowmo_ms: int = 0,
     run_ledger: PrivacyLedger | None = None,
+    macros: RunMacros | None = None,
 ) -> tuple[int, int]:
     resolved_max_depth = max_depth if max_depth is not None else MAX_MACRO_CALL_DEPTH
+    run_macros = macros if macros is not None else RunMacros(load_macro)
 
     if action.get("action") == "macro_call":
         return await _dispatch_nested_call(
@@ -331,6 +332,7 @@ async def _dispatch_one(
             max_depth=resolved_max_depth,
             slowmo_ms=slowmo_ms,
             run_ledger=run_ledger,
+            macros=run_macros,
         )
 
     # Push status before dispatch so the pill reflects the action that's
@@ -368,6 +370,7 @@ async def _dispatch_one(
                 max_depth=resolved_max_depth,
                 slowmo_ms=slowmo_ms,
                 run_ledger=run_ledger,
+                macros=run_macros,
             )
 
         return await conditional.dispatch_conditional(session, action, _recurse)
@@ -453,7 +456,13 @@ async def run_macro(
     *,
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
+    _macros: RunMacros | None = None,
 ) -> MacroRunResult:
+    """Run macro *name* on *session*.
+
+    ``_macros`` is for `run_sequence`, whose members share one `RunMacros`;
+    any other caller leaves it out and the run gets its own.
+    """
     async with session.operation("macro_run"):
         with span(
             "octowright.macro.run",
@@ -466,7 +475,8 @@ async def run_macro(
             mark = getattr(session, "mark_network_clean_window", None)
             if mark is not None:
                 mark()
-            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
+            macros = _macros if _macros is not None else RunMacros(load_macro)
+            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros)
 
 
 async def _build_failure_payload(
@@ -593,20 +603,22 @@ async def _run_macro_impl(
     *,
     slowmo_ms: int | None,
     ctx: Any | None = None,
+    macros: RunMacros | None = None,
 ) -> MacroRunResult:
-    macro = load_macro(name)
+    macros = macros if macros is not None else RunMacros(load_macro)
+    macro = macros(name)
     effective_args = args or {}
     # An argument that IS the forbidden text is sensitive whatever it is named;
     # the exported CLI reads the same set (privacy.assertion_text_args).
-    assertion_args = assertion_text_args(macro.get("actions", []))
-    sensitive_values = _sensitive_arg_values(effective_args, assertion_args=assertion_args)
+    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    sensitive_values = privacy.blind_scrub(effective_args)
     install_sensitive_recorder(session, sensitive_values)
     # What THIS run has admitted for blind scrubbing: its own arguments plus every
     # nested call's, appended as they execute. Failure payloads and screenshot
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
     actions = substitute(macro.get("actions", []), effective_args, trusted_hosts=own_site_hosts(session))
-    _start_request_tracking(session, actions)
+    _start_request_tracking(session, actions, macros)
 
     executed = 0
     skipped = 0
@@ -632,6 +644,7 @@ async def _run_macro_impl(
                     invocation_stack=invocation_stack,
                     slowmo_ms=resolved_slowmo,
                     run_ledger=run_ledger,
+                    macros=macros,
                 )
             except Exception as exc:
                 run_values = _failure_scrub_values(session, run_ledger)
@@ -682,17 +695,17 @@ async def _run_macro_impl(
         "macro": name,
         "executed": executed,
         "skipped": skipped,
-        "args_used": _redact_args_for_response(effective_args, assertion_args),
+        "args_used": _redact_args_for_response(effective_args, privacy),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
     }
 
 
-def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]]) -> None:
+def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:
     """Before the first step, so the requests the journey starts are the ones
     expect_network_clean waits for; a run that never asserts pays nothing."""
     enable_tracking = getattr(session, "enable_inflight_tracking", None)
-    if enable_tracking is not None and actions_assert_network_clean(actions, load_macro, substitute):
+    if enable_tracking is not None and actions_assert_network_clean(actions, macros):
         enable_tracking()
 
 
@@ -737,9 +750,14 @@ async def run_sequence(
 
             steps: list[MacroSequenceStep] = []
             all_ok = True
+            # One read of each macro for the whole sequence: a failed step's
+            # args_used below is classified from the copy its run loaded.
+            macros = RunMacros(load_macro)
             for name, step_args in zip(names, resolved_args, strict=True):
                 try:
-                    outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx)
+                    outcome = await run_macro(
+                        session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx, _macros=macros
+                    )
                     steps.append({**outcome, "ok": True})
                 except Exception as exc:
                     all_ok = False
@@ -748,7 +766,7 @@ async def run_sequence(
                             "macro": name,
                             "ok": False,
                             "error": str(exc),
-                            "args_used": _redact_args_for_response(step_args, _macro_assertion_args(name)),
+                            "args_used": _redact_args_for_response(step_args, _macro_privacy(macros, name)),
                         }
                     )
                     if stop_on_failure:

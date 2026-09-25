@@ -21,9 +21,11 @@ import pytest
 from octowright import defaults
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.macros import execution
+from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
+    MacroArgPrivacy,
     MacroBlindScrubRejected,
     PrivacyLedger,
     is_sensitive_arg_key,
@@ -270,6 +272,7 @@ def test_nested_reject_fails_before_installing_or_extending_a_ledger(
             session,
             {"action": "macro_call", "name": "child", "args": {"email": EMAIL}},
             run_ledger,
+            RunMacros(execution.load_macro),
         )
 
     assert session.recorder is underlying
@@ -400,7 +403,9 @@ def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary()
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")
     assert not is_sensitive_arg_key("peerage")
-    assert execution._redact_args_for_response(SOCIAL_ARGS) == {key: "<redacted>" for key in SOCIAL_ARGS}
+    assert execution._redact_args_for_response(SOCIAL_ARGS, MacroArgPrivacy()) == {
+        key: "<redacted>" for key in SOCIAL_ARGS
+    }
 
 
 @pytest.mark.parametrize(
@@ -443,7 +448,7 @@ def test_sensitive_value_aliases_are_removed_from_success_args_and_export_defaul
         "payload": {"label": f"account={raw}", "ordinary": "public"},
     }
 
-    redacted = execution._redact_args_for_response(args)
+    redacted = execution._redact_args_for_response(args, MacroArgPrivacy())
     source = render_macro_cli(
         name="private-alias-export",
         macro={"parameters": list(args), "actions": []},

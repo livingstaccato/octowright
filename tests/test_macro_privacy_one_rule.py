@@ -25,7 +25,7 @@ import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.macros import execution, privacy
-from octowright.macros.privacy import assertion_text_args
+from octowright.macros.privacy import MacroArgPrivacy, assertion_text_args
 
 SSN = "123-45-6789"
 ACTIONS: list[dict[str, Any]] = [
@@ -115,7 +115,7 @@ def test_the_export_redacts_the_same_arguments_as_live_replay(monkeypatch: pytes
     assert module["_HARD_REDACTED_ARGS"] == frozenset({"forbidden"})
     assert module["_redact_args"](dict(ARGS)) == {"forbidden": "<redacted>", "qty": "1"}
     assert module["_redact_args"](dict(ARGS)) == execution._redact_args_for_response(
-        dict(ARGS), assertion_text_args(ACTIONS)
+        dict(ARGS), MacroArgPrivacy.for_macro(ACTIONS)
     )
 
 

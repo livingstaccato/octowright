@@ -21,6 +21,7 @@ from itertools import pairwise
 from typing import Any, Literal
 from urllib.parse import quote, quote_plus
 
+from octowright.macros.nesting import iter_nested_actions
 from octowright.macros.redaction_text import normalize
 
 ARG_PRIVACY_CLASSIFIER_VERSION = 5
@@ -289,44 +290,19 @@ def assertion_text_args(actions: Any) -> frozenset[str]:
     nothing about the value (``qty``, ``order_id``), and a password field's fill
     is already redacted by the recorder's input classification.
     """
-    names: set[str] = set()
-
-    def walk(node: Any) -> None:
-        if isinstance(node, list):
-            for item in node:
-                walk(item)
-        elif isinstance(node, dict):
-            if node.get("action") == "expect_no_text" and isinstance(node.get("text"), str):
-                names.update(PLACEHOLDER_RE.findall(node["text"]))
-            for item in node.values():
-                walk(item)
-
-    walk(actions)
-    return frozenset(names)
+    # A called macro's own assertions are classified where that call runs,
+    # against the arguments it is called with, so calls are not followed.
+    return frozenset(
+        name
+        for action in iter_nested_actions(actions)
+        if action.get("action") == "expect_no_text" and isinstance(action.get("text"), str)
+        for name in PLACEHOLDER_RE.findall(action["text"])
+    )
 
 
-def _arg_tier(key: object, assertion_args: frozenset[str]) -> PrivacyTier | None:
-    return "credential" if key in assertion_args else _privacy_tier(key)
-
-
-def classified_arg_values(
-    args: Mapping[str, Any], *, assertion_args: frozenset[str] = frozenset()
-) -> tuple[ClassifiedArgValue, ...]:
-    """Classified leaves with their effective tier and value-free-safe path.
-
-    *assertion_args* (see `assertion_text_args`) are credential-tier whatever
-    they are named.
-    """
-    values: set[ClassifiedArgValue] = set()
-    for key, value in args.items():
-        values.update(
-            _collect_classified_values(
-                value,
-                inherited=_arg_tier(key, assertion_args),
-                path=str(key),
-            )
-        )
-    return tuple(sorted(values, key=lambda item: (item.path, -_TIER_RANK[item.tier], item.value)))
+def classified_arg_values(args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
+    """Classified leaves by NAME alone; see `MacroArgPrivacy` for a macro's own arguments."""
+    return NAME_ONLY_PRIVACY.classified(args)
 
 
 def sensitive_arg_values(args: Mapping[str, Any]) -> tuple[str, ...]:
@@ -365,17 +341,9 @@ def _admitted_classified_values(
     return tuple(item for item in classified if item.tier == "credential")
 
 
-def blind_scrub_arg_values(
-    args: Mapping[str, Any],
-    *,
-    policy: BlindScrubPolicy | None = None,
-    assertion_args: frozenset[str] = frozenset(),
-) -> tuple[str, ...]:
-    """Values admitted to blind scrubbers under the configured policy."""
-    resolved = policy or blind_scrub_policy()
-    classified = classified_arg_values(args, assertion_args=assertion_args)
-    selected = _admitted_classified_values(classified, resolved)
-    return tuple(sorted({item.value for item in selected}, key=lambda value: (-len(value), value)))
+def blind_scrub_arg_values(args: Mapping[str, Any], *, policy: BlindScrubPolicy | None = None) -> tuple[str, ...]:
+    """Values admitted to blind scrubbers, by NAME alone; see `MacroArgPrivacy`."""
+    return NAME_ONLY_PRIVACY.blind_scrub(args, policy=policy)
 
 
 def _serialized_variants(value: str) -> tuple[str, ...]:
@@ -499,23 +467,64 @@ def _redact_nested_args(value: Any, marker: str) -> Any:
     return value
 
 
-def redact_args(
-    args: Mapping[str, Any], *, marker: str = REDACTED, assertion_args: frozenset[str] = frozenset()
-) -> dict[str, Any]:
-    redacted = {
-        str(key): marker if is_sensitive_arg_key(key) or key in assertion_args else _redact_nested_args(value, marker)
-        for key, value in args.items()
-    }
-    policy = blind_scrub_policy()
-    # ``reject`` governs macro INVOCATIONS, not read-only rendering of an
-    # existing manifest or result. Structural redaction must remain usable in
-    # that mode, with the same alias handling as the replay-safe default.
-    blind_policy: BlindScrubPolicy = "credentials" if policy == "reject" else policy
-    return scrub_sensitive_values(
-        redacted,
-        blind_scrub_arg_values(args, policy=blind_policy, assertion_args=assertion_args),
-        marker=marker,
-    )
+def redact_args(args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str, Any]:
+    """*args* with sensitive values redacted, by NAME alone; see `MacroArgPrivacy`."""
+    return NAME_ONLY_PRIVACY.redact(args, marker=marker)
+
+
+@dataclass(frozen=True)
+class MacroArgPrivacy:
+    """How one macro's arguments are classified: by name, and by position.
+
+    An argument substituted into an ``expect_no_text`` is the forbidden text
+    itself, so it is credential-tier whatever it is named (`assertion_text_args`).
+    That fact belongs to the macro, not to the arguments, and it used to be a
+    keyword threaded through every classifier with an empty default -- so a
+    caller that forgot it silently leaked the forbidden text. Build the view
+    once per macro with `for_macro` and ask it; the module-level
+    `redact_args`/`blind_scrub_arg_values`/`classified_arg_values` are the
+    name-only view, for records that no longer know their macro.
+    """
+
+    assertion_args: frozenset[str] = frozenset()
+
+    @classmethod
+    def for_macro(cls, actions: Any) -> MacroArgPrivacy:
+        return cls(assertion_text_args(actions))
+
+    def _tier(self, key: object) -> PrivacyTier | None:
+        return "credential" if key in self.assertion_args else _privacy_tier(key)
+
+    def classified(self, args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
+        """Classified leaves with their effective tier and value-free-safe path."""
+        values: set[ClassifiedArgValue] = set()
+        for key, value in args.items():
+            values.update(_collect_classified_values(value, inherited=self._tier(key), path=str(key)))
+        return tuple(sorted(values, key=lambda item: (item.path, -_TIER_RANK[item.tier], item.value)))
+
+    def blind_scrub(self, args: Mapping[str, Any], *, policy: BlindScrubPolicy | None = None) -> tuple[str, ...]:
+        """Values admitted to blind scrubbers under the configured policy."""
+        selected = _admitted_classified_values(self.classified(args), policy or blind_scrub_policy())
+        return tuple(sorted({item.value for item in selected}, key=lambda value: (-len(value), value)))
+
+    def redact(self, args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str, Any]:
+        """*args* for a response or a log: sensitive keys replaced, admitted values scrubbed."""
+        redacted = {
+            str(key): marker
+            if is_sensitive_arg_key(key) or key in self.assertion_args
+            else _redact_nested_args(value, marker)
+            for key, value in args.items()
+        }
+        policy = blind_scrub_policy()
+        # ``reject`` governs macro INVOCATIONS, not read-only rendering of an
+        # existing manifest or result. Structural redaction must remain usable in
+        # that mode, with the same alias handling as the replay-safe default.
+        blind_policy: BlindScrubPolicy = "credentials" if policy == "reject" else policy
+        return scrub_sensitive_values(redacted, self.blind_scrub(args, policy=blind_policy), marker=marker)
+
+
+#: The view for arguments whose macro is not known.
+NAME_ONLY_PRIVACY = MacroArgPrivacy()
 
 
 #: Keys the ``expect_no_text`` recording digest. Random per process and never

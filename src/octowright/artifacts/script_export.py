@@ -16,6 +16,7 @@ from octowright import drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from octowright.macros.calls import actions_assert_network_clean
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -29,21 +30,12 @@ from octowright.macros.privacy import (
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
+    MacroArgPrivacy,
     _serialized_variants,
-    assertion_text_args,
     blind_scrub_arg_values,
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
-
-
-def _hard_redacted_args(actions: Any) -> list[str]:
-    """Names of the arguments that are the forbidden text of an expect_no_text, anywhere in *actions*.
-
-    The same set live replay treats as sensitive (``privacy.assertion_text_args``),
-    so ``args_used`` and the script's own log agree about one macro.
-    """
-    return sorted(assertion_text_args(actions))
 
 
 def _drawn_text_source() -> str:
@@ -68,7 +60,12 @@ def render_macro_cli(
     fn_name = _function_name(name)
     signature = _signature(parameters, include_evidence)
     action_json = json.dumps(macro.get("actions", []), indent=2)
-    hard_redacted_args = _hard_redacted_args(macro.get("actions", []))
+    # The macro's positional privacy -- the same view live replay builds -- so
+    # ``args_used`` and the script's own log agree about one macro.
+    hard_redacted_args = sorted(MacroArgPrivacy.for_macro(macro.get("actions", [])).assertion_args)
+    # Decided at render time by the predicate replay uses; a text search of
+    # ACTIONS_JSON also matched the string inside a selector or a typed value.
+    watch_network = actions_assert_network_clean(macro.get("actions", []))
     parser_lines = _parser_lines(parameters, args, include_evidence)
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
@@ -419,8 +416,8 @@ async def {fn_name}({signature}) -> dict[str, int]:
             "http_errors": 0,
             "inflight": {{}},
             "network_mark": None,
-            # Text search, so an assertion nested in try/if_selector counts too.
-            "watch_network": '"expect_network_clean"' in ACTIONS_JSON,
+            # An assertion nested in try/if_selector counts too.
+            "watch_network": {watch_network!r},
         }}
         _watch_network(state, page)
         executed = 0

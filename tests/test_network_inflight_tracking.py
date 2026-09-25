@@ -253,16 +253,14 @@ def test_an_unloadable_nested_macro_does_not_break_the_scan(monkeypatch: pytest.
     def load(name: str) -> dict[str, Any]:
         raise FileNotFoundError(name)
 
-    assert not actions_assert_network_clean([{"action": "macro_call", "name": "gone"}], load, lambda a, _b: a)
+    assert not actions_assert_network_clean([{"action": "macro_call", "name": "gone"}], load)
 
 
 def test_a_recursive_macro_call_terminates() -> None:
     from octowright.macros.calls import actions_assert_network_clean
 
     macros = {"a": [{"action": "macro_call", "name": "a"}]}
-    assert not actions_assert_network_clean(
-        macros["a"], lambda name: {"actions": macros[name]}, lambda actions, _args: actions
-    )
+    assert not actions_assert_network_clean(macros["a"], lambda name: {"actions": macros[name]})
 
 
 # --- a replaced document's requests are forgotten ---------------------------------------

@@ -9,15 +9,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from provide.telemetry import get_logger
-
+from octowright.macros.nesting import MacroLoader, iter_nested_actions
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
 from octowright.macros.substitution import own_site_hosts
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
-
-log = get_logger(__name__)
 
 MAX_MACRO_CALL_DEPTH = 32
 _RECURSION_PREFIX = "macro_call"
@@ -37,38 +34,16 @@ def validate_macro_call_shape(action: dict[str, Any]) -> tuple[str, dict[str, An
     return action["name"], action.get("args", {})
 
 
-def actions_assert_network_clean(actions: Any, load_macro: Any, substitute: Any) -> bool:
+def actions_assert_network_clean(actions: Any, load_macro: MacroLoader | None = None) -> bool:
     """Whether running *actions* can reach an ``expect_network_clean`` step.
 
-    Walks every nested value, so an assertion inside ``try``/``if_selector`` or
-    any other container counts, and follows ``macro_call`` into the called
-    macro with its call args substituted -- the same expansion dispatch does.
-    Each macro is visited once, so recursion terminates. A called macro that
-    cannot be loaded contributes nothing: dispatching it fails anyway.
+    Any depth counts, so an assertion inside ``try``/``if_selector`` or any
+    other container does, and with *load_macro* a ``macro_call`` is followed
+    into the called macro (`nesting.iter_nested_actions`).
     """
-    seen: set[str] = set()
-    stack: list[Any] = [actions]
-    while stack:
-        node = stack.pop()
-        if isinstance(node, list):
-            stack.extend(node)
-            continue
-        if not isinstance(node, dict):
-            continue
-        kind = node.get("action")
-        if kind == "expect_network_clean":
-            return True
-        name = node.get("name")
-        if kind == "macro_call" and isinstance(name, str) and name not in seen:
-            seen.add(name)
-            call_args = node.get("args")
-            try:
-                called = load_macro(name)
-                stack.append(substitute(called.get("actions", []), call_args if isinstance(call_args, dict) else {}))
-            except Exception as exc:
-                log.debug("octowright.macro.network_clean_scan_unloadable", macro=name, error=repr(exc))
-        stack.extend(node.values())
-    return False
+    return any(
+        action.get("action") == "expect_network_clean" for action in iter_nested_actions(actions, load_macro=load_macro)
+    )
 
 
 async def dispatch_macro_call(

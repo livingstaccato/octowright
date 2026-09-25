@@ -84,8 +84,9 @@ def test_hyphenated_credential_arg_names_are_redacted(key: str) -> None:
     """
     from octowright.macros._redact import _REDACTED_MACRO_VALUE
     from octowright.macros.execution import _redact_args_for_response
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    out = _redact_args_for_response({key: "s3kr3t-value"})
+    out = _redact_args_for_response({key: "s3kr3t-value"}, MacroArgPrivacy())
 
     assert out[key] == _REDACTED_MACRO_VALUE
     assert "s3kr3t-value" not in json.dumps(out)
@@ -98,8 +99,9 @@ def test_non_credential_arg_names_are_left_readable() -> None:
     above. Diagnostic args are the reason ``args_used`` is echoed at all.
     """
     from octowright.macros.execution import _redact_args_for_response
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    out = _redact_args_for_response({"order-id": "A-1234", "order_id": "A-1234"})
+    out = _redact_args_for_response({"order-id": "A-1234", "order_id": "A-1234"}, MacroArgPrivacy())
 
     assert out == {"order-id": "A-1234", "order_id": "A-1234"}
 
