@@ -440,6 +440,39 @@ uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.x
 
 Equivalent MCP tool: `run_test_suite`.
 
+`--persona <name>` launches each test browser as that persona, so it gets the
+persona's profile, `default_url`, trusted roots and credentials.
+`--redact-errors` records a failure as macro, step and action only, never
+exception text, for runs whose reports are kept as evidence.
+
+### Sequences
+
+A sequence runs several small macros, in order, in **one** browser. It keeps
+each macro to one piece of behaviour while a check walks them in sequence:
+
+```json
+[
+  {"macro": "app-login", "args": {"username": {"credential": "username"},
+                                  "password": {"credential": "password"},
+                                  "screenshot": {"artifact": "signed-in.png"}}},
+  {"macro": "orders-page-healthy", "args": {"route": "/orders", "password": {"credential": "password"}}}
+]
+```
+
+```bash
+octowright test --kind chromium --persona buyer --sequence sequences/smoke.json \
+    --artifacts "$OCTOWRIGHT_RECORDINGS/smoke" --redact-errors
+```
+
+- `{"credential": name}` is resolved from the persona at run time, so no
+  secret is ever written into the sequence file. A credential the persona
+  cannot supply fails the run before any browser launches.
+- `{"artifact": file}` becomes a path under `--artifacts`, which must sit
+  under `OCTOWRIGHT_RECORDINGS`. The JUnit report is written there as
+  `octowright-report.xml` unless `--out` names another path.
+- The sequence stops at the first failing macro; later steps are reported as
+  skipped. One JUnit testcase per step. `--sequence` and `--tag` are exclusive.
+
 ## Artifact bundles
 
 Macro artifact tools produce durable, token-light bundles for macro reuse and
