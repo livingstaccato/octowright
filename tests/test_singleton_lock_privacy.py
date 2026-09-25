@@ -38,9 +38,7 @@ def _info() -> singleton.LeaderInfo:
     )
 
 
-def test_the_temp_file_is_private_before_the_token_is_written(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_the_temp_file_is_private_before_the_token_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Observe the temp file at the moment it is renamed, with chmod disabled.
 
     A file that is only private because of an after-the-fact chmod fails this;

@@ -114,7 +114,7 @@ def test_load_scenario_rejects_parent_traversal(fresh_scenarios):
 _TEMPLATE = 'name: t\nparticipants:\n  - persona: "{{p}}"\n    kind: chromium\n    role: player\n'
 
 
-@pytest.mark.parametrize("sep", ["\x85", " ", " "])
+@pytest.mark.parametrize("sep", ["\x85", "\u2028", "\u2029"])
 def test_load_scenario_template_rejects_every_yaml_line_break(fresh_scenarios, sep):
     """PyYAML breaks lines on NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR too.
 

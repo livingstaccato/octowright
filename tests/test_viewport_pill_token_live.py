@@ -159,7 +159,9 @@ async def test_page_script_cannot_obtain_the_token_or_drive_the_binding(
     assert clicked == 2
 
 
-async def test_a_real_click_on_the_pill_still_syncs(launched: Any, page_url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_real_click_on_the_pill_still_syncs(
+    launched: Any, page_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No regression: the trusted path -- Alt held, real clicks -- still reaches Python.
 
     Playwright's input events are trusted, exactly like a human's, so this is

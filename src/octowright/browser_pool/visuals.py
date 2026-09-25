@@ -404,7 +404,9 @@ async def wire_init_scripts(
         .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
         .replace(
             "__VIEWPORT_TOKENS__",
-            _json.dumps({action: viewport_action_token_for(viewport_token, action) for action in VIEWPORT_TOKEN_ACTIONS}),
+            _json.dumps(
+                {action: viewport_action_token_for(viewport_token, action) for action in VIEWPORT_TOKEN_ACTIONS}
+            ),
         )
     )
     await bounded(
