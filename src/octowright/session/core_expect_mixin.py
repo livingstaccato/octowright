@@ -14,6 +14,7 @@ from typing import Any
 from playwright.async_api import Error as PlaywrightError
 from provide.telemetry import get_logger
 
+from octowright.assertion_warnings import strict_option, strict_refusal
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_ASSERTION_TEXT
 from octowright.drawn_text import (
     COLLECT_RENDERED_TEXT_JS,
@@ -166,7 +167,11 @@ class SessionExpectMixin(SessionLike):
 
     @gated_operation("browser_expect_network_clean")
     async def expect_network_clean(
-        self, http_errors: bool = False, since: str = "run", settle_timeout_ms: int | None = None
+        self,
+        http_errors: bool = False,
+        since: str = "run",
+        settle_timeout_ms: int | None = None,
+        require_settled: bool = False,
     ) -> dict[str, int]:
         """Assert no failed requests (aborts excepted) and no page errors in the window.
 
@@ -184,22 +189,32 @@ class SessionExpectMixin(SessionLike):
         it and so waits only for requests started from now. Requests dropped
         from that bounded tracking are reported as ``in_flight_untracked`` (only
         when there are any): they may still be running after the wait returns.
+        ``require_settled=True`` fails the check in both of those cases instead.
         The error carries counts only, because a failed URL or an exception
         message can carry a credential.
         """
         # Before anything waits, so a window that cannot be judged fails at once.
+        strict_option("expect_network_clean", require_settled)
         window = self._network.window(since)
         self.enable_inflight_tracking()
         settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
         in_flight = await settle_network(self._network.pending, settle) if settle > 0 else self._network.pending()
         counts = self._network.judge(window, http_errors)
-        options = {"http_errors": http_errors, "since": since, "settle_timeout_ms": settle_timeout_ms}
-        defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None}
-        self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
         result = {**counts, "in_flight": in_flight}
         untracked = self._network.since(window)[3]
         if untracked > 0:
             result["in_flight_untracked"] = untracked
+        refusal = strict_refusal("expect_network_clean", result, required=require_settled)
+        if refusal is not None:
+            raise RuntimeError(refusal)
+        options = {
+            "http_errors": http_errors,
+            "since": since,
+            "settle_timeout_ms": settle_timeout_ms,
+            "require_settled": require_settled,
+        }
+        defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None, "require_settled": False}
+        self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
         return result
 
     @gated_operation("browser_expect_no_text_scan")
@@ -260,7 +275,12 @@ class SessionExpectMixin(SessionLike):
 
     @gated_operation("browser_expect_no_text")
     async def expect_no_text(
-        self, text: str, selector: str = "body", timeout_ms: int | None = None, element_limit: int | None = None
+        self,
+        text: str,
+        selector: str = "body",
+        timeout_ms: int | None = None,
+        element_limit: int | None = None,
+        require_match: bool = False,
     ) -> dict[str, Any]:
         """Assert *text* is not drawn in any element matching *selector*; return what was checked.
 
@@ -285,10 +305,12 @@ class SessionExpectMixin(SessionLike):
         unless the text was found: a security check does not pass on a page it
         only partly read. The limit is *element_limit*, else
         ``OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT``, else ``ELEMENT_LIMIT``
-        (``drawn_text.resolve_element_limit``). *text* is treated as a secret, so neither the
-        error, the result nor the recording repeats it.
+        (``drawn_text.resolve_element_limit``). ``require_match=True`` fails a
+        check whose selector matched nothing. *text* is treated as a secret, so
+        neither the error, the result nor the recording repeats it.
         """
         check_forbidden_text(text)
+        strict_option("expect_no_text", require_match)
         limit = resolve_element_limit(element_limit, os.environ)
         timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
         target = self._target()
@@ -299,8 +321,7 @@ class SessionExpectMixin(SessionLike):
         result["snapshot"] = "unsupported" if self.kind != "chromium" else "checked" if whole_page else "skipped"
         if result["snapshot"] == "checked" and await self._snapshot_leaks(text, timeout):
             raise RuntimeError(leak_message(text, selector, "DOM snapshot"))
-        if result["truncated"]:
-            raise RuntimeError(truncation_message(selector, limit))
+        _refuse_a_partial_scan(result, selector, limit, require_match)
         # The marker, never the text; the keyed digest is what lets save_macro
         # bind the marker to the parameter it stood for (see
         # macros.privacy.assertion_text_digest). Local import: macros imports
@@ -314,6 +335,16 @@ class SessionExpectMixin(SessionLike):
             text_digest=assertion_text_digest(text),
             # A step's own limit is an input, so replay keeps it; the default is not recorded.
             **({"element_limit": element_limit} if element_limit is not None else {}),
+            **({"require_match": True} if require_match else {}),
             **result,
         )
         return result
+
+
+def _refuse_a_partial_scan(result: dict[str, Any], selector: str, limit: int, require_match: bool) -> None:
+    """Fail a scan that read less than its step accepts: past the element limit, or, if asked, nothing matched."""
+    if result["truncated"]:
+        raise RuntimeError(truncation_message(selector, limit))
+    refusal = strict_refusal("expect_no_text", {**result, "selector": selector}, required=require_match)
+    if refusal is not None:
+        raise RuntimeError(refusal)

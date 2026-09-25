@@ -343,3 +343,29 @@ async def test_a_selector_that_matches_nothing_says_so(session: Any, monkeypatch
     (observation,) = (await execution.run_macro(session, "stale"))["assertions"]
     assert observation["matched"] == 0
     assert observation["warning"] == "selector '#error-banner' matched no element, so no text was checked"
+
+
+async def test_require_settled_fails_on_a_request_still_in_flight(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _macros(
+        monkeypatch,
+        {
+            "hanging-strict": [
+                {"action": "evaluate", "expression": "() => { fetch('/hang').catch(() => {}); }"},
+                {"action": "expect_network_clean", "settle_timeout_ms": 300, "require_settled": True},
+            ]
+        },
+    )
+    with pytest.raises(RuntimeError, match="require_settled is set and 1 request"):
+        await execution.run_macro(session, "hanging-strict")
+
+
+async def test_require_match_fails_on_a_selector_that_matches_nothing(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    step = {"action": "expect_no_text", "text": SECRET, "selector": "#error-banner", "require_match": True}
+    _macros(monkeypatch, {"stale-strict": [step]})
+    with pytest.raises(RuntimeError, match="require_match is set") as excinfo:
+        await execution.run_macro(session, "stale-strict")
+    assert SECRET not in str(excinfo.value)

@@ -30,7 +30,7 @@ from __future__ import annotations
 import inspect
 
 from octowright import request_failures
-from octowright.assertion_warnings import assertion_warning
+from octowright.assertion_warnings import STRICT_OPTIONS, assertion_warning, strict_option, strict_refusal
 from octowright.macros._redact import _REDACT_VALUE_ACTIONS
 
 
@@ -60,9 +60,12 @@ def _network_helpers() -> str:
         request_failures.request_frame,
         request_failures.NetworkLedger,
         request_failures.settle_network,
-        # How a passing check's caveat is worded, shared with macro_run.
+        # How a passing check's caveat is worded, and when a step makes it fail, shared with macro_run.
         assertion_warning,
+        strict_option,
+        strict_refusal,
     )
+    constants += f"STRICT_OPTIONS = {STRICT_OPTIONS!r}\n"
     return constants + frozensets + "\n\n" + "\n\n\n".join(inspect.getsource(obj).rstrip() for obj in sources)
 
 
@@ -408,6 +411,7 @@ executed += 1
 """,
     # The whole script is one run, so since="run" counts from zero.
     "expect_network_clean": """
+require_settled = strict_option(kind, action.get("require_settled", False))
 window = state["network"].window(action.get("since", "run"))
 settle = action.get("settle_timeout_ms")
 settle = NETWORK_SETTLE_TIMEOUT_MS if settle is None else int(settle)
@@ -416,6 +420,9 @@ observation = {**state["network"].judge(window, bool(action.get("http_errors")))
 untracked = state["network"].since(window)[3]
 if untracked > 0:
     observation["in_flight_untracked"] = untracked
+refusal = strict_refusal(kind, observation, required=require_settled)
+if refusal is not None:
+    raise RuntimeError(refusal)
 _report_assertion(state, index, kind, observation)
 executed += 1
 """,
@@ -430,6 +437,7 @@ executed += 1
     "expect_no_text": """
 forbidden = action["text"]
 check_forbidden_text(forbidden)
+require_match = strict_option(kind, action.get("require_match", False))
 selector = action.get("selector", "body")
 limit = resolve_element_limit(action.get("element_limit"), os.environ)
 target = _target(state)
@@ -444,6 +452,9 @@ for position, scanned in enumerate(target.frames if selector == "body" and state
     fold_frame_result(summary, position, found, forbidden, selector)
 if summary["truncated"]:
     raise RuntimeError(truncation_message(selector, limit))
+refusal = strict_refusal(kind, {**summary, "selector": selector}, required=require_match)
+if refusal is not None:
+    raise RuntimeError(refusal)
 _report_assertion(state, index, kind, {**summary, "selector": selector})
 executed += 1
 """,

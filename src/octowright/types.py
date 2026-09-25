@@ -163,6 +163,7 @@ class ExpectNetworkCleanAction(MacroActionBase):
     http_errors: NotRequired[bool]
     since: NotRequired[Literal["run", "mark"]]
     settle_timeout_ms: NotRequired[int | None]
+    require_settled: NotRequired[bool]
 
 
 class MarkNetworkCleanAction(MacroActionBase):
@@ -174,6 +175,8 @@ class ExpectNoTextAction(MacroActionBase):
     text: str
     selector: NotRequired[str]
     timeout_ms: NotRequired[int | None]
+    element_limit: NotRequired[int | None]
+    require_match: NotRequired[bool]
 
 
 class MockRouteAction(MacroActionBase):

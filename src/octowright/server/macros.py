@@ -159,7 +159,9 @@ def macro_export_cli(
         "default comes from OCTOWRIGHT_MACRO_SLOWMO_MS. Returns {macro, executed, skipped, "
         "args_used, slowmo_ms}, plus `assertions` when the macro ran expect_network_clean or "
         "expect_no_text: what each saw, with a `warning` on a pass that judged less than asked "
-        "(requests still in flight, a selector that matched nothing)."
+        "(requests still in flight, a selector that matched nothing). A step can set "
+        "`require_settled: true` (expect_network_clean) or `require_match: true` "
+        "(expect_no_text) to fail on that caveat instead."
     ),
 )
 async def macro_run(
