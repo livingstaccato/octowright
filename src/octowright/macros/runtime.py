@@ -14,6 +14,7 @@ from provide.telemetry import get_logger
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
 from octowright._tracing import span
+from octowright.credential_sinks import REPLAY_RENAME_KEYS, canonical_aliases
 from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
 
 if TYPE_CHECKING:
@@ -149,22 +150,9 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     "expect_no_text": NO_TEXT_OBSERVATION_KEYS,
 }
 
-# Recorded keys that need renaming to match the method's parameter names.
-# mock_route/unmock_route: session/core_interaction_mixin.py's recorder.record()
-# writes the field as "pattern" (matching macros/lint.py's required-field name),
-# but the session methods' parameter is "url_pattern" — without this rename,
-# every recorded mock_route/unmock_route replay raised TypeError: unexpected
-# keyword argument 'pattern', dead on arrival since the two sides disagreed
-# on the field name.
-_REPLAY_RENAME_KEYS: dict[str, dict[str, str]] = {
-    "drag": {"source": "source_selector", "target": "target_selector"},
-    "mock_route": {"pattern": "url_pattern"},
-    "unmock_route": {"pattern": "url_pattern"},
-    # Same split, same reason: the recorder writes "pattern", the session
-    # method's parameter is "url_pattern".
-    "inject_headers": {"pattern": "url_pattern"},
-    "uninject_headers": {"pattern": "url_pattern"},
-}
+# The alias table lives beside the credential-sink guard, which must judge the
+# spelling replay uses (``credential_sinks.canonical_aliases``).
+_REPLAY_RENAME_KEYS = REPLAY_RENAME_KEYS
 
 
 def _normalize_replay_kwargs(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -185,10 +173,8 @@ def _normalize_replay_kwargs(kind: str, kwargs: dict[str, Any]) -> dict[str, Any
     drop_keys = _REPLAY_DROP_KEYS.get(kind)
     if drop_keys:
         kwargs = {k: v for k, v in kwargs.items() if k not in drop_keys}
-    rename_map = _REPLAY_RENAME_KEYS.get(kind)
-    if rename_map:
-        kwargs = {rename_map.get(k, k): v for k, v in kwargs.items()}
-    return kwargs
+    # Refuses two spellings that disagree rather than letting key order pick.
+    return canonical_aliases(kind, kwargs)
 
 
 async def _dispatch_standard(
