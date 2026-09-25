@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
+# Per-message cap: the count above bounds the number of messages, not their
+# SIZE, and one console.log of a stringified response would otherwise push
+# megabytes over the MCP transport. Generous next to capture_summaries' 88-char
+# digest cap because this text is read as the cause, not skimmed as a summary.
+MACRO_FAILURE_CONSOLE_TEXT_CHARS = 2000
+
 # Failed / non-2xx requests attached to a macro failure payload. A timeout is
 # almost never the bug -- it is the symptom of something the page reported and
 # the macro could not see. In the case this was built for, the page logged a
@@ -81,3 +87,29 @@ def page_errors_tail(session: SessionLike) -> list[dict[str, Any]]:
         log.debug("octowright.macro.failure_page_errors_tail_failed", error_type=type(exc).__name__)
         return []
     return [dict(error) for error in errors[-MACRO_FAILURE_PAGE_ERROR_TAIL:]]
+
+
+def _truncate_console_message(message: Any) -> Any:
+    """Return ``message`` with an over-long ``text`` capped, never mutated."""
+    if not isinstance(message, dict):
+        return message
+    text = message.get("text")
+    if not isinstance(text, str) or len(text) <= MACRO_FAILURE_CONSOLE_TEXT_CHARS:
+        return message
+    return {**message, "text": text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"}
+
+
+def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Cap each console message's text so a chatty page can't bloat the error.
+
+    Replaces the list rather than editing the messages, so this holds no
+    opinion about whether the producer handed back copies or the session's
+    live ring-buffer entries. It did copy them -- but an invariant maintained
+    across two modules by a comment is how the buffer got rewritten the first
+    time, and only this function needed to know.
+    """
+    messages = bundle.get("console_tail")
+    if not isinstance(messages, list):
+        return bundle
+    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
+    return bundle

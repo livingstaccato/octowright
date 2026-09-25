@@ -185,7 +185,7 @@ def test_a_console_message_exactly_at_the_cap_is_returned_unchanged() -> None:
     complete, on the macro-failure path where that text is the diagnostic an
     agent reads to explain why a run died.
     """
-    from octowright.macros.execution import MACRO_FAILURE_CONSOLE_TEXT_CHARS, _truncate_console_message
+    from octowright.macros.failure_context import MACRO_FAILURE_CONSOLE_TEXT_CHARS, _truncate_console_message
 
     exactly = {"level": "error", "text": "x" * MACRO_FAILURE_CONSOLE_TEXT_CHARS}
     assert _truncate_console_message(exactly) is exactly

@@ -26,6 +26,7 @@ from octowright.macros.calls import (
 )
 from octowright.macros.credential_fill import begin_fill_audit, end_fill_audit, guard_credential_fill
 from octowright.macros.descriptions import describe_action
+from octowright.macros.failure_context import _truncate_bundle_console
 from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
     MacroArgPrivacy,
@@ -110,11 +111,6 @@ _MACRO_LABEL_OVERFLOW = "(overflow)"
 # first (see ``_select_console_tail``), so this bounds payload size rather
 # than being a window a chatty page can flush the useful line out of.
 MACRO_FAILURE_CONSOLE_TAIL = 10
-# Per-message cap: the count above bounds the number of messages, not their
-# SIZE, and one console.log of a stringified response would otherwise push
-# megabytes over the MCP transport. Generous next to capture_summaries' 88-char
-# digest cap because this text is read as the cause, not skimmed as a summary.
-MACRO_FAILURE_CONSOLE_TEXT_CHARS = 2000
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
 # so an operator can see when dynamic macro names are filling the cap with
@@ -424,32 +420,6 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
         return
     with contextlib.suppress(Exception):
         await ctx.report_progress(progress, total=total, message=message)
-
-
-def _truncate_console_message(message: Any) -> Any:
-    """Return ``message`` with an over-long ``text`` capped, never mutated."""
-    if not isinstance(message, dict):
-        return message
-    text = message.get("text")
-    if not isinstance(text, str) or len(text) <= MACRO_FAILURE_CONSOLE_TEXT_CHARS:
-        return message
-    return {**message, "text": text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"}
-
-
-def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Cap each console message's text so a chatty page can't bloat the error.
-
-    Replaces the list rather than editing the messages, so this holds no
-    opinion about whether the producer handed back copies or the session's
-    live ring-buffer entries. It did copy them -- but an invariant maintained
-    across two modules by a comment is how the buffer got rewritten the first
-    time, and only this function needed to know.
-    """
-    messages = bundle.get("console_tail")
-    if not isinstance(messages, list):
-        return bundle
-    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
-    return bundle
 
 
 async def run_macro(
