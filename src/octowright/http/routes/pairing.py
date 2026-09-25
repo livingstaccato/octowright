@@ -21,6 +21,13 @@ from octowright.http.exposure import guard_sensitive_http
 from octowright.http.pairing import PAIR_CODE_TTL_SECONDS, dashboard_pairing_state
 from octowright.http.routes._common import _read_json_body
 
+#: Redemption is reached with no credential at all -- it is the bootstrap -- and
+#: reads its body before it can tell a real code from a bad one. A code is a few
+#: dozen bytes, so this fixed ceiling costs nothing and cannot be switched off,
+#: unlike ``OCTOWRIGHT_MAX_REQUEST_BODY_BYTES`` (off by default). Without it any
+#: process that can reach loopback made the leader buffer an unbounded body.
+PAIR_REDEEM_MAX_BODY_BYTES = 4096
+
 
 async def pair_mint(request: Request) -> Response:
     """Mint a single-use pairing code. Requires the capability token — the
@@ -49,7 +56,7 @@ async def pair_mint(request: Request) -> Response:
 
 async def pair_redeem(request: Request) -> Response:
     """Consume a code and return an origin-scoped browser bearer once."""
-    body, error = await _read_json_body(request)
+    body, error = await _read_json_body(request, max_bytes=PAIR_REDEEM_MAX_BODY_BYTES)
     if error is not None:
         return error
     code = body.get("code") if isinstance(body, dict) else None
