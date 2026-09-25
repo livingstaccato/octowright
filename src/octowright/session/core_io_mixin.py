@@ -94,6 +94,25 @@ def _raw_payload_size(payload: Any) -> int | None:
     return None
 
 
+#: Longest ``b'...'`` text frame parsed back to bytes. A bytes repr spends up
+#: to four chars per byte, so this admits every frame whose decoded bytes could
+#: fit ``WEBSOCKET_FRAME_MAX_BYTES``. The text is page-controlled and
+#: ``ast.literal_eval`` runs on the event loop: an uncapped parse of a 50-100 MB
+#: frame stalled the daemon. A longer frame is kept as (capped) text instead.
+BINARY_TEXT_PARSE_MAX_CHARS = 4 * WEBSOCKET_FRAME_MAX_BYTES + 3
+
+
+def _decode_binary_text(payload: Any) -> bytes | None:
+    """The bytes a ``b'...'`` text frame spells, or ``None`` (not one, unparsable, or too long)."""
+    if not _looks_like_binary_text(payload) or len(payload) > BINARY_TEXT_PARSE_MAX_CHARS:
+        return None
+    try:
+        parsed = ast.literal_eval(payload)
+    except Exception:
+        return None
+    return bytes(parsed) if isinstance(parsed, bytes | bytearray) else None
+
+
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
 
@@ -210,17 +229,10 @@ class SessionIOMixin(SessionLike):
                 payload_bytes = bytes(payload)
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
-            elif isinstance(payload, str) and _looks_like_binary_text(payload):
-                try:
-                    decoded = ast.literal_eval(payload)
-                except Exception:
-                    decoded = None
-                if isinstance(decoded, bytes | bytearray | memoryview):
-                    payload_bytes = bytes(decoded)
-                    if normalized_size is None:
-                        normalized_size = len(payload_bytes)
-                else:
-                    entry["payload_text"] = payload
+            elif (decoded := _decode_binary_text(payload)) is not None:
+                payload_bytes = decoded
+                if normalized_size is None:
+                    normalized_size = len(payload_bytes)
             else:
                 entry["payload_text"] = payload
             entry["payload_size"] = (
@@ -610,16 +622,9 @@ class SessionIOMixin(SessionLike):
         binding_id = getattr(websocket, "id", None)
 
         def _binary_preview(payload: Any) -> str:
-            if isinstance(payload, str) and _looks_like_binary_text(payload):
-                # "b'...'" and `b\"...\"` text markers from playwright / logs
-                # are rendered as the true byte length when possible.
-                try:
-                    parsed = ast.literal_eval(payload)
-                except Exception:
-                    parsed = None
-                if isinstance(parsed, bytes | bytearray | memoryview):
-                    return f"[binary payload hidden: {len(parsed)} bytes]"
-
+            # A ``b'...'`` text frame arrives here already decoded by the frame
+            # handler (once, and only when small), so it reports its true
+            # byte length; this never parses anything itself.
             size = len(payload) if hasattr(payload, "__len__") else None
             if size is None:
                 return "[binary payload hidden]"
@@ -654,6 +659,10 @@ class SessionIOMixin(SessionLike):
                     or isinstance(payload, bytes | bytearray | memoryview)
                     or _looks_like_binary_text(payload)
                 )
+                # Parsed ONCE per frame and shared by both previews and the
+                # sidecar, which each used to parse the full payload again.
+                decoded = _decode_binary_text(payload)
+                shown = decoded if decoded is not None else payload
                 self.recorder.record(
                     f"websocket_{direction}",
                     id=socket_id,
@@ -664,33 +673,19 @@ class SessionIOMixin(SessionLike):
                     # frame's real length either way, so capping the text
                     # costs nothing a reader of this file needed.
                     payload_preview=_preview_payload(
-                        payload, is_binary=is_binary, max_chars=WEBSOCKET_RECORD_PREVIEW_CHARS
+                        shown, is_binary=is_binary, max_chars=WEBSOCKET_RECORD_PREVIEW_CHARS
                     ),
                     payload_size=(len(payload) if payload is not None and hasattr(payload, "__len__") else None),
                 )
-                cache_payload_size = None
-                if isinstance(payload, bytes | bytearray | memoryview):
-                    cache_payload_size = len(payload)
-                elif isinstance(payload, str) and _looks_like_binary_text(payload):
-                    try:
-                        decoded = ast.literal_eval(payload)
-                    except Exception:
-                        cache_payload_size = len(payload)
-                    else:
-                        if isinstance(decoded, bytes | bytearray | memoryview):
-                            cache_payload_size = len(decoded)
-                        else:
-                            cache_payload_size = len(payload)
-                else:
-                    cache_payload_size = len(payload) if payload is not None and hasattr(payload, "__len__") else None
+                cache_payload_size = len(shown) if shown is not None and hasattr(shown, "__len__") else None
                 self._note_websocket_frame(socket_id, direction, cache_payload_size)
                 try:
                     self._append_websocket_cache(
                         direction=direction,
                         id_=socket_id,
                         url=url,
-                        payload_preview=_preview_payload(payload, is_binary=is_binary),
-                        payload=payload,
+                        payload_preview=_preview_payload(shown, is_binary=is_binary),
+                        payload=shown,
                         payload_size=cache_payload_size,
                     )
                 except Exception:
