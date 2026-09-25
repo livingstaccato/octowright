@@ -109,3 +109,52 @@ def test_load_scenario_rejects_parent_traversal(fresh_scenarios):
     scenarios, _ = fresh_scenarios
     with pytest.raises(ValueError, match="resolves outside"):
         scenarios.load_scenario("../../etc/passwd")
+
+
+_TEMPLATE = 'name: t\nparticipants:\n  - persona: "{{p}}"\n    kind: chromium\n    role: player\n'
+
+
+@pytest.mark.parametrize("sep", ["\x85", " ", " "])
+def test_load_scenario_template_rejects_every_yaml_line_break(fresh_scenarios, sep):
+    """PyYAML breaks lines on NEL, LINE SEPARATOR and PARAGRAPH SEPARATOR too.
+
+    Verified: with only \\n/\\r refused, ``cosmo"<sep>    url: "http://evil``
+    added a ``url`` key to the participant.
+    """
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "sep.yaml").write_text(_TEMPLATE, encoding="utf-8")
+    with pytest.raises(ValueError, match="newline"):
+        scenarios.load_scenario_template("sep", {"p": f'cosmo"{sep}    url: "http://evil.test/'})
+
+
+def test_load_scenario_template_value_cannot_break_out_of_its_quotes(fresh_scenarios):
+    """No line break needed in a flow mapping: a quote ends the scalar.
+
+    Raw text substitution let ``cosmo", url: "http://evil.test/", x: "`` add a
+    ``url`` key; substituting into the parsed structure keeps it one string.
+    """
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "flow.yaml").write_text(
+        'name: t\nparticipants: [{persona: "{{p}}", kind: chromium, role: player}]\n', encoding="utf-8"
+    )
+    value = 'cosmo", url: "http://evil.test/", x: "'
+    scenario = scenarios.load_scenario_template("flow", {"p": value})
+    assert scenario.participants[0].persona == value
+    assert scenario.participants[0].url is None
+
+
+def test_load_scenario_template_value_cannot_become_structure(fresh_scenarios):
+    """An unquoted-looking value stays a string, not a YAML list or mapping."""
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "shape.yaml").write_text(_TEMPLATE, encoding="utf-8")
+    scenario = scenarios.load_scenario_template("shape", {"p": "[a, b]"})
+    assert scenario.participants[0].persona == "[a, b]"
+
+
+def test_load_scenario_template_with_an_unquoted_placeholder_says_so(fresh_scenarios):
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "bare.yaml").write_text(
+        "name: t\nparticipants:\n  - persona: {{p}}\n    kind: chromium\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="quote"):
+        scenarios.load_scenario_template("bare", {"p": "cosmo"})

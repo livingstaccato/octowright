@@ -119,7 +119,10 @@ def _validate_scenario(s: Scenario) -> None:
 
 
 def load_yaml_scenario(content: str, name: str) -> Scenario:
-    raw = yaml.safe_load(content)
+    return _scenario_from_raw(yaml.safe_load(content), name)
+
+
+def _scenario_from_raw(raw: Any, name: str) -> Scenario:
     if not isinstance(raw, dict):
         # Scenario YAML must be a mapping; a list or scalar at top level is
         # almost certainly a hand-edit mistake. Reset to {} so the caller
@@ -395,22 +398,47 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     )
     if not path.exists():
         raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
-    content = path.read_text(encoding="utf-8")
-    # Reject arg values that contain CR/LF before raw substitution into YAML:
-    # a newline in a value lets the caller inject arbitrary YAML structure
-    # (extra keys, list items) once the {{placeholder}} is replaced and the
-    # result is fed to yaml.safe_load.
+    # Every character PyYAML treats as a line break, not only CR/LF. The
+    # substitution below no longer goes through YAML text, so this is no longer
+    # what stops injection -- but a persona or URL containing a line break is
+    # never what a caller meant, and refusing it keeps the error they got.
     for k, v in args.items():
-        sv = str(v)
-        if "\n" in sv or "\r" in sv:
-            raise ValueError(
-                f"scenario template arg {k!r} contains a newline; "
-                "templates substitute raw into YAML and newlines would inject structure"
-            )
-    # Simple jinja-style substitution if args are provided.
-    for k, v in args.items():
-        content = content.replace(f"{{{{{k}}}}}", str(v))
-    return load_yaml_scenario(content, name)
+        if any(c in str(v) for c in _YAML_LINE_BREAKS):
+            raise ValueError(f"scenario template arg {k!r} contains a newline (a YAML line break)")
+    # Parse the template FIRST, then substitute into the parsed strings. Raw
+    # text substitution let a value rewrite the document: a line break
+    # (including NEL/LS/PS, which PyYAML also honours) started a new key, and a
+    # bare quote ended a flow-style scalar, so ``cosmo", url: "http://evil/"``
+    # added a url with no line break at all. A value substituted into an
+    # already-parsed string cannot become structure.
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"scenario template {name!r} is not valid YAML before substitution ({exc}); "
+            'quote every placeholder, e.g. persona: "{{persona_1}}"'
+        ) from exc
+    replacements = {f"{{{{{k}}}}}": str(v) for k, v in args.items()}
+    return _scenario_from_raw(_substitute_placeholders(raw, replacements), name)
+
+
+_YAML_LINE_BREAKS = ("\n", "\r", "\x85", "\u2028", "\u2029")
+
+
+def _substitute_placeholders(node: Any, replacements: dict[str, str]) -> Any:
+    """Replace ``{{key}}`` inside every string of a parsed YAML tree, keys included."""
+    if isinstance(node, str):
+        for placeholder, value in replacements.items():
+            node = node.replace(placeholder, value)
+        return node
+    if isinstance(node, dict):
+        return {
+            _substitute_placeholders(k, replacements): _substitute_placeholders(v, replacements)
+            for k, v in node.items()
+        }
+    if isinstance(node, list):
+        return [_substitute_placeholders(item, replacements) for item in node]
+    return node
 
 
 def list_scenarios() -> list[dict[str, Any]]:
