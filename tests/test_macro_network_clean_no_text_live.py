@@ -27,6 +27,7 @@ import pytest
 
 from octowright.browser_pool.pool import BrowserPool
 from octowright.macros import execution
+from octowright.request_failures import settle_network
 
 pytestmark = pytest.mark.live_browser
 
@@ -111,7 +112,7 @@ _REFUSED_AND_THROWN = (
 async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     session.enable_inflight_tracking()
     await session.page.evaluate(_REFUSED_AND_THROWN.format(port=_closed_port()))
-    await session._settle_network(5000)
+    await settle_network(session.pending_requests, 5000)
     assert session.network_failures_since()[:2] == (1, 1), list(session._network_requests)
 
     _macros(monkeypatch, {"clean": [{"action": "expect_network_clean"}]})
@@ -147,7 +148,7 @@ async def test_a_cancelled_request_is_observed_and_classified_as_an_abort(sessio
         "() => { const c = new AbortController();"
         " fetch('/slow-cancelled', {signal: c.signal}).catch(() => {}); setTimeout(() => c.abort(), 150); }"
     )
-    await session._settle_network(5000)
+    await settle_network(session.pending_requests, 5000)
     failures = [row["failure"] for row in session._network_requests if row.get("failure")]
     assert failures, "the engine reported no cancellation, so the abort list was not exercised"
     assert session.network_failures_since()[0] == 0, failures
@@ -158,7 +159,7 @@ async def test_navigating_away_mid_request_is_not_a_failure(session: Any, page_u
     session.mark_network_clean_window()
     await session.page.evaluate("() => { fetch('/slow-never-answers-' + Math.random()).catch(() => {}); }")
     await session.page.goto(page_url + "?next")
-    await session._settle_network(5000)
+    await settle_network(session.pending_requests, 5000)
     failures = [row["failure"] for row in session._network_requests if row.get("failure")]
     assert session.network_failures_since()[0] == 0, failures
 

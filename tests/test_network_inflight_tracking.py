@@ -23,10 +23,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright import request_failures
 from octowright.browser_pool.listeners import _wire_listeners
 from octowright.macros import execution
 from octowright.request_failures import ABORTED_REQUEST_FAILURES
-from octowright.session import core_network_mixin
 from octowright.session.core import BrowserSession
 
 
@@ -284,7 +284,7 @@ def test_a_cross_document_commit_forgets_the_old_documents_requests(session: Bro
     assert session.pending_requests() == 3
     page.fire("framenavigated", page.main_frame)
     # The request that brought the new document may still be streaming its body.
-    assert list(session._inflight_requests) == [navigation]
+    assert list(session._network.inflight) == [navigation]
 
 
 def test_a_same_document_navigation_keeps_the_documents_requests(session: BrowserSession) -> None:
@@ -302,7 +302,7 @@ def test_a_subframe_commit_forgets_only_that_frames_requests(session: BrowserSes
     page.fire("request", _request(child))
     page.fire("request", _request(child, navigation=True))
     page.fire("framenavigated", child)
-    remaining = [(value[1], value[2]) for value in session._inflight_requests.values()]
+    remaining = [(value[1], value[2]) for value in session._network.inflight.values()]
     assert sorted(remaining, key=lambda r: r[1]) == [(page.main_frame, False), (child, True)]
 
 
@@ -331,7 +331,7 @@ def test_a_request_without_a_frame_is_still_tracked(session: BrowserSession) -> 
 async def test_requests_evicted_past_the_limit_are_reported(
     session: BrowserSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(core_network_mixin, "INFLIGHT_REQUEST_LIMIT", 3)
+    monkeypatch.setattr(request_failures, "INFLIGHT_REQUEST_LIMIT", 3)
     page = _tracked(session)
     for _ in range(3):
         page.fire("request", _request(page.main_frame))
@@ -353,7 +353,7 @@ async def test_no_untracked_key_when_nothing_was_evicted(session: BrowserSession
 async def test_untracked_is_counted_from_the_explicit_mark_for_since_mark(
     session: BrowserSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(core_network_mixin, "INFLIGHT_REQUEST_LIMIT", 1)
+    monkeypatch.setattr(request_failures, "INFLIGHT_REQUEST_LIMIT", 1)
     page = _tracked(session)
     page.fire("request", _request(page.main_frame))
     await session.mark_network_clean()
@@ -390,3 +390,38 @@ def test_a_real_failure_is_not_an_abort(session: BrowserSession) -> None:
     request.failure = "net::ERR_CONNECTION_REFUSED"
     session._handle_request_failed(request)
     assert session.network_failures_since()[0] == 1
+
+
+# --- the ledger's bookkeeping ------------------------------------------------------------
+
+
+def test_closing_a_tracked_page_releases_its_listener_entry(session: BrowserSession) -> None:
+    """The handlers close over the page, so a kept entry would keep its own weak key alive."""
+    page = _tracked(session)
+    page.fire("request", _request(page.main_frame))
+    for handler in page.handlers["close"]:
+        handler()
+    assert page not in session._tracked_pages
+    assert session.pending_requests() == 0
+
+
+def test_eviction_and_forgetting_leave_no_stale_index_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(request_failures, "INFLIGHT_REQUEST_LIMIT", 2)
+    ledger = request_failures.NetworkLedger()
+    page, child = _Page(), object()
+    for frame in (child, child, page.main_frame):
+        ledger.request_started(_request(frame), page)
+    assert ledger.evicted == 1 and ledger.pending() == 2
+    ledger.frame_detached(child)
+    ledger.page_closed(page)
+    assert ledger.pending() == 0
+    assert not ledger._by_frame and not ledger._by_page
+
+
+@pytest.mark.anyio
+async def test_since_mark_without_a_mark_fails_before_waiting(session: BrowserSession) -> None:
+    """Refused up front, as the exported CLI always did, rather than after a settle wait."""
+    page = _tracked(session)
+    page.fire("request", _request(page.main_frame))  # would hold a settle wait to its timeout
+    with pytest.raises(RuntimeError, match="mark_network_clean"):
+        await session.expect_network_clean(since="mark", settle_timeout_ms=60_000)

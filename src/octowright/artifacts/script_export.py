@@ -95,6 +95,8 @@ import re
 import sys
 import time
 import unicodedata
+from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -411,11 +413,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
             "dialog_policy": "manual",
             "dialog_prompt_text": None,
             "dialog_pages": [],
-            "failed_requests": 0,
-            "page_errors": 0,
-            "http_errors": 0,
-            "inflight": {{}},
-            "network_mark": None,
+            "network": NetworkLedger(),
             # An assertion nested in try/if_selector counts too.
             "watch_network": {watch_network!r},
         }}

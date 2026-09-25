@@ -27,113 +27,71 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
+import inspect
+
+from octowright import request_failures
 from octowright.macros._redact import _REDACT_VALUE_ACTIONS
-from octowright.request_failures import ABORTED_REQUEST_FAILURES, HTTP_ERROR_RESOURCE_TYPES, LONG_LIVED_RESOURCE_TYPES
+
+
+def _network_helpers() -> str:
+    """The session's own network ledger and settle wait, rendered from their source.
+
+    Not hand-mirrored: the copy had drifted (no in-flight bound, a per-tick
+    ``is_closed`` poll instead of a close listener, requests keyed by an ``id``
+    a collected object's successor could reuse). The names below are the ones
+    the rendered source reads.
+    """
+    constants = "".join(
+        f"{name} = {getattr(request_failures, name)!r}\n"
+        for name in (
+            "INFLIGHT_REQUEST_LIMIT",
+            "NETWORK_SETTLE_TIMEOUT_MS",
+            "NETWORK_QUIET_SECONDS",
+            "NETWORK_SETTLE_POLL_SECONDS",
+        )
+    )
+    frozensets = "".join(
+        f"{name} = frozenset({sorted(getattr(request_failures, name))!r})\n"
+        for name in ("ABORTED_REQUEST_FAILURES", "HTTP_ERROR_RESOURCE_TYPES", "LONG_LIVED_RESOURCE_TYPES")
+    )
+    sources = (
+        request_failures.is_http_error,
+        request_failures.request_frame,
+        request_failures.NetworkLedger,
+        request_failures.settle_network,
+    )
+    return constants + frozensets + "\n\n" + "\n\n\n".join(inspect.getsource(obj).rstrip() for obj in sources)
+
 
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
 STATE_HELPERS = (
-    """
-_ABORTED_REQUEST_FAILURES = """
-    + repr(sorted(ABORTED_REQUEST_FAILURES))
+    _network_helpers()
     + """
-_HTTP_ERROR_RESOURCE_TYPES = """
-    + repr(sorted(HTTP_ERROR_RESOURCE_TYPES))
-    + """
-_LONG_LIVED_RESOURCE_TYPES = """
-    + repr(sorted(LONG_LIVED_RESOURCE_TYPES))
-    + """
+
+
 # Action kinds whose text/value is always redacted in logs, as replay redacts them.
 _REDACT_VALUE_ACTIONS = """
     + repr(sorted(_REDACT_VALUE_ACTIONS))
     + "\n\n\n"
     + '''def _watch_network(state: dict[str, Any], page: Any) -> None:
-    """Count what expect_network_clean judges, from the moment a page exists.
+    """Feed the page's events to the ledger expect_network_clean judges, from the moment it exists.
 
-    Mirrors the session: a ``requestfailed`` that is not an abort, and every
-    ``pageerror``. Counts only -- the messages are never kept. Lazy like the
-    dialog policy: a macro that never asserts it never touches ``page.on``.
-
-    Requests in flight map ``id(request)`` to (page, frame, is-navigation); a
-    cross-document commit forgets the replaced document's, as the session does
-    (Chromium never ends a fetch that navigating away cancelled).
+    Wired as the session wires them, including the close that forgets a
+    closed page's requests. Lazy like the dialog policy: a macro that never
+    asserts it never touches ``page.on``.
     """
     if not state["watch_network"]:
         return
-    inflight = state["inflight"]
-    navigating: set[Any] = set()
-
-    def _on_started(request: Any) -> None:
-        if request.resource_type in _LONG_LIVED_RESOURCE_TYPES:
-            return
-        try:
-            frame = request.frame
-        except Exception:  # a service worker's request has no frame
-            frame = None
-        navigation = frame is not None and request.is_navigation_request() is True
-        if navigation:
-            navigating.add(frame)
-        inflight[id(request)] = (page, frame, navigation)
-
-    def _on_finished(request: Any) -> None:
-        inflight.pop(id(request), None)
-
-    def _on_failed(request: Any) -> None:
-        inflight.pop(id(request), None)
-        if request.failure and request.failure not in _ABORTED_REQUEST_FAILURES:
-            state["failed_requests"] += 1
-
-    def _on_navigated(frame: Any) -> None:
-        if frame not in navigating:
-            return  # same-document (pushState, a fragment): its requests are still live
-        navigating.discard(frame)
-        whole_page = frame is page.main_frame
-        for key, (owner, owner_frame, navigation) in list(inflight.items()):
-            if owner is page and not (navigation and owner_frame is frame) and (whole_page or owner_frame is frame):
-                inflight.pop(key, None)
-
-    def _on_detached(frame: Any) -> None:
-        navigating.discard(frame)
-        for key, (_owner, owner_frame, _navigation) in list(inflight.items()):
-            if owner_frame is frame:
-                inflight.pop(key, None)
-
-    def _on_error(_error: Any) -> None:
-        state["page_errors"] += 1
-
-    def _on_response(response: Any) -> None:
-        if response.status >= 400 and response.request.resource_type in _HTTP_ERROR_RESOURCE_TYPES:
-            state["http_errors"] += 1
-
-    page.on("request", _on_started)
-    page.on("requestfinished", _on_finished)
-    page.on("requestfailed", _on_failed)
-    page.on("framenavigated", _on_navigated)
-    page.on("framedetached", _on_detached)
-    page.on("pageerror", _on_error)
-    page.on("response", _on_response)
-
-
-def _network_counts(state: dict[str, Any]) -> tuple[int, int, int]:
-    return state["failed_requests"], state["page_errors"], state["http_errors"]
-
-
-async def _settle_network(state: dict[str, Any], timeout_ms: int) -> int:
-    """Mirrors the session's settle wait: in-flight requests end, then a quiet interval."""
-    deadline = time.monotonic() + timeout_ms / 1000
-
-    def pending() -> int:
-        for key, (page, _frame, _navigation) in list(state["inflight"].items()):
-            if page.is_closed():
-                state["inflight"].pop(key, None)
-        return len(state["inflight"])
-
-    while time.monotonic() < deadline:
-        quiet = pending() == 0
-        await asyncio.sleep(min(0.1 if quiet else 0.05, max(0.0, deadline - time.monotonic())))
-        if quiet and pending() == 0:
-            return 0
-    return pending()
+    ledger = state["network"]
+    page.on("request", lambda request: ledger.request_started(request, page))
+    page.on("requestfinished", ledger.request_finished)
+    page.on("requestfailed", ledger.request_failed)
+    page.on("framenavigated", lambda frame: ledger.frame_navigated(frame, page))
+    page.on("framedetached", ledger.frame_detached)
+    page.on("close", lambda: ledger.page_closed(page))
+    page.on("pageerror", ledger.page_error)
+    page.on("response", ledger.response)
 
 
 def _page(state: dict[str, Any]) -> Any:
@@ -418,27 +376,16 @@ executed += 1
 """,
     # The whole script is one run, so since="run" counts from zero.
     "expect_network_clean": """
-since = action.get("since", "run")
-if since not in ("run", "mark"):
-    raise ValueError(f"unknown since={since!r}; expected 'run' or 'mark'")
-if since == "mark" and state["network_mark"] is None:
-    raise RuntimeError('expect_network_clean(since="mark") needs an earlier mark_network_clean step')
+window = state["network"].window(action.get("since", "run"))
 settle = action.get("settle_timeout_ms")
-settle = 5000 if settle is None else int(settle)
+settle = NETWORK_SETTLE_TIMEOUT_MS if settle is None else int(settle)
 if settle > 0:
-    await _settle_network(state, settle)
-base = state["network_mark"] if since == "mark" else (0, 0, 0)
-failed, errors, http = (now - then for now, then in zip(_network_counts(state), base))
-counted = http if action.get("http_errors") else 0
-if failed or errors or counted:
-    detail = f"{failed} failed request(s), {errors} page error(s)"
-    if action.get("http_errors"):
-        detail += f", {counted} HTTP error(s)"
-    raise RuntimeError(f"network not clean: {detail}")
+    await settle_network(state["network"].pending, settle)
+state["network"].judge(window, bool(action.get("http_errors")))
 executed += 1
 """,
     "mark_network_clean": """
-state["network_mark"] = _network_counts(state)
+state["network"].mark()
 executed += 1
 """,
     # The same drawn_text functions replay calls, rendered verbatim above the

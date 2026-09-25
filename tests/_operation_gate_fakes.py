@@ -71,3 +71,14 @@ class OperationAwareFake:
 
     def operation_snapshot(self) -> OperationGateSnapshot:
         return self._test_operation_gate.snapshot()
+
+    # The request-tracking hooks run_macro calls on every SessionLike. A fake
+    # with no network capture has nothing to mark or track.
+    def mark_network_clean_window(self) -> None:
+        return None
+
+    def enable_inflight_tracking(self) -> None:
+        return None
+
+    def disable_inflight_tracking(self) -> bool:
+        return False

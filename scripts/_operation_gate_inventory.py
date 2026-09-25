@@ -238,15 +238,25 @@ BYPASSES: dict[str, tuple[str, str]] = {
     "session/core_network_mixin.py:SessionNetworkMixin._track_page_requests": (
         "event-critical",
         "attaches passive request/requestfinished/framenavigated/framedetached listeners; runs "
-        "from the popup wiring event and from operations already holding the session's lease",
+        "from the popup wiring event and from operations already holding the session's lease. "
+        "The handlers are request_failures.NetworkLedger's, which read only the event payloads "
+        "they are handed (request fields, the navigated page's cached main_frame)",
     ),
-    "session/core_network_mixin.py:SessionNetworkMixin._handle_frame_navigated": (
+    "request_failures.py:NetworkLedger.response": (
+        "event-critical",
+        "reads a browser-emitted response's status and resource type to count an HTTP error",
+    ),
+    "request_failures.py:NetworkLedger.request_failed": (
+        "event-critical",
+        "reads a browser-emitted request's failure text to count a failed request",
+    ),
+    "request_failures.py:NetworkLedger.request_started": (
+        "event-critical",
+        "reads a browser-emitted request's resource type and navigation flag to track it as in flight",
+    ),
+    "request_failures.py:NetworkLedger.frame_navigated": (
         "event-critical",
         "reads the navigated page's cached main_frame to forget a replaced document's in-flight requests",
-    ),
-    "session/core_network_mixin.py:SessionNetworkMixin._handle_request_started": (
-        "event-critical",
-        "reads a browser-emitted request's resource type to track it as in flight",
     ),
     "browser_pool/crash_recovery.py:_safe_url": (
         "event-critical",

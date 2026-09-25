@@ -21,6 +21,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import counter
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
+from octowright.request_failures import NetworkLedger
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
@@ -229,38 +230,22 @@ class BrowserSession(
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
     # Uncaught page exceptions (Playwright's ``pageerror``), kept in memory for
-    # ``expect_network_clean``. Bounded like the console ring; the running count
-    # is what the assertion reads, so eviction cannot hide an error.
+    # a human debugging. Bounded like the console ring; the running count in
+    # ``_network`` is what ``expect_network_clean`` reads, so eviction cannot
+    # hide an error.
     page_errors: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=PAGE_ERROR_LIMIT))
-    page_error_count: int = 0
-    # Running totals ``expect_network_clean`` judges. Counted in the event
-    # handlers rather than read back from ``_network_requests``: that deque is a
-    # bounded diagnostic, and a failure it evicted must still count.
-    _request_failure_count: int = 0
-    _http_error_count: int = 0
-    # (request failures, page errors, HTTP errors) at the start of the current
-    # macro run, and at the last ``mark_network_clean`` step (None until one ran).
-    _network_clean_mark: tuple[int, int, int] = (0, 0, 0)
-    _network_clean_explicit_mark: tuple[int, int, int] | None = None
-    # Requests started and not yet finished or failed, each mapped to
-    # (page, frame, is-navigation), so ``expect_network_clean`` can wait for
-    # them. Bounded (oldest dropped, and counted in ``_inflight_evicted``)
-    # because a request whose end event never arrives would otherwise stay
-    # forever. Only populated once ``_inflight_tracking`` is on: subscribing to
-    # every request's start and end costs protocol traffic and pins Request
-    # objects, which a session that never asks should not pay for.
-    _inflight_requests: dict[Any, Any] = field(default_factory=dict, repr=False)
+    # The counts, windows and in-flight requests ``expect_network_clean``
+    # judges; counted in the event handlers rather than read back from
+    # ``_network_requests``, a bounded diagnostic whose evictions must still count.
+    _network: NetworkLedger = field(default_factory=NetworkLedger, repr=False)
+    # Whether request start/end events are subscribed to. Off until something
+    # will judge them: every request's start and end costs protocol traffic and
+    # pins Request objects, which a session that never asks should not pay for.
     _inflight_tracking: bool = False
+    # Per page, the handlers tracking attached, so turning it off removes them.
     _tracked_pages: WeakKeyDictionary[Page, list[tuple[str, Any]]] = field(
         default_factory=WeakKeyDictionary, repr=False
     )
-    # Frames with a navigation request since their last commit, to their page:
-    # what tells a cross-document commit from a same-document one.
-    _navigating_frames: dict[Any, Any] = field(default_factory=dict, repr=False)
-    _inflight_evicted: int = 0
-    # _inflight_evicted at the run window's start and at the last mark step.
-    _inflight_evicted_run_mark: int = 0
-    _inflight_evicted_explicit_mark: int = 0
     # Applied to page-derived text before it is written to disk (the markdown
     # cache). Installed by macros.privacy.install_sensitive_recorder so the
     # session scrubs a macro's credential values without importing the macro

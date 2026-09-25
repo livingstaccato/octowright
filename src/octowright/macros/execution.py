@@ -470,11 +470,8 @@ async def run_macro(
             instance_id=session.instance_id,
             kind=session.kind,
         ):
-            # expect_network_clean judges this run, not the session's past. An
-            # injected session with no network capture has nothing to mark.
-            mark = getattr(session, "mark_network_clean_window", None)
-            if mark is not None:
-                mark()
+            # expect_network_clean judges this run, not the session's past.
+            session.mark_network_clean_window()
             macros = _macros if _macros is not None else RunMacros(load_macro)
             return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros)
 
@@ -704,17 +701,14 @@ async def _run_macro_impl(
 def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:
     """Before the first step, so the requests the journey starts are the ones
     expect_network_clean waits for; a run that never asserts pays nothing."""
-    enable_tracking = getattr(session, "enable_inflight_tracking", None)
-    if enable_tracking is not None and actions_assert_network_clean(actions, macros):
-        enable_tracking()
+    if actions_assert_network_clean(actions, macros):
+        session.enable_inflight_tracking()
 
 
 def _end_request_tracking(session: SessionLike) -> None:
     """Pass or fail, the run that needed request tracking is over; an open
     mark_network_clean window keeps it on for the verify macro after it."""
-    disable_tracking = getattr(session, "disable_inflight_tracking", None)
-    if disable_tracking is not None:
-        disable_tracking()
+    session.disable_inflight_tracking()
 
 
 async def run_sequence(

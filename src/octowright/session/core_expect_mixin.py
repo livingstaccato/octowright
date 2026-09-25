@@ -28,27 +28,18 @@ from octowright.drawn_text import (
     skip_gone_frame,
     truncation_message,
 )
+from octowright.request_failures import NETWORK_SETTLE_TIMEOUT_MS, settle_network
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
 from octowright.session.rendered_text import snapshot_drawn_text
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
-#: How long expect_network_clean waits, by default, for in-flight requests to end.
-NETWORK_SETTLE_TIMEOUT_MS = 5000
-#: Quiet time after the last in-flight request ends, for the follow-up it triggers.
-_NETWORK_QUIET_SECONDS = 0.1
 
 log = get_logger(__name__)
 
 
 class SessionExpectMixin(SessionLike):
-    # Written by mark_network_clean below; declared so the assignment does not
-    # narrow the dataclass field's Optional type.
-    _network_clean_explicit_mark: tuple[int, int, int] | None
-    _inflight_evicted: int
-    _inflight_evicted_explicit_mark: int
-
     @gated_operation("browser_expect_poll")
     async def _poll_until(self, timeout_ms: int, predicate: Any, label: str) -> None:
         deadline = None if timeout_ms == 0 else time.monotonic() + (timeout_ms / 1000)
@@ -165,30 +156,12 @@ class SessionExpectMixin(SessionLike):
         self.recorder.record("expect_js", expression=expression, equals=equals)
         return result
 
-    async def _settle_network(self, timeout_ms: int) -> int:
-        """Wait until no request is in flight for a quiet interval; return what is still pending.
-
-        Bounded: a page that long-polls never settles, and the check then judges
-        what has happened so far instead of hanging or failing on a request
-        that has not failed.
-        """
-        deadline = time.monotonic() + timeout_ms / 1000
-        while time.monotonic() < deadline:
-            if self.pending_requests() == 0:
-                await asyncio.sleep(min(_NETWORK_QUIET_SECONDS, max(0.0, deadline - time.monotonic())))
-                if self.pending_requests() == 0:
-                    return 0
-            else:
-                await asyncio.sleep(min(_WAIT_FOR_POLL_SECONDS, max(0.0, deadline - time.monotonic())))
-        return self.pending_requests()
-
     @gated_operation("browser_mark_network_clean")
     async def mark_network_clean(self) -> None:
         """Start the window ``expect_network_clean(since="mark")`` judges; it spans macro runs."""
         # A mark means a check will follow, so the journey's requests are waited for.
         self.enable_inflight_tracking()
-        self._network_clean_explicit_mark = self._network_clean_counts()
-        self._inflight_evicted_explicit_mark = self._inflight_evicted
+        self._network.mark()
         self.recorder.record("mark_network_clean")
 
     @gated_operation("browser_expect_network_clean")
@@ -214,25 +187,17 @@ class SessionExpectMixin(SessionLike):
         The error carries counts only, because a failed URL or an exception
         message can carry a credential.
         """
-        if since not in ("run", "mark"):
-            raise ValueError(f'unknown since={since!r}; expected "run" or "mark"')
+        # Before anything waits, so a window that cannot be judged fails at once.
+        window = self._network.window(since)
         self.enable_inflight_tracking()
         settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
-        in_flight = await self._settle_network(settle) if settle > 0 else self.pending_requests()
-        failed, page_errors, http_error_count = self.network_failures_since(since)
-        counts = {"failed_requests": failed, "page_errors": page_errors}
-        if http_errors:
-            counts["http_errors"] = http_error_count
-        if any(counts.values()):
-            detail = f"{failed} failed request(s), {page_errors} page error(s)"
-            if http_errors:
-                detail += f", {http_error_count} HTTP error(s)"
-            raise RuntimeError(f"network not clean: {detail}")
+        in_flight = await settle_network(self._network.pending, settle) if settle > 0 else self._network.pending()
+        counts = self._network.judge(window, http_errors)
         options = {"http_errors": http_errors, "since": since, "settle_timeout_ms": settle_timeout_ms}
         defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None}
         self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
         result = {**counts, "in_flight": in_flight}
-        untracked = self.untracked_requests_since(since)
+        untracked = self._network.since(window)[3]
         if untracked > 0:
             result["in_flight_untracked"] = untracked
         return result

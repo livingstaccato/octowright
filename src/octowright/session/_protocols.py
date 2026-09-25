@@ -9,10 +9,12 @@ from collections import deque
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString, Protocol
+from weakref import WeakKeyDictionary
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
+from octowright.request_failures import NetworkLedger
 from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 if TYPE_CHECKING:
@@ -52,12 +54,9 @@ class SessionLike(Protocol):
     _network_requests: deque[dict[str, Any]]
     _network_requests_dropped: int
     page_errors: deque[dict[str, Any]]
-    page_error_count: int
-    _request_failure_count: int
-    _http_error_count: int
-    _network_clean_mark: tuple[int, int, int]
-    _network_clean_explicit_mark: tuple[int, int, int] | None
-    _inflight_requests: dict[Any, Any]
+    _network: NetworkLedger
+    _inflight_tracking: bool
+    _tracked_pages: WeakKeyDictionary[Any, list[tuple[str, Any]]]
     durable_text_scrubber: DurableTextScrubber | None
     trace: bool
     trace_path: Path | None
@@ -143,11 +142,7 @@ class SessionLike(Protocol):
 
     def disable_inflight_tracking(self) -> bool: ...
 
-    def untracked_requests_since(self, since: str = "run") -> int: ...
-
     def _forget_page_requests(self, page: Any) -> None: ...
-
-    def _network_clean_counts(self) -> tuple[int, int, int]: ...
 
     def mark_network_clean_window(self) -> None: ...
 

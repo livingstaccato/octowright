@@ -27,10 +27,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright import request_failures
 from octowright.macros import execution
 from octowright.macros.lint import lint_macro
 from octowright.macros.runtime import _ACTION_MAP
-from octowright.session import core_expect_mixin
 from octowright.session.core import BrowserSession
 
 
@@ -183,8 +183,8 @@ class FakeClock:
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     fake = FakeClock()
-    monkeypatch.setattr(core_expect_mixin, "time", fake)
-    monkeypatch.setattr(core_expect_mixin, "asyncio", fake)
+    monkeypatch.setattr(request_failures, "time", fake)
+    monkeypatch.setattr(request_failures, "asyncio", fake)
     return fake
 
 
@@ -199,7 +199,7 @@ def _refuse(session: BrowserSession, request: MagicMock) -> Callable[[], None]:
 @pytest.mark.anyio
 async def test_a_request_that_fails_while_the_check_waits_is_counted(session: BrowserSession, clock: FakeClock) -> None:
     pending = _request()
-    session._handle_request_started(pending, session.page)
+    session._network.request_started(pending, session.page)
     clock.at(0.17, _refuse(session, pending))
     with pytest.raises(RuntimeError, match=r"1 failed request\(s\)"):
         await session.expect_network_clean(settle_timeout_ms=2000)
@@ -211,9 +211,9 @@ async def test_a_follow_up_started_inside_the_quiet_interval_is_waited_for(
 ) -> None:
     """The quiet interval exists for this: the request a finished one triggers."""
     first, follow_up = _request(), _request()
-    session._handle_request_started(first, session.page)
-    clock.at(0.03, lambda: session._handle_request_finished(first))
-    clock.at(0.08, lambda: session._handle_request_started(follow_up, session.page))  # inside 0.05..0.15
+    session._network.request_started(first, session.page)
+    clock.at(0.03, lambda: session._network.request_finished(first))
+    clock.at(0.08, lambda: session._network.request_started(follow_up, session.page))  # inside 0.05..0.15
     clock.at(0.47, _refuse(session, follow_up))
     with pytest.raises(RuntimeError, match=r"1 failed request\(s\)"):
         await session.expect_network_clean(settle_timeout_ms=2000)
@@ -223,8 +223,8 @@ async def test_a_follow_up_started_inside_the_quiet_interval_is_waited_for(
 @pytest.mark.anyio
 async def test_the_quiet_interval_is_cut_at_the_deadline(session: BrowserSession, clock: FakeClock) -> None:
     request = _request()
-    session._handle_request_started(request, session.page)
-    clock.at(0.12, lambda: session._handle_request_finished(request))
+    session._network.request_started(request, session.page)
+    clock.at(0.12, lambda: session._network.request_finished(request))
     result = await session.expect_network_clean(settle_timeout_ms=150)
     assert result["in_flight"] == 0
     assert clock.elapsed == pytest.approx(0.15)
@@ -235,9 +235,9 @@ async def test_a_follow_up_in_the_last_quiet_interval_is_reported_in_flight(
     session: BrowserSession, clock: FakeClock
 ) -> None:
     first, follow_up = _request(), _request()
-    session._handle_request_started(first, session.page)
-    clock.at(0.12, lambda: session._handle_request_finished(first))
-    clock.at(0.14, lambda: session._handle_request_started(follow_up, session.page))
+    session._network.request_started(first, session.page)
+    clock.at(0.12, lambda: session._network.request_finished(first))
+    clock.at(0.14, lambda: session._network.request_started(follow_up, session.page))
     result = await session.expect_network_clean(settle_timeout_ms=150)
     assert result["in_flight"] == 1 and result["failed_requests"] == 0
     assert clock.elapsed == pytest.approx(0.15)
@@ -245,7 +245,7 @@ async def test_a_follow_up_in_the_last_quiet_interval_is_reported_in_flight(
 
 @pytest.mark.anyio
 async def test_a_request_that_never_finishes_is_reported_not_failed(session: BrowserSession, clock: FakeClock) -> None:
-    session._handle_request_started(_request(), session.page)
+    session._network.request_started(_request(), session.page)
     result = await session.expect_network_clean(settle_timeout_ms=150)
     assert clock.elapsed == pytest.approx(0.15)
     assert result["in_flight"] == 1 and result["failed_requests"] == 0
@@ -253,7 +253,7 @@ async def test_a_request_that_never_finishes_is_reported_not_failed(session: Bro
 
 @pytest.mark.anyio
 async def test_settle_zero_judges_immediately(session: BrowserSession, clock: FakeClock) -> None:
-    session._handle_request_started(_request(), session.page)
+    session._network.request_started(_request(), session.page)
     result = await session.expect_network_clean(settle_timeout_ms=0)
     assert clock.elapsed == 0 and result["in_flight"] == 1
 
@@ -263,7 +263,7 @@ async def test_settle_zero_judges_immediately(session: BrowserSession, clock: Fa
 async def test_long_lived_streams_are_not_waited_for(
     session: BrowserSession, clock: FakeClock, resource_type: str
 ) -> None:
-    session._handle_request_started(_request(resource_type), session.page)
+    session._network.request_started(_request(resource_type), session.page)
     result = await session.expect_network_clean(settle_timeout_ms=3000)
     assert clock.elapsed == pytest.approx(0.1) and result["in_flight"] == 0
 
@@ -271,8 +271,8 @@ async def test_long_lived_streams_are_not_waited_for(
 @pytest.mark.anyio
 async def test_a_finished_request_stops_the_wait(session: BrowserSession, clock: FakeClock) -> None:
     request = _request()
-    session._handle_request_started(request, session.page)
-    session._handle_request_finished(request)
+    session._network.request_started(request, session.page)
+    session._network.request_finished(request)
     await session.expect_network_clean(settle_timeout_ms=3000)
     assert clock.elapsed == pytest.approx(0.1)
 
@@ -280,8 +280,8 @@ async def test_a_finished_request_stops_the_wait(session: BrowserSession, clock:
 @pytest.mark.anyio
 async def test_a_closed_pages_requests_are_not_waited_for(session: BrowserSession, clock: FakeClock) -> None:
     closed = MagicMock()
-    session._handle_request_started(_request(), closed)
-    session._handle_request_started(_request(), session.page)
+    session._network.request_started(_request(), closed)
+    session._network.request_started(_request(), session.page)
     session._forget_page_requests(closed)
     assert session.pending_requests() == 1
     session._forget_page_requests(session.page)
@@ -291,8 +291,8 @@ async def test_a_closed_pages_requests_are_not_waited_for(session: BrowserSessio
 
 def test_in_flight_tracking_is_bounded(session: BrowserSession) -> None:
     for _ in range(5000):
-        session._handle_request_started(_request(), session.page)
-    assert len(session._inflight_requests) <= 1000
+        session._network.request_started(_request(), session.page)
+    assert len(session._network.inflight) <= 1000
 
 
 def test_listeners_track_request_lifecycle(session: BrowserSession) -> None:

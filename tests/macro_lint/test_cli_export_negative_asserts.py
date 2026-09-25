@@ -78,6 +78,13 @@ def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]], on_page
     return asyncio.run(namespace["run_m"]())
 
 
+class _Req(types.SimpleNamespace):
+    """A request double hashed by identity, as Playwright's Request is: the ledger keys by it."""
+
+    __hash__ = object.__hash__
+    __eq__ = object.__eq__
+
+
 def _fire(page: _FakePage, event: str, payload: Any) -> None:
     for handler in page.handlers.get(event, []):
         handler(payload)
@@ -89,7 +96,7 @@ def test_clean_run_passes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_failed_request_and_page_error_fail_with_counts(monkeypatch: pytest.MonkeyPatch) -> None:
     def dirty(page: _FakePage) -> None:
-        _fire(page, "requestfailed", types.SimpleNamespace(failure="net::ERR_CONNECTION_REFUSED"))
+        _fire(page, "requestfailed", _Req(failure="net::ERR_CONNECTION_REFUSED"))
         _fire(page, "pageerror", Exception(SECRET))
 
     with pytest.raises(BaseException) as excinfo:
@@ -101,7 +108,7 @@ def test_failed_request_and_page_error_fail_with_counts(monkeypatch: pytest.Monk
 @pytest.mark.parametrize("aborted", sorted(ABORTED_REQUEST_FAILURES))
 def test_aborts_are_not_failures(monkeypatch: pytest.MonkeyPatch, aborted: str) -> None:
     def abort(page: _FakePage) -> None:
-        _fire(page, "requestfailed", types.SimpleNamespace(failure=aborted))
+        _fire(page, "requestfailed", _Req(failure=aborted))
 
     assert _run(monkeypatch, [{"action": "expect_network_clean"}], on_page=abort)["executed"] == 2
 
@@ -156,7 +163,7 @@ def test_http_errors_opt_in_counts_only_api_and_page_loads(monkeypatch: pytest.M
 
 
 def _refused(page: _FakePage) -> None:
-    _fire(page, "requestfailed", types.SimpleNamespace(failure="net::ERR_CONNECTION_REFUSED"))
+    _fire(page, "requestfailed", _Req(failure="net::ERR_CONNECTION_REFUSED"))
 
 
 def test_since_mark_judges_from_the_mark(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -172,7 +179,7 @@ def test_since_mark_without_a_mark_is_refused(monkeypatch: pytest.MonkeyPatch) -
 
 def test_the_export_waits_for_a_request_in_flight(monkeypatch: pytest.MonkeyPatch) -> None:
     def pending_then_fails(page: _FakePage) -> None:
-        request = types.SimpleNamespace(resource_type="fetch", failure=None)
+        request = _Req(resource_type="fetch", failure=None)
         _fire(page, "request", request)
 
         async def later() -> None:
@@ -244,7 +251,7 @@ def test_a_new_tab_is_watched_during_its_first_load(monkeypatch: pytest.MonkeyPa
     async def goto(self: _FakePage, url: str) -> None:
         await original_goto(self, url)
         if self.tag.startswith("tab-"):
-            _fire(self, "requestfailed", types.SimpleNamespace(failure="net::ERR_CONNECTION_REFUSED"))
+            _fire(self, "requestfailed", _Req(failure="net::ERR_CONNECTION_REFUSED"))
 
     monkeypatch.setattr(_FakePage, "goto", goto)
     actions = [{"action": "open_url", "url": "https://x.test/"}, {"action": "expect_network_clean"}]
@@ -280,7 +287,7 @@ class _Page:
 
 
 def _req(frame: Any, navigation: bool = False) -> Any:
-    return types.SimpleNamespace(
+    return _Req(
         resource_type="document" if navigation else "fetch",
         failure=None,
         frame=frame,
@@ -290,8 +297,7 @@ def _req(frame: Any, navigation: bool = False) -> Any:
 
 def _watched(monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, Any], dict[str, Any], _Page]:
     ns = _helpers(monkeypatch)
-    state: dict[str, Any] = {"watch_network": True, "inflight": {}, "failed_requests": 0, "page_errors": 0}
-    state["http_errors"] = 0
+    state: dict[str, Any] = {"watch_network": True, "network": ns["NetworkLedger"]()}
     page = _Page()
     ns["_watch_network"](state, page)
     return ns, state, page
@@ -304,14 +310,14 @@ def test_the_export_forgets_a_replaced_documents_requests(monkeypatch: pytest.Mo
     for request in (fetch, child_fetch, navigation):
         _fire(page, "request", request)
     _fire(page, "framenavigated", page.main_frame)
-    assert list(state["inflight"]) == [id(navigation)]
+    assert list(state["network"].inflight) == [navigation]
 
 
 def test_the_export_keeps_requests_across_a_same_document_navigation(monkeypatch: pytest.MonkeyPatch) -> None:
     _ns, state, page = _watched(monkeypatch)
     _fire(page, "request", _req(page.main_frame))
     _fire(page, "framenavigated", page.main_frame)
-    assert len(state["inflight"]) == 1
+    assert state["network"].pending() == 1
 
 
 def test_the_export_forgets_a_detached_frames_requests(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -320,7 +326,24 @@ def test_the_export_forgets_a_detached_frames_requests(monkeypatch: pytest.Monke
     _fire(page, "request", _req(child))
     _fire(page, "request", _req(page.main_frame))
     _fire(page, "framedetached", child)
-    assert len(state["inflight"]) == 1
+    assert state["network"].pending() == 1
+
+
+def test_the_export_forgets_a_closed_pages_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """By the page's close event, as the session does, rather than polling is_closed."""
+    _ns, state, page = _watched(monkeypatch)
+    _fire(page, "request", _req(page.main_frame))
+    for handler in page.handlers["close"]:
+        handler()
+    assert state["network"].pending() == 0
+
+
+def test_the_exports_in_flight_tracking_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    ns, state, page = _watched(monkeypatch)
+    for _ in range(ns["INFLIGHT_REQUEST_LIMIT"] + 5):
+        _fire(page, "request", _req(page.main_frame))
+    assert state["network"].pending() == ns["INFLIGHT_REQUEST_LIMIT"]
+    assert state["network"].evicted == 5
 
 
 def test_the_exports_settle_wait_catches_a_follow_up_inside_the_quiet_interval(
@@ -342,8 +365,8 @@ def test_the_exports_settle_wait_catches_a_follow_up_inside_the_quiet_interval(
         _fire(page, "requestfailed", follow_up)
 
     clock.at(0.47, fail)
-    assert asyncio.run(ns["_settle_network"](state, 2000)) == 0
-    assert state["failed_requests"] == 1
+    assert asyncio.run(ns["settle_network"](state["network"].pending, 2000)) == 0
+    assert state["network"].failed_requests == 1
     assert 0.47 < clock.elapsed < 0.7
 
 

@@ -126,7 +126,7 @@ def test_page_errors_are_bounded(session: BrowserSession) -> None:
     for i in range(session.page_errors.maxlen + 5):  # type: ignore[operator]
         session._handle_page_error(Exception(f"e{i}"))
     assert len(session.page_errors) == session.page_errors.maxlen
-    assert session.page_error_count == session.page_errors.maxlen + 5  # type: ignore[operator]
+    assert session._network.page_errors == session.page_errors.maxlen + 5  # type: ignore[operator]
 
 
 def test_pageerror_is_wired_on_every_page(session: BrowserSession) -> None:
