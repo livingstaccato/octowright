@@ -78,3 +78,25 @@ async def recorded_input_value(session: Any, value: str, probe: Callable[[], Awa
     if mode == "all" or verdict is not False:
         return REDACTED_INPUT_PLACEHOLDER
     return value
+
+
+def live_scrubbed(session: Any, value: Any) -> Any:
+    """*value* scrubbed of the session's privacy ledger, for an IN-MEMORY buffer.
+
+    The ledger was applied only at the recorder boundary, so the console ring,
+    the page-error list and the network deque kept a page echo of a typed
+    password in cleartext -- and ``browser_console_messages``,
+    ``browser_network_requests``, their summaries and the dashboard's live
+    ``/console`` hand those buffers straight back. Scrubbing at ingestion gives
+    every reader one scrubbed copy, including the macro failure payload, which
+    reads the same buffers and scrubs again anyway. What it cannot do is reach
+    back: an entry buffered before a value was admitted keeps it, but such an
+    entry predates the value being typed.
+
+    ``active is True`` rather than truthiness: a mock session answers every
+    attribute read with something truthy.
+    """
+    scrub = getattr(session, "durable_text_scrubber", None)
+    if scrub is None or getattr(scrub, "active", False) is not True:
+        return value
+    return scrub.scrub_value(value)

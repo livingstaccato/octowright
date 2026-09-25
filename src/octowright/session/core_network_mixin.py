@@ -29,6 +29,7 @@ from provide.telemetry import get_logger
 from octowright.http_headers import redact_header_values
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
+from octowright.session.input_redaction import live_scrubbed
 
 log = get_logger(__name__)
 
@@ -193,6 +194,9 @@ class SessionNetworkMixin(SessionLike):
             "status_text": response.status_text,
             "headers": _recorded_headers(request),
         }
+        # Scrubbed BEFORE it is appended: the body read below mutates this
+        # same dict in place once it lands, so it must be the buffered copy.
+        row = live_scrubbed(self, row)
         self._append_network_request(row)
         self._network.response(response)
         self._maybe_capture_body(response, row)
@@ -255,7 +259,7 @@ class SessionNetworkMixin(SessionLike):
             log.debug("octowright.session.response_body_unavailable", url=url, error=repr(exc))
             return
         row["body_truncated"] = len(body) > cap
-        row["body"] = body[:cap].decode("utf-8", errors="replace")
+        row["body"] = live_scrubbed(self, body[:cap].decode("utf-8", errors="replace"))
 
     def enable_inflight_tracking(self) -> None:
         """Track requests in flight on every page, now and opened later. Idempotent.
@@ -316,18 +320,21 @@ class SessionNetworkMixin(SessionLike):
     def _handle_request_failed(self, request: Any) -> None:
         self._network.request_failed(request)
         self._append_network_request(
-            {
-                "url": request.url,
-                "method": request.method,
-                "resource_type": request.resource_type,
-                "status": None,
-                "failure": request.failure,
-                "headers": _recorded_headers(request),
-            }
+            live_scrubbed(
+                self,
+                {
+                    "url": request.url,
+                    "method": request.method,
+                    "resource_type": request.resource_type,
+                    "status": None,
+                    "failure": request.failure,
+                    "headers": _recorded_headers(request),
+                },
+            )
         )
 
     def _handle_page_error(self, error: Any) -> None:
-        self.page_errors.append({"message": str(error)[:PAGE_ERROR_TEXT_CHARS]})
+        self.page_errors.append(live_scrubbed(self, {"message": str(error)[:PAGE_ERROR_TEXT_CHARS]}))
         self._network.page_error()
 
     def mark_network_clean_window(self) -> None:

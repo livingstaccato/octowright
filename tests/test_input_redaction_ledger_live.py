@@ -39,6 +39,7 @@ document.getElementById("pw").addEventListener("input", (e) => {
   console.log("typed " + e.target.value);
   document.getElementById("echo").textContent = "You typed " + e.target.value;
 });
+window.echoToServer = (value) => fetch("/echo", {method: "POST", body: value});
 </script></body></html>"""
 
 
@@ -49,6 +50,17 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(PAGE)))
         self.end_headers()
         self.wfile.write(PAGE)
+
+    def do_POST(self) -> None:
+        # A same-origin failure that echoes what it was sent, as a login API
+        # reporting the rejected value would.
+        sent = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body = b'{"error": "rejected ' + sent + b'"}'
+        self.send_response(500)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def log_message(self, *_args: object) -> None:
         return
@@ -111,3 +123,29 @@ async def test_a_page_echo_of_a_filled_password_is_scrubbed(session: Any, monkey
     await session.page.evaluate("() => document.getElementById('pw').dispatchEvent(new Event('input'))")
     await _console_rows(session, 2)
     assert SECRET not in Path(session.log_path).read_text(encoding="utf-8")
+
+
+async def _body_landed(session: Any) -> dict[str, Any]:
+    for _ in range(100):
+        rows = [row for row in session.get_network_requests(limit=None)["requests"] if row["url"].endswith("/echo")]
+        if rows and "body" in rows[-1]:
+            return rows[-1]
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"no /echo body: {session.get_network_requests(limit=None)}")
+
+
+async def test_the_live_console_and_network_buffers_are_scrubbed_too(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What browser_console_messages, browser_network_requests, their summaries
+    and the dashboard's live /console read -- not only the JSONL."""
+    monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+    await session.fill("#pw", SECRET)
+    await _console_rows(session, 1)
+    await session.page.evaluate("(v) => window.echoToServer(v)", SECRET)
+    row = await _body_landed(session)
+
+    assert [entry["text"] for entry in session.console if "typed" in entry["text"]] == [f"typed {REDACTED}"]
+    assert row["body"] == f'{{"error": "rejected {REDACTED}"}}'
+    assert SECRET not in json.dumps(list(session.console))
+    assert SECRET not in json.dumps(session.get_network_requests(limit=None, include_headers=True))

@@ -28,6 +28,7 @@ from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FL
 from octowright.session import markdown_render, websocket_view
 from octowright.session._constants import CONSOLE_TEXT_MAX_CHARS, WEBSOCKET_FRAME_MAX_BYTES
 from octowright.session._protocols import SessionLike
+from octowright.session.input_redaction import live_scrubbed
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
@@ -431,7 +432,7 @@ class SessionIOMixin(SessionLike):
 
     def attach_console(self) -> None:
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, **_console_text_fields(msg.text)}
+            entry = live_scrubbed(self, {"level": msg.type, **_console_text_fields(msg.text)})
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
@@ -465,7 +466,7 @@ class SessionIOMixin(SessionLike):
 
         # Attach console listener so logs from the new tab are collected.
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, **_console_text_fields(msg.text), "page_index": page_index}
+            entry = live_scrubbed(self, {"level": msg.type, **_console_text_fields(msg.text), "page_index": page_index})
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
@@ -488,7 +489,8 @@ class SessionIOMixin(SessionLike):
             # What the binding called it, when it says anything at all. Never
             # the key -- see ``_next_websocket_id``.
             "binding_id": binding_id,
-            "url": url,
+            # browser_websocket_summary returns this; see ``live_scrubbed``.
+            "url": live_scrubbed(self, url),
             "opened_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "closed_at": None,
             "framesent": 0,
@@ -705,7 +707,7 @@ class SessionIOMixin(SessionLike):
         def _on_error(error: Any) -> None:
             entry = self._websockets.get(socket_id)
             if entry is not None:
-                entry["error"] = str(error)
+                entry["error"] = live_scrubbed(self, str(error))
             self.recorder.record(
                 "websocket_error",
                 id=socket_id,
