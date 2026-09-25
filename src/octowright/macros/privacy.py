@@ -407,50 +407,92 @@ def sensitive_value_variants(values: Iterable[str]) -> tuple[str, ...]:
 # a credential split across a word boundary must still be caught.
 _WORD_BOUNDED_BELOW = 4
 
+#: Characters that continue an identifier for a WORD-BOUNDED ledger entry (a
+#: password the input classification admitted, see `admit_redacted_input`).
+#: ``-`` and ``_`` are included so ``#admin-menu`` and ``admin_panel`` are one
+#: identifier and survive a typed password of ``admin``.
+_IDENTIFIER_CHARS = "A-Za-z0-9_-"
+
+
+def _continues_identifier(char: str) -> bool:
+    return char.isascii() and (char.isalnum() or char in "_-")
+
+
+def _identifier_bounded(variant: str) -> str:
+    """*variant* as a pattern that cannot match inside a longer identifier.
+
+    Each edge is guarded only where the variant's own edge character would
+    continue an identifier: a value starting with ``!`` cannot be the tail of
+    one, so requiring a boundary before it would only miss real echoes.
+    """
+    before = f"(?<![{_IDENTIFIER_CHARS}])" if _continues_identifier(variant[0]) else ""
+    after = f"(?![{_IDENTIFIER_CHARS}])" if _continues_identifier(variant[-1]) else ""
+    return f"{before}{re.escape(variant)}{after}"
+
 
 @functools.lru_cache(maxsize=64)
-def _scrub_patterns(sensitive_values: tuple[str, ...]) -> tuple[re.Pattern[str], ...]:
+def _scrub_patterns(
+    sensitive_values: tuple[str, ...], word_bounded: frozenset[str] = frozenset()
+) -> tuple[re.Pattern[str], ...]:
     """The compiled patterns for one ledger state, in the order they must apply.
 
     Cached because the durable scrubber runs on every capture of a session that
     admitted a credential, and the variants (JSON, HTML, percent-encoded to a
     depth) and their regexes were re-derived on each call. The ledger only
-    grows, so each state is compiled once.
+    grows, so each state is compiled once. *word_bounded* values match only as
+    a whole identifier (`_identifier_bounded`); the rest keep the length rule.
     """
     patterns: list[re.Pattern[str]] = []
     for sensitive in sensitive_values:
         for variant in _serialized_variants(sensitive):
-            pattern = (
-                rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])"
-                if len(sensitive) < _WORD_BOUNDED_BELOW
-                else re.escape(variant)
-            )
+            if sensitive in word_bounded:
+                pattern = _identifier_bounded(variant)
+            elif len(sensitive) < _WORD_BOUNDED_BELOW:
+                pattern = rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])"
+            else:
+                pattern = re.escape(variant)
             # Percent-encoded spellings vary in hex case between producers.
             patterns.append(re.compile(pattern, re.IGNORECASE if "%" in variant else 0))
     return tuple(patterns)
 
 
-def _scrub_text(text: str, sensitive_values: tuple[str, ...], marker: str) -> str:
-    for pattern in _scrub_patterns(tuple(sensitive_values)):
+def _scrub_text(
+    text: str, sensitive_values: tuple[str, ...], marker: str, word_bounded: frozenset[str] = frozenset()
+) -> str:
+    for pattern in _scrub_patterns(tuple(sensitive_values), word_bounded):
         text = pattern.sub(marker, text)
     return text
 
 
-def scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...], *, marker: str = REDACTED) -> Any:
-    """Copy a diagnostic while scrubbing raw, escaped, and URL-encoded values."""
+def scrub_sensitive_values(
+    value: Any,
+    sensitive_values: tuple[str, ...],
+    *,
+    marker: str = REDACTED,
+    word_bounded: frozenset[str] = frozenset(),
+) -> Any:
+    """Copy a diagnostic while scrubbing raw, escaped, and URL-encoded values.
+
+    Members of *word_bounded* are replaced only where they are not embedded in
+    a longer identifier; see `PrivacyLedger.word_bounded`.
+    """
     if isinstance(value, str):
-        return _scrub_text(value, sensitive_values, marker)
+        return _scrub_text(value, sensitive_values, marker, word_bounded)
     if isinstance(value, Mapping):
         return {
-            str(scrub_sensitive_values(str(key), sensitive_values, marker=marker)): scrub_sensitive_values(
-                item, sensitive_values, marker=marker
+            str(scrub_sensitive_values(str(key), sensitive_values, marker=marker, word_bounded=word_bounded)): (
+                scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded)
             )
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [scrub_sensitive_values(item, sensitive_values, marker=marker) for item in value]
+        return [
+            scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded) for item in value
+        ]
     if isinstance(value, tuple):
-        return tuple(scrub_sensitive_values(item, sensitive_values, marker=marker) for item in value)
+        return tuple(
+            scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded) for item in value
+        )
     return value
 
 
@@ -573,10 +615,19 @@ class PrivacyLedger:
     def __init__(self, values: Iterable[str] = ()) -> None:
         self._members: set[str] = set()
         self._values: tuple[str, ...] = ()
+        self._bounded: set[str] = set()
+        self._anywhere: set[str] = set()
         self.add(values)
 
-    def add(self, values: Iterable[str]) -> None:
-        new = {value for value in values if isinstance(value, str) and value} - self._members
+    def add(self, values: Iterable[str], *, word_bounded: bool = False) -> None:
+        """Append *values*; ``word_bounded`` ones are scrubbed only as whole identifiers.
+
+        A value admitted both ways is scrubbed anywhere: the stronger claim wins,
+        whichever order the two admissions arrived in.
+        """
+        admitted = {value for value in values if isinstance(value, str) and value}
+        (self._bounded if word_bounded else self._anywhere).update(admitted)
+        new = admitted - self._members
         if new:
             self._members |= new
             self._values = tuple(sorted(self._members, key=lambda value: (-len(value), value)))
@@ -584,6 +635,25 @@ class PrivacyLedger:
     @property
     def values(self) -> tuple[str, ...]:
         return self._values
+
+    @property
+    def word_bounded(self) -> frozenset[str]:
+        """Values scrubbed only where not embedded in a longer identifier.
+
+        The passwords `admit_redacted_input` adds. They are whatever someone
+        typed into a password field -- very often a test value such as
+        ``admin`` -- and replacing one anywhere rewrote ``administrator`` and
+        ``#admin-menu`` in every later row, so a macro saved from the recording
+        replayed broken selectors. Bounding keeps every echo that stands as its
+        own token (``pw=admin``, ``"admin"``, a URL parameter) scrubbed; what
+        it gives up is an echo glued to other identifier characters.
+        """
+        return frozenset(self._bounded - self._anywhere)
+
+    def scrub(self, value: Any) -> Any:
+        """*value* scrubbed of this ledger's values, or *value* itself when it is empty."""
+        values = self._values
+        return scrub_sensitive_values(value, values, word_bounded=self.word_bounded) if values else value
 
 
 class SessionPrivacyLedger(PrivacyLedger):
@@ -610,10 +680,11 @@ class SensitiveRecorder:
         self.ledger = ledger
 
     def _scrubbed(self, fields: dict[str, Any]) -> dict[str, Any]:
-        values = self.ledger.values
         # Nothing to scrub is the common case for a session that never admitted a
-        # macro value, and scrubbing an empty set still copies every field.
-        return scrub_sensitive_values(fields, values) if values else fields
+        # macro value, and scrubbing an empty set still copies every field --
+        # ``PrivacyLedger.scrub`` returns *fields* untouched then.
+        scrubbed: dict[str, Any] = self.ledger.scrub(fields)
+        return scrubbed
 
     def record(self, action: str, **fields: Any) -> None:
         self._recorder.record(action, **self._scrubbed(fields))
@@ -672,8 +743,12 @@ class DurableTextScrubber:
         return bool(self.ledger.values)
 
     def __call__(self, text: str) -> str:
-        values = self.ledger.values
-        return scrub_sensitive_values(text, values) if values else text
+        scrubbed: str = self.ledger.scrub(text)
+        return scrubbed
+
+    def scrub_value(self, value: Any) -> Any:
+        """A structure (a console entry, a network row) scrubbed like text."""
+        return self.ledger.scrub(value)
 
 
 def admit_redacted_input(session: Any, value: str) -> None:
@@ -684,6 +759,8 @@ def admit_redacted_input(session: Any, value: str) -> None:
     ``console.log``, a request body, a websocket frame, the rendered page --
     and each of those rows used to persist it in cleartext. Appending to the
     session ledger (never replacing it) keeps it scrubbed across every later
-    macro run as well.
+    macro run as well. Admitted WORD-BOUNDED (`PrivacyLedger.word_bounded`),
+    unlike a macro's classified values: only the field type says this is a
+    secret, and a typed password is often an ordinary word.
     """
-    install_sensitive_recorder(session, [value])
+    install_sensitive_recorder(session).add([value], word_bounded=True)
