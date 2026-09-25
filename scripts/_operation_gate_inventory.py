@@ -37,14 +37,14 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "hangs, and it holds no BrowserSession to take a lease from -- the navigation it is deciding "
         "on is itself running under that session's gate",
     ),
-    "ssrf_guard.py:_validate_chain": (
+    "ssrf_guard.py:_serve_navigation": (
         "event-critical",
-        "runs inside the same route callback to resolve redirect hops before the request is released",
-    ),
-    "ssrf_guard.py:_handle_non_get": (
-        "event-critical",
-        "runs inside the same route callback: sends a non-GET navigation once and fulfills or aborts it "
+        "runs inside the same route callback: fetches the navigation once and fulfills or aborts it "
         "before the request is released",
+    ),
+    "ssrf_guard.py:_handle_subresource": (
+        "event-critical",
+        "runs inside the same route callback: aborts or releases a subresource request",
     ),
     "browser_pool/launch_helpers.py:_is_blank": (
         "launch-time-before-session-publication",
