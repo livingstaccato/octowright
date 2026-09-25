@@ -33,6 +33,7 @@ def session(tmp_path: Path) -> BrowserSession:
     page = AsyncMock()
     page.url = "https://octowright.com/"
     page.on = MagicMock()  # Page.on is synchronous; an AsyncMock one leaks unawaited coroutines
+    page.frames = [page]  # a real page lists its main frame; the fake is its own
     return BrowserSession(
         instance_id="test",
         kind="chromium",

@@ -19,9 +19,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.drawn_text import ELEMENT_LIMIT, resolve_element_limit
 from octowright.macros.lint import lint_macro
 from octowright.session.core import BrowserSession
-from octowright.session.rendered_text import ELEMENT_LIMIT, resolve_element_limit
 
 SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
 

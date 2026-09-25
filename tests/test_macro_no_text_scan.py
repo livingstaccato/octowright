@@ -21,16 +21,18 @@ import pytest
 from playwright.async_api import Error as PlaywrightError
 
 from octowright.defaults import REDACTED_ASSERTION_TEXT
+from octowright.drawn_text import ELEMENT_LIMIT, NO_TEXT_OBSERVATION_KEYS, contains
 from octowright.macros.lint import lint_macro
 from octowright.macros.runtime import _normalize_replay_kwargs
 from octowright.session.core import BrowserSession
-from octowright.session.rendered_text import ELEMENT_LIMIT, contains, snapshot_drawn_text
+from octowright.session.rendered_text import snapshot_drawn_text
 
 SECRET = "hunter2-Correct-Horse!"  # pragma: allowlist secret -- a fixture, never a real credential
 
 
-def _frame(*pieces: str, matched: int = 1, truncated: bool = False) -> MagicMock:
+def _frame(*pieces: str, matched: int = 1, truncated: bool = False, detached: bool = False) -> MagicMock:
     frame = MagicMock()
+    frame.is_detached = MagicMock(return_value=detached)
     frame.evaluate = AsyncMock(return_value={"pieces": list(pieces), "matched": matched, "truncated": truncated})
     return frame
 
@@ -110,6 +112,17 @@ def test_a_recorded_result_replays_and_lints() -> None:
 
 
 @pytest.mark.anyio
+async def test_everything_a_check_records_besides_its_inputs_is_dropped_on_replay(tmp_path: Path) -> None:
+    """The recorded row, not a hand-kept list: a new summary field must not make replay raise TypeError."""
+    session = _session(tmp_path)
+    await session.expect_no_text(SECRET, selector="body", element_limit=50)
+    recorded = dict(session.recorder.record.call_args.kwargs)
+    inputs = {"text", "selector", "element_limit"}
+    assert set(recorded) - inputs == set(NO_TEXT_OBSERVATION_KEYS)
+    assert set(_normalize_replay_kwargs("expect_no_text", recorded)) == inputs
+
+
+@pytest.mark.anyio
 async def test_a_truncated_scan_that_found_nothing_is_refused(tmp_path: Path) -> None:
     """A security assertion must not pass on a page it only partly read."""
     session = _session(tmp_path, frames=[_frame("Welcome", truncated=True)])
@@ -151,16 +164,19 @@ async def test_every_frame_of_a_real_frame_list_is_scanned(tmp_path: Path) -> No
 
 
 @pytest.mark.parametrize(
-    "message",
+    ("message", "detached"),
     [
-        "Frame was detached",
-        "Execution context was destroyed, most likely because of a navigation",
-        "frame.evaluate: Navigation interrupted by another one",
+        # Detaching is asked of the frame, whatever the message says (Firefox
+        # reports a removed iframe as a destroyed context, measured).
+        ("Frame was detached", True),
+        ("SyntaxError: anything at all", True),
+        # Navigating is recognised by the message every engine gives it.
+        ("Frame.evaluate: Execution context was destroyed, most likely because of a navigation", False),
     ],
 )
 @pytest.mark.anyio
-async def test_a_child_frame_that_goes_away_is_skipped(tmp_path: Path, message: str) -> None:
-    child = _frame()
+async def test_a_child_frame_that_goes_away_is_skipped(tmp_path: Path, message: str, detached: bool) -> None:
+    child = _frame(detached=detached)
     child.evaluate = AsyncMock(side_effect=PlaywrightError(message))
     session = _session(tmp_path, frames=[_frame("main"), child, _frame("other")])
     result = await session.expect_no_text(SECRET)

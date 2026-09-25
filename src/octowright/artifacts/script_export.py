@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from octowright import drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
@@ -33,7 +34,6 @@ from octowright.macros.privacy import (
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
-from octowright.session.rendered_text import resolve_element_limit
 
 
 def _hard_redacted_args(actions: Any) -> list[str]:
@@ -43,6 +43,17 @@ def _hard_redacted_args(actions: Any) -> list[str]:
     so ``args_used`` and the script's own log agree about one macro.
     """
     return sorted(assertion_text_args(actions))
+
+
+def _drawn_text_source() -> str:
+    """``octowright.drawn_text`` as script source: everything after its ``__future__`` import.
+
+    The script opens with that import itself, and it may only appear first.
+    """
+    _header, marker, body = inspect.getsource(drawn_text).partition("from __future__ import annotations\n")
+    if not marker:
+        raise RuntimeError("octowright.drawn_text must import annotations from __future__ to be rendered")
+    return body.strip()
 
 
 def render_macro_cli(
@@ -69,8 +80,9 @@ def render_macro_cli(
     # Rendered from the live scrubber's own source rather than hand-mirrored:
     # the copy had already lost the HTML-escaped spellings.
     serialized_variants = inspect.getsource(_serialized_variants).rstrip()
-    # Same reason: expect_no_text's element limit resolves exactly as replay's.
-    element_limit_resolver = inspect.getsource(resolve_element_limit).rstrip()
+    # Same reason, whole module: expect_no_text's collector, comparison, limit,
+    # frame rules and messages are the ones replay runs (see drawn_text).
+    drawn_text_source = _drawn_text_source()
 
     return f"""\
 {doc!r}
@@ -291,7 +303,7 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 {serialized_variants}
 
 
-{element_limit_resolver}
+{drawn_text_source}
 
 
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:

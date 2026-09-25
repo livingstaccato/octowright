@@ -23,7 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from octowright.defaults import REDACTED_ASSERTION_TEXT
+from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 
 from .lint_credentials import (
     _CREDENTIAL_CANDIDATE_KEYS,
@@ -193,11 +193,7 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
 def _check_unbound_assertion_text(action: dict[str, Any], kind: str, report: _Report) -> None:
     """A recorded expect_no_text whose text was redacted and never bound to a parameter."""
     if kind == "expect_no_text" and action.get("text") == REDACTED_ASSERTION_TEXT:
-        report(
-            "expect_no_text was recorded with its text redacted; set 'text' to the value or a "
-            "{{parameter}} before replaying it",
-            code="redacted_assertion_text",
-        )
+        report(REDACTED_TEXT_REFUSAL, code="redacted_assertion_text")
 
 
 def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:

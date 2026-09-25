@@ -41,6 +41,7 @@ def session(tmp_path: Path) -> BrowserSession:
     page = AsyncMock()
     page.url = "https://octowright.com/"
     page.content = AsyncMock(return_value="<html></html>")
+    page.frames = [page]  # a real page lists its main frame; the fake is its own
     return BrowserSession(
         instance_id="test",
         kind="chromium",
@@ -225,6 +226,20 @@ def test_a_login_recording_binds_both_the_fill_and_the_assertion(
     assert actions[0]["value"] == "{{password}}"
     assert actions[1]["text"] == "{{password}}"
     assert "text_digest" not in actions[1]
+
+
+def test_a_saved_assertion_keeps_its_inputs_and_drops_what_it_observed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
+
+    storage = _storage(monkeypatch, tmp_path)
+    row = {**_assertion_row(SECRET), "element_limit": 50, "matched": 1, "frames_scanned": 1}
+    row |= {"frames_skipped": 0, "truncated": False, "snapshot": "checked"}
+    saved = storage.save_macro(recording_path=_recording(tmp_path, [row]), name="m", parameters={"password": SECRET})
+    action = {key: value for key, value in _saved_actions(saved)[0].items() if key != "ts"}
+    assert action == {"action": "expect_no_text", "selector": "body", "text": "{{password}}", "element_limit": 50}
+    assert not set(action) & set(NO_TEXT_OBSERVATION_KEYS)
 
 
 def _assertion_row(text: str | None) -> dict[str, Any]:

@@ -170,6 +170,11 @@ class _FakePage:
         self.context = context or _FakeContext(rec)
         self.handlers: dict[str, list[Any]] = {}
         self.rendered_text = "hello world"
+        # A real page lists its main frame first; this fake stands in for both.
+        self.frames = [self]
+
+    def is_detached(self) -> bool:
+        return False
 
     def _log(self, name: str, *args: Any, **kw: Any) -> None:
         self._rec.record(name, *args, **kw)

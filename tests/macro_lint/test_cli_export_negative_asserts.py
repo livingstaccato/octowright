@@ -21,8 +21,8 @@ import pytest
 
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.defaults import REDACTED_ASSERTION_TEXT
+from octowright.drawn_text import ELEMENT_LIMIT
 from octowright.request_failures import ABORTED_REQUEST_FAILURES
-from octowright.session.rendered_text import ELEMENT_LIMIT
 from tests._macro_artifact_fixtures import _reload, restore_reloaded_defaults
 from tests.macro_lint.test_cli_export_execution import _FakeContext, _FakePage, _Recorder
 
@@ -360,11 +360,56 @@ def test_the_export_refuses_the_redaction_marker(monkeypatch: pytest.MonkeyPatch
         _run(monkeypatch, [{"action": "expect_no_text", "text": REDACTED_ASSERTION_TEXT}], on_page=leak)
 
 
-def test_the_export_renders_the_runtime_marker_constant() -> None:
+def test_the_export_renders_drawn_text_verbatim() -> None:
+    """One copy of the collector, comparison, limit, frame rules and messages: replay's own module."""
+    import inspect
+
+    from octowright import drawn_text
+
     source = render_macro_cli(name="m", macro={"actions": []}, include_evidence=False)
-    assert f"_REDACTED_ASSERTION_TEXT = {REDACTED_ASSERTION_TEXT!r}" in source
-    assert f'"limit": {ELEMENT_LIMIT}' not in source  # the limit is rendered as a constant too
-    assert f"_ELEMENT_LIMIT = {ELEMENT_LIMIT}" in source
+    body = inspect.getsource(drawn_text).partition("from __future__ import annotations\n")[2].strip()
+    assert body in source
+    assert source.count("from __future__ import annotations") == 1
+    assert f'"limit": {ELEMENT_LIMIT}' not in source  # the limit is read from the module, not spliced
+
+
+def test_drawn_text_imports_only_the_standard_library() -> None:
+    """It is rendered into a script that has no octowright to import."""
+    import ast
+    import inspect
+    import sys
+
+    from octowright import drawn_text
+
+    tree = ast.parse(inspect.getsource(drawn_text))
+    imported = {
+        alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names
+    }
+    imported |= {
+        (node.module or "").split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.level == 0
+    }
+    assert imported - {"__future__"} <= set(sys.stdlib_module_names)
+
+
+def test_the_export_refuses_the_marker_in_replays_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.drawn_text import REDACTED_TEXT_REFUSAL
+
+    with pytest.raises(BaseException) as excinfo:
+        _run(monkeypatch, [{"action": "expect_no_text", "text": REDACTED_ASSERTION_TEXT}])
+    assert str(excinfo.value) == REDACTED_TEXT_REFUSAL
+
+
+def test_the_export_names_a_leak_in_replays_words(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.drawn_text import leak_message
+
+    def leak(page: _FakePage) -> None:
+        page.rendered_text = f"your password is {SECRET}"
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET, "selector": "#p"}], on_page=leak)
+    assert str(excinfo.value) == leak_message(SECRET, "#p", "script scan")
 
 
 def _scan_returns(monkeypatch: pytest.MonkeyPatch, result: Any) -> None:
@@ -414,15 +459,6 @@ def test_the_export_names_the_limit_that_applied(monkeypatch: pytest.MonkeyPatch
         _run(monkeypatch, [{"action": "expect_no_text", "text": SECRET, "element_limit": 123}])
 
 
-def test_the_export_renders_the_live_limit_resolver() -> None:
-    import inspect
-
-    from octowright.session.rendered_text import resolve_element_limit
-
-    source = render_macro_cli(name="m", macro={"actions": []}, include_evidence=False)
-    assert inspect.getsource(resolve_element_limit).rstrip() in source
-
-
 def test_a_main_frame_without_a_result_fails_in_the_export(monkeypatch: pytest.MonkeyPatch) -> None:
     _scan_returns(monkeypatch, None)
     with pytest.raises(BaseException, match="no result"):
@@ -449,3 +485,27 @@ def test_export_macro_cli_refuses_an_unbound_assertion(monkeypatch: pytest.Monke
         assert not list((tmp_path / "recordings").rglob("*.py"))
     finally:
         restore_reloaded_defaults()
+
+
+def test_the_export_refusal_finds_a_nested_marker_and_says_what_lint_says() -> None:
+    """A step inside a branch counts against the top-level step, in lint's own words."""
+    from octowright.drawn_text import REDACTED_TEXT_REFUSAL
+    from octowright.macros.artifacts import _refuse_unbound_assertions
+    from octowright.macros.lint import lint_macro
+
+    marker = {"action": "expect_no_text", "text": REDACTED_ASSERTION_TEXT}
+    actions = [
+        {"action": "navigate", "url": "https://example.test/"},
+        {"action": "if_selector", "selector": "#x", "then": [marker], "else": []},
+        {"action": "try", "actions": [{"action": "click", "selector": "#a"}]},
+        {"action": "try_each", "branches": [[{"action": "click", "selector": "#b"}], [dict(marker)]]},
+        {"action": "expect_no_text", "text": "{{password}}"},
+    ]
+    with pytest.raises(ValueError) as excinfo:
+        _refuse_unbound_assertions("m", {"actions": actions})
+    assert str(excinfo.value) == f"macro 'm' cannot be exported at step 1, step 3: {REDACTED_TEXT_REFUSAL}"
+    issues = [i for i in lint_macro({"name": "m", "actions": actions}) if i.code == "redacted_assertion_text"]
+    assert {i.message for i in issues} == {REDACTED_TEXT_REFUSAL}
+    assert sorted(i.action_index for i in issues) == [1, 3]
+    _refuse_unbound_assertions("m", {"actions": actions[4:]})  # a bound step is not refused
+    _refuse_unbound_assertions("m", {"actions": "not a list"})

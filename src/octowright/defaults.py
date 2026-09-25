@@ -12,6 +12,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from octowright import drawn_text as _drawn_text
 from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
 
 # Default OTel service name. Set as an env-var default (not a constant) so
@@ -497,7 +498,8 @@ REDACTED_INPUT_PLACEHOLDER = "<redacted:password>"
 # secret. Deliberately NOT the placeholder above: save_macro binds that one to a
 # credential parameter as a single redacted input field, and an assertion
 # sharing it made every recording containing one either unsavable or ambiguous.
-REDACTED_ASSERTION_TEXT = "<redacted:forbidden-text>"
+# Defined with expect_no_text's portable check, which the exported CLI renders.
+REDACTED_ASSERTION_TEXT = _drawn_text.REDACTED_ASSERTION_TEXT
 
 # Env var name controlling whether ``.py`` scenario files are loadable.
 # ``.py`` scenarios run arbitrary Python at module import; default OFF so a

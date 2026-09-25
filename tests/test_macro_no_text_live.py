@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 
 from octowright.browser_pool.pool import BrowserPool
-from octowright.session.rendered_text import ELEMENT_LIMIT
+from octowright.drawn_text import ELEMENT_LIMIT
 
 pytestmark = pytest.mark.live_browser
 
@@ -52,6 +52,7 @@ document.getElementById("styled").attachShadow({mode: "open"}).innerHTML =
     "/closed": b"""<!doctype html><body><div id="closed-host"></div><script>
 document.getElementById("closed-host").attachShadow({mode: "closed"}).innerHTML = "<span>TOKEN-CLOSED</span>";
 </script></body>""",
+    "/framed": b"""<!doctype html><body><p>outer</p><iframe id="f" srcdoc="<p>child</p>"></iframe></body>""",
     "/huge": b"<!doctype html><body><div id=all></div><script>"
     b"document.getElementById('all').innerHTML = '<i></i>'.repeat(" + str(ELEMENT_LIMIT + 10).encode() + b");"
     b"</script><p id=small>just a paragraph</p></body>",
@@ -184,6 +185,43 @@ async def test_a_page_past_the_element_limit_is_refused(session: Any, base_url: 
         await session.expect_no_text("TOKEN-NOT-THERE")
     result = await session.expect_no_text("TOKEN-NOT-THERE", selector="#small")
     assert result == {**result, "matched": 1, "truncated": False}
+
+
+async def _framed(session: Any, base_url: str) -> Any:
+    await _open(session, base_url + "/framed")
+    await session.page.wait_for_function("() => document.getElementById('f').contentDocument?.body?.innerText")
+    return session.page.frames[1]
+
+
+async def test_a_child_frame_detached_before_it_is_read_is_skipped(session: Any, base_url: str) -> None:
+    """Asked of the frame (``is_detached``), not recognised by the engine's message."""
+    child = await _framed(session, base_url)
+    await session.page.evaluate("() => document.getElementById('f').remove()")
+    result = await session._scan_drawn_text([session.page.main_frame, child], "TOKEN-NOT-THERE", "body", 5.0)
+    assert (result["frames_scanned"], result["frames_skipped"]) == (1, 1)
+
+
+@pytest.mark.parametrize("change", ["navigate", "remove"])
+async def test_a_frame_going_away_mid_read_is_recognised(session: Any, base_url: str, change: str) -> None:
+    """Measured: Firefox reports a removed frame as a destroyed context, and every engine a navigation so."""
+    import asyncio
+
+    from playwright.async_api import Error as PlaywrightError
+
+    from octowright.drawn_text import new_scan_summary, skip_gone_frame
+
+    child = await _framed(session, base_url)
+    pending = asyncio.ensure_future(child.evaluate("() => new Promise(() => {})"))
+    await asyncio.sleep(0.2)
+    script = (
+        "document.getElementById('f').srcdoc = '<p>other</p>'"
+        if change == "navigate"
+        else "document.getElementById('f').remove()"
+    )
+    await session.page.evaluate(f"() => {{ {script}; }}")
+    with pytest.raises(PlaywrightError) as excinfo:
+        await asyncio.wait_for(pending, 10)
+    assert skip_gone_frame(new_scan_summary(), 1, child.is_detached(), excinfo.value)
 
 
 @pytest.mark.parametrize(

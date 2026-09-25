@@ -22,8 +22,8 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
+from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.lint import lint_macro
 from octowright.macros.privacy import blind_scrub_arg_values, redact_args, scrub_sensitive_values
 from octowright.macros.storage import load_macro, macro_path
 
@@ -146,19 +146,25 @@ def _refuse_unbound_assertions(name: str, macro: dict[str, Any]) -> None:
     """Refuse a macro whose expect_no_text still holds the recording's redaction marker.
 
     Replay refuses that step, and so does the exported script, but only once it
-    reaches it; a script that can never pass is not worth writing.
+    reaches it; a script that can never pass is not worth writing. Nested steps
+    (conditional and ``try`` branches) count against the top-level step holding them.
     """
-    steps = [
-        issue.action_index
-        for issue in lint_macro(macro if "name" in macro else {**macro, "name": name})
-        if issue.severity == "error" and issue.code == "redacted_assertion_text"
-    ]
+    actions = macro.get("actions")
+    actions = actions if isinstance(actions, list) else []
+    steps = [index for index, action in enumerate(actions) if _holds_unbound_assertion(action)]
     if steps:
         where = ", ".join(f"step {index}" for index in steps)
-        raise ValueError(
-            f"macro {name!r} cannot be exported: expect_no_text at {where} was recorded with its text "
-            "redacted; set 'text' to the value or a {{parameter}} first"
-        )
+        raise ValueError(f"macro {name!r} cannot be exported at {where}: {REDACTED_TEXT_REFUSAL}")
+
+
+def _holds_unbound_assertion(node: Any) -> bool:
+    if isinstance(node, list):
+        return any(_holds_unbound_assertion(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    if node.get("action") == "expect_no_text" and node.get("text") == REDACTED_ASSERTION_TEXT:
+        return True
+    return any(_holds_unbound_assertion(value) for value in node.values())
 
 
 async def run_macro_artifact(

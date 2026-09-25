@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_text, reject_unsafe_path
+from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
 from octowright.macros.privacy import assertion_digest_matches, is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
@@ -132,8 +133,9 @@ def _bind_redacted_assertions(actions: list[dict[str, Any]], param_map: dict[str
     marker stays, and ``macro_lint`` tells the author to set the text; the same
     happens when no parameter, or more than one, matches. Never refused: the
     assertion does not stop the rest of the recording from replaying. The digest
-    itself is dropped from every saved action -- it means nothing to replay, and
-    ``expect_no_text`` takes no such argument.
+    and the recorded scan summary (``drawn_text.NO_TEXT_OBSERVATION_KEYS``) are
+    dropped from every saved action -- they mean nothing to replay, and
+    ``expect_no_text`` takes no such arguments.
     """
     return [
         _bind_assertion(action, param_map) if action.get("action") == "expect_no_text" else action for action in actions
@@ -142,7 +144,8 @@ def _bind_redacted_assertions(actions: list[dict[str, Any]], param_map: dict[str
 
 def _bind_assertion(action: dict[str, Any], param_map: dict[str, str]) -> dict[str, Any]:
     digest = action.get("text_digest")
-    bound = {key: value for key, value in action.items() if key != "text_digest"}
+    # The digest and what the check observed are the recording's, not the macro's inputs.
+    bound = {key: value for key, value in action.items() if key not in NO_TEXT_OBSERVATION_KEYS}
     if bound.get("text") == defaults.REDACTED_ASSERTION_TEXT:
         matches = [name for name, value in param_map.items() if assertion_digest_matches(value, digest)]
         if len(matches) == 1:

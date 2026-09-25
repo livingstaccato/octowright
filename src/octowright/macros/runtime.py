@@ -14,6 +14,7 @@ from provide.telemetry import get_logger
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
 from octowright._tracing import span
+from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -145,7 +146,7 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     "get_text_by": ("result",),
     # expect_no_text records what it checked (counts and the snapshot state,
     # never the text), so a vacuous pass is visible in the recording.
-    "expect_no_text": ("matched", "frames_scanned", "frames_skipped", "truncated", "snapshot", "text_digest"),
+    "expect_no_text": NO_TEXT_OBSERVATION_KEYS,
 }
 
 # Recorded keys that need renaming to match the method's parameter names.

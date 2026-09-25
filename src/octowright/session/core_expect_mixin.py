@@ -15,17 +15,22 @@ from playwright.async_api import Error as PlaywrightError
 from provide.telemetry import get_logger
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_ASSERTION_TEXT
-from octowright.session._protocols import SessionLike
-from octowright.session.operation.gate import gated_operation
-from octowright.session.rendered_text import (
+from octowright.drawn_text import (
     COLLECT_RENDERED_TEXT_JS,
     ELEMENT_LIMIT,
-    FRAME_GONE,
+    check_forbidden_text,
     collect_args,
     contains,
+    fold_frame_result,
+    leak_message,
+    new_scan_summary,
     resolve_element_limit,
-    snapshot_drawn_text,
+    skip_gone_frame,
+    truncation_message,
 )
+from octowright.session._protocols import SessionLike
+from octowright.session.operation.gate import gated_operation
+from octowright.session.rendered_text import snapshot_drawn_text
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
@@ -239,12 +244,9 @@ class SessionExpectMixin(SessionLike):
         """Raise if any frame draws *text*; return what the scan covered.
 
         ``frames[0]`` is the page's main frame, or the one frame the check is
-        scoped to, and anything wrong there fails the check. A child frame that
-        detaches or navigates while it is read (an ad rotating, a widget
-        reloading) is skipped and counted, instead of failing a check about the
-        page on a frame that no longer exists.
+        scoped to; the rules are ``drawn_text``'s, which the exported CLI shares.
         """
-        summary: dict[str, Any] = {"matched": 0, "frames_scanned": 0, "frames_skipped": 0, "truncated": False}
+        summary = new_scan_summary()
         for position, frame in enumerate(frames):
             try:
                 found = await bounded(
@@ -253,22 +255,12 @@ class SessionExpectMixin(SessionLike):
                     timeout=timeout,
                 )
             except PlaywrightError as exc:
-                if position == 0 or not FRAME_GONE.search(str(exc)):
+                if not skip_gone_frame(summary, position, frame.is_detached(), exc):
                     raise
                 log.debug("expect_no_text.frame_skipped", reason="frame_gone")
-                summary["frames_skipped"] += 1
                 continue
-            if not isinstance(found, dict):
-                if position == 0:
-                    raise RuntimeError("expect_no_text: the rendered-text scan returned no result for the page")
+            if not fold_frame_result(summary, position, found, text, selector):
                 log.debug("expect_no_text.frame_skipped", reason="no_result")
-                summary["frames_skipped"] += 1
-                continue
-            if contains(found.get("pieces", []), text):
-                raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}" (script scan)')
-            summary["frames_scanned"] += 1
-            summary["matched"] += int(found.get("matched") or 0)
-            summary["truncated"] = summary["truncated"] or bool(found.get("truncated"))
         return summary
 
     @gated_operation("browser_expect_no_text_snapshot")
@@ -300,7 +292,7 @@ class SessionExpectMixin(SessionLike):
     ) -> dict[str, Any]:
         """Assert *text* is not drawn in any element matching *selector*; return what was checked.
 
-        Drawn means text a reader can see (``session.rendered_text`` has the
+        Drawn means text a reader can see (``octowright.drawn_text`` has the
         full definition): rendered text of every match, open shadow roots,
         visible form values and placeholders, a broken image's alt text, a
         select's option labels and CSS generated content -- in every frame when
@@ -309,7 +301,7 @@ class SessionExpectMixin(SessionLike):
         the page's DOM snapshot is also checked, which reaches closed shadow
         roots; other engines cannot. Canvas, video and other pixel-only content
         cannot be text-checked. Text compares ignoring case, whitespace and
-        invisible characters (``macros.redaction_text.normalize``). octowright's
+        invisible characters (``drawn_text.normalize``). octowright's
         own overlays are not the page and are left out of both scans.
 
         Returns ``{matched, frames_scanned, frames_skipped, truncated,
@@ -321,25 +313,22 @@ class SessionExpectMixin(SessionLike):
         unless the text was found: a security check does not pass on a page it
         only partly read. The limit is *element_limit*, else
         ``OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT``, else ``ELEMENT_LIMIT``
-        (``rendered_text.resolve_element_limit``). *text* is treated as a secret, so neither the
+        (``drawn_text.resolve_element_limit``). *text* is treated as a secret, so neither the
         error, the result nor the recording repeats it.
         """
-        _check_forbidden_text(text)
+        check_forbidden_text(text)
         limit = resolve_element_limit(element_limit, os.environ)
         timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
         target = self._target()
         whole_page = selector == "body" and target is self.page
-        frames = _frames_to_scan(target, getattr(target, "frames", None) if whole_page else None)
+        # The whole page is every frame; a selector or an active frame is just the target.
+        frames = list(self.page.frames) if whole_page else [target]
         result = await self._scan_drawn_text(frames, text, selector, timeout, limit)
         result["snapshot"] = "unsupported" if self.kind != "chromium" else "checked" if whole_page else "skipped"
         if result["snapshot"] == "checked" and await self._snapshot_leaks(text, timeout):
-            raise RuntimeError(f'forbidden text ({len(text)} chars) is rendered in "{selector}" (DOM snapshot)')
+            raise RuntimeError(leak_message(text, selector, "DOM snapshot"))
         if result["truncated"]:
-            raise RuntimeError(
-                f'expect_no_text: "{selector}" holds more than {limit} elements, so it was only partly '
-                "checked and cannot pass; narrow the check with a selector for the region the text would appear "
-                "in, or raise element_limit (or OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT)"
-            )
+            raise RuntimeError(truncation_message(selector, limit))
         # The marker, never the text; the keyed digest is what lets save_macro
         # bind the marker to the parameter it stood for (see
         # macros.privacy.assertion_text_digest). Local import: macros imports
@@ -356,18 +345,3 @@ class SessionExpectMixin(SessionLike):
             **result,
         )
         return result
-
-
-def _check_forbidden_text(text: str) -> None:
-    if not text:
-        raise ValueError("expect_no_text: text is empty, and an empty string is in every page")
-    if text == REDACTED_ASSERTION_TEXT:
-        raise ValueError(
-            "expect_no_text: this step was recorded with its text redacted; set text to the value "
-            "or a {{parameter}} before replaying it"
-        )
-
-
-def _frames_to_scan(target: Any, frames: Any) -> list[Any]:
-    """Every frame when the check is about the whole page (*frames* given); otherwise only the target."""
-    return list(frames) if isinstance(frames, list) and frames else [target]
