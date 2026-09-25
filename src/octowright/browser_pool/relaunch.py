@@ -75,6 +75,7 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
         protected_reason=getattr(session, "protected_reason", "explicit"),
         disable_automation_controlled=getattr(session, "disable_automation_controlled", False),
         target_url=getattr(session.page, "url", None) or session.url,
+        launch_url=session.launch_url,
     )
 
 
@@ -102,7 +103,7 @@ async def _launch_from_snapshot(
 ) -> dict[str, Any]:
     # Don't overwrite the prior HAR — a handoff/relaunch gets a fresh sibling path.
     next_har = rotate_har_path(snapshot.har_path)
-    return await pool.launch(
+    result = await pool.launch(
         kind=snapshot.kind,
         url=snapshot.target_url,
         headed=headed,
@@ -118,6 +119,14 @@ async def _launch_from_snapshot(
         protected=snapshot.protected,
         disable_automation_controlled=snapshot.disable_automation_controlled,
     )
+    # The replacement opened at the page's current URL; its trusted launch URL
+    # is still the original's (see RelaunchSnapshot.launch_url). Set before the
+    # new instance id is returned to anyone who could run a macro on it.
+    if snapshot.launch_url is not None:
+        # A replacement already gone has nothing left to trust.
+        with contextlib.suppress(KeyError):
+            pool.get(result["instance_id"]).launch_url = snapshot.launch_url
+    return result
 
 
 async def _close_with_fallback_snapshot(

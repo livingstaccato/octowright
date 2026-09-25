@@ -51,6 +51,7 @@ def _fake_source(
         label=label,
         profile=profile,
         url=url,
+        launch_url=url,
         user_data_dir=user_data_dir,
         har_path=har_path,
         stabilize=stabilize,
@@ -420,3 +421,34 @@ async def test_handoff_close_aborted_by_ceiling_propagates_instead_of_stale_snap
 
     # No replacement was launched over the unconfirmed teardown.
     assert launch_calls["count"] == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("how", ["handoff", "relaunch_fluid"])
+async def test_a_replacement_keeps_the_original_launch_url(monkeypatch: pytest.MonkeyPatch, how: str) -> None:
+    """The replacement opens where the page WAS, but the operator launched elsewhere.
+
+    ``launch_url`` is what the macro header guard trusts as the session's own
+    site (``substitution.own_site_hosts``). Taking the current page URL as the
+    replacement's launch URL would let a macro navigate to its own server,
+    wait for a relaunch, and then name that server as the own site.
+    """
+    _pop_manifest_noop(monkeypatch)
+    pool = BrowserPool()
+    source = _fake_source(
+        instance_id="old01", url="https://app.example.test/", profile="dante", user_data_dir="/tmp/profile-dir"
+    )
+    source.page.url = "https://attacker.test/landing"
+    pool._sessions["old01"] = source
+    replacement = SimpleNamespace(launch_url="https://attacker.test/landing", set_protected_state=AsyncMock())
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        pool._sessions["new01"] = replacement
+        return {"instance_id": "new01", "kind": kwargs["kind"], "url": kwargs.get("url"), "log_path": "/tmp/n.jsonl"}
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+    if how == "handoff":
+        await pool.handoff("old01", headed=False)
+    else:
+        await pool.relaunch_fluid("old01")
+    assert replacement.launch_url == "https://app.example.test/"
