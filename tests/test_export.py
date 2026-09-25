@@ -1048,10 +1048,10 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
             {"action": "open_url", "url": "https://y"},
             {"action": "switch_page", "index": 1},
             {"action": "close_page"},
-            {"action": "mock_route", "url_pattern": "*", "status": 200, "body": "hi"},
-            {"action": "unmock_route", "url_pattern": "*"},
+            {"action": "mock_route", "pattern": "*", "status": 200, "body": "hi"},
+            {"action": "unmock_route", "pattern": "*"},
             {"action": "set_dialog_policy", "policy": "accept"},
-            {"action": "set_input_files", "selector": "input", "files": ["/tmp/x"]},
+            {"action": "set_input_files", "selector": "input", "paths": ["/tmp/x"]},
             {"action": "if", "selector": "#foo"},
             {"action": "click", "selector": "#bar"},
             {"action": "end_block"},
@@ -1222,7 +1222,7 @@ def test_export_rejects_mock_route_status_injection(tmp_path: Path, fmt: str, ex
         tmp_path / "r.jsonl",
         [
             {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
-            {"action": "mock_route", "url_pattern": "*", "status": _INJECTION_INT, "body": "hi"},
+            {"action": "mock_route", "pattern": "*", "status": _INJECTION_INT, "body": "hi"},
         ],
     )
     out_path = tmp_path / f"out.{ext}"
@@ -1305,7 +1305,7 @@ def test_export_normal_recording_still_runs_all_six_guarded_fields(tmp_path: Pat
             {"action": "resize", "width": 1024, "height": 768},
             {"action": "open_url", "url": "https://y"},
             {"action": "switch_page", "index": 1},
-            {"action": "mock_route", "url_pattern": "*", "status": 404, "body": "nope"},
+            {"action": "mock_route", "pattern": "*", "status": 404, "body": "nope"},
             {"action": "set_dialog_policy", "policy": "accept"},
         ],
     )

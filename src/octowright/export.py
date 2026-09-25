@@ -12,7 +12,9 @@ from pathlib import Path
 from octowright._export_shared import (
     _UNSUPPORTED,
     _has_semantic_locator,
+    _input_file_paths,
     _launch_viewport,
+    _route_pattern,
     _safe_int,
     _validate_dialog_policy,
     _validate_kind,
@@ -265,6 +267,21 @@ def _py_cond_while(e: dict) -> str | None:
     return f"        {p}{c}:"
 
 
+def _py_mock_route(entry: dict) -> str:
+    # content_type/headers are the live mock's too (the recorder writes both);
+    # emitted only when recorded, so older rows export as they always have.
+    status = _safe_int(entry.get("status"), action="mock_route", field="status", default=200)
+    extra = ""
+    if entry.get("content_type") is not None:
+        extra += f", content_type={str(entry['content_type'])!r}"
+    if entry.get("headers"):
+        extra += f", headers={dict(entry['headers'])!r}"
+    return (
+        f"        await page.route({_route_pattern(entry)!r}, lambda route: route.fulfill("
+        f"status={status}, body={entry.get('body') or ''!r}{extra}))"
+    )
+
+
 def _py_set_dialog_policy(entry: dict) -> str:
     policy = _validate_dialog_policy(entry.get("policy"))
     if policy == "manual":
@@ -339,14 +356,12 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "close_page": _py_close_page,
     "switch_frame": _py_switch_frame,
     "reset_frame": lambda _e: "        _upload_target = page",
-    "mock_route": lambda e: (
-        f"        await page.route({e['url_pattern']!r}, lambda route: route.fulfill("
-        f"status={_safe_int(e.get('status'), action='mock_route', field='status', default=200)}, "
-        f"body={e.get('body', '')!r}))"
-    ),
-    "unmock_route": lambda e: f"        await page.unroute({e['url_pattern']!r})",
+    "mock_route": _py_mock_route,
+    "unmock_route": lambda e: f"        await page.unroute({_route_pattern(e)!r})",
     "set_dialog_policy": _py_set_dialog_policy,
-    "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {e.get('files', [])!r})",
+    "set_input_files": lambda e: (
+        f"        await page.set_input_files({e['selector']!r}, {_input_file_paths(e)!r})"
+    ),
     "upload_files": _py_upload_files,
     "if": _py_cond_while,
     "if_not": _py_cond_while,

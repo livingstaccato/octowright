@@ -71,6 +71,33 @@ def _validate_dialog_policy(policy: object, *, action: str = "set_dialog_policy"
     return str(policy)
 
 
+def _route_pattern(entry: dict) -> str:
+    """The URL pattern of a ``mock_route``/``unmock_route`` row.
+
+    The recorder writes ``pattern``; ``url_pattern`` is the session method's
+    parameter name, which a hand-written macro row may carry instead. A row
+    carrying both, disagreeing, is refused rather than resolved: which one wins
+    is exactly what a crafted row would choose to exploit.
+    """
+    pattern, url_pattern = entry.get("pattern"), entry.get("url_pattern")
+    if pattern is not None and url_pattern is not None and pattern != url_pattern:
+        raise ValueError(f"export: action {entry.get('action')!r} has conflicting pattern and url_pattern")
+    chosen = pattern if pattern is not None else url_pattern
+    if chosen is None:
+        raise ValueError(f"export: action {entry.get('action')!r} needs a pattern")
+    return str(chosen)
+
+
+def _input_file_paths(entry: dict) -> list:
+    """The files of a ``set_input_files`` row.
+
+    The recorder has always written ``paths``. ``files`` is what the emitters
+    used to read -- no recorder wrote it, but a hand-built row may carry it.
+    """
+    paths = entry.get("paths")
+    return list(paths if paths is not None else entry.get("files") or [])
+
+
 #: What an exported script says at a step it cannot run, instead of dropping it.
 _UNSUPPORTED = (
     "{kind} is not supported by browser_export_script: it needs state a linear script "

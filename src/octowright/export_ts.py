@@ -16,7 +16,9 @@ from collections.abc import Callable
 from octowright._export_shared import (
     _UNSUPPORTED,
     _has_semantic_locator,
+    _input_file_paths,
     _launch_viewport,
+    _route_pattern,
     _safe_int,
     _validate_dialog_policy,
     _validate_kind,
@@ -281,6 +283,20 @@ def _ts_select_option(entry: dict) -> str:
     return f"  await page.selectOption({sel});"
 
 
+def _ts_mock_route(entry: dict) -> str:
+    # See export._py_mock_route: content_type/headers only when recorded.
+    status = _safe_int(entry.get("status"), action="mock_route", field="status", default=200)
+    extra = ""
+    if entry.get("content_type") is not None:
+        extra += f", contentType: {json.dumps(str(entry['content_type']))}"
+    if entry.get("headers"):
+        extra += f", headers: {json.dumps(dict(entry['headers']))}"
+    return (
+        f"  await page.route({json.dumps(_route_pattern(entry))}, route => route.fulfill({{ "
+        f"status: {status}, body: {json.dumps(entry.get('body') or '')}{extra} }}));"
+    )
+
+
 def _ts_set_dialog_policy(entry: dict) -> str:
     policy = _validate_dialog_policy(entry.get("policy"))
     if policy == "manual":
@@ -347,15 +363,11 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "close_page": _ts_close_page,
     "switch_frame": _ts_switch_frame,
     "reset_frame": lambda _e: "  uploadTarget = page;",
-    "mock_route": lambda e: (
-        f"  await page.route({json.dumps(e['url_pattern'])}, route => route.fulfill({{ "
-        f"status: {_safe_int(e.get('status'), action='mock_route', field='status', default=200)}, "
-        f"body: {json.dumps(e.get('body', ''))} }}));"
-    ),
-    "unmock_route": lambda e: f"  await page.unroute({json.dumps(e['url_pattern'])});",
+    "mock_route": _ts_mock_route,
+    "unmock_route": lambda e: f"  await page.unroute({json.dumps(_route_pattern(e))});",
     "set_dialog_policy": _ts_set_dialog_policy,
     "set_input_files": lambda e: (
-        f"  await page.setInputFiles({json.dumps(e['selector'])}, {json.dumps(e.get('files', []))});"
+        f"  await page.setInputFiles({json.dumps(e['selector'])}, {json.dumps(_input_file_paths(e))});"
     ),
     "upload_files": _ts_upload_files,
     "if": _ts_cond_while,
