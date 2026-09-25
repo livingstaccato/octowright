@@ -23,6 +23,7 @@ from octowright.macros.calls import (
     dispatch_macro_call,
     dispatch_plain_action,
 )
+from octowright.macros.credential_fill import begin_fill_audit, end_fill_audit, guard_credential_fill
 from octowright.macros.descriptions import describe_action
 from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
@@ -349,6 +350,7 @@ async def _dispatch_one(
     # check for browser actions. It runs after every awaited status/slowmo step
     # and immediately before conditional/plain dispatch, so no scheduler turn
     # can separate the check from the browser operation.
+    await guard_credential_fill(session, action)
     boundary = getattr(session, "_octowright_before_macro_action", None)
     if boundary is not None:
         boundary(
@@ -628,8 +630,10 @@ async def _run_macro_impl(
 
     macro_started = time.monotonic()
     completed_ok = False
+    audit, audit_token = begin_fill_audit()
     try:
         for index, action in enumerate(actions):
+            audit.step = index
             failure: RuntimeError | None = None
             failure_cause: Exception | None = None
             safe_original: str | None = None
@@ -677,6 +681,7 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
+        end_fill_audit(audit_token)
         _end_request_tracking(session)
         elapsed_s = await _finish_macro_run(
             session,
@@ -688,7 +693,7 @@ async def _run_macro_impl(
             resolved_slowmo=resolved_slowmo,
         )
 
-    return {
+    result: MacroRunResult = {
         "macro": name,
         "executed": executed,
         "skipped": skipped,
@@ -696,6 +701,9 @@ async def _run_macro_impl(
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
     }
+    if audit.offsite:  # warn mode let a credential onto a foreign origin
+        result["credential_fill_offsite"] = audit.offsite
+    return result
 
 
 def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:

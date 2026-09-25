@@ -398,6 +398,9 @@ source_paths = [
     "src/octowright/personas.py",
     "src/octowright/scenarios.py",
     "src/octowright/macros/",
+    # The credential-sink guard, moved out of macros/substitution.py so the
+    # exported CLI can render it; it stays mutated with the code it came from.
+    "src/octowright/credential_sinks.py",
     # The artifact store's shared layer. Added 2026-08-27 after a verification
     # idempotency bug lived here undetected: `macros/artifacts.py` was mutated
     # while the module it delegates every check evaluation to was not, so the
@@ -415,6 +418,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_network_clean_window.py",
     "tests/test_network_inflight_tracking.py",
     "tests/test_macro_header_credentials_own_site.py",
+    "tests/test_macro_credential_alias_normalization.py",
+    "tests/test_macro_credential_fill_origin.py",
     "tests/test_macro_nested_scan.py",
     "tests/test_macro_no_text_element_limit.py",
     "tests/test_macro_assertion_privacy.py",

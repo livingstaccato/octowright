@@ -11,8 +11,8 @@ from urllib.parse import SplitResult, urlsplit
 # The sink set, the opt-out and the expander live in ``octowright.credential_sinks``
 # so the exported CLI runs the same rules; the first two are re-exported here.
 from octowright.credential_sinks import CREDENTIAL_UNSAFE_KEYS as CREDENTIAL_UNSAFE_KEYS
+from octowright.credential_sinks import Origin, dispatch_fields, expand_actions, url_origin
 from octowright.credential_sinks import credential_sinks_blocked as credential_sinks_blocked
-from octowright.credential_sinks import Origin, expand_actions, url_origin
 from octowright.defaults import new_tab_url
 from octowright.macros.privacy import PLACEHOLDER_RE, is_credential_key
 
@@ -72,7 +72,8 @@ def substitute_in_action(action: dict[str, Any], value_to_name: dict[str, str]) 
 
 
 def action_kwargs(action: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in action.items() if key not in RECORDING_NOISE_KEYS}
+    # The credential-fill guard's inputs go too: no session method takes them.
+    return {key: value for key, value in dispatch_fields(action).items() if key not in RECORDING_NOISE_KEYS}
 
 
 #: Actions whose locator IS the semantic keys, so stripping them would remove
@@ -150,7 +151,10 @@ def own_site_origins(session: SessionLike) -> set[Origin]:
 
 
 def substitute(
-    actions: list[dict[str, Any]], args: dict[str, Any], *, trusted_origins: frozenset[Origin] | set[Origin] = frozenset()
+    actions: list[dict[str, Any]],
+    args: dict[str, Any],
+    *,
+    trusted_origins: frozenset[Origin] | set[Origin] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
 

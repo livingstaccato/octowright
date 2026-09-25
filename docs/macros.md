@@ -392,10 +392,34 @@ classifier vocabulary or the credential sink guard.
 credential-named argument expanded into `url`, `expression`, `verify_js`,
 `grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
 `paths` entry is refused by default. The one exemption is a header sent to the
-session's own site: `inject_headers` whose `pattern` names the host of the launch
-URL or persona `base_url` may carry `Bearer {{token}}`. See
-`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in [env-vars.md](env-vars.md) for the full
-name list, match rules and opt-out.
+session's own origin: `inject_headers` whose `pattern` spells out the scheme,
+host and port of the launch URL or persona `base_url` may carry
+`Bearer {{token}}` (`https://app.example.test/**` for a launch at
+`https://app.example.test`, but not `http://localhost:45678/**` for a launch at
+`http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+[env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
+
+**Credentials are typed only onto the session's own origin.** A `fill`,
+`fill_by` or `type` whose value comes from a credential-named argument checks,
+immediately before it runs, the origin of the page (or active frame) it would
+type into. On the launch URL's or persona `base_url`'s origin it runs; anywhere
+else it is refused, naming the origin -- a shared macro that navigates to
+`https://evil.example/login` and then fills `{{password}}` would otherwise hand
+the password to that page's JavaScript. A sign-in hop to an identity provider
+lists that origin on the step itself, literally:
+
+```json
+{"action": "fill", "selector": "#password", "value": "{{password}}",
+ "allowed_origins": ["https://login.idp.example"]}
+```
+
+Entries are exact origins (`scheme://host[:port]`): no wildcard, path or
+`{{placeholder}}`, which `macro_lint` reports and replay refuses. Identity and
+contextual arguments (`{{email}}`, `{{username}}`) are not checked.
+`OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn` logs and runs the step instead,
+recording `credential_fill_offsite: [{step, action, origin}]` in the run result;
+`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` turns this and every other credential
+check off.
 
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy

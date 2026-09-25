@@ -524,6 +524,16 @@ class SessionPageMixin(SessionLike):
         await self._target().fill(selector, value, timeout=budget)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
+    @gated_operation("macro_credential_fill_origin")
+    async def target_url(self) -> str:
+        """The URL of the document a fill or type would land in: the active frame's, else the page's.
+
+        Read under the gate, immediately before a macro types a credential, so
+        the origin check sees the page as it is now rather than ``self.url``,
+        which only an octowright navigate writes.
+        """
+        return str(getattr(self._target(), "url", "") or "")
+
     @gated_operation("browser_press_key")
     async def press_key(self, key: str) -> None:
         await self.page.keyboard.press(key)

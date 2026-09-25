@@ -23,6 +23,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from octowright.credential_sinks import ALLOWED_ORIGINS_KEY, CREDENTIAL_FILL_FIELDS, parse_allowed_origins
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 
 from .lint_credentials import (
@@ -234,6 +235,16 @@ def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, i
         )
 
 
+def _check_allowed_origins(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Report an ``allowed_origins`` that replay would refuse, at save time rather than mid-run."""
+    if kind not in CREDENTIAL_FILL_FIELDS or ALLOWED_ORIGINS_KEY not in action:
+        return
+    try:
+        parse_allowed_origins(action[ALLOWED_ORIGINS_KEY])
+    except ValueError as exc:
+        issues.append(Issue(severity="error", code="bad_allowed_origins", message=str(exc), action_index=outer_index))
+
+
 def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Flag an action carrying both spellings of a renamed field."""
     for recorded, param in ambiguous_rename_fields(kind, frozenset(action)):
@@ -243,8 +254,8 @@ def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int,
                 code="ambiguous_field",
                 message=(
                     f"action {kind!r} carries both {recorded!r} and {param!r}, which are the same field — "
-                    "replay keeps whichever comes last in the JSON, so the effective value is not stable; "
-                    "keep one"
+                    "replay refuses the action when they differ, and a later edit to one leaves them "
+                    "differing; keep one"
                 ),
                 action_index=outer_index,
             )
@@ -576,6 +587,7 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     # neither. These fail open outside _ACTION_MAP, so conditionals are unaffected.
     _check_unknown_fields(action, kind, outer_index, issues)
     _check_ambiguous_fields(action, kind, outer_index, issues)
+    _check_allowed_origins(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)

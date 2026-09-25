@@ -181,6 +181,97 @@ def headers_reach_trusted_origin(action: dict[str, Any], trusted_origins: frozen
     return origin is not None and origin in trusted_origins
 
 
+#: The field each typing action puts into the page. The sink guard lets a
+#: credential through here -- it is the intended destination -- so what is
+#: checked instead is WHICH page it lands in (`offsite_credential_origin`).
+CREDENTIAL_FILL_FIELDS = {"fill": "value", "fill_by": "value", "type": "text"}
+#: A step's own list of extra origins it may type a credential into, for a
+#: sign-in hop to an identity provider. An input to the guard, never to the call.
+ALLOWED_ORIGINS_KEY = "allowed_origins"
+#: Set by `expand_actions` on a typing step whose value came from a
+#: credential-tier arg: the names, never the values. Whatever the macro itself
+#: put under this key is discarded first, so a macro cannot unmark a step.
+CREDENTIAL_FILL_MARKER = "_octowright_credential_args"
+CREDENTIAL_FILL_ORIGINS_ENV = "OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS"
+
+_EXACT_ORIGIN = re.compile(r"^https?://[^/?#*{}\[\]@\\\s]+/?$", re.IGNORECASE)
+
+
+def credential_fill_mode() -> str:
+    """``block`` (the default) or ``warn``. Anything else is ``block``: this fails closed."""
+    raw = os.environ.get(CREDENTIAL_FILL_ORIGINS_ENV, "block").strip().lower()
+    return "warn" if raw == "warn" else "block"
+
+
+def parse_allowed_origins(value: object) -> frozenset[Origin]:
+    """A step's ``allowed_origins``, each an exact origin written literally.
+
+    No wildcard, path or ``{{placeholder}}``: a placeholder would let the
+    caller's arguments, rather than the macro's author, choose where a
+    credential may be typed, and a pattern is a promise about more hosts than
+    anyone reviewed.
+    """
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list):
+        raise ValueError(
+            f"{ALLOWED_ORIGINS_KEY} must be a list of origins such as ['https://login.example'], "
+            f"got {type(value).__name__}"
+        )
+    origins: set[Origin] = set()
+    for entry in value:
+        origin = url_origin(entry) if isinstance(entry, str) and _EXACT_ORIGIN.match(entry) else None
+        if origin is None:
+            raise ValueError(
+                f"{ALLOWED_ORIGINS_KEY} entry {str(entry)[:120]!r} is not an exact origin; write it "
+                "literally as scheme://host[:port], with no wildcard, path or {{placeholder}}"
+            )
+        origins.add(origin)
+    return frozenset(origins)
+
+
+def offsite_credential_origin(
+    action: dict[str, Any], current_url: object, trusted_origins: frozenset[Origin] | set[Origin]
+) -> str | None:
+    """The origin a credential-typing *action* would land on, when that is not allowed.
+
+    None means the step may run: it types no credential, the credential checks
+    are off, or the page's origin is trusted or listed on the step. Only the
+    origin is ever returned, never the page's path or query.
+    """
+    if not action.get(CREDENTIAL_FILL_MARKER) or not credential_sinks_blocked():
+        return None
+    origin = url_origin(current_url)
+    if origin is not None and origin in set(trusted_origins) | parse_allowed_origins(action.get(ALLOWED_ORIGINS_KEY)):
+        return None
+    if origin is not None:
+        return format_origin(origin)
+    try:
+        scheme = urlsplit(str(current_url or "")).scheme
+    except ValueError:
+        scheme = ""
+    return f"{scheme}:" if scheme else "<no page>"
+
+
+def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
+    names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
+    return ValueError(
+        f"macro {action.get('action')} would type credential arg {names} into a page at {shown}, "
+        "which is not the session's own origin (its launch URL or persona base_url). For an "
+        f'intended sign-in hop, list the origin literally on this step: "{ALLOWED_ORIGINS_KEY}": ["{shown}"]. '
+        f"{CREDENTIAL_FILL_ORIGINS_ENV}=warn logs and runs the step instead; "
+        f"{CREDENTIAL_SINKS_ENV}=allow turns every credential check off."
+    )
+
+
+def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
+    """*action* without the guard's own inputs, which no session method takes."""
+    guard_only = {CREDENTIAL_FILL_MARKER}
+    if action.get("action") in CREDENTIAL_FILL_FIELDS:
+        guard_only.add(ALLOWED_ORIGINS_KEY)
+    return {key: value for key, value in action.items() if key not in guard_only}
+
+
 def _sink_refusal(key: str) -> ValueError:
     return ValueError(
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
@@ -217,15 +308,33 @@ class _Expander:
         return self.placeholder.sub(replacer, value)
 
     def action(self, node: dict[str, Any]) -> dict[str, Any]:
-        node = canonical_aliases(str(node.get("action")), node)
+        kind = str(node.get("action"))
+        node = canonical_aliases(kind, node)
+        node.pop(CREDENTIAL_FILL_MARKER, None)
+        credentials = self._typed_credentials(kind, node)
         headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
-        return {
+        expanded = {
             key: self.value(
                 item,
                 unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS and not (headers_exempt and key == "headers"),
             )
             for key, item in node.items()
         }
+        if credentials:
+            expanded[CREDENTIAL_FILL_MARKER] = credentials
+        return expanded
+
+    def _typed_credentials(self, kind: str, node: dict[str, Any]) -> list[str]:
+        """The credential-tier args a typing step puts into the page, by name."""
+        typed_field = CREDENTIAL_FILL_FIELDS.get(kind)
+        if typed_field is None:
+            return []
+        # Judged on the macro as written, before expansion, so the list is the
+        # author's and not something an argument spelled into it.
+        parse_allowed_origins(node.get(ALLOWED_ORIGINS_KEY))
+        typed = node.get(typed_field)
+        names = self.placeholder.findall(typed) if isinstance(typed, str) else []
+        return sorted({name for name in names if self.is_credential(name)})
 
     def value(self, value: Any, *, unsafe_sink: bool = False) -> Any:
         if isinstance(value, str):
