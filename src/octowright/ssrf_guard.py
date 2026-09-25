@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Re-check every navigation hop against the SSRF policy, not just the first.
+"""Check every request against the SSRF policy, and serve the browser what was checked.
 
 ``ssrf.check_navigation_url`` runs pre-flight, on the URL an MCP tool or a
 replayed macro asked for. A redirect is not that URL: a public page that
@@ -15,56 +15,65 @@ first hop landed on a loopback target and its body was readable.
 Why the obvious implementation does not work
 --------------------------------------------
 Playwright does **not** re-invoke a route handler for a redirected request.
-Measured both ways: after ``route.fallback()`` *and* after
-``route.fulfill(response=<the 302>)``, Chromium follows the chain inside the
-network stack and the handler is called exactly once, for the first hop, while
-the server sees every hop. So a handler that merely inspects ``request.url``
-is a no-op on precisely the case it exists for.
+Measured on chromium, firefox and webkit (Playwright 1.62): after
+``route.fallback()`` *and* after ``route.fulfill(response=<the 302>)``, the
+engine follows the chain inside its network stack and the handler is called
+exactly once, for the first hop, while the server sees every hop. So neither a
+handler that inspects ``request.url`` nor one that answers hop by hop with the
+validated 3xx sees the hops after the first. (WebKit also refuses a 3xx in
+``route.fulfill`` outright.)
 
-What this does instead
-----------------------
-Every navigation's own URL is checked first -- including one the page started
-itself (a link, a form, ``location = ...``), which no tool pre-flighted -- and
-every hop is checked with :func:`ssrf.check_navigation_url_resolved`, so a
-hostname is resolved and refused if any answer is non-public.
+Why the browser is never allowed to fetch a navigation itself
+-------------------------------------------------------------
+This guard used to validate the chain with ``route.fetch`` and then
+``route.fallback()``, so the browser fetched every hop again. A server that
+answers the first request "200" and the second "302 -> private" -- or does so
+at any hop of a chain -- had its redirect followed unchecked (measured on all
+three engines). Validating one response and delivering another is the whole
+bug, so each navigation is now fetched **exactly once, by the guard**
+(``route.fetch(max_redirects=0)``), and:
 
-For a GET navigation the guard walks the chain itself with
-``route.fetch(max_redirects=0)``, validating each ``Location`` **before**
-fetching it, then hands the navigation back to the browser with
-``route.fallback()`` once the whole chain is clear.
+* **not a redirect** -- the fetched response is fulfilled into the page as-is.
+  That is the common case, and it costs nothing: ``page.url``, the status, and
+  relative-URL resolution are those of the one URL requested.
+* **a redirect** -- the ``Location`` is checked, and the page is handed a tiny
+  document that replaces itself with it (``location.replace`` plus a meta
+  refresh). That starts a NEW navigation, which comes back through this
+  handler and is fetched and checked the same way, so the browser only ever
+  receives responses the guard validated. Why not fulfil the whole chain's
+  final body against the first URL: ``page.url`` would stay the first URL,
+  breaking ``browser_expect_url`` and every relative link; and a cross-origin
+  final body would run under the FIRST URL's origin. The client redirect lands
+  on the real final URL (measured: ``page.url`` and ``<a href="rel">`` resolve
+  against it on all three engines). Cookies set by an intermediate hop still
+  land -- ``route.fetch`` shares the context's cookie jar (measured).
 
-A non-GET navigation (in practice a form POST) cannot be fetched twice without
-submitting it twice, so it is sent exactly **once**, by the guard, with
-``route.fetch(max_redirects=0)``:
+A non-GET navigation (in practice a form POST) is fetched once the same way.
+A ``303``, or ``301``/``302`` on a POST, becomes a GET, so it is answered with
+the same client redirect to the validated ``Location``. A ``307``/``308`` (or
+``301``/``302`` on another method) would re-send the body to a hop this guard
+could only validate by submitting it again, so it is refused.
 
-* not a redirect -- the response is fulfilled into the page as-is;
-* ``303``, or ``301``/``302`` on a POST -- the browser would follow with a GET,
-  so the guard validates the ``Location``, walks the rest of the chain with GET
-  the same way the GET path does, and, if every hop is clean, fulfills the
-  original route with the fetched 3xx so the browser follows it itself;
-* ``307``/``308`` (or ``301``/``302`` on another method) -- method-preserving:
-  the next hop would re-send the body, so it cannot be walked without
-  re-submitting, and Playwright will not call this handler for it. The first
-  ``Location`` is validated for the log line, and the navigation is aborted
-  either way rather than letting unchecked later hops through.
+Every other request -- images, scripts, ``fetch``/XHR, WebSockets -- is checked
+too, against :func:`ssrf.check_request_url_cached`: a literal non-public IP or
+a refused name is aborted, and a hostname is resolved (off the event loop, one
+lookup per host per TTL) and aborted if any answer is non-public. WebSockets
+are not visible to ``context.route`` at all; they are routed separately with
+``route_web_socket`` and either closed or connected through.
 
 Known costs, deliberately accepted (this only runs under an opt-in policy):
 
-* **An allowed GET navigation is fetched twice** -- once to validate the
-  chain, once by the browser. Letting the browser navigate for real is what
-  keeps ``page.url``, the redirect history, and relative-URL resolution
-  correct; fulfilling the final body against the original URL would silently
-  break ``browser_expect_url`` and every relative link on the page. A POST
-  that redirects has the same cost for the hops after the first.
+* **A redirecting navigation's ``goto`` returns the client-redirect document's
+  synthetic 200**, not the 3xx chain, and ``response.request.redirected_from``
+  is empty. ``page.url`` and the page itself are the final ones.
 * **A method-preserving redirect of a form submission is refused** under
   ``block-private``, even to a public host.
-* **Validation and connection are separate DNS lookups.** The browser resolves
-  a hop again when it connects, and Playwright cannot pin the validated
-  address into that connection, so a rebinding DNS server can still answer
-  differently the second time -- see ``ssrf``'s module docstring.
-* Subresources are not checked at all: a fetch to a private host cannot be
-  read back through the tool surface, and intercepting every image and XHR
-  would break ordinary pages for no gain in this threat model.
+* **Every WebSocket message is relayed through the Playwright driver** once a
+  socket is routed.
+* **Validation and connection are still separate DNS lookups for
+  subresources**, and the browser resolves them itself. A navigation is
+  fetched by the guard, but Playwright's fetch resolves too; neither can be
+  pinned to the validated address -- see ``ssrf``'s module docstring.
 
 With the default ``off`` policy nothing is registered, so none of this
 touches a default deployment.
@@ -74,6 +83,8 @@ from __future__ import annotations
 
 import html
 import json
+import re
+import weakref
 from typing import Any
 from urllib.parse import urljoin
 
@@ -87,21 +98,22 @@ log = get_logger(__name__)
 # Chromium surfaces this as ERR_BLOCKED_BY_CLIENT, which reads correctly in
 # the page and in the network log.
 _ABORT_REASON = "blockedbyclient"
+# Not blockedbyclient for subresources: WebKit leaves an <img> aborted with it
+# pending forever -- neither load nor error fires (measured, Playwright 1.62),
+# so a page waiting on it hangs. accessdenied errors promptly on all three.
+_SUBRESOURCE_ABORT_REASON = "accessdenied"
 
 # Matches the hop limit browsers enforce; a chain longer than this is broken
-# anyway, and the bound keeps a redirect loop from spinning the validator.
+# anyway, and the bound keeps a redirect loop from spinning forever -- each hop
+# is its own navigation here, so the browser's own limit never applies.
 MAX_REDIRECT_HOPS = 20
-
-_REDIRECT_STATUSES = range(300, 400)
 
 #: The statuses a browser actually follows. Of these, 303 always becomes a
 #: GET, and 301/302 become a GET for a POST (Fetch standard, "HTTP-redirect
 #: fetch" step 12); 307/308 always re-send the method and body.
 _FOLLOWED_REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
-#: Request headers that describe the submitted body, dropped when the chain
-#: after a POST is walked with a bodiless GET.
-_BODY_HEADERS = frozenset({"content-type", "content-length"})
+_EVERY_URL = re.compile(".*")
 
 
 class RedirectBlocked(ValueError):
@@ -116,28 +128,6 @@ async def _check_hop(url: str) -> None:
         raise RedirectBlocked(str(exc)) from exc
 
 
-async def _validate_chain(route: Any, start_url: str, *, as_get: dict[str, Any] | None = None) -> None:
-    """Walk the redirect chain from *start_url*, refusing a blocked hop.
-
-    Each ``Location`` is checked *before* the request that would fetch it, so
-    a blocked host is never contacted. *as_get* carries the ``route.fetch``
-    overrides that turn the intercepted request into a bodiless GET, for the
-    chain after a POST was redirected; ``None`` replays the request as it is.
-    """
-    overrides = as_get or {}
-    url = start_url
-    for _ in range(MAX_REDIRECT_HOPS):
-        response = await route.fetch(url=url, max_redirects=0, **overrides)
-        if response.status not in _REDIRECT_STATUSES:
-            return
-        location = response.headers.get("location")
-        if not location:
-            return
-        url = urljoin(url, location)
-        await _check_hop(url)
-    raise RedirectBlocked(f"redirect chain from {start_url!r} exceeded {MAX_REDIRECT_HOPS} hops")
-
-
 def _client_redirect(target: str) -> str:
     """A document that replaces itself with *target*, with or without JavaScript."""
     attr = html.escape(target, quote=True)
@@ -147,96 +137,139 @@ def _client_redirect(target: str) -> str:
     return f"<!doctype html>{refresh}<script>location.replace({literal})</script>"
 
 
-def _get_overrides(request: Any) -> dict[str, Any]:
-    """``route.fetch`` overrides for a GET that carries none of *request*'s body.
+class _HopCounter:
+    """Consecutive guard-issued redirects per frame.
 
-    An empty ``post_data`` is what stops Playwright substituting the original
-    request's body (it falls back to it whenever none is given).
+    Each hop of a chain is its own navigation now, so the browser's own
+    redirect limit never applies and ``/loop -> /loop`` would spin forever.
+    Reset whenever a frame is served a real (non-redirect) response.
     """
-    headers = {k: v for k, v in (request.headers or {}).items() if k.lower() not in _BODY_HEADERS}
-    return {"method": "GET", "headers": headers, "post_data": b""}
+
+    def __init__(self) -> None:
+        self._hops: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
+
+    @staticmethod
+    def _frame(request: Any) -> Any:
+        try:
+            return request.frame
+        except Exception:  # a service-worker request has no frame
+            return None
+
+    def step(self, request: Any, target: str) -> None:
+        frame = self._frame(request)
+        if frame is None:
+            return
+        hops = self._hops.get(frame, 0) + 1
+        if hops > MAX_REDIRECT_HOPS:
+            self._hops.pop(frame, None)
+            raise RedirectBlocked(f"redirect chain reaching {target!r} exceeded {MAX_REDIRECT_HOPS} hops")
+        self._hops[frame] = hops
+
+    def reset(self, request: Any) -> None:
+        frame = self._frame(request)
+        if frame is not None:
+            self._hops.pop(frame, None)
 
 
-async def _handle_non_get(route: Any, request: Any, *, fulfill_redirects: bool) -> None:
-    """Send a non-GET navigation once, and only release a redirect it can vouch for."""
+async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None:
+    """Fetch a navigation once and hand the page only what was validated."""
     try:
         response = await route.fetch(max_redirects=0)
     except Exception as exc:
         # The browser would have shown a network error; say so rather than
         # leaving the intercepted request unanswered.
-        log.debug("octowright.ssrf.non_get_fetch_failed", url=request.url, error=repr(exc))
+        log.debug("octowright.ssrf.navigation_fetch_failed", url=request.url, error=repr(exc))
         await route.abort("failed")
         return
     location = response.headers.get("location")
     if response.status not in _FOLLOWED_REDIRECTS or not location:
+        hops.reset(request)
         await route.fulfill(response=response)
         return
     target = urljoin(request.url, location)
     await _check_hop(target)
-    becomes_get = response.status == 303 or (response.status in {301, 302} and request.method.upper() == "POST")
+    method = request.method.upper()
+    becomes_get = method == "GET" or response.status == 303 or (response.status in {301, 302} and method == "POST")
     if not becomes_get:
         raise RedirectBlocked(
             f"{response.status} redirect of a {request.method} navigation to {target!r} would re-send the "
-            "request body to later hops this guard cannot see; refused under block-private"
+            "request body to a hop this guard could only check by submitting it again; refused under block-private"
         )
-    await _validate_chain(route, target, as_get=_get_overrides(request))
-    if not fulfill_redirects:
-        # The engine refuses a 3xx outright (see install_navigation_guard), and
-        # the refusal consumes the route, so it cannot be tried and caught. The
-        # POST has already been sent, so aborting would lose a submission the
-        # server accepted. Hand the page a document that navigates to the
-        # validated target instead: that is a NEW GET navigation, so it comes
-        # back through this guard and is checked again.
-        await route.fulfill(status=200, content_type="text/html", body=_client_redirect(target))
+    hops.step(request, target)
+    # A NEW navigation, which comes back through this handler -- see the
+    # module docstring for why the 3xx itself is never handed to the browser.
+    await route.fulfill(status=200, content_type="text/html", body=_client_redirect(target))
+
+
+async def _handle_subresource(route: Any, request: Any) -> None:
+    try:
+        await ssrf.check_request_url_cached(request.url)
+    except ValueError as exc:
+        log.debug("octowright.ssrf.subresource_blocked", url=request.url, error=str(exc))
+        await route.abort(_SUBRESOURCE_ABORT_REASON)
         return
-    # The browser follows the 3xx itself -- and, per the module docstring,
-    # without calling this handler again, which is why the chain was walked
-    # first.
-    await route.fulfill(response=response)
+    await route.fallback()
 
 
-async def _handle_route(route: Any, request: Any, *, fulfill_redirects: bool) -> None:
-    """Abort a navigation whose redirect chain the policy refuses."""
+async def _handle_route(route: Any, request: Any, hops: _HopCounter) -> None:
+    """Abort a request the policy refuses; serve a navigation from its own validated fetch."""
     try:
         if not request.is_navigation_request():
-            await route.fallback()
+            await _handle_subresource(route, request)
             return
         try:
             await _check_hop(request.url)
-            if request.method.upper() != "GET":
-                await _handle_non_get(route, request, fulfill_redirects=fulfill_redirects)
-                return
-            await _validate_chain(route, request.url)
+            await _serve_navigation(route, request, hops)
         except RedirectBlocked as exc:
             log.warning("octowright.ssrf.redirect_blocked", url=request.url, method=request.method, error=str(exc))
             await route.abort(_ABORT_REASON)
-            return
-        await route.fallback()
     except Exception as exc:  # pragma: no cover - route already gone
-        # A route whose page navigated away raises on fallback and abort alike.
+        # A route whose page navigated away raises on fulfill and abort alike.
         # Swallowing keeps a dead route from surfacing as a launch failure.
         log.debug("octowright.ssrf.route_handler_failed", error=repr(exc))
 
 
-async def install_navigation_guard(context: Any, *, fulfill_redirects: bool) -> None:
-    """Register the per-hop navigation check on *context*.
+def _as_http(url: str) -> str:
+    """The http(s) URL a ws(s) URL's host is checked as."""
+    scheme, sep, rest = url.partition(":")
+    return {"ws": "http", "wss": "https"}.get(scheme.lower(), scheme) + sep + rest
+
+
+async def _handle_websocket(ws: Any) -> None:
+    try:
+        await ssrf.check_request_url_cached(_as_http(ws.url))
+    except ValueError as exc:
+        log.debug("octowright.ssrf.websocket_blocked", url=ws.url, error=str(exc))
+        await ws.close()
+        return
+    # Routing a socket detaches it from the server until this is called;
+    # messages are then relayed both ways unchanged.
+    ws.connect_to_server()
+
+
+async def install_navigation_guard(context: Any) -> None:
+    """Register the per-request check on *context*.
 
     No-op unless the SSRF policy is enabled, so the default deployment keeps
-    an uninstrumented context. *fulfill_redirects* says whether the engine
-    accepts a 3xx in ``route.fulfill``, which decides how a validated POST
-    redirect is released. WebKit does not ("Route.fulfill: Cannot fulfill with
-    redirect status: 303"; measured on Playwright 1.62), so its caller passes
-    False. Required rather than read off ``context.browser``: a persistent
-    context has no browser to ask, and the launch path already knows.
+    an uninstrumented context.
     """
     if not ssrf.policy_enabled():
         return
+    hops = _HopCounter()
 
     async def handler(route: Any, request: Any) -> None:
-        await _handle_route(route, request, fulfill_redirects=fulfill_redirects)
+        await _handle_route(route, request, hops)
 
     await bounded(
         context.route("**/*", handler),
         operation="browser_install_navigation_guard",
     )
-    log.debug("octowright.ssrf.navigation_guard_installed", fulfill_redirects=fulfill_redirects)
+    route_web_socket = getattr(context, "route_web_socket", None)
+    if route_web_socket is not None:
+        # A glob does not match ws:// URLs (measured); a pattern that matches
+        # everything does.
+        await bounded(
+            route_web_socket(_EVERY_URL, _handle_websocket),
+            operation="browser_install_websocket_guard",
+        )
+    log.debug("octowright.ssrf.navigation_guard_installed")

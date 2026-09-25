@@ -76,7 +76,7 @@ async def test_redirect_to_a_blocked_host_never_reaches_it(
     monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
     # The first hop stands in for a public redirector the policy allows.
     monkeypatch.setenv("OCTOWRIGHT_SSRF_ALLOW", "127.0.0.1")
-    await install_navigation_guard(context, fulfill_redirects=True)
+    await install_navigation_guard(context)
     page = await context.new_page()
     base = f"http://127.0.0.1:{server.server_address[1]}"
 
@@ -97,7 +97,7 @@ async def test_allowed_navigation_still_loads(monkeypatch: pytest.MonkeyPatch, s
     """The guard must not break ordinary browsing under the same policy."""
     monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
     monkeypatch.setenv("OCTOWRIGHT_SSRF_ALLOW", "127.0.0.1")
-    await install_navigation_guard(context, fulfill_redirects=True)
+    await install_navigation_guard(context)
     page = await context.new_page()
     await page.goto(f"http://127.0.0.1:{server.server_address[1]}/secret")
     assert SECRET in await page.content()
@@ -112,7 +112,7 @@ async def test_policy_off_installs_nothing(monkeypatch: pytest.MonkeyPatch) -> N
         async def route(self, *args: Any) -> None:
             calls.append(args)
 
-    await install_navigation_guard(_Ctx(), fulfill_redirects=True)
+    await install_navigation_guard(_Ctx())
     assert calls == []
 
 
@@ -124,5 +124,5 @@ async def test_policy_on_registers_a_route(monkeypatch: pytest.MonkeyPatch) -> N
         async def route(self, *args: Any) -> None:
             calls.append(args)
 
-    await install_navigation_guard(_Ctx(), fulfill_redirects=True)
+    await install_navigation_guard(_Ctx())
     assert len(calls) == 1

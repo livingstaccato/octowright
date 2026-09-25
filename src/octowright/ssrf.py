@@ -40,6 +40,10 @@ Two layers, deliberately split:
   refused (fail closed): an unresolvable name is exactly what a rebinding
   attacker's short-TTL record looks like between answers, and "could not
   check" must not read as "checked and public".
+* :func:`check_request_url_cached` is the same check for subresources (every
+  image, script, fetch/XHR and WebSocket ``ssrf_guard`` sees), with a short
+  per-host verdict cache so a page's hundredth request to a CDN does not pay
+  its own ``getaddrinfo``.
 
 What this still cannot close -- the DNS-rebinding window
 --------------------------------------------------------
@@ -63,6 +67,7 @@ import asyncio
 import ipaddress
 import os
 import socket
+import time
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -126,7 +131,6 @@ def ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_reserved
         or ip.is_unspecified
     )
-
 
 
 _HEX_DIGITS = "0123456789abcdefABCDEF"  # pragma: allowlist secret
@@ -343,25 +347,82 @@ def _resolved_non_public(host: str) -> list[str]:
     return flagged
 
 
+async def _resolution_refusal(host: str) -> str | None:
+    """Why ``host`` is refused once resolved, or ``None`` when every answer is public.
+
+    The lookup runs in a worker thread: ``getaddrinfo`` blocks, and every
+    caller is on the daemon's event loop.
+    """
+    try:
+        flagged = await asyncio.to_thread(_resolved_non_public, host)
+    except (OSError, UnicodeError) as exc:
+        return (
+            f"SSRF policy block-private refuses {host!r}: the host could not be resolved "
+            f"({exc}); an unresolvable name is refused rather than assumed public"
+        )
+    if flagged:
+        return (
+            f"SSRF policy block-private refuses {host!r}: it resolves to non-public address(es) {sorted(set(flagged))}"
+        )
+    return None
+
+
 async def check_navigation_url_resolved(url: str) -> None:
     """:func:`check_navigation_url`, then refuse a host that RESOLVES non-public.
 
-    The lookup runs in a worker thread: ``getaddrinfo`` blocks, and every
-    caller is on the daemon's event loop. See the module docstring for the
-    rebinding window this cannot close.
+    See the module docstring for the rebinding window this cannot close.
     """
     host = _policy_host(url)
     if host is None or _refuse_as_spelled(host):
         return
-    try:
-        flagged = await asyncio.to_thread(_resolved_non_public, host)
-    except (OSError, UnicodeError) as exc:
-        raise InvalidRequestError(
-            f"SSRF policy block-private refuses navigation to {host!r}: the host could not be resolved "
-            f"({exc}); an unresolvable name is refused rather than assumed public"
-        ) from exc
-    if flagged:
-        raise InvalidRequestError(
-            f"SSRF policy block-private refuses navigation to {host!r}: it resolves to non-public "
-            f"address(es) {sorted(set(flagged))}"
+    refusal = await _resolution_refusal(host)
+    if refusal is not None:
+        raise InvalidRequestError(refusal)
+
+
+#: How long a subresource host's verdict is reused. A page issues dozens of
+#: requests to the same few hosts; resolving each one would put a thread-pool
+#: ``getaddrinfo`` in front of every image. Short, because a cached "public"
+#: is exactly what a rebinding record wants to outlive -- though the browser's
+#: own lookup already leaves that window open (module docstring).
+SUBRESOURCE_VERDICT_TTL_SECONDS = 30.0
+#: Bound on distinct cached hosts, so a page that requests a fresh random
+#: subdomain per request cannot grow the cache without limit.
+SUBRESOURCE_VERDICT_MAX_HOSTS = 1024
+
+_subresource_verdicts: dict[str, tuple[float, str | None]] = {}
+_subresource_lookups: dict[str, asyncio.Task[str | None]] = {}
+
+
+async def check_request_url_cached(url: str) -> None:
+    """:func:`check_navigation_url_resolved` for a subresource, with a per-host TTL cache.
+
+    Concurrent requests to a host whose verdict is not cached share one
+    lookup rather than each starting their own.
+    """
+    host = _policy_host(url)
+    if host is None or _refuse_as_spelled(host):
+        return
+    now = time.monotonic()
+    cached = _subresource_verdicts.get(host)
+    if cached is None or cached[0] <= now:
+        refusal = await _shared_lookup(host)
+        if len(_subresource_verdicts) >= SUBRESOURCE_VERDICT_MAX_HOSTS:
+            _subresource_verdicts.pop(next(iter(_subresource_verdicts)))
+        _subresource_verdicts[host] = (now + SUBRESOURCE_VERDICT_TTL_SECONDS, refusal)
+    else:
+        refusal = cached[1]
+    if refusal is not None:
+        raise InvalidRequestError(refusal)
+
+
+async def _shared_lookup(host: str) -> str | None:
+    task = _subresource_lookups.get(host)
+    # A task left by another event loop (a test's) cannot be awaited here.
+    if task is None or task.get_loop() is not asyncio.get_running_loop():
+        task = asyncio.ensure_future(_resolution_refusal(host))
+        _subresource_lookups[host] = task
+        task.add_done_callback(
+            lambda done: _subresource_lookups.pop(host, None) if _subresource_lookups.get(host) is done else None
         )
+    return await asyncio.shield(task)

@@ -280,28 +280,23 @@ async def install_scoped_header_routes(
         )
 
 
-async def install_context_routes(
-    context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None, *, fulfill_redirects: bool
-) -> None:
+async def install_context_routes(context: Any, headers: dict[str, str] | None, url_patterns: list[str] | None) -> None:
     """Install every launch-time context route, in the ONE order that is correct.
 
     Playwright runs context route handlers **last-registered-first**, and
     ``install_navigation_guard`` is itself a context route. Registering the
     scoped header routes AFTER it therefore makes them run FIRST, so the
-    guard's own ``route.fetch(max_redirects=0)`` validation hop carries the
-    same headers as the request the browser ends up making -- the chain the
-    guard checks and the chain the browser follows are one request.
+    guard's own ``route.fetch(max_redirects=0)`` -- which is now the ONLY
+    fetch of a navigation -- carries the same headers the browser's request
+    would have.
 
     Reversed, they are two: an unauthenticated validation fetch can be answered
     with an allowed redirect (a login page) while the authenticated request the
     browser actually makes redirects somewhere the policy would have refused,
     and the guard never sees it. The order is the whole point of this helper
     existing rather than two calls at the call site.
-
-    *fulfill_redirects* is the engine capability the guard needs -- see
-    ``install_navigation_guard``.
     """
-    await install_navigation_guard(context, fulfill_redirects=fulfill_redirects)
+    await install_navigation_guard(context)
     await install_scoped_header_routes(context, headers, url_patterns)
 
 
@@ -443,13 +438,10 @@ async def _open_browser_context(
         page = await context.new_page()
         user_data_dir = None
     # Pre-flight SSRF checks only see the URL that was asked for; a redirect
-    # is a different host. No-op unless a policy is enabled. Registration order
-    # is load-bearing -- see install_context_routes. WebKit's route.fulfill
-    # refuses a redirect status, so the guard releases a POST redirect there
-    # another way.
-    await install_context_routes(
-        context, extra_http_headers, extra_http_headers_urls, fulfill_redirects=kind != "webkit"
-    )
+    # is a different host, and a subresource was never asked for at all. No-op
+    # unless a policy is enabled. Registration order is load-bearing -- see
+    # install_context_routes.
+    await install_context_routes(context, extra_http_headers, extra_http_headers_urls)
     return browser, context, page, user_data_dir
 
 

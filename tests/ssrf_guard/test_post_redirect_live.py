@@ -80,7 +80,7 @@ async def context(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
         except Exception as exc:  # engine not installed on this host
             pytest.skip(f"{request.param} unavailable: {exc}")
         ctx = await browser.new_context()
-        await install_navigation_guard(ctx, fulfill_redirects=request.param != "webkit")
+        await install_navigation_guard(ctx)
         yield ctx
         await browser.close()
 
