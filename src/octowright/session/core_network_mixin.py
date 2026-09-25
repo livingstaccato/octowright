@@ -45,6 +45,17 @@ NETWORK_BODY_MAX_BYTES_DEFAULT = 2048
 #: gigabyte into the daemon. Deliberately far above the retained cap: an HTML
 #: error page is commonly tens of KB and its first 2 KiB is still worth having.
 RESPONSE_BODY_READ_MAX_BYTES = 1024 * 1024
+#: gzip and deflate cannot expand by more than ~1032:1, so a compressed body
+#: declared at or below this decodes within ``RESPONSE_BODY_READ_MAX_BYTES``.
+#: Short refusal reasons -- what the body exists to carry -- fit comfortably.
+COMPRESSED_BODY_READ_MAX_BYTES = RESPONSE_BODY_READ_MAX_BYTES // 1032
+#: Encodings whose worst-case expansion is bounded by the ratio above. Brotli
+#: and zstd are deliberately absent: a few hundred bytes of either can decode to
+#: gigabytes, so no declared length makes their bodies safe to read.
+_RATIO_BOUNDED_ENCODINGS = frozenset({"gzip", "x-gzip", "deflate"})
+#: Failed-body reads in flight per session. Each is one background task holding
+#: up to the read ceiling, and a hostile page can fire failing requests at will.
+RESPONSE_BODY_READS_IN_FLIGHT_MAX = 8
 #: Uncaught page exceptions retained per session. Only the count reaches
 #: ``expect_network_clean``; the messages are kept for a human debugging.
 PAGE_ERROR_LIMIT = 200
@@ -119,6 +130,32 @@ def _declared_length(response: Any) -> int | None:
         return None
 
 
+def _unbounded_body_reason(response: Any) -> str | None:
+    """Why *response*'s body must not be read, or ``None`` when its size is bounded.
+
+    Playwright has no ranged or streaming body read: ``response.body()``
+    materialises the whole DECODED body before any cap applies. So a body is
+    read only when its decoded size is known to be bounded first. No
+    trustworthy ``Content-Length`` (chunked, absent, unparsable) means the size
+    is unknown until read -- ``"unknown_length"``. ``Content-Length`` counts
+    ENCODED bytes, so a compressed body is read only for a ratio-bounded
+    encoding declared under ``COMPRESSED_BODY_READ_MAX_BYTES`` -- else
+    ``"encoded"``.
+    """
+    declared = _declared_length(response)
+    if declared is None or declared < 0:
+        return "unknown_length"
+    if declared > RESPONSE_BODY_READ_MAX_BYTES:
+        return "too_large"
+    headers = getattr(response, "headers", None)
+    encoding = str(headers.get("content-encoding", "") if isinstance(headers, dict) else "").strip().lower()
+    if encoding in ("", "identity"):
+        return None
+    if encoding in _RATIO_BOUNDED_ENCODINGS and declared <= COMPRESSED_BODY_READ_MAX_BYTES:
+        return None
+    return "encoded"
+
+
 def _same_origin(candidate: str, page_url: str) -> bool:
     """Whether *candidate* shares an origin with the page.
 
@@ -183,6 +220,10 @@ class SessionNetworkMixin(SessionLike):
     # Declared on SessionLike too; repeated because this mixin assigns it, and
     # mypy otherwise reports its first read here as "Cannot determine type".
     _inflight_tracking: bool
+    #: Failed-body reads scheduled and not yet finished; see
+    #: ``RESPONSE_BODY_READS_IN_FLIGHT_MAX``. A class default so a bare mixin
+    #: subject needs no setup.
+    _body_reads_in_flight: int = 0
 
     def _handle_response(self, response: Any) -> None:
         request = response.request
@@ -231,9 +272,17 @@ class SessionNetworkMixin(SessionLike):
             # No loop (a sync test harness driving the handler directly);
             # metadata is already recorded, the body is simply not fetched.
             return
+        if self._body_reads_in_flight >= RESPONSE_BODY_READS_IN_FLIGHT_MAX:
+            row["body_skipped"] = "busy"
+            return
+        self._body_reads_in_flight += 1
         task = loop.create_task(self._read_response_body(response, row, cap, request_url))
         self._bg_tasks.add(task)
-        task.add_done_callback(self._bg_tasks.discard)
+        task.add_done_callback(self._body_read_done)
+
+    def _body_read_done(self, task: Any) -> None:
+        self._body_reads_in_flight -= 1
+        self._bg_tasks.discard(task)
 
     async def _read_response_body(self, response: Any, row: dict[str, Any], cap: int, url: str) -> None:
         """Best-effort: a body that cannot be read leaves the row as it was.
@@ -243,16 +292,12 @@ class SessionNetworkMixin(SessionLike):
         anyone who could act on it -- and a missing body must degrade to
         today's behaviour, not to a broken response record.
         """
-        declared = _declared_length(response)
-        if declared is not None and declared > RESPONSE_BODY_READ_MAX_BYTES:
-            row["body_skipped"] = "too_large"
-            row["body_size"] = declared
+        skipped = _unbounded_body_reason(response)
+        if skipped is not None:
+            row["body_skipped"] = skipped
+            if skipped == "too_large":
+                row["body_size"] = _declared_length(response)
             return
-        # No Content-Length (a chunked response) means the size is unknown
-        # until read, and Playwright offers no ranged or streaming read of a
-        # response body, so such a body is still read whole and then capped.
-        # Content-Length also counts ENCODED bytes: a compressed body under the
-        # ceiling can decode larger. Both are accepted gaps.
         try:
             body = await response.body()
         except Exception as exc:

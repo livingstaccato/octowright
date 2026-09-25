@@ -200,8 +200,10 @@ async def test_body_over_the_read_ceiling_is_never_materialised() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("content_length", [None, "900", "garbage"])
-async def test_body_without_a_large_declared_length_is_still_read(content_length: str | None) -> None:
+@pytest.mark.parametrize("content_length", ["15", "900"])
+async def test_body_with_a_declared_length_under_the_ceiling_is_read(content_length: str) -> None:
+    """A missing or unparsable length is no longer read at all; see
+    tests/session/test_response_body_read_bounds.py."""
     response = _response(content_length, body=b'{"detail": "x"}')
     row: dict[str, Any] = {"url": "https://app.test/api"}
     await _Net()._read_response_body(response, row, 2048, row["url"])
