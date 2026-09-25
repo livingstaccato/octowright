@@ -37,6 +37,7 @@ from octowright.mcp_types import (
 from octowright.server._state import mcp
 from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.server.web_parse import parse_page
+from octowright.ssrf import ip_is_non_public
 from octowright.text_scoring import weighted_text_score
 
 _MAX_HTML_BYTES = 1_000_000
@@ -116,12 +117,6 @@ def _clean_limit(limit: int, *, default: int = 20, max_value: int = 100) -> int:
     return max(1, min(value, max_value))
 
 
-def _ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        ip = ip.ipv4_mapped
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
-
-
 def _resolve_host_ips(host: str) -> list[str]:
     infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     ips: list[str] = []
@@ -147,7 +142,7 @@ def _safe_resolved_ips(host: str) -> list[str]:
             resolved_ip = ipaddress.ip_address(ip_text)
         except ValueError:
             raise ValueError(f"web discovery got invalid address {ip_text!r} for host {host!r}") from None
-        if _ip_is_non_public(resolved_ip):
+        if ip_is_non_public(resolved_ip):
             raise ValueError(
                 f"web discovery refuses host {host!r}; resolves to non-public address {ip_text!r}"
             ) from None
@@ -167,7 +162,7 @@ def _check_ip_host(host: str) -> bool:
         ip = ipaddress.ip_address(host)
     except ValueError:
         return False
-    if _ip_is_non_public(ip):
+    if ip_is_non_public(ip):
         raise ValueError(f"web discovery refuses non-public host {host!r}")
     return True
 

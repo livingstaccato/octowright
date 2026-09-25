@@ -102,13 +102,31 @@ def _allowlist() -> set[str]:
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
-def _ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True for any address an SSRF should not be able to reach. IPv4-mapped
     IPv6 (``::ffff:127.0.0.1``) is unwrapped first so a mapped loopback/private
-    address can't slip through the v6 classification."""
+    address can't slip through the v6 classification.
+
+    ``not is_global`` is the base test, not ``is_private``: the shared address
+    space 100.64.0.0/10 (RFC 6598) is neither private nor global, and it holds
+    Alibaba Cloud's metadata service (100.100.100.200) and every Tailscale
+    node. The explicit flags stay because ``is_global`` alone is not a superset
+    of them -- on 3.11 it calls multicast 224.0.0.0/4 global. Shared by the
+    opt-in navigation policy here and the always-on web discovery check
+    (``server.web``), so the two cannot disagree about what "public" means.
+    """
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    return (
+        not ip.is_global
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
+
 
 
 _HEX_DIGITS = "0123456789abcdefABCDEF"  # pragma: allowlist secret
@@ -282,7 +300,7 @@ def _refuse_as_spelled(host: str) -> bool:
     fully classified, so there is nothing left for DNS to answer.
     """
     ip = _literal_ip(host)
-    blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else _ip_is_non_public(ip)
+    blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else ip_is_non_public(ip)
     if blocked:
         raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
     return ip is not None
@@ -320,7 +338,7 @@ def _resolved_non_public(host: str) -> list[str]:
         except ValueError:
             flagged.append(address)  # an answer we cannot classify is not public
             continue
-        if _ip_is_non_public(ip):
+        if ip_is_non_public(ip):
             flagged.append(address)
     return flagged
 
