@@ -345,3 +345,83 @@ async def test_the_export_keeps_what_the_assertion_meant(tmp_path: Path, case: s
     if fmt == "python":
         compile(source, "<exported>", "exec")
     assert (py_fragment if fmt == "python" else ts_fragment) in source, source
+
+
+# A value that closes the literal it is spliced into, in either language, and
+# calls PWNED. Embedded as data it appears only inside its own quoted literal.
+_PAYLOAD = "x'\"`); PWNED(); ('\n PWNED() // \u2028 PWNED() #"
+
+_CONTROL_ROWS = [
+    {"action": "if", "selector": "#s"},
+    {"action": "while_not", "expression": "e()"},
+    {"action": "if_not", "text": "t"},
+]
+
+
+async def _every_recorded_row(tmp_path: Path) -> list[dict[str, Any]]:
+    rows = [_launch_row(tmp_path)]
+    for kind in sorted(CASES):
+        recorded, _expected = await _recorded(tmp_path / kind, kind)
+        rows.extend(recorded)
+    for case in MEANING_CASES.values():
+        session = await _element_session(tmp_path, "exact words")
+        await case[0](session)
+        rows.extend(_rows(session.recorder))
+    return rows + _CONTROL_ROWS
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+async def test_no_recorded_field_is_spliced_into_the_source_raw(staging: Path, fmt: str) -> None:
+    """Every field of every row, replaced by a payload, stays a literal or is refused.
+
+    A recording or saved macro can be attacker-controlled; the TS select_option
+    emitter spliced ``index`` in bare, so ``{"index": "0 }); evil(); ({"}``
+    became code in the exported script.
+    """
+    for kind in CASES:
+        (staging / kind).mkdir()
+        _upload_file(staging / kind)
+    literal = repr(_PAYLOAD) if fmt == "python" else json.dumps(_PAYLOAD)
+    checked = 0
+    for row in await _every_recorded_row(staging):
+        for field in [key for key in row if key != "action"]:
+            poisoned = {**row, field: _PAYLOAD}
+            try:
+                block = [{"action": "click", "selector": "#b"}, {"action": "end_block"}] if row in _CONTROL_ROWS else []
+                source = _export_rows(staging, [poisoned, *block], fmt)
+            except ValueError:
+                continue  # refused at export time: nothing was written
+            body = source.split("https://x.test/", 1)[1] if row["action"] != "launch" else source
+            assert body.count("PWNED") == 3 * body.count(literal), f"{row['action']}.{field} ({fmt}):\n{body}"
+            if fmt == "python":
+                compile(source, "<exported>", "exec")
+            checked += 1
+    assert checked > 50
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+def test_select_option_index_must_be_a_number(tmp_path: Path, fmt: str) -> None:
+    row = {"action": "select_option", "selector": "#s", "index": "0 }); require('fs').rmSync('/'); ({"}
+    with pytest.raises(ValueError, match="index"):
+        _export_rows(tmp_path, [row], fmt)
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+def test_a_critical_point_cannot_end_its_comment(tmp_path: Path, fmt: str) -> None:
+    log = tmp_path / "r.jsonl"
+    log.write_text(json.dumps({"action": "launch", "kind": "chromium", "url": "https://x.test/"}) + "\n")
+    point = "checkout\nPWNED()\u2028PWNED()"
+    out = export_script(log, tmp_path / f"o.{fmt}", fmt=fmt, manifest={"critical_points": [point]})
+    source = out.read_text(encoding="utf-8")
+    prefix = "#" if fmt == "python" else "//"
+    assert [line for line in source.splitlines() if "PWNED" in line] == [f"{prefix} - checkout PWNED() PWNED()"]
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+def test_an_infinite_number_is_refused_as_a_value_error(tmp_path: Path, fmt: str) -> None:
+    """``int(float('inf'))`` raises OverflowError; export failures are ValueErrors."""
+    log = tmp_path / "r.jsonl"
+    rows = [{"action": "launch", "kind": "chromium", "url": "https://x.test/"}, {"action": "switch_page", "index": 1}]
+    log.write_text("\n".join(json.dumps(r) for r in rows).replace('"index": 1', '"index": Infinity') + "\n")
+    with pytest.raises(ValueError, match="index"):
+        export_script(log, tmp_path / f"o.{fmt}", fmt=fmt)

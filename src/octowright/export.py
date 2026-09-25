@@ -248,7 +248,8 @@ def _py_select_option(entry: dict) -> str:
     if entry.get("label") is not None:
         return f"        await page.select_option({sel!r}, label={entry['label']!r})"
     if entry.get("index") is not None:
-        return f"        await page.select_option({sel!r}, index={entry['index']!r})"
+        index = _safe_int(entry["index"], action="select_option", field="index")
+        return f"        await page.select_option({sel!r}, index={index})"
     return f"        await page.select_option({sel!r})"
 
 
@@ -455,7 +456,9 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python", manifest:
         comment_prefix = "#" if fmt == "python" else "//"
         lines.append(f"{comment_prefix} Critical Points:")
         for cp in manifest["critical_points"]:
-            lines.append(f"{comment_prefix} - {cp}")
+            # One line per point: a line break in the text would end the
+            # comment and make the rest of it source.
+            lines.append(f"{comment_prefix} - {' '.join(str(cp).splitlines())}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(out_path, "\n".join(lines) + "\n")

@@ -281,7 +281,8 @@ def _ts_select_option(entry: dict) -> str:
     if entry.get("label") is not None:
         return f"  await page.selectOption({sel}, {{ label: {json.dumps(entry['label'])} }});"
     if entry.get("index") is not None:
-        return f"  await page.selectOption({sel}, {{ index: {entry['index']} }});"
+        index = _safe_int(entry["index"], action="select_option", field="index")
+        return f"  await page.selectOption({sel}, {{ index: {index} }});"
     return f"  await page.selectOption({sel});"
 
 

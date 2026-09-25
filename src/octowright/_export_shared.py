@@ -45,7 +45,7 @@ def _safe_int(value: Any, *, action: str, field: str, default: int = 0) -> int:
         return default
     try:
         return int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"export: action {action!r} field {field!r} must be a number, got {value!r}") from exc
 
 
