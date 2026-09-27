@@ -60,7 +60,9 @@ class AssertionResults:
         if not self.observations:
             return {}
         copies = [dict(o) for o in self.observations]
-        scrubbed = scrub_sensitive_values(copies, sensitive_values, marker=_REDACTED_MACRO_VALUE, word_bounded=word_bounded)
+        scrubbed = scrub_sensitive_values(
+            copies, sensitive_values, marker=_REDACTED_MACRO_VALUE, word_bounded=word_bounded
+        )
         return {"assertions": scrubbed}
 
 

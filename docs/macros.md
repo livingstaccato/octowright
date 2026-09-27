@@ -422,12 +422,19 @@ and in the failure payload when a later step fails;
 `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` turns this and every other credential
 check off.
 
-The origin checked is the one of the frame that owns the element the value is
-typed into, read when it is typed: the element is resolved first and the
-credential typed into that same element, so a page that navigates during the
-fill's wait, or a selector that enters a frame
-(`iframe >> internal:control=enter-frame >> #pw`), cannot move it to an origin
-nobody checked. A credential passed to a called macro under another name
+The origin checked is that of the document that receives the value, at the
+moment it receives it. A `fill` / `fill_by` takes the selector's first match,
+checks the frame that owns it and fills that element; if the element is
+replaced (a re-render, or a navigation during the fill's wait) it resolves
+the selector again and re-checks, so a hydrated form is still filled and a
+page that moved to another origin is refused. A `type` goes one key at a
+time and, before each key, checks the document that has focus, so keys
+follow focus like a keyboard's (an auto-advancing one-time-code form works)
+and a page that navigates partway through stops the rest of the value. A
+selector that enters a frame (`iframe >> internal:control=enter-frame >> #pw`)
+is checked on that frame. What is left is the single driver round trip
+inside one Playwright fill or keypress, between focusing the element and
+dispatching the input. A credential passed to a called macro under another name
 (`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
 
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`

@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""A credential fill bound to the document whose origin was checked.
+"""A credential fill or type bound to the documents whose origin was checked.
 
 The macro layer's origin check (``macros.credential_fill``) used to read the
 active frame's URL once, before dispatch, and the fill then decided for itself
@@ -15,9 +15,10 @@ filled on the new origin; and a selector that enters a frame
 whose origin nobody read.
 
 So while a marked step dispatches, the macro layer binds its check here and
-the session's typing methods resolve the element FIRST, hand the check the URL
-of the frame that owns it, and type into that same handle. A navigation after
-the check detaches the handle and the fill fails instead of following the page.
+the session's typing methods hand it the URL of the document that receives
+the value, as it receives it (``octowright.credential_input``): the frame that
+owns the element a fill resolves, re-read when a re-render or a navigation
+replaces that element, and for a type the focused document before every key.
 
 A context variable, like the macro layer's warn-mode audit, rather than a
 parameter threaded through the dispatcher, its conditional recursion and every

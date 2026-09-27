@@ -451,7 +451,7 @@ class SessionPageMixin(SessionLike):
     # already holds -- the gate grants re-entry by owning-task identity, and
     # this runs inline in that task rather than in one it spawned.
     @gated_operation("browser_type")
-    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None, handle: Any = None) -> None:
+    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None) -> None:
         """Type *text* by pressing physical keys, holding Shift for real.
 
         Playwright's ``type()`` never holds the modifier down, so a target that
@@ -466,44 +466,44 @@ class SessionPageMixin(SessionLike):
         ``self._target()`` so a frame-scoped selector still resolves in its own
         frame. ``a11y_dragdrop`` splits the two the same way for the same
         reason.
+        """
+        await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        for char in text:
+            await self._keystroke(self.page.keyboard, char)
+            if delay_ms:
+                await asyncio.sleep(delay_ms / 1000)
+
+    @gated_operation("browser_type")
+    async def _keystroke(self, sink: Any, char: str) -> None:
+        """One physical key for *char*, pressed through *sink*.
+
+        *sink* is the page keyboard, or, for a credential, the focused
+        element's handle (``octowright.credential_input``). Both have
+        ``press`` and ``type``, and an element press is the page keyboard's
+        press after focus, so the Shift held here still applies to it.
 
         A character the layout has no physical key for (accented, emoji, any
         non-ASCII) falls back to Playwright's own text insertion: it has no
         scancode to send, so a guessed key would be worse than the payload.
-
-        With a checked *handle* (``session.fill_origin``) every key goes
-        through the element rather than to whatever the page has focused, so a
-        navigation between two keys fails the step instead of typing the rest
-        of a credential into the next document. The page keyboard's held Shift
-        still applies: an element press is that keyboard's press, after focus.
         """
-        if handle is None:
-            await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        else:
-            await handle.focus()
+        stroke = keystroke_for(char)
+        if stroke is None:
+            log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
+            await sink.type(char)
+            return
+        code, shift_held = stroke
+        if not shift_held:
+            await sink.press(code)
+            return
         keyboard = self.page.keyboard
-        press = keyboard.press if handle is None else handle.press
-        insert = keyboard.type if handle is None else handle.type
-        for char in text:
-            stroke = keystroke_for(char)
-            if stroke is None:
-                log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
-                await insert(char)
-            else:
-                code, shift_held = stroke
-                if shift_held:
-                    await keyboard.down("Shift")
-                    try:
-                        await press(code)
-                    finally:
-                        # Release even if the press raises, or the modifier
-                        # stays latched and every later keystroke on this page
-                        # -- including another tool's -- arrives shifted.
-                        await keyboard.up("Shift")
-                else:
-                    await press(code)
-            if delay_ms:
-                await asyncio.sleep(delay_ms / 1000)
+        await keyboard.down("Shift")
+        try:
+            await sink.press(code)
+        finally:
+            # Release even if the press raises, or the modifier stays latched
+            # and every later keystroke on this page -- including another
+            # tool's -- arrives shifted.
+            await keyboard.up("Shift")
 
     @gated_operation("browser_type")
     async def type_text(self, selector: str, text: str, delay_ms: int | None, *, key_mode: str | None = None) -> None:
@@ -520,17 +520,10 @@ class SessionPageMixin(SessionLike):
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_text = await self._redacted_or_original(selector, text)
         check = pending_fill_origin_check()
-        if check is not None:
-            handle, left = await self._checked_element(
-                self._target().locator(selector), check, DEFAULT_ACTION_TIMEOUT_MS
+        if check is not None:  # one key at a time, each into a checked document; see credential_input
+            await self._checked_type(
+                self._target().locator(selector), text, check, delay_ms=delay_ms, keys=key_mode == "keys"
             )
-            try:
-                if key_mode == "keys":
-                    await self._type_as_keystrokes(selector, text, delay_ms, handle)
-                else:
-                    await handle.type(text, delay=delay_ms or 0, timeout=left)
-            finally:
-                await self._dispose_handle(handle)
         elif key_mode == "keys":
             await self._type_as_keystrokes(selector, text, delay_ms)
         else:
@@ -550,12 +543,8 @@ class SessionPageMixin(SessionLike):
         check = pending_fill_origin_check()
         if check is None:
             await self._target().fill(selector, value, timeout=budget)
-        else:  # bound to the checked element; see session.fill_origin
-            handle, left = await self._checked_element(self._target().locator(selector), check, budget)
-            try:
-                await handle.fill(value, timeout=left)
-            finally:
-                await self._dispose_handle(handle)
+        else:  # into a checked document only; see octowright.credential_input
+            await self._checked_fill(self._target().locator(selector), value, check, budget)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("macro_credential_fill_origin")

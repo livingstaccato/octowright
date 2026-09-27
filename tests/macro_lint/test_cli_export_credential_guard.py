@@ -150,6 +150,9 @@ def test_a_credential_fill_on_the_trusted_origin_runs(monkeypatch: pytest.Monkey
     assert rec.args_for("locator.resolve:main") == ("#pw",)
     assert rec.args_for("handle.fill") == (SECRET,)
     assert "fill" not in rec.names()
+    # The first match, as a selector fill takes it, not a strict single one.
+    assert "locator.first:css" in rec.names()
+    assert "handle.dispose" in rec.names()
 
 
 def test_a_step_listing_the_origin_may_fill_there(monkeypatch: pytest.MonkeyPatch) -> None:

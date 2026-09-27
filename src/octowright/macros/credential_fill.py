@@ -69,9 +69,10 @@ async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) ->
     ``session.url``, which is the last URL an octowright navigate wrote and
     misses a redirect or a script-driven navigation -- so a refusal comes
     before the step does anything. Then, bound for the step's dispatch
-    (``session.fill_origin``), on the frame that owns the element the value is
-    actually typed into, at the moment it is typed: a navigation during the
-    fill's wait, or a selector that enters a frame, is what moved it.
+    (``session.fill_origin``), on the document that actually receives the
+    value, as it receives it (``octowright.credential_input``): a navigation
+    during the fill's wait or partway through a type, or a selector that
+    enters a frame, is what moved it.
     """
     check = _OriginCheck(session, action) if action.get(CREDENTIAL_FILL_MARKER) else None
     if check is not None:

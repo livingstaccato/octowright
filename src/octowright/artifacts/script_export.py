@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from octowright import credential_sinks, drawn_text
+from octowright import credential_input, credential_sinks, drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.config_paths import upload_staging_dir, user_config_dir
@@ -86,6 +86,9 @@ def render_macro_cli(
     # exemption and credential-fill origin check that macro_run enforces. The
     # script substituted with a bare re.sub before, so it ran what replay refused.
     credential_sinks_source = _module_source(credential_sinks)
+    # And how a credential step types: one key at a time into a checked
+    # document, the fill into a checked element -- the session's own helpers.
+    credential_input_source = _module_source(credential_input)
     # The live upload allowlist, so an exported set_input_files cannot read a
     # file macro_run would refuse (~/.ssh/id_rsa).
     # The default staging dir is rendered as its resolver, not its value: the
@@ -323,6 +326,9 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 {credential_sinks_source}
 
 
+{credential_input_source}
+
+
 {upload_source}
 
 
@@ -405,7 +411,7 @@ def _check_credential_fill(
 ) -> None:
     # The live rule (offsite_credential_origin): read off the active frame
     # immediately before the step, then again off the frame that owns the
-    # element the value is typed into (_credential_handle). Warn mode prints
+    # document the value is typed into (_credential_check). Warn mode prints
     # each origin once per step.
     if url is None:
         url = getattr(_target(state), "url", "")
@@ -421,19 +427,30 @@ def _check_credential_fill(
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
 
 
-async def _credential_handle(
-    state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any, locator: Any
-) -> Any:
-    # A credential step types into the element whose own frame passed the
-    # check, never the selector again: Playwright's wait survives a
-    # navigation, and a selector can enter a child frame. None for any other
-    # step, which dispatches as it always did.
+class _ScriptSession:
+    # What credential_input needs of a session. A script has one active page
+    # and nothing else driving it, so there is no gate for an operation to take.
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.page = _page(state)
+
+    def operation(self, _name: str) -> Any:
+        return self
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+
+def _credential_check(state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any) -> Any:
+    # A credential step checks the document that receives the value, as it
+    # receives it (checked_fill / checked_type): Playwright's wait survives a
+    # navigation, a selector can enter a child frame, and keys follow focus.
+    # None for any other step, which dispatches as it always did.
     if not action.get(CREDENTIAL_FILL_MARKER):
         return None
-    handle = await locator.element_handle(timeout=action.get("timeout_ms"))
-    frame = await handle.owner_frame()
-    _check_credential_fill(state, index, action, trusted, url=getattr(frame, "url", "") or "")
-    return handle
+    return lambda url: _check_credential_fill(state, index, action, trusted, url=url)
 
 
 {evidence_helpers}

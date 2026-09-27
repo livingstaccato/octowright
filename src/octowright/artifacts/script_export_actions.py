@@ -344,19 +344,32 @@ await _target(state).click(action["selector"])
 executed += 1
 """,
     "fill": """
-handle = await _credential_handle(state, index, action, trusted, _target(state).locator(action["selector"]))
-if handle is None:
+check = _credential_check(state, index, action, trusted)
+if check is None:
     await _target(state).fill(action["selector"], action.get("value", ""))
 else:
-    await handle.fill(action.get("value", ""))
+    await checked_fill(
+        _ScriptSession(state),
+        _target(state).locator(action["selector"]),
+        action.get("value", ""),
+        check,
+        action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+    )
 executed += 1
 """,
     "type": """
-handle = await _credential_handle(state, index, action, trusted, _target(state).locator(action["selector"]))
-if handle is None:
+check = _credential_check(state, index, action, trusted)
+if check is None:
     await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
 else:
-    await handle.type(action.get("text", ""), delay=action.get("delay_ms") or 0)
+    await checked_type(
+        _ScriptSession(state),
+        _target(state).locator(action["selector"]),
+        action.get("text", ""),
+        check,
+        delay_ms=action.get("delay_ms"),
+        timeout_ms=_DEFAULT_ACTION_TIMEOUT_MS,
+    )
 executed += 1
 """,
     "press_key": """
@@ -474,11 +487,17 @@ await _locator(_target(state), action).click(timeout=action.get("timeout_ms"))
 executed += 1
 """,
     "fill_by": """
-handle = await _credential_handle(state, index, action, trusted, _locator(_target(state), action))
-if handle is None:
+check = _credential_check(state, index, action, trusted)
+if check is None:
     await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
 else:
-    await handle.fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+    await checked_fill(
+        _ScriptSession(state),
+        _locator(_target(state), action),
+        action.get("value", ""),
+        check,
+        action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+    )
 executed += 1
 """,
     "get_text_by": """

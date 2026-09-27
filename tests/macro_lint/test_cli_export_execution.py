@@ -66,10 +66,19 @@ class _FakeElement:
     async def type(self, text: str, **kw: Any) -> None:
         self._rec.record("handle.type", text, **kw)
 
+    async def dispose(self) -> None:
+        self._rec.record("handle.dispose")
+
 
 class _FakeLocator:
     def __init__(self, rec: _Recorder, label: str, owner: str | None = None, frame: Any = None) -> None:
         self._rec, self._label, self._owner, self._frame = rec, label, owner, frame
+
+    @property
+    def first(self) -> _FakeLocator:
+        """A credential step takes the first match, as a selector fill does."""
+        self._rec.record(f"locator.first:{self._label}")
+        return self
 
     async def element_handle(self, **kw: Any) -> _FakeElement:
         self._rec.record(f"locator.element_handle:{self._label}", **kw)
