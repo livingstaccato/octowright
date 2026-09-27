@@ -24,7 +24,7 @@ from octowright.macros.calls import (
     dispatch_macro_call,
     dispatch_plain_action,
 )
-from octowright.macros.credential_fill import begin_fill_audit, credential_fill_guard, end_fill_audit
+from octowright.macros.credential_fill import FillAudit, begin_fill_audit, credential_fill_guard, end_fill_audit
 from octowright.macros.descriptions import describe_action
 from octowright.macros.failure_context import _truncate_bundle_console
 from octowright.macros.nesting import RunMacros
@@ -644,8 +644,7 @@ async def _run_macro_impl(
                     sensitive_values=run_values,
                 )
                 payload.update(assertions.fields(run_values))
-                if audit.offsite:  # a failed run is still one that typed a credential off-site
-                    payload["credential_fill_offsite"] = list(audit.offsite)
+                payload.update(_offsite_fields(audit))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
@@ -685,6 +684,11 @@ async def _run_macro_impl(
     if audit.offsite:  # warn mode let a credential onto a foreign origin
         result["credential_fill_offsite"] = audit.offsite
     return result
+
+
+def _offsite_fields(audit: FillAudit) -> dict[str, Any]:
+    """What warn mode let through, for a failure payload: a failed run still typed it off-site."""
+    return {"credential_fill_offsite": list(audit.offsite)} if audit.offsite else {}
 
 
 def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:
