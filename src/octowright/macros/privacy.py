@@ -7,25 +7,32 @@
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import hmac
-import html
-import json
 import os
 import re
 import secrets
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, Literal
-from urllib.parse import quote, quote_plus
 
 from octowright.macros.nesting import iter_nested_actions
 from octowright.macros.redaction_text import normalize
 
+# The scrub itself (variants, patterns, the structure walk) lives in
+# ``scrub_engine``; re-exported so every existing import keeps its spelling.
+from octowright.macros.scrub_engine import _MAX_ENCODING_DEPTH as _MAX_ENCODING_DEPTH
+from octowright.macros.scrub_engine import REDACTED as REDACTED
+from octowright.macros.scrub_engine import _scrub_patterns as _scrub_patterns
+from octowright.macros.scrub_engine import _scrub_text as _scrub_text
+from octowright.macros.scrub_engine import _scrub_tree as _scrub_tree
+from octowright.macros.scrub_engine import _serialized_variants as _serialized_variants
+from octowright.macros.scrub_engine import filtered_text_scrubber
+from octowright.macros.scrub_engine import scrub_sensitive_values as scrub_sensitive_values
+from octowright.macros.scrub_engine import sensitive_value_variants as sensitive_value_variants
+
 ARG_PRIVACY_CLASSIFIER_VERSION = 5
-REDACTED = "<redacted>"
 BLIND_SCRUB_POLICY_ENV = "OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY"
 
 BlindScrubPolicy = Literal["credentials", "all", "reject"]
@@ -175,8 +182,6 @@ def _privacy_tier(key: object) -> PrivacyTier | None:
         return "contextual"
     return None
 
-
-_MAX_ENCODING_DEPTH = 3
 
 # A mapping key that reads as structure rather than as data. Nested keys under a
 # classified branch are collected because a map can be *keyed* by an identity
@@ -346,156 +351,6 @@ def blind_scrub_arg_values(args: Mapping[str, Any], *, policy: BlindScrubPolicy 
     return NAME_ONLY_PRIVACY.blind_scrub(args, policy=policy)
 
 
-def _serialized_variants(value: str) -> tuple[str, ...]:
-    # Rendered verbatim into every exported macro CLI (artifacts.script_export),
-    # so the generated script and the live scrubber cannot drift apart. It must
-    # therefore stay self-contained: stdlib json/html/quote/quote_plus and
-    # _MAX_ENCODING_DEPTH only.
-    variants: set[str] = {
-        value,
-        json.dumps(value, ensure_ascii=True)[1:-1],
-        json.dumps(value, ensure_ascii=False)[1:-1],
-        # Serialized page HTML (page.content(), a raw capture) spells & < > " '
-        # as entities, so a value containing them no longer matches its raw form.
-        html.escape(value, quote=True),
-        html.escape(value, quote=False),
-    }
-    frontier = set(variants)
-    for _ in range(_MAX_ENCODING_DEPTH):
-        frontier = {encoded for item in frontier for encoded in (quote(item, safe=""), quote_plus(item, safe=""))}
-        variants.update(frontier)
-    # The markdown cache is markitdown's output, and markitdown's markdownify
-    # backslash-escapes ``*`` and ``_`` in text nodes (its defaults:
-    # escape_asterisks and escape_underscores on, escape_misc off -- checked on
-    # markitdown 0.1.8 / markdownify 1.2.3), so ``Secret_pa*ss`` reaches the
-    # cache as ``Secret\_pa\*ss``. Added after the percent-encoding pass: nothing
-    # percent-encodes markdown, and each variant costs a pattern per write.
-    variants.add(value.replace("*", "\\*").replace("_", "\\_"))
-    return tuple(sorted((item for item in variants if item), key=len, reverse=True))
-
-
-def sensitive_value_variants(values: Iterable[str]) -> tuple[str, ...]:
-    """Every spelling the given classified values can take in a rendered page.
-
-    The public, multi-value form of `_serialized_variants`. A caller redacting a
-    live DOM before a screenshot has to remove every encoding of every classified
-    value and then assert nothing remains, which needs one flat set rather than a
-    tuple per value.
-
-    Ordered longest first, like `sensitive_arg_values` and `_serialized_variants`.
-    That ordering is load-bearing for a replacing caller, not cosmetic: when one
-    variant is a substring of another -- which percent-encoding routinely produces,
-    since `quote` leaves short values unchanged -- replacing the shorter one first
-    consumes the characters the longer match needed and leaves the rest of the
-    longer spelling on the page.
-
-    Non-string entries are skipped rather than raising: the values reach this from
-    macro arguments, where a null field is ordinary, and `_serialized_variants`
-    raises TypeError on one. An empty string needs no guard here -- that function
-    already returns no variants for it, and an empty variant would match at every
-    position.
-    """
-    variants: set[str] = set()
-    for value in values:
-        if isinstance(value, str):
-            variants.update(_serialized_variants(value))
-    return tuple(sorted(variants, key=len, reverse=True))
-
-
-# Below this length a value is short enough to occur inside unrelated words, so
-# it only matches on an alphanumeric boundary. Longer values match anywhere:
-# a credential split across a word boundary must still be caught.
-_WORD_BOUNDED_BELOW = 4
-
-#: Characters that continue an identifier for a WORD-BOUNDED ledger entry (a
-#: password the input classification admitted, see `admit_redacted_input`).
-#: ``-`` and ``_`` are included so ``#admin-menu`` and ``admin_panel`` are one
-#: identifier and survive a typed password of ``admin``.
-_IDENTIFIER_CHARS = "A-Za-z0-9_-"
-
-
-def _continues_identifier(char: str) -> bool:
-    return char.isascii() and (char.isalnum() or char in "_-")
-
-
-def _identifier_bounded(variant: str) -> str:
-    """*variant* as a pattern that cannot match inside a longer identifier.
-
-    Each edge is guarded only where the variant's own edge character would
-    continue an identifier: a value starting with ``!`` cannot be the tail of
-    one, so requiring a boundary before it would only miss real echoes.
-    """
-    before = f"(?<![{_IDENTIFIER_CHARS}])" if _continues_identifier(variant[0]) else ""
-    after = f"(?![{_IDENTIFIER_CHARS}])" if _continues_identifier(variant[-1]) else ""
-    return f"{before}{re.escape(variant)}{after}"
-
-
-@functools.lru_cache(maxsize=64)
-def _scrub_patterns(
-    sensitive_values: tuple[str, ...], word_bounded: frozenset[str] = frozenset()
-) -> tuple[re.Pattern[str], ...]:
-    """The compiled patterns for one ledger state, in the order they must apply.
-
-    Cached because the durable scrubber runs on every capture of a session that
-    admitted a credential, and the variants (JSON, HTML, percent-encoded to a
-    depth) and their regexes were re-derived on each call. The ledger only
-    grows, so each state is compiled once. *word_bounded* values match only as
-    a whole identifier (`_identifier_bounded`); the rest keep the length rule.
-    """
-    patterns: list[re.Pattern[str]] = []
-    for sensitive in sensitive_values:
-        for variant in _serialized_variants(sensitive):
-            if sensitive in word_bounded:
-                pattern = _identifier_bounded(variant)
-            elif len(sensitive) < _WORD_BOUNDED_BELOW:
-                pattern = rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])"
-            else:
-                pattern = re.escape(variant)
-            # Percent-encoded spellings vary in hex case between producers.
-            patterns.append(re.compile(pattern, re.IGNORECASE if "%" in variant else 0))
-    return tuple(patterns)
-
-
-def _scrub_text(
-    text: str, sensitive_values: tuple[str, ...], marker: str, word_bounded: frozenset[str] = frozenset()
-) -> str:
-    for pattern in _scrub_patterns(tuple(sensitive_values), word_bounded):
-        text = pattern.sub(marker, text)
-    return text
-
-
-def scrub_sensitive_values(
-    value: Any,
-    sensitive_values: tuple[str, ...],
-    *,
-    marker: str = REDACTED,
-    word_bounded: frozenset[str] = frozenset(),
-) -> Any:
-    """Copy a diagnostic while scrubbing raw, escaped, and URL-encoded values.
-
-    Members of *word_bounded* are replaced only where they are not embedded in
-    a longer identifier; see `PrivacyLedger.word_bounded`.
-    """
-    if isinstance(value, str):
-        return _scrub_text(value, sensitive_values, marker, word_bounded)
-    if isinstance(value, Mapping):
-        return {
-            str(scrub_sensitive_values(str(key), sensitive_values, marker=marker, word_bounded=word_bounded)): (
-                scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [
-            scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded) for item in value
-        ]
-    if isinstance(value, tuple):
-        return tuple(
-            scrub_sensitive_values(item, sensitive_values, marker=marker, word_bounded=word_bounded) for item in value
-        )
-    return value
-
-
 def _redact_nested_args(value: Any, marker: str) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -617,6 +472,11 @@ class PrivacyLedger:
         self._values: tuple[str, ...] = ()
         self._bounded: set[str] = set()
         self._anywhere: set[str] = set()
+        self._word_bounded: frozenset[str] = frozenset()
+        # Bumped by every add that changes what a scrub does; `_text_scrubber`
+        # rebuilds its cache when this moves.
+        self._version = 0
+        self._cached: tuple[int, Callable[[str], str]] | None = None
         self.add(values)
 
     def add(self, values: Iterable[str], *, word_bounded: bool = False) -> None:
@@ -626,11 +486,16 @@ class PrivacyLedger:
         whichever order the two admissions arrived in.
         """
         admitted = {value for value in values if isinstance(value, str) and value}
-        (self._bounded if word_bounded else self._anywhere).update(admitted)
+        claim = self._bounded if word_bounded else self._anywhere
+        if admitted <= claim:
+            return
+        claim.update(admitted)
         new = admitted - self._members
         if new:
             self._members |= new
             self._values = tuple(sorted(self._members, key=lambda value: (-len(value), value)))
+        self._word_bounded = frozenset(self._bounded - self._anywhere)
+        self._version += 1
 
     @property
     def values(self) -> tuple[str, ...]:
@@ -648,12 +513,29 @@ class PrivacyLedger:
         own token (``pw=admin``, ``"admin"``, a URL parameter) scrubbed; what
         it gives up is an echo glued to other identifier characters.
         """
-        return frozenset(self._bounded - self._anywhere)
+        return self._word_bounded
 
     def scrub(self, value: Any) -> Any:
-        """*value* scrubbed of this ledger's values, or *value* itself when it is empty."""
-        values = self._values
-        return scrub_sensitive_values(value, values, word_bounded=self.word_bounded) if values else value
+        """*value* scrubbed of this ledger's values, or *value* itself when it is empty.
+
+        Byte-identical to `scrub_sensitive_values` over the same state, which
+        the live buffers (`input_redaction.live_scrubbed`) call on every
+        console message, network row and socket URL: see `_text_scrubber`.
+        """
+        return _scrub_tree(value, self._text_scrubber()) if self._values else value
+
+    def _text_scrubber(self) -> Callable[[str], str]:
+        """The per-string scrub for the current state, built once per state.
+
+        Almost every string a page produces holds no ledger value; see
+        `scrub_engine.filtered_text_scrubber`.
+        """
+        cached = self._cached
+        if cached is not None and cached[0] == self._version:
+            return cached[1]
+        scrub_text = filtered_text_scrubber(self._values, self._word_bounded)
+        self._cached = (self._version, scrub_text)
+        return scrub_text
 
 
 class SessionPrivacyLedger(PrivacyLedger):
