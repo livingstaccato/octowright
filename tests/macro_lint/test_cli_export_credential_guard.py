@@ -146,21 +146,25 @@ def test_a_credential_fill_on_the_trusted_origin_runs(monkeypatch: pytest.Monkey
     _result, rec = _run(
         monkeypatch, _login("https://app.example.test"), {"password": SECRET}, trusted=("https://app.example.test",)
     )
-    assert rec.args_for("fill") == ("#pw", SECRET)
+    # Typed into the element whose frame was checked, never through the selector again.
+    assert rec.args_for("locator.resolve:main") == ("#pw",)
+    assert rec.args_for("handle.fill") == (SECRET,)
+    assert "fill" not in rec.names()
 
 
 def test_a_step_listing_the_origin_may_fill_there(monkeypatch: pytest.MonkeyPatch) -> None:
     actions = _login("https://login.idp.example", allowed_origins=["https://login.idp.example"])
     _result, rec = _run(monkeypatch, actions, {"password": SECRET})
-    assert rec.args_for("fill") == ("#pw", SECRET)
+    assert rec.args_for("handle.fill") == (SECRET,)
 
 
 def test_warn_mode_fills_and_reports(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS", "warn")
     _result, rec = _run(monkeypatch, _login("https://evil.example"), {"password": SECRET})
-    assert rec.args_for("fill") == ("#pw", SECRET)
+    assert rec.args_for("handle.fill") == (SECRET,)
     err = capsys.readouterr().err
-    assert "credential_fill_offsite" in err
+    # Read twice (before the step, then off the element's frame), reported once.
+    assert err.count("credential_fill_offsite") == 1
     assert "https://evil.example" in err
     assert SECRET not in err
 

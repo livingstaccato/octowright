@@ -249,3 +249,48 @@ def test_lint_reports_a_malformed_allowed_origins() -> None:
         {"name": "t", "parameters": ["password"], "actions": [_step("fill", allowed_origins=["https://*.a.test"])]}
     )
     assert any("allowed_origins" in i.message for i in issues)
+
+
+# --- the check stays bound to the step's dispatch ---------------------------------------
+
+
+@pytest.mark.anyio
+async def test_the_check_is_bound_for_the_dispatch_of_a_marked_step_only(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The session re-checks on the element's own frame; see ``session.fill_origin``."""
+    from octowright.session.fill_origin import pending_fill_origin_check
+
+    session = _session(tmp_path, launch="https://app.example.test/", current="https://app.example.test/")
+    seen: list[Any] = []
+    session.fill.side_effect = lambda *a, **kw: seen.append(pending_fill_origin_check())
+    await _run(monkeypatch, session, [_step("fill"), _step("fill", "{{email}}")])
+    marked, unmarked = seen
+    assert unmarked is None
+    assert marked is not None
+    marked("https://app.example.test/inner")  # the own origin passes
+    with pytest.raises(ValueError, match=r"https://evil\.example"):
+        marked("https://evil.example/frame")
+    assert pending_fill_origin_check() is None
+
+
+@pytest.mark.anyio
+async def test_warn_mode_records_an_origin_once_however_often_it_is_read(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from octowright.session.fill_origin import pending_fill_origin_check
+
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS", "warn")
+    session = _session(tmp_path, launch="https://app.example.test/", current="https://evil.example/login")
+
+    def _element_check(*_a: Any, **_kw: Any) -> None:
+        check = pending_fill_origin_check()
+        check("https://evil.example/login")  # the same origin the pre-check saw
+        check("https://other.example/frame")  # a frame the pre-check never read
+
+    session.fill.side_effect = _element_check
+    result = await _run(monkeypatch, session, [_step("fill")])
+    assert result["credential_fill_offsite"] == [
+        {"step": 0, "action": "fill", "origin": "https://evil.example"},
+        {"step": 0, "action": "fill", "origin": "https://other.example"},
+    ]

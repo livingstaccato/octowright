@@ -17,6 +17,8 @@ dispatch all happens in the run's own task.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -30,6 +32,7 @@ from octowright.credential_sinks import (
     offsite_credential_origin,
 )
 from octowright.macros.substitution import own_site_origins
+from octowright.session.fill_origin import fill_origin_check
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -57,29 +60,52 @@ def end_fill_audit(token: Token[FillAudit | None]) -> None:
     _AUDIT.reset(token)
 
 
-async def guard_credential_fill(session: SessionLike, action: dict[str, Any]) -> None:
+@asynccontextmanager
+async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) -> AsyncIterator[None]:
     """Refuse (or, in warn mode, record) a credential typed onto a foreign origin.
 
-    The URL is read through the session's gate, from the frame the fill will
-    land in, immediately before dispatch -- not from ``session.url``, which is
-    the last URL an octowright navigate wrote and misses a redirect or a
-    script-driven navigation.
+    Checked twice, by one check. Before dispatch, on the URL read through the
+    session's gate from the frame the fill would land in -- not from
+    ``session.url``, which is the last URL an octowright navigate wrote and
+    misses a redirect or a script-driven navigation -- so a refusal comes
+    before the step does anything. Then, bound for the step's dispatch
+    (``session.fill_origin``), on the frame that owns the element the value is
+    actually typed into, at the moment it is typed: a navigation during the
+    fill's wait, or a selector that enters a frame, is what moved it.
     """
-    if not action.get(CREDENTIAL_FILL_MARKER):
-        return
-    shown = offsite_credential_origin(action, await session.target_url(), own_site_origins(session))
-    if shown is None:
-        return
-    if credential_fill_mode() != "warn":
-        raise credential_fill_refusal(action, shown)
-    audit = _AUDIT.get()
-    step = audit.step if audit is not None else None
-    log.warning(
-        "octowright.macro.credential_fill_offsite",
-        instance_id=session.instance_id,
-        action=action.get("action"),
-        origin=shown,
-        step=step,
-    )
-    if audit is not None:
-        audit.offsite.append({"step": step, "action": action.get("action"), "origin": shown})
+    check = _OriginCheck(session, action) if action.get(CREDENTIAL_FILL_MARKER) else None
+    if check is not None:
+        check(await session.target_url())
+    with fill_origin_check(check):
+        yield
+
+
+class _OriginCheck:
+    """One step's origin rule; warn mode records each foreign origin once, however often it is read."""
+
+    def __init__(self, session: SessionLike, action: dict[str, Any]) -> None:
+        self.session = session
+        self.action = action
+        self.trusted = own_site_origins(session)
+        self.recorded: set[str] = set()
+
+    def __call__(self, url: str) -> None:
+        shown = offsite_credential_origin(self.action, url, self.trusted)
+        if shown is None:
+            return
+        if credential_fill_mode() != "warn":
+            raise credential_fill_refusal(self.action, shown)
+        if shown in self.recorded:
+            return
+        self.recorded.add(shown)
+        audit = _AUDIT.get()
+        step = audit.step if audit is not None else None
+        log.warning(
+            "octowright.macro.credential_fill_offsite",
+            instance_id=self.session.instance_id,
+            action=self.action.get("action"),
+            origin=shown,
+            step=step,
+        )
+        if audit is not None:
+            audit.offsite.append({"step": step, "action": self.action.get("action"), "origin": shown})

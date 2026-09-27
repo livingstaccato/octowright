@@ -344,11 +344,19 @@ await _target(state).click(action["selector"])
 executed += 1
 """,
     "fill": """
-await _target(state).fill(action["selector"], action.get("value", ""))
+handle = await _credential_handle(state, index, action, trusted, _target(state).locator(action["selector"]))
+if handle is None:
+    await _target(state).fill(action["selector"], action.get("value", ""))
+else:
+    await handle.fill(action.get("value", ""))
 executed += 1
 """,
     "type": """
-await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
+handle = await _credential_handle(state, index, action, trusted, _target(state).locator(action["selector"]))
+if handle is None:
+    await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
+else:
+    await handle.type(action.get("text", ""), delay=action.get("delay_ms") or 0)
 executed += 1
 """,
     "press_key": """
@@ -466,7 +474,11 @@ await _locator(_target(state), action).click(timeout=action.get("timeout_ms"))
 executed += 1
 """,
     "fill_by": """
-await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+handle = await _credential_handle(state, index, action, trusted, _locator(_target(state), action))
+if handle is None:
+    await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+else:
+    await handle.fill(action.get("value", ""), timeout=action.get("timeout_ms"))
 executed += 1
 """,
     "get_text_by": """

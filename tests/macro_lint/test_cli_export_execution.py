@@ -51,9 +51,29 @@ class _Recorder:
         return next(a for n, a, _kw in self.calls if n == name)
 
 
+class _FakeElement:
+    """What ``element_handle`` resolves: a credential step types into this, not the selector."""
+
+    def __init__(self, rec: _Recorder, frame: Any) -> None:
+        self._rec, self._frame = rec, frame
+
+    async def owner_frame(self) -> Any:
+        return self._frame
+
+    async def fill(self, value: str, **kw: Any) -> None:
+        self._rec.record("handle.fill", value, **kw)
+
+    async def type(self, text: str, **kw: Any) -> None:
+        self._rec.record("handle.type", text, **kw)
+
+
 class _FakeLocator:
-    def __init__(self, rec: _Recorder, label: str, owner: str | None = None) -> None:
-        self._rec, self._label, self._owner = rec, label, owner
+    def __init__(self, rec: _Recorder, label: str, owner: str | None = None, frame: Any = None) -> None:
+        self._rec, self._label, self._owner, self._frame = rec, label, owner, frame
+
+    async def element_handle(self, **kw: Any) -> _FakeElement:
+        self._rec.record(f"locator.element_handle:{self._label}", **kw)
+        return _FakeElement(self._rec, self._frame)
 
     async def click(self, **kw: Any) -> None:
         self._rec.record(f"locator.click:{self._label}", **kw)
@@ -280,21 +300,21 @@ class _FakePage:
             self.context.pages.remove(self)
 
     def get_by_role(self, role: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "role")
+        return _FakeLocator(self._rec, "role", frame=self)
 
     def get_by_label(self, label: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "label")
+        return _FakeLocator(self._rec, "label", frame=self)
 
     def get_by_text(self, text: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "text")
+        return _FakeLocator(self._rec, "text", frame=self)
 
     def get_by_test_id(self, test_id: str) -> _FakeLocator:
-        return _FakeLocator(self._rec, "test_id")
+        return _FakeLocator(self._rec, "test_id", frame=self)
 
     def locator(self, selector: str) -> _FakeLocator:
         """a11y_dragdrop's source/verify_selector_* locators (CSS, not ARIA)."""
         self._log(f"locator.resolve:{self.tag}", selector)
-        return _FakeLocator(self._rec, "css", self.tag)
+        return _FakeLocator(self._rec, "css", self.tag, frame=self)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:

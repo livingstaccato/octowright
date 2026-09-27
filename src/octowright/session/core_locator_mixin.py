@@ -16,12 +16,14 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from provide.telemetry import get_logger
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+from octowright.session.fill_origin import FillOriginCheck, pending_fill_origin_check
 from octowright.session.input_redaction import CREDENTIAL_FIELD_JS, classify_credential_field, recorded_input_value
 from octowright.session.operation.gate import gated_operation
 
@@ -46,6 +48,32 @@ class SessionLocatorMixin(SessionLike):
     @gated_operation("session_locator_redaction")
     async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
         return await recorded_input_value(self, value, lambda: self._is_password_locator(locator))
+
+    @gated_operation("macro_credential_fill_origin")
+    async def _checked_element(self, locator: Any, check: FillOriginCheck, timeout_ms: int) -> tuple[Any, int]:
+        """*locator*'s element once *check* has passed its owning frame's URL, and the budget left.
+
+        See ``session.fill_origin``. The caller types into the returned handle,
+        never the selector again, and disposes of it. The handle is resolved
+        with the same strictness a selector fill has, and waiting for it
+        spends the step's budget rather than adding to it.
+        """
+        started = time.monotonic()
+        handle = await locator.element_handle(timeout=timeout_ms)
+        try:
+            frame = await handle.owner_frame()
+            check(str(getattr(frame, "url", "") or ""))
+        except BaseException:
+            await self._dispose_handle(handle)
+            raise
+        return handle, max(1, timeout_ms - int((time.monotonic() - started) * 1000))
+
+    @gated_operation("macro_credential_fill_origin")
+    async def _dispose_handle(self, handle: Any) -> None:
+        try:
+            await handle.dispose()
+        except Exception as exc:  # the document it lived in may be gone, which is the point
+            log.debug("core_locator_mixin.handle_dispose_failed", error=str(exc))
 
     @gated_operation("session_locator_resolve")
     async def _locator(self, **finders: Any) -> Any:
@@ -83,7 +111,16 @@ class SessionLocatorMixin(SessionLike):
         """Fill an input matched by role, label, or data-testid."""
         locator = await self._locator(**finders)
         recorded_value = await self._redacted_or_original_for_locator(locator, value)
-        await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
+        budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        check = pending_fill_origin_check()
+        if check is None:
+            await locator.fill(value, timeout=budget)
+        else:
+            handle, left = await self._checked_element(locator, check, budget)
+            try:
+                await handle.fill(value, timeout=left)
+            finally:
+                await self._dispose_handle(handle)
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 

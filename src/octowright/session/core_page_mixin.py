@@ -29,6 +29,7 @@ from octowright.session.aria_redaction import (
 from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
+from octowright.session.fill_origin import pending_fill_origin_check
 from octowright.session.input_redaction import CREDENTIAL_FIELD_JS, classify_credential_field, recorded_input_value
 from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
@@ -450,7 +451,7 @@ class SessionPageMixin(SessionLike):
     # already holds -- the gate grants re-entry by owning-task identity, and
     # this runs inline in that task rather than in one it spawned.
     @gated_operation("browser_type")
-    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None) -> None:
+    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None, handle: Any = None) -> None:
         """Type *text* by pressing physical keys, holding Shift for real.
 
         Playwright's ``type()`` never holds the modifier down, so a target that
@@ -469,27 +470,38 @@ class SessionPageMixin(SessionLike):
         A character the layout has no physical key for (accented, emoji, any
         non-ASCII) falls back to Playwright's own text insertion: it has no
         scancode to send, so a guessed key would be worse than the payload.
+
+        With a checked *handle* (``session.fill_origin``) every key goes
+        through the element rather than to whatever the page has focused, so a
+        navigation between two keys fails the step instead of typing the rest
+        of a credential into the next document. The page keyboard's held Shift
+        still applies: an element press is that keyboard's press, after focus.
         """
-        await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        if handle is None:
+            await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        else:
+            await handle.focus()
         keyboard = self.page.keyboard
+        press = keyboard.press if handle is None else handle.press
+        insert = keyboard.type if handle is None else handle.type
         for char in text:
             stroke = keystroke_for(char)
             if stroke is None:
                 log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
-                await keyboard.type(char)
+                await insert(char)
             else:
                 code, shift_held = stroke
                 if shift_held:
                     await keyboard.down("Shift")
                     try:
-                        await keyboard.press(code)
+                        await press(code)
                     finally:
                         # Release even if the press raises, or the modifier
                         # stays latched and every later keystroke on this page
                         # -- including another tool's -- arrives shifted.
                         await keyboard.up("Shift")
                 else:
-                    await keyboard.press(code)
+                    await press(code)
             if delay_ms:
                 await asyncio.sleep(delay_ms / 1000)
 
@@ -503,14 +515,26 @@ class SessionPageMixin(SessionLike):
         Playwright's ``type()``, which is correct for every DOM input and
         carries no keyboard-layout assumption.
         """
+        if key_mode not in (None, "text", "keys"):
+            raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
         recorded_text = await self._redacted_or_original(selector, text)
-        if key_mode == "keys":
+        check = pending_fill_origin_check()
+        if check is not None:
+            handle, left = await self._checked_element(
+                self._target().locator(selector), check, DEFAULT_ACTION_TIMEOUT_MS
+            )
+            try:
+                if key_mode == "keys":
+                    await self._type_as_keystrokes(selector, text, delay_ms, handle)
+                else:
+                    await handle.type(text, delay=delay_ms or 0, timeout=left)
+            finally:
+                await self._dispose_handle(handle)
+        elif key_mode == "keys":
             await self._type_as_keystrokes(selector, text, delay_ms)
-        elif key_mode in (None, "text"):
-            await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         else:
-            raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
+            await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
         # Only stamped when it was actually asked for, so an ordinary type row
         # stays byte-identical to what every pre-existing recording holds.
         extra = {"key_mode": key_mode} if key_mode else {}
@@ -523,7 +547,15 @@ class SessionPageMixin(SessionLike):
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
         recorded_value = await self._redacted_or_original(selector, value)
-        await self._target().fill(selector, value, timeout=budget)
+        check = pending_fill_origin_check()
+        if check is None:
+            await self._target().fill(selector, value, timeout=budget)
+        else:  # bound to the checked element; see session.fill_origin
+            handle, left = await self._checked_element(self._target().locator(selector), check, budget)
+            try:
+                await handle.fill(value, timeout=left)
+            finally:
+                await self._dispose_handle(handle)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("macro_credential_fill_origin")

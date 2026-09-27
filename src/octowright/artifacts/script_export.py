@@ -400,16 +400,40 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
 
 {state_helpers}
 
-def _check_credential_fill(state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any) -> None:
-    # The live rule (offsite_credential_origin), read off the frame the fill
-    # lands in, immediately before the step.
-    shown = offsite_credential_origin(action, getattr(_target(state), "url", ""), trusted)
+def _check_credential_fill(
+    state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any, url: Any = None
+) -> None:
+    # The live rule (offsite_credential_origin): read off the active frame
+    # immediately before the step, then again off the frame that owns the
+    # element the value is typed into (_credential_handle). Warn mode prints
+    # each origin once per step.
+    if url is None:
+        url = getattr(_target(state), "url", "")
+    shown = offsite_credential_origin(action, url, trusted)
     if shown is None:
         return
     if credential_fill_mode() != "warn":
         raise credential_fill_refusal(action, shown)
+    if (index, shown) in state.setdefault("offsite_reported", set()):
+        return
+    state["offsite_reported"].add((index, shown))
     record = {{"event": "credential_fill_offsite", "index": index, "action": action.get("action"), "origin": shown}}
     print(json.dumps(record, sort_keys=True), file=sys.stderr)
+
+
+async def _credential_handle(
+    state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any, locator: Any
+) -> Any:
+    # A credential step types into the element whose own frame passed the
+    # check, never the selector again: Playwright's wait survives a
+    # navigation, and a selector can enter a child frame. None for any other
+    # step, which dispatches as it always did.
+    if not action.get(CREDENTIAL_FILL_MARKER):
+        return None
+    handle = await locator.element_handle(timeout=action.get("timeout_ms"))
+    frame = await handle.owner_frame()
+    _check_credential_fill(state, index, action, trusted, url=getattr(frame, "url", "") or "")
+    return handle
 
 
 {evidence_helpers}

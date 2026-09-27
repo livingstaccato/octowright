@@ -24,7 +24,7 @@ from octowright.macros.calls import (
     dispatch_macro_call,
     dispatch_plain_action,
 )
-from octowright.macros.credential_fill import begin_fill_audit, end_fill_audit, guard_credential_fill
+from octowright.macros.credential_fill import begin_fill_audit, credential_fill_guard, end_fill_audit
 from octowright.macros.descriptions import describe_action
 from octowright.macros.failure_context import _truncate_bundle_console
 from octowright.macros.nesting import RunMacros
@@ -343,44 +343,46 @@ async def _dispatch_one(
     if slowmo_ms > 0:
         await asyncio.sleep(slowmo_ms / 1000)
 
-    # A composition root may install a synchronous, process-local authority
-    # check for browser actions. It runs after every awaited status/slowmo step
-    # and immediately before conditional/plain dispatch, so no scheduler turn
-    # can separate the check from the browser operation.
-    await guard_credential_fill(session, action)
-    boundary = getattr(session, "_octowright_before_macro_action", None)
-    if boundary is not None:
-        boundary(
-            action=action,
-            invocation_stack=tuple(invocation_stack or ()),
-        )
-
-    run_values = _run_values(run_ledger)
-    if action.get("action") == "screenshot" and run_values:
-        return await _dispatch_classified_screenshot(session, action, run_values)
-
-    if action.get("action") in conditional.CONDITIONAL_ACTIONS:
-
-        async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
-            return await _dispatch_one(
-                recurse_session,
-                recurse_action,
-                invocation_stack=invocation_stack,
-                max_depth=resolved_max_depth,
-                slowmo_ms=slowmo_ms,
-                run_ledger=run_ledger,
-                macros=run_macros,
+    # The credential-fill check stays bound for the whole dispatch: the
+    # session re-checks on the element the value is typed into.
+    async with credential_fill_guard(session, action):
+        # A composition root may install a synchronous, process-local authority
+        # check for browser actions. It runs after every awaited status/slowmo step
+        # and immediately before conditional/plain dispatch, so no scheduler turn
+        # can separate the check from the browser operation.
+        boundary = getattr(session, "_octowright_before_macro_action", None)
+        if boundary is not None:
+            boundary(
+                action=action,
+                invocation_stack=tuple(invocation_stack or ()),
             )
 
-        return await conditional.dispatch_conditional(session, action, _recurse)
+        run_values = _run_values(run_ledger)
+        if action.get("action") == "screenshot" and run_values:
+            return await _dispatch_classified_screenshot(session, action, run_values)
 
-    return await dispatch_plain_action(
-        session,
-        action,
-        semantic_keys=SEMANTIC_LOCATOR_KEYS,
-        strip_non_aria_noise=strip_non_aria_noise,
-        action_kwargs=action_kwargs,
-    )
+        if action.get("action") in conditional.CONDITIONAL_ACTIONS:
+
+            async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
+                return await _dispatch_one(
+                    recurse_session,
+                    recurse_action,
+                    invocation_stack=invocation_stack,
+                    max_depth=resolved_max_depth,
+                    slowmo_ms=slowmo_ms,
+                    run_ledger=run_ledger,
+                    macros=run_macros,
+                )
+
+            return await conditional.dispatch_conditional(session, action, _recurse)
+
+        return await dispatch_plain_action(
+            session,
+            action,
+            semantic_keys=SEMANTIC_LOCATOR_KEYS,
+            strip_non_aria_noise=strip_non_aria_noise,
+            action_kwargs=action_kwargs,
+        )
 
 
 async def _dispatch_simple(session: SessionLike, action: dict[str, Any]) -> tuple[int, int]:
