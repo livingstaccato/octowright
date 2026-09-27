@@ -202,7 +202,7 @@ class Recorder:
             "bytes_written": self._bytes_written,
         }
         with contextlib.suppress(OSError, ValueError):
-            self._fh.write(json.dumps(marker, ensure_ascii=False) + "\n")
+            self._fh.write(dumps_utf8_safe(marker) + "\n")
             self._fh.flush()
 
     @property

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from octowright import defaults
+from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.private_paths import secure_artifact_tree
 
@@ -74,7 +75,7 @@ def save_golden(
     # Atomic temp-sibling + os.replace: a same-user attacker who swaps the
     # destination for a symlink in the resolve()->write() window gets the
     # symlink replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2))
     return path
 
 

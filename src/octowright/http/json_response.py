@@ -3,36 +3,35 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""A JSON response that cannot 500 on page text.
+"""The one JSON response class every HTTP route answers with.
 
 Starlette's ``JSONResponse`` renders with ``ensure_ascii=False`` and a strict
 UTF-8 encode, so one console entry holding a lone surrogate made ``/console``
 answer 500 until the entry left the ring. See ``octowright._json_text``.
+
+It is a class, used by every route, rather than a helper a route opts into:
+the helper was adopted route by route and the scenario and meta routes --
+whose bodies carry page text through a macro's console tail and a macro's
+recorded accessible names -- were missed. ``tests/test_lone_surrogate_sinks``
+fails on any ``http`` module that imports Starlette's class directly.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse
 
 from octowright._json_text import dumps_utf8_safe
 
 
-def safe_json_response(
-    content: Any,
-    status_code: int = 200,
-    headers: dict[str, str] | None = None,
-    background: BackgroundTask | None = None,
-) -> JSONResponse:
+class SafeJSONResponse(JSONResponse):
     """A ``JSONResponse`` whose body is rendered surrogate-safe.
 
     Starlette's own ``render`` arguments, so an encodable body is
-    byte-identical; the body is replaced after construction rather than by
-    overriding ``render`` so the instance is still a plain ``JSONResponse``.
+    byte-identical; still an ``isinstance`` of ``JSONResponse`` for anything
+    that checks.
     """
-    response = JSONResponse(None, status_code=status_code, headers=headers, background=background)
-    response.body = dumps_utf8_safe(content, allow_nan=False, indent=None, separators=(",", ":")).encode("utf-8")
-    response.headers["content-length"] = str(len(response.body))
-    return response
+
+    def render(self, content: Any) -> bytes:
+        return dumps_utf8_safe(content, allow_nan=False, indent=None, separators=(",", ":")).encode("utf-8")

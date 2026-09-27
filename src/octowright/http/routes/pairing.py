@@ -13,11 +13,12 @@ the loopback/Host/cross-origin guard like every sensitive route.
 from __future__ import annotations
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, Response
 from starlette.routing import Route
 
 from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.pairing import PAIR_CODE_TTL_SECONDS, dashboard_pairing_state
 from octowright.http.routes._common import _read_json_body
 
@@ -37,7 +38,7 @@ async def pair_mint(request: Request) -> Response:
     if pairing is None or not pairing.token_configured or not pairing.http_mint:
         # Inline (--no-singleton) leader: no lockfile, so no token anyone
         # outside the process could present here. It mints in-process instead.
-        return JSONResponse(
+        return SafeJSONResponse(
             {
                 "error": "pairing unavailable over HTTP: this leader has no published capability token "
                 "(inline/--no-singleton mode); use the pairing URL it printed at startup or the "
@@ -46,9 +47,9 @@ async def pair_mint(request: Request) -> Response:
             status_code=503,
         )
     if not pairing.capability_token_ok(request.headers.get("x-octowright-token")):
-        return JSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
+        return SafeJSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
     code = pairing.mint_code()
-    return JSONResponse(
+    return SafeJSONResponse(
         {"code": code, "expires_in": int(PAIR_CODE_TTL_SECONDS)},
         headers={"Cache-Control": "no-store"},
     )
@@ -63,12 +64,12 @@ async def pair_redeem(request: Request) -> Response:
     pairing = dashboard_pairing_state(request)
     grant = pairing.redeem_code(code) if pairing is not None and isinstance(code, str) else None
     if grant is None:
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": "invalid or expired pairing code"},
             status_code=403,
             headers={"Cache-Control": "no-store"},
         )
-    return JSONResponse(
+    return SafeJSONResponse(
         {"bearer": grant.bearer, "expires_at": grant.expires_at},
         headers={"Cache-Control": "no-store"},
     )

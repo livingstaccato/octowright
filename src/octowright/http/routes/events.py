@@ -15,7 +15,7 @@ from typing import Any
 
 from starlette.endpoints import WebSocketEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
@@ -37,7 +37,7 @@ from octowright.http.exposure import (
     sensitive_allowed_for_connection,
     websocket_origin_allowed,
 )
-from octowright.http.json_response import safe_json_response
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.pairing import (
     DASHBOARD_AUTH_EXPIRED_REASON,
     DashboardStreamLease,
@@ -118,11 +118,11 @@ async def dashboard_events_endpoint(request: Request) -> StreamingResponse:
     )
 
 
-async def session_events(request: Request) -> JSONResponse:
+async def session_events(request: Request) -> SafeJSONResponse:
     sid = request.path_params["id"]
     log_path = _resolve_log_path(sid)
     if log_path is None:
-        return safe_json_response({"error": f"no session with id {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
     since, err = _parse_since(request)
     if err is not None:
         return err
@@ -130,7 +130,7 @@ async def session_events(request: Request) -> JSONResponse:
     # _tail_jsonl opens + seeks + reads the JSONL synchronously; running it on
     # the event loop blocks every other request and WS push for the duration.
     payload = await asyncio.to_thread(_tail_jsonl, log_path, since)
-    return safe_json_response(payload)
+    return SafeJSONResponse(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     return session_artifact_cache.get_download_rows(jsonl_path)
 
 
-async def session_console(request: Request) -> JSONResponse:
+async def session_console(request: Request) -> SafeJSONResponse:
     """Return paginated console messages for a session.
 
     Live sessions read straight from ``pool.get(id).console``. Closed sessions
@@ -182,7 +182,7 @@ async def session_console(request: Request) -> JSONResponse:
     else:
         jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
         if jsonl is None:
-            return safe_json_response({"error": f"no session with id {sid!r}"}, status_code=404)
+            return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
         messages = _read_console_from_jsonl(jsonl)
 
     level = request.query_params.get("level")
@@ -190,10 +190,10 @@ async def session_console(request: Request) -> JSONResponse:
         messages = [m for m in messages if m.get("level") == level]
 
     sliced, total, cursor = _paginate(messages, since)
-    return safe_json_response({"messages": sliced, "cursor": cursor, "total": total})
+    return SafeJSONResponse({"messages": sliced, "cursor": cursor, "total": total})
 
 
-async def session_downloads(request: Request) -> JSONResponse:
+async def session_downloads(request: Request) -> SafeJSONResponse:
     """Return paginated downloads for a session.
 
     Live sessions use ``pool.get(id).list_downloads()``. Closed sessions scan
@@ -215,7 +215,7 @@ async def session_downloads(request: Request) -> JSONResponse:
     else:
         jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
         if jsonl is None:
-            return safe_json_response({"error": f"no session with id {sid!r}"}, status_code=404)
+            return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
         downloads = _read_downloads_from_jsonl(jsonl)
 
     # Paginate first, then stat-annotate only the visible slice. Stat-ing all N
@@ -226,7 +226,7 @@ async def session_downloads(request: Request) -> JSONResponse:
         {**d, "path_exists": isinstance(d.get("path"), str) and session_artifact_cache.path_exists(d["path"])}
         for d in sliced
     ]
-    return safe_json_response({"downloads": annotated, "cursor": cursor, "total": total})
+    return SafeJSONResponse({"downloads": annotated, "cursor": cursor, "total": total})
 
 
 # ---------------------------------------------------------------------------

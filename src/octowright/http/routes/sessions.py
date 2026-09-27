@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
@@ -32,7 +31,7 @@ from octowright.http.discovery import (
     _summarise_recording,
 )
 from octowright.http.exposure import guard_sensitive_http
-from octowright.http.json_response import safe_json_response
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool, _read_json_body
 from octowright.http.routes._session_kinds import (
     close_plugin_session,
@@ -85,7 +84,7 @@ CLOSED_SESSIONS_DEFAULT_LIMIT = 200
 CLOSED_SESSIONS_MAX_LIMIT = 5000
 
 
-def _parse_closed_limit(request: Request) -> tuple[int, JSONResponse | None]:
+def _parse_closed_limit(request: Request) -> tuple[int, SafeJSONResponse | None]:
     """Parse ``?closed_limit=``. Returns (limit, error_response_or_None).
 
     Non-int → 400. A non-positive value resolves to the default rather than
@@ -98,13 +97,13 @@ def _parse_closed_limit(request: Request) -> tuple[int, JSONResponse | None]:
     try:
         value = int(raw)
     except ValueError:
-        return 0, safe_json_response({"error": f"invalid closed_limit={raw!r}, must be int"}, status_code=400)
+        return 0, SafeJSONResponse({"error": f"invalid closed_limit={raw!r}, must be int"}, status_code=400)
     if value <= 0:
         return CLOSED_SESSIONS_DEFAULT_LIMIT, None
     return min(value, CLOSED_SESSIONS_MAX_LIMIT), None
 
 
-async def list_sessions(request: Request) -> JSONResponse:
+async def list_sessions(request: Request) -> SafeJSONResponse:
     limit, error = _parse_closed_limit(request)
     if error is not None:
         return error
@@ -116,7 +115,7 @@ async def list_sessions(request: Request) -> JSONResponse:
     live += _safe_live_summaries(iter_plugin_sessions())
     live_paths = {s["log_path"] for s in live}
     closed, closed_total = _closed_sessions(state.RECORDINGS_DIR, live_paths, limit=limit)
-    return safe_json_response(
+    return SafeJSONResponse(
         {
             "live": live,
             "closed": closed,
@@ -181,7 +180,7 @@ def _attach_macro_intent(detail: dict[str, Any], log_path: Path) -> None:
         )
 
 
-async def _live_session_detail_response(live: Any) -> JSONResponse:
+async def _live_session_detail_response(live: Any) -> SafeJSONResponse:
     markdown_path = _resolve_live_markdown_path(live)
     detail = _build_live_session_detail(live, markdown_path)
     log_path = Path(live.log_path)
@@ -198,16 +197,16 @@ async def _live_session_detail_response(live: Any) -> JSONResponse:
         )
     if log_path.exists():
         _attach_macro_intent(detail, log_path)
-    return safe_json_response(detail)
+    return SafeJSONResponse(detail)
 
 
-def _closed_session_detail_response(sid: str) -> JSONResponse:
+def _closed_session_detail_response(sid: str) -> SafeJSONResponse:
     jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
     if jsonl is None:
-        return safe_json_response({"error": f"no session with id {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
     summary = _summarise_recording(jsonl)
     if summary is None:
-        return safe_json_response({"error": f"could not parse recording for id {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"could not parse recording for id {sid!r}"}, status_code=404)
     artefacts = session_artifact_cache.scan_artifacts(jsonl)
     detail = {
         **summary,
@@ -227,10 +226,10 @@ def _closed_session_detail_response(sid: str) -> JSONResponse:
 
     _attach_macro_intent(detail, jsonl)
 
-    return safe_json_response(detail)
+    return SafeJSONResponse(detail)
 
 
-async def session_detail(request: Request) -> JSONResponse:
+async def session_detail(request: Request) -> SafeJSONResponse:
     sid = request.path_params["id"]
     # A plugin session (terminal included, when enabled) has no
     # page/console/video; short-circuit before the browser-only detail
@@ -238,7 +237,7 @@ async def session_detail(request: Request) -> JSONResponse:
     plugin_found = find_plugin_session(sid)
     if plugin_found is not None:
         kind, plugin_session = plugin_found
-        return safe_json_response(plugin_session_detail(kind, plugin_session))
+        return SafeJSONResponse(plugin_session_detail(kind, plugin_session))
     live = _live_session_or_none(sid)
     if live is not None:
         return await _live_session_detail_response(live)
@@ -250,7 +249,7 @@ async def session_detail(request: Request) -> JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-async def session_launch(request: Request) -> JSONResponse:
+async def session_launch(request: Request) -> SafeJSONResponse:
     """POST /api/sessions — launch a new browser session via ``pool.launch(...)``.
 
     Returns a 201 with the SessionSummary shape used by ``GET /api/sessions``.
@@ -259,16 +258,16 @@ async def session_launch(request: Request) -> JSONResponse:
     if err is not None:
         return err
     if not isinstance(payload, dict):
-        return safe_json_response({"error": "body must be a JSON object"}, status_code=400)
+        return SafeJSONResponse({"error": "body must be a JSON object"}, status_code=400)
 
     kind = payload.get("kind")
     if not kind:
-        return safe_json_response(
+        return SafeJSONResponse(
             {"error": "kind is required (one of chromium/firefox/webkit)"},
             status_code=400,
         )
     if kind not in SUPPORTED_KINDS:
-        return safe_json_response(
+        return SafeJSONResponse(
             {"error": f"kind must be one of {list(SUPPORTED_KINDS)}, got {kind!r}"},
             status_code=400,
         )
@@ -295,7 +294,7 @@ async def session_launch(request: Request) -> JSONResponse:
         # a header that cannot be sent) and pool.launch's own `kind` check,
         # surfaced as 400 even though we pre-checked, so we stay safe if
         # SUPPORTED_KINDS drifts.
-        return safe_json_response({"error": str(e)}, status_code=400)
+        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         state.log.exception(
             "octowright.http.session_launch_failed",
@@ -304,7 +303,7 @@ async def session_launch(request: Request) -> JSONResponse:
             # from building them, where the name is unbound.
             url=payload.get("url"),
         )
-        return safe_json_response({"error": f"launch failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"launch failed: {e}"}, status_code=500)
 
     summary = _live_summary_from_launch(result)
     state.log.info(
@@ -316,10 +315,10 @@ async def session_launch(request: Request) -> JSONResponse:
         trace=launch_kwargs["trace"],
     )
     await publish_dashboard_invalidation("sessions")
-    return safe_json_response(summary, status_code=201)
+    return SafeJSONResponse(summary, status_code=201)
 
 
-async def _maybe_close_plugin(sid: str, *, force: bool) -> JSONResponse | None:
+async def _maybe_close_plugin(sid: str, *, force: bool) -> SafeJSONResponse | None:
     """Close ``sid`` if it is a live plugin session, else return ``None``.
 
     ``ProtectedSessionCloseError`` is core's own type, raised by the plugin —
@@ -329,15 +328,15 @@ async def _maybe_close_plugin(sid: str, *, force: bool) -> JSONResponse | None:
     try:
         result = await close_plugin_session(sid, force=force)
     except ProtectedSessionCloseError as e:
-        return safe_json_response({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+        return SafeJSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
     if result is None:
         return None
     state.log.info("octowright.http.plugin_session_closed", instance_id=sid)
     await publish_dashboard_invalidation("sessions")
-    return safe_json_response({"closed": True, "instance_id": sid, **result})
+    return SafeJSONResponse({"closed": True, "instance_id": sid, **result})
 
 
-async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
+async def _close_browser_session(sid: str, *, force: bool) -> SafeJSONResponse:
     """Close a live browser session and warm its close-time artefact cache.
 
     404 if no live browser session holds ``sid`` (closed sessions on disk cannot
@@ -353,17 +352,17 @@ async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
         # well before teardown finishes) -- pool.close() itself coalesces onto
         # that in-flight coordinator and returns normally. Only a genuinely
         # unknown/fully-closed id reaches this branch.
-        return safe_json_response(
+        return SafeJSONResponse(
             {"error": f"no live session with id {sid!r}; closed sessions cannot be re-closed"},
             status_code=404,
         )
     except ProtectedBrowserCloseError as e:
-        return safe_json_response({"error": str(e).replace("force=True", "force=true")}, status_code=409)
+        return SafeJSONResponse({"error": str(e).replace("force=True", "force=true")}, status_code=409)
     except ValueError as e:
-        return safe_json_response({"error": str(e)}, status_code=400)
+        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         state.log.exception("octowright.http.session_close_failed", instance_id=sid)
-        return safe_json_response({"error": f"close failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"close failed: {e}"}, status_code=500)
 
     body: dict[str, Any] = {"closed": True, "instance_id": sid, **result}
     log_path = result.get("log_path")
@@ -389,10 +388,10 @@ async def _close_browser_session(sid: str, *, force: bool) -> JSONResponse:
 
     state.log.info("octowright.http.session_closed", instance_id=sid)
     await publish_dashboard_invalidation("sessions")
-    return safe_json_response(body)
+    return SafeJSONResponse(body)
 
 
-async def session_close(request: Request) -> JSONResponse:
+async def session_close(request: Request) -> SafeJSONResponse:
     """DELETE /api/sessions/{id} — close a live session (browser or plugin kind)."""
     sid = request.path_params["id"]
     raw_force = request.query_params.get("force")
@@ -400,7 +399,7 @@ async def session_close(request: Request) -> JSONResponse:
     if raw_force is not None:
         parsed_force = _parse_bool(raw_force)
         if parsed_force is None:
-            return safe_json_response({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
+            return SafeJSONResponse({"error": f"invalid force={raw_force!r}, must be bool"}, status_code=400)
         force = parsed_force
     # A plugin-kind session (terminal included, when enabled) lives in its
     # own pool. Close it here too so the dashboard's close button works
@@ -412,67 +411,67 @@ async def session_close(request: Request) -> JSONResponse:
     return await _close_browser_session(sid, force=force)
 
 
-async def session_navigate(request: Request) -> JSONResponse:
+async def session_navigate(request: Request) -> SafeJSONResponse:
     """POST /api/sessions/{id}/navigate — drive the live session's page to ``url``."""
     sid = request.path_params["id"]
     payload, err = await _read_json_body(request)
     if err is not None:
         return err
     if not isinstance(payload, dict):
-        return safe_json_response({"error": "body must be a JSON object"}, status_code=400)
+        return SafeJSONResponse({"error": "body must be a JSON object"}, status_code=400)
 
     url = payload.get("url")
     if not isinstance(url, str) or not url.strip():
-        return safe_json_response({"error": "url is required and must be a non-empty string"}, status_code=400)
+        return SafeJSONResponse({"error": "url is required and must be a non-empty string"}, status_code=400)
 
     pool = state.pool
     if not pool.has_session(sid):
-        return safe_json_response({"error": f"no live session with id {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
     try:
         # In the try: a mid-drain session passes has_session but pool.get raises -- 409, not 500.
         session = pool.get(sid)
         await session.navigate(url)
     except ValueError as e:
         # Bad input (e.g. disallowed url scheme) — 400, not 500.
-        return safe_json_response({"error": str(e)}, status_code=400)
+        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except (SessionClosingError, SessionClosedError, SessionOperationAbortedError) as e:
-        return safe_json_response({"error": str(e)}, status_code=409)
+        return SafeJSONResponse({"error": str(e)}, status_code=409)
     except SessionBusyTimeoutError as e:
-        return safe_json_response({"error": str(e)}, status_code=503)
+        return SafeJSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
         state.log.exception("octowright.http.session_navigate_failed", instance_id=sid, url=url)
-        return safe_json_response({"error": f"navigate failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"navigate failed: {e}"}, status_code=500)
     state.log.info("octowright.http.session_navigated", instance_id=sid, url=url)
-    return safe_json_response({"ok": True, "url": url})
+    return SafeJSONResponse({"ok": True, "url": url})
 
 
-async def session_selector_validate(request: Request) -> JSONResponse:
+async def session_selector_validate(request: Request) -> SafeJSONResponse:
     """POST /api/sessions/{id}/selector/validate — check a CSS selector against a live page."""
     sid = request.path_params["id"]
     payload, err = await _read_json_body(request)
     if err is not None:
         return err
     if not isinstance(payload, dict):
-        return safe_json_response({"error": "body must be a JSON object"}, status_code=400)
+        return SafeJSONResponse({"error": "body must be a JSON object"}, status_code=400)
 
     selector = payload.get("selector")
     if not isinstance(selector, str) or not selector.strip():
-        return safe_json_response({"error": "selector is required and must be a non-empty string"}, status_code=400)
+        return SafeJSONResponse({"error": "selector is required and must be a non-empty string"}, status_code=400)
 
     pool = state.pool
     if not pool.has_session(sid):
-        return safe_json_response({"error": f"no live session with id {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no live session with id {sid!r}"}, status_code=404)
     timeout = _dashboard_operation_timeout_seconds()
     try:
         session = pool.get(sid)  # in the try for session_navigate's reason: 409, not 500
         async with session.operation("dashboard_selector_validate", wait_timeout_seconds=timeout):
             count = await session.page.locator(selector).count()
     except (SessionClosingError, SessionClosedError, SessionOperationAbortedError) as e:
-        return safe_json_response({"error": str(e)}, status_code=409)
+        return SafeJSONResponse({"error": str(e)}, status_code=409)
     except SessionBusyTimeoutError as e:
-        return safe_json_response({"error": str(e)}, status_code=503)
+        return SafeJSONResponse({"error": str(e)}, status_code=503)
     except Exception as e:
-        return safe_json_response(
+        return SafeJSONResponse(
             {
                 "ok": False,
                 "selector": selector,
@@ -482,7 +481,7 @@ async def session_selector_validate(request: Request) -> JSONResponse:
             },
             status_code=400,
         )
-    return safe_json_response({"ok": True, "selector": selector, "found": count > 0, "count": count})
+    return SafeJSONResponse({"ok": True, "selector": selector, "found": count > 0, "count": count})
 
 
 def routes() -> list[Route]:

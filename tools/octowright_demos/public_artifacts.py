@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
+from octowright._json_text import dumps_utf8_safe
 from octowright_demos.models import DemoBundle
 
 _DROP_EVENT_KEYS = {
@@ -42,7 +43,7 @@ def _sanitize_replay_log(bundle: DemoBundle, replay_path: Path) -> None:
         if not raw_line.strip():
             continue
         event = json.loads(raw_line)
-        sanitized_lines.append(json.dumps(_sanitize_event(bundle, event), ensure_ascii=False))
+        sanitized_lines.append(dumps_utf8_safe(_sanitize_event(bundle, event)))
     replay_path.write_text("\n".join(sanitized_lines) + "\n", encoding="utf-8")
 
 

@@ -14,6 +14,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 import octowright.macros as macro_mod
+from octowright._json_text import dumps_utf8_safe
 from octowright._tracing import counter, set_attrs, span
 from octowright.artifacts.digest import digest_macro, digest_recording_text
 from octowright.artifacts.evidence import EvidenceBuilder
@@ -596,7 +597,7 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
 
     from octowright._paths import atomic_write_text
 
-    atomic_write_text(verification_path, json.dumps(v_res, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(verification_path, dumps_utf8_safe(v_res, indent=2), encoding="utf-8")
 
     manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
     write_artifact_manifest(manifest_path, manifest)

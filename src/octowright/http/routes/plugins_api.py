@@ -19,10 +19,10 @@ from __future__ import annotations
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 
 
 def _frontend_rows() -> dict[str, dict[str, Any]]:
@@ -48,9 +48,9 @@ def _frontend_rows() -> dict[str, dict[str, Any]]:
     return by_kind
 
 
-async def list_plugin_frontends(_request: Request) -> JSONResponse:
+async def list_plugin_frontends(_request: Request) -> SafeJSONResponse:
     """GET /api/plugins — kind → renderer descriptor."""
-    return JSONResponse(_frontend_rows())
+    return SafeJSONResponse(_frontend_rows())
 
 
 def plugins_api_routes() -> list[Route]:

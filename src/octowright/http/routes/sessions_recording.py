@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
@@ -19,6 +18,7 @@ from octowright.browser_pool.options import LaunchOptions
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.http.discovery import _find_recording_for, _live_summary_from_launch, _read_first_launch
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.recording_sidecars import (
     is_failure_dump,
     is_recording_sidecar,
@@ -27,24 +27,24 @@ from octowright.http.recording_sidecars import (
 )
 
 
-async def recording_delete(request: Request) -> JSONResponse:
+async def recording_delete(request: Request) -> SafeJSONResponse:
     """DELETE /api/sessions/{id}/recording — remove a closed session's files from disk."""
     sid = request.path_params["id"]
     pool = state.pool
     if pool.has_session(sid):
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": f"session {sid!r} is still live; close it first"},
             status_code=409,
         )
 
     jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
     if jsonl is None:
-        return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
 
     removed, files_removed, dirs_removed = _remove_session_artifacts(sid, jsonl, state.RECORDINGS_DIR)
     state.log.info("recording_deleted", session_id=sid, files=files_removed, dirs=dirs_removed)
     await publish_dashboard_invalidation("sessions")
-    return JSONResponse(
+    return SafeJSONResponse(
         {
             "deleted": True,
             "session_id": sid,
@@ -102,7 +102,7 @@ def _relaunch_kwargs_from_record(launch: dict[str, Any]) -> dict[str, Any]:
     return LaunchOptions.from_launch_record(launch).with_har_rotated().to_pool_kwargs()
 
 
-async def session_relaunch(request: Request) -> JSONResponse:
+async def session_relaunch(request: Request) -> SafeJSONResponse:
     """POST /api/sessions/{id}/relaunch — start a fresh session with the same launch params.
 
     Reads the first ``launch`` record from the closed session's JSONL and
@@ -117,18 +117,18 @@ async def session_relaunch(request: Request) -> JSONResponse:
     sid = request.path_params["id"]
     pool = state.pool
     if pool.has_session(sid):
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": f"session {sid!r} is still live; relaunch only applies to closed sessions"},
             status_code=409,
         )
 
     jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
     if jsonl is None:
-        return JSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
+        return SafeJSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
 
     launch = _read_first_launch(jsonl)
     if launch is None:
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": f"recording for {sid!r} has no parseable launch record"},
             status_code=422,
         )
@@ -143,10 +143,10 @@ async def session_relaunch(request: Request) -> JSONResponse:
         launch_kwargs = _relaunch_kwargs_from_record(launch)
         result = await pool.launch(**launch_kwargs)
     except ValueError as e:
-        return JSONResponse({"error": f"recording for {sid!r} cannot be relaunched: {e}"}, status_code=422)
+        return SafeJSONResponse({"error": f"recording for {sid!r} cannot be relaunched: {e}"}, status_code=422)
     except Exception as e:
         state.log.exception("octowright.http.session_relaunch_failed", session_id=sid)
-        return JSONResponse({"error": f"relaunch failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"relaunch failed: {e}"}, status_code=500)
 
     summary = _live_summary_from_launch(result)
     state.log.info(
@@ -156,7 +156,7 @@ async def session_relaunch(request: Request) -> JSONResponse:
         kind=result["kind"],
     )
     await publish_dashboard_invalidation("sessions")
-    return JSONResponse(summary, status_code=201)
+    return SafeJSONResponse(summary, status_code=201)
 
 
 def routes() -> list[Route]:

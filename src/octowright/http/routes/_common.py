@@ -12,7 +12,8 @@ import os
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+
+from octowright.http.json_response import SafeJSONResponse
 
 # Falsey tokens that keep an OCTOWRIGHT_* byte-limit knob OFF.
 _OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", "no"}
@@ -35,14 +36,14 @@ def _max_request_body_bytes() -> int:
     return value if value > 0 else 0
 
 
-def _body_too_large(limit: int) -> JSONResponse:
-    return JSONResponse(
+def _body_too_large(limit: int) -> SafeJSONResponse:
+    return SafeJSONResponse(
         {"error": f"request body exceeds the {limit}-byte limit"},
         status_code=413,
     )
 
 
-async def _read_body_capped(request: Request, *, max_bytes: int = 0) -> tuple[bytes, JSONResponse | None]:
+async def _read_body_capped(request: Request, *, max_bytes: int = 0) -> tuple[bytes, SafeJSONResponse | None]:
     """Read the raw body, enforcing ``OCTOWRIGHT_MAX_REQUEST_BODY_BYTES`` when set.
 
     Rejects early on an honest oversized ``Content-Length``, and streams +
@@ -76,7 +77,7 @@ async def _read_body_capped(request: Request, *, max_bytes: int = 0) -> tuple[by
     return b"".join(chunks), None
 
 
-async def _read_json_body(request: Request, *, max_bytes: int = 0) -> tuple[Any, JSONResponse | None]:
+async def _read_json_body(request: Request, *, max_bytes: int = 0) -> tuple[Any, SafeJSONResponse | None]:
     """Read and JSON-decode the request body. An empty body decodes to ``{}``.
 
     Returns ``(payload, None)`` on success or ``(None, error_response)`` on
@@ -91,20 +92,20 @@ async def _read_json_body(request: Request, *, max_bytes: int = 0) -> tuple[Any,
         return {}, None
     content_type = (request.headers.get("content-type") or "").lower()
     if not content_type.startswith("application/json"):
-        return None, JSONResponse(
+        return None, SafeJSONResponse(
             {"error": "content-type must be application/json for JSON request bodies"},
             status_code=415,
         )
     try:
         return json.loads(raw), None
     except json.JSONDecodeError as e:
-        return None, JSONResponse(
+        return None, SafeJSONResponse(
             {"error": f"invalid JSON body: {e}"},
             status_code=400,
         )
 
 
-def _parse_since(request: Request) -> tuple[int | None, JSONResponse | None]:
+def _parse_since(request: Request) -> tuple[int | None, SafeJSONResponse | None]:
     """Parse the ``since`` query param. Returns (since, error_response_or_None).
 
     Non-int → 400. Negative ints are clamped to 0; tail_log/_paginate both
@@ -117,7 +118,7 @@ def _parse_since(request: Request) -> tuple[int | None, JSONResponse | None]:
     try:
         value = int(raw)
     except ValueError:
-        return None, JSONResponse(
+        return None, SafeJSONResponse(
             {"error": f"invalid since={raw!r}, must be int"},
             status_code=400,
         )
