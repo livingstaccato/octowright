@@ -121,8 +121,10 @@ async def scenario_start(name: str) -> ScenarioStartResult:
     description=(
         "Start a scenario from a template. Templates support simple {{key}} substitution "
         "using the provided `args`; placeholders must be quoted in the YAML, and a quoted "
-        'placeholder that is the whole value ("{{headed}}") takes the arg\'s type: '
-        "true/false, numbers and null. Returns the participant table."
+        'placeholder that is the whole value ("{{headed}}") turns exactly true/false into a '
+        "boolean and null into None; every other string, numbers included, stays a string, so "
+        'pass a JSON number (not "1280") for a numeric field. Native JSON bool/number/null args '
+        "keep their type. Returns the participant table."
     ),
 )
 async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> ScenarioStartResult:

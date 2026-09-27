@@ -315,7 +315,12 @@ def _validate_optional_ints(
     for field_name in fields:
         value = raw.get(field_name)
         if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
-            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer")
+            # A template arg substituted as text stays a string ("1280"); say how
+            # to get a number rather than leaving the caller to guess.
+            raise ValueError(
+                f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer, "
+                f"got {type(value).__name__} {value!r} (a template arg must be passed as a JSON number)"
+            )
 
 
 def _validate_optional_bools(
@@ -412,8 +417,9 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     # bare quote ended a flow-style scalar, so ``cosmo", url: "http://evil/"``
     # added a url with no line break at all. A value substituted into an
     # already-parsed string cannot become structure.
-    # A quoted scalar that is exactly one placeholder takes the arg's scalar
-    # type (bool/int/float/null), without re-parsing it; see scenario_templates.
+    # A quoted scalar that is exactly one placeholder turns true/false/null
+    # into a bool / None and leaves everything else a string, without
+    # re-parsing it; see scenario_templates.
     text = path.read_text(encoding="utf-8")
     try:
         raw = yaml.safe_load(text)

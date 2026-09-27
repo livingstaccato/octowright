@@ -160,13 +160,15 @@ def test_load_scenario_template_with_an_unquoted_placeholder_says_so(fresh_scena
         scenarios.load_scenario_template("bare", {"p": "cosmo"})
 
 
-# --- A placeholder that is the whole scalar takes the value's YAML type ----
+# --- A placeholder that is the whole scalar: true/false/null only --------
 #
 # The template is parsed before substitution, so ``headed: "{{headed}}"``
 # used to become the STRING "false" -- truthy, and rejected by the bool
-# validators. A quoted scalar that is exactly one placeholder now resolves
-# the substituted text as a YAML 1.2 core-schema scalar (bool/int/float/null)
-# and nothing else: no mapping, sequence, tag or anchor can come from an arg.
+# validators. A quoted scalar that is exactly one placeholder now turns the
+# exact lowercase spellings ``true``/``false``/``null`` into a bool / None and
+# nothing else: every other string -- numbers included -- stays a string, so a
+# persona "007" or a pin "0123" survives. A caller who wants a number passes a
+# JSON number. The template format declares no parameter types to consult.
 
 _TYPED = (
     "name: t\n"
@@ -185,33 +187,57 @@ _TYPED = (
 def _typed(fresh_scenarios, **args):
     scenarios, template_dir = fresh_scenarios
     (template_dir / "typed.yaml").write_text(_TYPED, encoding="utf-8")
-    base = {"p": "cosmo", "video": "false", "w": "1280", "url": "null", "ratio": "0.5"}
+    base = {"p": "cosmo", "video": "false", "w": 1280, "url": "null", "ratio": "0.5"}
     return scenarios.load_scenario_template("typed", {**base, **args})
 
 
-def test_whole_placeholder_takes_bool_int_float_and_null(fresh_scenarios):
+def test_whole_placeholder_takes_bool_and_null(fresh_scenarios):
     scenario = _typed(fresh_scenarios)
     participant = scenario.participants[0]
     assert participant.record_video is False
-    assert participant.viewport_w == 1280
     assert participant.url is None
-    assert scenario.verify["ratio"] == 0.5
+    assert _typed(fresh_scenarios, video="true").participants[0].record_video is True
 
 
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [("true", True), ("True", True), ("TRUE", True), ("false", False), ("~", None), ("Null", None)],
-)
-def test_whole_placeholder_follows_the_yaml_core_spellings(fresh_scenarios, text, expected):
-    scenario = _typed(fresh_scenarios, url=text)
-    assert scenario.participants[0].url is expected
+def test_a_number_spelled_as_text_stays_a_string(fresh_scenarios):
+    assert _typed(fresh_scenarios).verify["ratio"] == "0.5"
+    assert _typed(fresh_scenarios, ratio="0123").verify["ratio"] == "0123"
+
+
+@pytest.mark.parametrize("persona", ["007", "2024", "0123", "1.5", "1e3", "True", "NULL", "~", "Null"])
+def test_a_persona_that_looks_like_a_yaml_scalar_stays_the_persona(fresh_scenarios, persona):
+    """Coercing it made the persona an int/None and the scenario "missing required 'persona'"."""
+    assert _typed(fresh_scenarios, p=persona).participants[0].persona == persona
+
+
+def test_a_startup_macro_named_like_a_number_stays_a_string(fresh_scenarios):
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "macros.yaml").write_text(
+        'name: t\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    startup_macros: ["{{m}}"]\n',
+        encoding="utf-8",
+    )
+    scenario = scenarios.load_scenario_template("macros", {"m": "1"})
+    assert scenario.participants[0].startup_macros == ["1"]
+
+
+def test_a_numeric_string_for_an_integer_field_says_to_pass_a_number(fresh_scenarios):
+    with pytest.raises(ValueError, match="JSON number"):
+        _typed(fresh_scenarios, w="1280")
+
+
+@pytest.mark.parametrize(("text", "expected"), [("true", True), ("false", False), ("null", None)])
+def test_only_the_lowercase_spellings_are_coerced(fresh_scenarios, text, expected):
+    assert _typed(fresh_scenarios, url=text).participants[0].url is expected
 
 
 def test_native_json_args_keep_their_type(fresh_scenarios):
-    """An MCP caller passing a real bool/int is not round-tripped through str."""
-    participant = _typed(fresh_scenarios, video=True, w=800).participants[0]
+    """An MCP caller passing a real bool/int/float/null is not round-tripped through str."""
+    scenario = _typed(fresh_scenarios, video=True, w=800, ratio=0.25, url=None)
+    participant = scenario.participants[0]
     assert participant.record_video is True
     assert participant.viewport_w == 800
+    assert participant.url is None
+    assert scenario.verify["ratio"] == 0.25
 
 
 def test_embedded_placeholder_stays_a_string(fresh_scenarios):
@@ -223,12 +249,18 @@ def test_embedded_placeholder_stays_a_string(fresh_scenarios):
     [
         "yes",  # a YAML 1.1 bool, not a 1.2 one: the Norway problem stays out
         "on",
+        "True",
+        "FALSE",
+        "~",
+        "1280",
+        "-3",
+        "0.5",
         "[a, b]",
         "{a: 1}",
         "!!python/object:os.system x",
         "&anchor x",
         "*alias",
-        "2026-09-27",  # a YAML timestamp is not in the coerced set
+        "2026-09-27",
         "",
         "0x1F-ish",
     ],

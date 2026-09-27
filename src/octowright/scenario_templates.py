@@ -11,15 +11,18 @@ rewriting the document -- but it also made every substituted value a string,
 so ``record_video: "{{video}}"`` with ``video=false`` produced the truthy
 string ``"false"``, which the bool validators then rejected.
 
-A quoted scalar that is EXACTLY one placeholder therefore takes the arg's
-scalar type. The text is resolved against the YAML 1.2 core schema's
-bool/int/float/null spellings by regex, never by handing it to a YAML
-parser, so no mapping, sequence, tag, anchor or alias can come from an arg.
-Deliberately narrower than PyYAML's own resolver: YAML 1.1's ``yes``/``no``/
-``on``/``off`` booleans (the "Norway problem"), timestamps, hex/octal and
-``.inf``/``.nan`` stay strings, and so does the empty string -- 1.2 core
-calls it null, but an empty arg meaning "absent" is not what a caller who
-passed ``""`` wrote. A placeholder inside a longer string stays a string.
+A quoted scalar that is EXACTLY one placeholder therefore turns the exact
+lowercase spellings ``true``, ``false`` and ``null`` into a bool / ``None``,
+and nothing else. Every other value stays the string it is -- numbers
+included: coercing anything that looked like a YAML int turned a persona
+``"007"`` into ``7`` (then "missing required 'persona'"), a pin ``"0123"`` into
+``123`` and a macro named ``"1"`` into an int, with no way to keep the string.
+A caller that means a number passes a JSON number; a native JSON
+bool/number/null arg keeps its type. The template format declares no
+parameter types, so there is nothing to consult for "this one is a number".
+The text is matched, never handed to a YAML parser, so no mapping, sequence,
+tag, anchor or alias can come from an arg. A placeholder inside a longer
+string stays a string.
 """
 
 from __future__ import annotations
@@ -28,11 +31,8 @@ import re
 from typing import Any
 
 _PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
-_NULL = re.compile(r"null|Null|NULL|~")
-_TRUE = re.compile(r"true|True|TRUE")
-_FALSE = re.compile(r"false|False|FALSE")
-_INT = re.compile(r"[-+]?[0-9]+")
-_FLOAT = re.compile(r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+#: The only text a whole-value placeholder is coerced from.
+_COERCED: dict[str, Any] = {"true": True, "false": False, "null": None}
 
 # A block-mapping value or sequence item that is a bare ``{{name}}`` -- YAML
 # reads it as a nested flow mapping, so the template fails to parse.
@@ -40,18 +40,8 @@ _BARE_PLACEHOLDER_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?(?:[^\s#'\"][^#'\"]*
 
 
 def coerce_scalar(text: str) -> Any:
-    """``text`` as the YAML 1.2 core bool/int/float/null it spells, else unchanged."""
-    if _NULL.fullmatch(text):
-        return None
-    if _TRUE.fullmatch(text):
-        return True
-    if _FALSE.fullmatch(text):
-        return False
-    if _INT.fullmatch(text):
-        return int(text)
-    if _FLOAT.fullmatch(text):
-        return float(text)
-    return text
+    """``True``/``False``/``None`` for exactly ``true``/``false``/``null``, else ``text`` unchanged."""
+    return _COERCED.get(text, text)
 
 
 def _whole_value(value: Any) -> Any:
@@ -101,5 +91,6 @@ def unquoted_placeholder_hint(text: str) -> str:
     where = "; ".join(fixes) if fixes else 'e.g. persona: "{{persona_1}}"'
     return (
         f"quote every placeholder ({where}). A quoted placeholder that is the whole value still "
-        "takes its argument's type: true/false becomes a boolean, 1280 a number, null None"
+        "turns exactly true/false into a boolean and null into None; every other value, numbers "
+        "included, stays a string -- pass a JSON number for a numeric field"
     )
