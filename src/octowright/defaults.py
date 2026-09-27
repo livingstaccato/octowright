@@ -13,7 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from octowright import drawn_text as _drawn_text
-from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
+from octowright.config_paths import upload_staging_dir, user_cache_dir, user_config_dir, user_state_dir
 
 # Default OTel service name. Set as an env-var default (not a constant) so
 # provide.telemetry.setup_telemetry() picks it up via its env-driven
@@ -155,8 +155,9 @@ GOLDENS_DIR = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(_CONFIG_DIR / "g
 # Upload staging directory: the only filesystem location an LLM-driven
 # browser_set_input_files call may read from by default. Additional roots can
 # be allowlisted via OCTOWRIGHT_UPLOAD_ROOTS (os.pathsep-separated). The
-# current working directory is always permitted so test fixtures resolve.
-UPLOAD_STAGING_DIR = Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(_CONFIG_DIR / "uploads")))
+# daemon's CWD is deliberately NOT a root (see session.upload_paths). The rule
+# lives in config_paths so the exported macro CLI can render it.
+UPLOAD_STAGING_DIR = upload_staging_dir()
 UPLOAD_EXTRA_ROOTS_RAW = os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", "")
 
 # Octowright Advisor local state: preferences, lightweight usage summaries,

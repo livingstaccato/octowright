@@ -210,3 +210,48 @@ def test_the_script_renders_the_live_rules_not_a_copy() -> None:
     assert inspect.getsource(credential_sinks.offsite_credential_origin) in source
     assert inspect.getsource(upload_paths.check_upload_path) in source
     assert inspect.getsource(upload_paths.upload_roots) in source
+
+
+# --- the default upload root is worked out where the script runs ----------------------------
+
+
+def test_the_script_carries_no_path_from_the_exporting_machine() -> None:
+    """The staging dir was baked in as the exporter's absolute path: it named
+    their home and username, and did not exist on CI or for another user."""
+    from octowright import defaults
+
+    source = render_macro_cli(name="x", macro={"actions": []}, include_evidence=False)
+    assert str(defaults.UPLOAD_STAGING_DIR) not in source
+    assert str(Path.home()) not in source
+
+
+def test_the_script_renders_the_staging_dir_resolver() -> None:
+    from octowright import config_paths
+
+    source = render_macro_cli(name="x", macro={"actions": []}, include_evidence=False)
+    assert inspect.getsource(config_paths.user_config_dir) in source
+    assert inspect.getsource(config_paths.upload_staging_dir) in source
+
+
+def test_the_default_staging_dir_is_the_running_users(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Exported here, run as someone else: their config dir is the default root."""
+    runner_config = tmp_path / "runner-config"
+    staging = runner_config / "octowright" / "uploads"
+    staging.mkdir(parents=True)
+    inside = staging / "report.pdf"
+    inside.write_text("pdf", encoding="utf-8")
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    source = render_macro_cli(
+        name="guarded",
+        macro={"parameters": [], "actions": [{"action": "set_input_files", "selector": "#f", "paths": [str(inside)]}]},
+        include_evidence=False,
+    )
+    monkeypatch.delenv("OCTOWRIGHT_UPLOAD_STAGING_DIR", raising=False)
+    monkeypatch.delenv("OCTOWRIGHT_UPLOAD_ROOTS", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(runner_config))
+    monkeypatch.setenv("APPDATA", str(runner_config))
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)  # executing the generated artefact is the point
+    asyncio.run(namespace["run_guarded"](trusted_origins=()))
+    assert str(inside.resolve()) in rec.args_for("set_input_files")[-1]

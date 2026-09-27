@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 from typing import Any
 
-from octowright import credential_sinks, defaults, drawn_text
+from octowright import credential_sinks, drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.config_paths import upload_staging_dir, user_config_dir
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros.calls import actions_assert_network_clean
 from octowright.macros.privacy import (
@@ -87,7 +88,12 @@ def render_macro_cli(
     credential_sinks_source = _module_source(credential_sinks)
     # The live upload allowlist, so an exported set_input_files cannot read a
     # file macro_run would refuse (~/.ssh/id_rsa).
-    upload_source = inspect.getsource(upload_roots).rstrip() + "\n\n\n" + inspect.getsource(check_upload_path).rstrip()
+    # The default staging dir is rendered as its resolver, not its value: the
+    # value is the exporting user's absolute path, which names their home and
+    # does not exist on CI or for anyone else.
+    upload_source = "\n\n\n".join(
+        inspect.getsource(fn).rstrip() for fn in (user_config_dir, upload_staging_dir, upload_roots, check_upload_path)
+    )
 
     return f"""\
 {doc!r}
@@ -99,6 +105,7 @@ import asyncio
 import html
 import json
 import os
+import platform
 import re
 import sys
 import time
@@ -132,9 +139,6 @@ _MAX_ENCODING_DEPTH = 3
 _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
-# Where the exporting octowright stages uploads; OCTOWRIGHT_UPLOAD_STAGING_DIR
-# and OCTOWRIGHT_UPLOAD_ROOTS at run time adjust it exactly as they do live.
-_UPLOAD_STAGING_DIR_DEFAULT = {str(defaults.UPLOAD_STAGING_DIR)!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 
@@ -327,10 +331,9 @@ def _is_credential_arg(key: str) -> bool:
 
 
 def _upload_paths(paths: Any) -> list[str]:
-    roots = upload_roots(
-        Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", _UPLOAD_STAGING_DIR_DEFAULT)),
-        os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", ""),
-    )
+    # Resolved here, where the script runs, by the rule replay uses: the
+    # running user's config dir unless OCTOWRIGHT_UPLOAD_STAGING_DIR says otherwise.
+    roots = upload_roots(upload_staging_dir(), os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", ""))
     return [str(check_upload_path(path, roots)) for path in paths or []]
 
 
