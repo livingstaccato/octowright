@@ -401,11 +401,14 @@ if mode == "regex" and re.search(expected, actual) is None:
     raise RuntimeError(f"text mismatch: expected pattern {expected!r}, got {actual!r}")
 executed += 1
 """,
+    # ``equals`` null is the truthy check, as the session records and replays
+    # it (``equals is not None``); keying on the key's presence demanded that a
+    # recorded truthy check return null. Python ``==``, so True == 1 as live.
     "expect_js": """
 result = await _target(state).evaluate(action["expression"])
-if "equals" in action and result != action["equals"]:
+if action.get("equals") is not None and result != action["equals"]:
     raise RuntimeError(f"JS assertion failed: expected {action['equals']!r}, got {result!r}")
-if "equals" not in action and not result:
+if action.get("equals") is None and not result:
     raise RuntimeError(f"JS assertion failed: got {result!r}")
 executed += 1
 """,

@@ -313,7 +313,7 @@ MEANING_CASES: dict[str, tuple[Callable[[BrowserSession], Awaitable[Any]], str, 
     "expect_js-equals": (
         lambda s: s.expect_js("sentinelCount()", equals=True),
         "if await page.evaluate('sentinelCount()') != True: raise",
-        'if (JSON.stringify(await page.evaluate("sentinelCount()")) !== JSON.stringify(true)) throw',
+        'if (!pyEquals(await page.evaluate("sentinelCount()"), true)) throw',
     ),
     "expect_text-equals": (
         lambda s: s.expect_text("#t", "exact words", mode="equals"),
