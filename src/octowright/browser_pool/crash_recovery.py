@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
@@ -274,7 +275,9 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
         # not the event ran first: new_page ends up present exactly once, dead_page
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
+        chain = ssrf_guard.begin_navigation(new_page.main_frame)
         await new_page.goto(last_url, timeout=timeout_ms)
+        ssrf_guard.raise_if_refused(chain)
         # Put the replacement in the DEAD page's slot rather than at the end, so
         # page indices stay stable across a recovery. Agents hold indices from
         # page_list/page_switch; appending would shift every index at or after the

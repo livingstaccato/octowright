@@ -5,14 +5,17 @@
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf, ssrf_guard
 from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
+from octowright.request_errors import InvalidRequestError
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.a11y_dragdrop import run_a11y_dragdrop
@@ -348,11 +351,49 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
 
     @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
+        chain = ssrf_guard.begin_navigation(self.page.main_frame)
         response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
+        ssrf_guard.raise_if_refused(chain)
         url = self.page.url
         title = await bounded(self.page.title(), operation="browser_navigate_back")
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
+
+    @gated_operation("browser_open_url_settle")
+    async def _settle_guarded_popup(self, page: Any) -> None:
+        """Return once a popup the SSRF guard served has reached its destination.
+
+        A redirect reaches the popup as a client-redirect document, and that
+        document's ``domcontentloaded`` is not the destination's: waiting for
+        it alone returned ``open_url`` on the stub (measured on firefox and
+        webkit). Its ``load`` never fires -- it replaces itself while still
+        parsing -- so ``load`` is the destination's. A refused hop after it
+        fires no event at all on those engines, which is why every wait also
+        ends on the guard's word. The whole wait shares one navigation budget.
+        """
+        deadline = time.monotonic() + DEFAULT_NAV_TIMEOUT_MS / 1000
+
+        def remaining_ms() -> float:
+            return max(1.0, (deadline - time.monotonic()) * 1000)
+
+        chain = ssrf_guard.frame_chain(page.main_frame)
+        refusal = await ssrf_guard.until_refused(
+            page.wait_for_load_state("domcontentloaded", timeout=remaining_ms()), chain
+        )
+        if refusal is None:
+            try:
+                on_stub = await bounded(page.evaluate(ssrf_guard.IS_CLIENT_REDIRECT_JS), operation="browser_open_url")
+            except SessionCallTimeoutError:
+                raise
+            except Exception as exc:  # the document was replaced under the probe: still navigating
+                log.debug("octowright.open_url.redirect_probe_failed", error=repr(exc))
+                on_stub = True
+            if on_stub:
+                refusal = await ssrf_guard.until_refused(
+                    page.wait_for_load_state("load", timeout=remaining_ms()), chain
+                )
+        if refusal is not None:
+            raise InvalidRequestError(refusal)
 
     @gated_operation("browser_open_url")
     async def open_url(
@@ -379,7 +420,9 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         if target == "tab":
             new_page = await self.context.new_page()
             try:
+                chain = ssrf_guard.begin_navigation(new_page.main_frame)
                 await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                ssrf_guard.raise_if_refused(chain)
             except Exception as exc:
                 # Surface the failure to the caller — open_url is a user-action
                 # path, so a swallowed nav must not be reported as ok=True.
@@ -401,7 +444,10 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
                 )
             new_page = await popup_info.value
             try:
-                await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
+                if ssrf.policy_enabled():
+                    await self._settle_guarded_popup(new_page)
+                else:
+                    await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
             except Exception as exc:
                 log.warning(
                     "octowright.open_url.nav_failed",

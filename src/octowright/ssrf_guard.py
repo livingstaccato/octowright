@@ -3,7 +3,7 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Check every request against the SSRF policy, and serve the browser what was checked.
+"""Check every request URL against the SSRF policy, and serve the browser what was checked.
 
 ``ssrf.check_navigation_url`` runs pre-flight, on the URL an MCP tool or a
 replayed macro asked for. A redirect is not that URL: a public page that
@@ -54,21 +54,66 @@ the same client redirect to the validated ``Location``. A ``307``/``308`` (or
 ``301``/``302`` on another method) would re-send the body to a hop this guard
 could only validate by submitting it again, so it is refused.
 
-Every other request -- images, scripts, ``fetch``/XHR, WebSockets -- is checked
-too, against :func:`ssrf.check_request_url_cached`: a literal non-public IP or
-a refused name is aborted, and a hostname is resolved (off the event loop, one
-lookup per host per TTL) and aborted if any answer is non-public. WebSockets
-are not visible to ``context.route`` at all; they are routed separately with
-``route_web_socket`` and either closed or connected through.
+A redirect ``Location`` that is not http(s) is refused before any document is
+built, as a browser refuses it: the policy has no host to check for
+``javascript:``, and served as a client redirect it ran as script in the
+redirecting URL's origin (measured on all three engines).
+
+Every other request -- images, scripts, ``fetch``/XHR, WebSockets -- has its
+URL checked too, against :func:`ssrf.check_request_url_cached`: a literal
+non-public IP or a refused name is aborted, and a hostname is resolved (off the
+event loop, one lookup per host per TTL) and aborted if any answer is
+non-public. WebSockets are not visible to ``context.route`` at all; they are
+routed separately with ``route_web_socket`` and either closed or connected
+through.
+
+What is NOT checked: a subresource's redirect
+----------------------------------------------
+Only a subresource's first URL is checked. The handler is never called again
+for its redirect hops (measured on all three engines, after ``fallback()`` and
+``continue_()`` alike), so ``<img src=https://public.example/r>`` or a
+``no-cors`` ``fetch`` answering ``302 -> http://169.254.169.254/...`` reaches
+the private host on **firefox and webkit** -- a blind SSRF: the page cannot
+read the response, but the request is made. **Chromium** refuses it today,
+and not because of this guard: its Local Network Access check treats a
+guard-fulfilled page as public and headless denies the permission. That is a
+browser feature this guard neither controls nor relies on.
+
+It is not closed, because the only way to see the hops is for the guard to
+fetch every subresource itself (``route.fetch(max_redirects=0)``, walking the
+chain) and fulfil the final response -- and a redirect cannot be known before
+the fetch, so that cost lands on every request. Prototyped and measured on all
+three engines, it breaks what the browser enforces for the page:
+
+* a same-origin URL redirecting cross-origin became **readable** by the page
+  (the final body is fulfilled against the first URL, so the CORS check the
+  browser applies after a cross-origin redirect never happens);
+* a streamed response (``text/event-stream``, a ``ReadableStream`` body)
+  delivered **nothing** until it ended -- ``route.fetch`` buffers the body;
+* ``fetch(url, {credentials: 'omit'})`` **still sent the context's cookies**.
+
+Range requests, the HTTP cache and large media would all pay the same
+buffering. A deployment that must stop a subresource redirect needs
+network-layer egress control, as for DNS rebinding below.
 
 Known costs, deliberately accepted (this only runs under an opt-in policy):
 
 * **A redirecting navigation's ``goto`` returns the client-redirect document's
   synthetic 200**, not the 3xx chain, and ``response.request.redirected_from``
-  is empty. ``page.url`` and the page itself are the final ones. The real
-  chain is kept on the session's network rows instead: each hop's row carries
-  its real 3xx ``status``, ``redirect_location`` and
+  is empty. ``page.url`` and the page itself are the final ones: the document
+  replaces itself while still parsing, so its ``load`` never fires and
+  ``goto`` resolves on the destination (measured on all three engines). The
+  real chain is kept on the session's network rows instead: each hop's row
+  carries its real 3xx ``status``, ``redirect_location`` and
   ``served_as: "client_redirect"`` (``client_redirect_of``).
+* **A refused later hop is not always an error to the browser.** Chromium's
+  ``goto`` resolves on the error page, and a popup on firefox and webkit sits
+  on the client-redirect document with no further event. The tool paths
+  therefore read the guard's own verdict (:class:`FrameChain`,
+  :func:`begin_navigation`, :func:`raise_if_refused`): ``navigate``,
+  ``navigate_back``, launch navigation and ``open_url`` raise or report the
+  refusal, and ``open_url``'s popup waits past the client-redirect document
+  (``CLIENT_REDIRECT_MARKER``) to the destination's ``load``.
 * **A method-preserving redirect of a form submission is refused** under
   ``block-private``, even to a public host.
 * **Every WebSocket message is relayed through the Playwright driver** once a
@@ -84,16 +129,20 @@ touches a default deployment.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import html
 import json
 import re
 import weakref
+from collections.abc import Awaitable
 from typing import Any
 from urllib.parse import urljoin
 
 from provide.telemetry import get_logger
 
 from octowright import ssrf
+from octowright.request_errors import InvalidRequestError
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -138,13 +187,21 @@ async def _check_hop(url: str) -> None:
         raise RedirectBlocked(str(exc)) from exc
 
 
+#: Names the client-redirect document, so a caller that only sees load states
+#: can tell it is not the destination: a popup's first request has no frame to
+#: record that on (see ``_HopCounter._frame``).
+CLIENT_REDIRECT_MARKER = "octowright-client-redirect"
+IS_CLIENT_REDIRECT_JS = f"() => !!document.querySelector('meta[name=\"{CLIENT_REDIRECT_MARKER}\"]')"
+
+
 def _client_redirect(target: str) -> str:
     """A document that replaces itself with *target*, with or without JavaScript."""
     attr = html.escape(target, quote=True)
     # json.dumps leaves "<" alone, so a "</script>" in the Location would close the tag.
     literal = json.dumps(target).replace("<", "\\u003c")
     refresh = f'<meta http-equiv="refresh" content="0;url={attr}">'
-    return f"<!doctype html>{refresh}<script>location.replace({literal})</script>"
+    marker = f'<meta name="{CLIENT_REDIRECT_MARKER}">'
+    return f"<!doctype html>{marker}{refresh}<script>location.replace({literal})</script>"
 
 
 #: The redirect each client-redirected navigation really got, keyed by its
@@ -159,6 +216,86 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
         return _CLIENT_REDIRECTS.get(request)
     except TypeError:  # a request double that cannot be weakly referenced
         return None
+
+
+class FrameChain:
+    """Whether the guard refused a navigation in one frame, for a caller that cannot see it.
+
+    A caller waiting on the browser alone cannot always tell. On chromium a
+    ``goto`` whose LATER hop was refused -- the client-redirect document's own
+    navigation, not the ``goto``'s -- resolves on the error page instead of
+    raising; on firefox and webkit that hop leaves the client-redirect document
+    in place and fires no event at all, so a popup waiting for a load state
+    waits out its whole timeout (all measured).
+    """
+
+    __slots__ = ("reason", "refused")
+
+    def __init__(self) -> None:
+        self.refused = asyncio.Event()
+        self.reason: str | None = None
+
+
+_FRAME_CHAINS: weakref.WeakKeyDictionary[Any, FrameChain] = weakref.WeakKeyDictionary()
+
+
+def frame_chain(frame: Any) -> FrameChain:
+    """The guard's record for *frame*, created empty on first use."""
+    chain = _FRAME_CHAINS.get(frame)
+    if chain is None:
+        chain = _FRAME_CHAINS[frame] = FrameChain()
+    return chain
+
+
+def begin_navigation(frame: Any) -> FrameChain | None:
+    """A fresh record for a navigation about to start in *frame*; ``None`` with the policy off.
+
+    Pair it with :func:`raise_if_refused` after the ``goto``: on chromium a
+    ``goto`` whose LATER hop the guard refused resolves on the error page
+    instead of raising (measured), so it would report success.
+    """
+    if not ssrf.policy_enabled():
+        return None
+    chain = _FRAME_CHAINS[frame] = FrameChain()
+    return chain
+
+
+def raise_if_refused(chain: FrameChain | None) -> None:
+    """Raise the refusal the guard recorded on *chain* since :func:`begin_navigation`, if any."""
+    if chain is not None and chain.refused.is_set():
+        raise InvalidRequestError(chain.reason or "navigation refused by the SSRF policy")
+
+
+async def until_refused(wait: Awaitable[Any], chain: FrameChain) -> str | None:
+    """Await *wait* unless the guard refuses a navigation in *chain*'s frame first.
+
+    Returns the refusal, or ``None`` once *wait* finished. A refusal recorded
+    before the call wins at once -- the frame is fresh, so it is this one's.
+    """
+    if chain.refused.is_set():
+        _discard(wait)
+        return chain.reason
+    waiting = asyncio.ensure_future(wait)
+    refused = asyncio.ensure_future(chain.refused.wait())
+    try:
+        await asyncio.wait({waiting, refused}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in (waiting, refused):
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+    if chain.refused.is_set():
+        return chain.reason
+    waiting.result()
+    return None
+
+
+def _discard(wait: Awaitable[Any]) -> None:
+    """Close a coroutine that will not be awaited, so it is not reported as never awaited."""
+    close = getattr(wait, "close", None)
+    if close is not None:
+        close()
 
 
 class _HopCounter:
@@ -178,10 +315,12 @@ class _HopCounter:
     def _frame(request: Any) -> Any:
         try:
             return request.frame
-        except Exception as exc:  # a service-worker request has no frame
-            # Such a request is not bounded by the hop limit; say so rather
-            # than dropping the bound silently.
-            log.debug("octowright.ssrf.request_without_frame", url=getattr(request, "url", None), error=repr(exc))
+        except Exception as exc:
+            # A service-worker request has no frame, and nor does a popup's
+            # first navigation (measured: Playwright raises until the frame
+            # exists). Neither is bounded by the hop limit or recorded on a
+            # FrameChain; say so rather than dropping both silently.
+            log.debug("octowright.ssrf.request_without_frame", error=repr(exc))
             return None
 
     def step(self, request: Any, target: str) -> None:
@@ -194,10 +333,16 @@ class _HopCounter:
             raise RedirectBlocked(f"redirect chain reaching {target!r} exceeded {MAX_REDIRECT_HOPS} hops")
         self._hops[frame] = hops
 
-    def reset(self, request: Any) -> None:
+    def reset(self, request: Any, refusal: str | None = None) -> None:
+        """End *request*'s frame's chain; *refusal* says the navigation was refused or failed."""
         frame = self._frame(request)
-        if frame is not None:
-            self._hops.pop(frame, None)
+        if frame is None:
+            return
+        self._hops.pop(frame, None)
+        if refusal is not None:
+            chain = frame_chain(frame)
+            chain.reason = refusal
+            chain.refused.set()
 
 
 async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None:
@@ -208,7 +353,7 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None
         # The browser would have shown a network error; say so rather than
         # leaving the intercepted request unanswered.
         log.debug("octowright.ssrf.navigation_fetch_failed", url=request.url, error=repr(exc))
-        hops.reset(request)
+        hops.reset(request, refusal=f"navigation to {request.url!r} failed: {exc}")
         await route.abort("failed")
         return
     location = response.headers.get("location")
@@ -256,7 +401,7 @@ async def _handle_route(route: Any, request: Any, hops: _HopCounter) -> None:
             await _serve_navigation(route, request, hops)
         except RedirectBlocked as exc:
             log.warning("octowright.ssrf.redirect_blocked", url=request.url, method=request.method, error=str(exc))
-            hops.reset(request)
+            hops.reset(request, refusal=str(exc))
             await route.abort(_ABORT_REASON)
     except Exception as exc:  # pragma: no cover - route already gone
         # A route whose page navigated away raises on fulfill and abort alike.

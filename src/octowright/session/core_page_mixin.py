@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
-from octowright import ssrf
+from octowright import ssrf, ssrf_guard
 from octowright._tracing import histogram, span
 from octowright.defaults import (
     DEFAULT_ACTION_TIMEOUT_MS,
@@ -349,7 +349,9 @@ class SessionPageMixin(SessionLike):
             prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
             self._last_mcp_navigation = url
             try:
+                chain = ssrf_guard.begin_navigation(self.page.main_frame)
                 await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                ssrf_guard.raise_if_refused(chain)
             except BaseException:
                 # Reset the dedupe tag on failure: if the user then navigates to
                 # the same URL manually, that's a genuine user_navigation event

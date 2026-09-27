@@ -41,7 +41,8 @@ Two layers, deliberately split:
   attacker's short-TTL record looks like between answers, and "could not
   check" must not read as "checked and public".
 * :func:`check_request_url_cached` is the same check for subresources (every
-  image, script, fetch/XHR and WebSocket ``ssrf_guard`` sees), with a short
+  image, script, fetch/XHR and WebSocket ``ssrf_guard`` sees -- the first URL
+  only: a subresource's redirect hops never reach it, see ``ssrf_guard``), with a short
   per-host verdict cache so a page's hundredth request to a CDN does not pay
   its own ``getaddrinfo``.
 

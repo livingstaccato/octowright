@@ -355,7 +355,9 @@ async def test_a_chain_that_ends_in_an_abort_does_not_count_against_the_next(end
     hops = _HopCounter()
     frame = _Frame()
     for i in range(MAX_REDIRECT_HOPS - 2):
-        assert (await _hop(hops, frame, f"https://a.test/{i}", _Response(302, f"https://a.test/{i + 1}"))).aborted is None
+        assert (
+            await _hop(hops, frame, f"https://a.test/{i}", _Response(302, f"https://a.test/{i + 1}"))
+        ).aborted is None
     last = f"https://a.test/{MAX_REDIRECT_HOPS - 2}"
     if ending == "blocked":
         end = await _hop(hops, frame, last, _Response(302, "http://169.254.169.254/"))

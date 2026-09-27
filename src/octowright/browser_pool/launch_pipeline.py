@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -309,7 +310,9 @@ async def post_context_setup(
             # nav_warning), not a policy rejection.
             nav_error: str | None = None
             try:
+                chain = ssrf_guard.begin_navigation(page.main_frame)
                 await page.goto(target_url)
+                ssrf_guard.raise_if_refused(chain)
             except Exception as _nav_exc:
                 nav_error = str(_nav_exc)
                 log.warning(
