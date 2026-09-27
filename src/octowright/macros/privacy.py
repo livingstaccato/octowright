@@ -706,6 +706,20 @@ def session_privacy_ledger(session: Any) -> SessionPrivacyLedger:
     return ledger
 
 
+def with_session_ledger(session: Any, values: Iterable[str]) -> tuple[str, ...]:
+    """*values* and the session ledger's, de-duplicated and longest first.
+
+    For a caller that must redact everything the session holds, not only its
+    own run's values: the ledger also carries what was admitted outside any
+    macro -- a password the input classification hid from a direct
+    ``browser_fill`` -- and the page may still render it. Reads the ledger
+    without creating one.
+    """
+    ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
+    held = ledger.values if isinstance(ledger, SessionPrivacyLedger) else ()
+    return PrivacyLedger((*values, *held)).values
+
+
 def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:
     """Add values to the session's scrub set and make sure exactly one wrapper reads it.
 

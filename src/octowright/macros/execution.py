@@ -32,7 +32,7 @@ from octowright.macros.privacy import (
     MacroArgPrivacy,
     PrivacyLedger,
     install_sensitive_recorder,
-    session_privacy_ledger,
+    with_session_ledger,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
@@ -257,7 +257,7 @@ def _failure_scrub_values(session: SessionLike, run_ledger: PrivacyLedger) -> tu
     the page may have echoed one into the console or a request the payload
     carries.
     """
-    return PrivacyLedger((*run_ledger.values, *session_privacy_ledger(session).values)).values
+    return with_session_ledger(session, run_ledger.values)
 
 
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
@@ -359,7 +359,8 @@ async def _dispatch_one(
 
         run_values = _run_values(run_ledger)
         if action.get("action") == "screenshot" and run_values:
-            return await _dispatch_classified_screenshot(session, action, run_values)
+            # The pixels can show what the session admitted outside this run, too.
+            return await _dispatch_classified_screenshot(session, action, with_session_ledger(session, run_values))
 
         if action.get("action") in conditional.CONDITIONAL_ACTIONS:
 
