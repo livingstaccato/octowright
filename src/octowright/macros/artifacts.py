@@ -356,7 +356,7 @@ async def _capture_screenshot(
                 await safe_screenshot.redacted_screenshot(
                     session,
                     {"action": "screenshot", "path": str(path)},
-                    with_session_ledger(session, sensitive_values),
+                    with_session_ledger(session, sensitive_values).values,
                     root=run_dir,
                 )
             except Exception as exc:  # Best-effort evidence must not hide macro results.

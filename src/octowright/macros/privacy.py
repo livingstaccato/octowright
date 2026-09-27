@@ -588,18 +588,28 @@ def session_privacy_ledger(session: Any) -> SessionPrivacyLedger:
     return ledger
 
 
-def with_session_ledger(session: Any, values: Iterable[str]) -> tuple[str, ...]:
-    """*values* and the session ledger's, de-duplicated and longest first.
+def with_session_ledger(session: Any, values: Iterable[str]) -> PrivacyLedger:
+    """*values* merged with the session ledger, which keeps each value's word-bounded status.
 
     For a caller that must redact everything the session holds, not only its
     own run's values: the ledger also carries what was admitted outside any
     macro -- a password the input classification hid from a direct
     ``browser_fill`` -- and the page may still render it. Reads the ledger
     without creating one.
+
+    A ledger, not a flat tuple: a flat tuple scrubbed a typed ``admin`` inside
+    ``Administrator`` and ``#admin-menu`` again, which is what
+    `PrivacyLedger.word_bounded` exists to prevent. *values* are the run's own
+    classified values and match anywhere, so a value held both ways is
+    scrubbed anywhere (`PrivacyLedger.add`).
     """
+    merged = PrivacyLedger(values)
     ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
-    held = ledger.values if isinstance(ledger, SessionPrivacyLedger) else ()
-    return PrivacyLedger((*values, *held)).values
+    if isinstance(ledger, SessionPrivacyLedger):
+        bounded = ledger.word_bounded
+        merged.add(value for value in ledger.values if value not in bounded)
+        merged.add(bounded, word_bounded=True)
+    return merged
 
 
 def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:

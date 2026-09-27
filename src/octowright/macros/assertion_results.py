@@ -49,7 +49,9 @@ class AssertionResults:
             observation["warning"] = warning
         self.observations.append(observation)
 
-    def fields(self, sensitive_values: tuple[str, ...]) -> MacroAssertionFields:
+    def fields(
+        self, sensitive_values: tuple[str, ...], *, word_bounded: frozenset[str] = frozenset()
+    ) -> MacroAssertionFields:
         """``{"assertions": [...]}`` for a result or failure payload, or nothing when no check ran.
 
         Scrubbed of the run's sensitive values like the rest of that payload: a
@@ -58,7 +60,8 @@ class AssertionResults:
         if not self.observations:
             return {}
         copies = [dict(o) for o in self.observations]
-        return {"assertions": scrub_sensitive_values(copies, sensitive_values, marker=_REDACTED_MACRO_VALUE)}
+        scrubbed = scrub_sensitive_values(copies, sensitive_values, marker=_REDACTED_MACRO_VALUE, word_bounded=word_bounded)
+        return {"assertions": scrubbed}
 
 
 _CURRENT: ContextVar[AssertionResults | None] = ContextVar("octowright_macro_assertions", default=None)

@@ -289,6 +289,13 @@ async def redacted_screenshot(
     Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
     page was restored. Refusals raise ``RuntimeError`` naming what was found, never the
     value.
+
+    Every value is matched anywhere, word-bounded ledger values included
+    (`PrivacyLedger.word_bounded`), and that is deliberate. The redaction also
+    catches a value that is reversed, split across nodes or spelled in digits,
+    and none of those forms has token boundaries to respect. Blanking
+    ``Administrator`` for a typed ``admin`` is the accepted cost of never
+    drawing the password.
     """
     path_value = action.get("path")
     if not path_value:

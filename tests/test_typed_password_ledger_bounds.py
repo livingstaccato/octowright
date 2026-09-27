@@ -111,3 +111,44 @@ def test_macro_values_still_match_inside_longer_words() -> None:
     """Unchanged for a macro's classified values -- pinned elsewhere, restated here
     so the typed-input change visibly did not touch them."""
     assert privacy.scrub_sensitive_values("abcd abcde", ("abcd",)) == "<redacted> <redacted>e"
+
+
+def test_merging_the_session_ledger_keeps_a_typed_password_word_bounded() -> None:
+    """``with_session_ledger`` merges ledgers: the run's values still match anywhere, typed ones as tokens."""
+    session, _inner = _typed(TYPED)
+
+    merged = privacy.with_session_ledger(session, ["tok-3f9a"])
+
+    assert merged.word_bounded == frozenset({TYPED})
+    assert merged.scrub("Administrator admin tok-3f9a-x") == "Administrator <redacted> <redacted>-x"
+
+
+def test_a_value_the_run_also_holds_is_scrubbed_anywhere() -> None:
+    """A run's own classified value is the stronger claim, whichever ledger held it first."""
+    session, _inner = _typed(TYPED)
+
+    assert privacy.with_session_ledger(session, [TYPED]).word_bounded == frozenset()
+
+
+async def test_a_macro_failure_payload_keeps_administrator(monkeypatch: Any) -> None:
+    """The failure scrub reads the merged ledger, so a typed ``admin`` leaves ``#admin-menu`` intact."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import pytest
+
+    from octowright.macros import execution
+
+    session = MagicMock()
+    session.durable_text_scrubber = None
+    privacy.admit_redacted_input(session, TYPED)
+    session.click = AsyncMock(side_effect=RuntimeError("timed out waiting for #admin-menu (admin)"))
+    session.diagnostic_bundle = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#admin-menu"}]}
+    )
+    monkeypatch.setattr(execution, "_push_status", AsyncMock())
+    monkeypatch.setattr(execution, "_suggest_fix", AsyncMock(return_value=None))
+    with pytest.raises(RuntimeError) as raised:
+        await execution._run_macro_impl(session, "m", {"token": "fixture-run-token"}, slowmo_ms=0)
+    original = raised.value.args[0]["original"]
+    assert "#admin-menu" in original and "(admin)" not in original
