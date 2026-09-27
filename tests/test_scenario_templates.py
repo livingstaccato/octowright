@@ -292,3 +292,23 @@ def test_unquoted_placeholder_error_names_the_line_and_the_fix(fresh_scenarios):
     assert 'record_video: "{{video}}"' in message
     # Quoting does not cost the type, and the message says so.
     assert "boolean" in message
+
+
+def test_templates_and_macros_share_one_placeholder_grammar():
+    """Templates re-implemented the pattern with a different character class."""
+    from octowright import placeholders, scenario_templates
+    from octowright.macros import privacy
+
+    assert scenario_templates._PLACEHOLDER is placeholders.PLACEHOLDER_RE
+    assert privacy.PLACEHOLDER_RE is placeholders.PLACEHOLDER_RE
+    assert privacy.PLACEHOLDER_PATTERN == placeholders.PLACEHOLDER_PATTERN
+
+
+def test_a_name_the_macro_grammar_accepts_is_a_whole_value_placeholder_in_a_template(fresh_scenarios):
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "brace.yaml").write_text(
+        'name: t\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    record_video: "{{a{b}}"\n',
+        encoding="utf-8",
+    )
+    scenario = scenarios.load_scenario_template("brace", {"a{b": "true"})
+    assert scenario.participants[0].record_video is True

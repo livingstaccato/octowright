@@ -32,6 +32,12 @@ from octowright.macros.scrub_engine import filtered_text_scrubber
 from octowright.macros.scrub_engine import scrub_sensitive_values as scrub_sensitive_values
 from octowright.macros.scrub_engine import sensitive_value_variants as sensitive_value_variants
 
+# The ``{{name}}`` placeholder grammar lives in ``octowright.placeholders``
+# (shared with scenario templates); re-exported so every macro import keeps
+# its spelling.
+from octowright.placeholders import PLACEHOLDER_PATTERN as PLACEHOLDER_PATTERN
+from octowright.placeholders import PLACEHOLDER_RE as PLACEHOLDER_RE
+
 ARG_PRIVACY_CLASSIFIER_VERSION = 5
 BLIND_SCRUB_POLICY_ENV = "OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY"
 
@@ -273,14 +279,6 @@ def _collect_classified_values(
     if inherited is not None and value not in (None, ""):
         return {ClassifiedArgValue(str(value), path, inherited)}
     return set()
-
-
-#: The ``{{name}}`` placeholder grammar: what ``substitution.substitute``
-#: expands, what the linters and this module read argument names with, and
-#: (rendered as the string) what an exported macro CLI substitutes. Defined
-#: here rather than in ``substitution`` because that module imports this one.
-PLACEHOLDER_PATTERN = r"\{\{([^}]+)\}\}"
-PLACEHOLDER_RE = re.compile(PLACEHOLDER_PATTERN)
 
 
 def assertion_text_args(actions: Any) -> frozenset[str]:

@@ -30,13 +30,18 @@ from __future__ import annotations
 import re
 from typing import Any
 
-_PLACEHOLDER = re.compile(r"\{\{([^{}]+)\}\}")
+from octowright.placeholders import PLACEHOLDER_PATTERN, PLACEHOLDER_RE
+
+# The macros' grammar, not a copy of it: see ``octowright.placeholders``.
+_PLACEHOLDER = PLACEHOLDER_RE
 #: The only text a whole-value placeholder is coerced from.
 _COERCED: dict[str, Any] = {"true": True, "false": False, "null": None}
 
 # A block-mapping value or sequence item that is a bare ``{{name}}`` -- YAML
 # reads it as a nested flow mapping, so the template fails to parse.
-_BARE_PLACEHOLDER_LINE = re.compile(r"^(?P<lead>\s*(?:-\s+)?(?:[^\s#'\"][^#'\"]*?:\s+)?)(?P<ph>\{\{[^{}]+\}\})\s*$")
+_BARE_PLACEHOLDER_LINE = re.compile(
+    r"^(?P<lead>\s*(?:-\s+)?(?:[^\s#'\"][^#'\"]*?:\s+)?)(?P<ph>" + PLACEHOLDER_PATTERN + r")\s*$"
+)
 
 
 def coerce_scalar(text: str) -> Any:
