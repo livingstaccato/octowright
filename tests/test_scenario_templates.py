@@ -158,3 +158,105 @@ def test_load_scenario_template_with_an_unquoted_placeholder_says_so(fresh_scena
     )
     with pytest.raises(ValueError, match="quote"):
         scenarios.load_scenario_template("bare", {"p": "cosmo"})
+
+
+# --- A placeholder that is the whole scalar takes the value's YAML type ----
+#
+# The template is parsed before substitution, so ``headed: "{{headed}}"``
+# used to become the STRING "false" -- truthy, and rejected by the bool
+# validators. A quoted scalar that is exactly one placeholder now resolves
+# the substituted text as a YAML 1.2 core-schema scalar (bool/int/float/null)
+# and nothing else: no mapping, sequence, tag or anchor can come from an arg.
+
+_TYPED = (
+    "name: t\n"
+    "participants:\n"
+    '  - persona: "{{p}}"\n'
+    "    kind: chromium\n"
+    '    record_video: "{{video}}"\n'
+    '    viewport_w: "{{w}}"\n'
+    '    url: "{{url}}"\n'
+    "verify:\n"
+    '  ratio: "{{ratio}}"\n'
+    '  label: "run-{{video}}"\n'
+)
+
+
+def _typed(fresh_scenarios, **args):
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "typed.yaml").write_text(_TYPED, encoding="utf-8")
+    base = {"p": "cosmo", "video": "false", "w": "1280", "url": "null", "ratio": "0.5"}
+    return scenarios.load_scenario_template("typed", {**base, **args})
+
+
+def test_whole_placeholder_takes_bool_int_float_and_null(fresh_scenarios):
+    scenario = _typed(fresh_scenarios)
+    participant = scenario.participants[0]
+    assert participant.record_video is False
+    assert participant.viewport_w == 1280
+    assert participant.url is None
+    assert scenario.verify["ratio"] == 0.5
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("true", True), ("True", True), ("TRUE", True), ("false", False), ("~", None), ("Null", None)],
+)
+def test_whole_placeholder_follows_the_yaml_core_spellings(fresh_scenarios, text, expected):
+    scenario = _typed(fresh_scenarios, url=text)
+    assert scenario.participants[0].url is expected
+
+
+def test_native_json_args_keep_their_type(fresh_scenarios):
+    """An MCP caller passing a real bool/int is not round-tripped through str."""
+    participant = _typed(fresh_scenarios, video=True, w=800).participants[0]
+    assert participant.record_video is True
+    assert participant.viewport_w == 800
+
+
+def test_embedded_placeholder_stays_a_string(fresh_scenarios):
+    assert _typed(fresh_scenarios).verify["label"] == "run-false"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "yes",  # a YAML 1.1 bool, not a 1.2 one: the Norway problem stays out
+        "on",
+        "[a, b]",
+        "{a: 1}",
+        "!!python/object:os.system x",
+        "&anchor x",
+        "*alias",
+        "2026-09-27",  # a YAML timestamp is not in the coerced set
+        "",
+        "0x1F-ish",
+    ],
+)
+def test_whole_placeholder_never_becomes_structure_or_an_unlisted_type(fresh_scenarios, text):
+    assert _typed(fresh_scenarios, url=text).participants[0].url == text
+
+
+def test_bundled_collaboration_template_still_loads(fresh_scenarios):
+    from pathlib import Path
+
+    scenarios, template_dir = fresh_scenarios
+    bundled = Path(__file__).resolve().parents[1] / "examples" / "scenarios" / "templates" / "collaboration.yaml"
+    (template_dir / "collaboration.yaml").write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+    scenario = scenarios.load_scenario_template("collaboration", {"persona_1": "cosmo", "persona_2": "ziggy"})
+    assert [p.persona for p in scenario.participants] == ["cosmo", "ziggy"]
+
+
+def test_unquoted_placeholder_error_names_the_line_and_the_fix(fresh_scenarios):
+    scenarios, template_dir = fresh_scenarios
+    (template_dir / "bare2.yaml").write_text(
+        "name: t\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    record_video: {{video}}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError) as info:
+        scenarios.load_scenario_template("bare2", {"video": "true"})
+    message = str(info.value)
+    assert "line 5" in message
+    assert 'record_video: "{{video}}"' in message
+    # Quoting does not cost the type, and the message says so.
+    assert "boolean" in message

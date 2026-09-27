@@ -18,6 +18,7 @@ from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
 )
+from octowright.scenario_templates import substitute_placeholders, unquoted_placeholder_hint
 
 # ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
 # their canonical home is ``octowright.scenarios_pool``. They are NOT re-
@@ -411,34 +412,20 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     # bare quote ended a flow-style scalar, so ``cosmo", url: "http://evil/"``
     # added a url with no line break at all. A value substituted into an
     # already-parsed string cannot become structure.
+    # A quoted scalar that is exactly one placeholder takes the arg's scalar
+    # type (bool/int/float/null), without re-parsing it; see scenario_templates.
+    text = path.read_text(encoding="utf-8")
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        raw = yaml.safe_load(text)
     except yaml.YAMLError as exc:
         raise ValueError(
             f"scenario template {name!r} is not valid YAML before substitution ({exc}); "
-            'quote every placeholder, e.g. persona: "{{persona_1}}"'
+            f"{unquoted_placeholder_hint(text)}"
         ) from exc
-    replacements = {f"{{{{{k}}}}}": str(v) for k, v in args.items()}
-    return _scenario_from_raw(_substitute_placeholders(raw, replacements), name)
+    return _scenario_from_raw(substitute_placeholders(raw, args), name)
 
 
 _YAML_LINE_BREAKS = ("\n", "\r", "\x85", "\u2028", "\u2029")
-
-
-def _substitute_placeholders(node: Any, replacements: dict[str, str]) -> Any:
-    """Replace ``{{key}}`` inside every string of a parsed YAML tree, keys included."""
-    if isinstance(node, str):
-        for placeholder, value in replacements.items():
-            node = node.replace(placeholder, value)
-        return node
-    if isinstance(node, dict):
-        return {
-            _substitute_placeholders(k, replacements): _substitute_placeholders(v, replacements)
-            for k, v in node.items()
-        }
-    if isinstance(node, list):
-        return [_substitute_placeholders(item, replacements) for item in node]
-    return node
 
 
 def list_scenarios() -> list[dict[str, Any]]:

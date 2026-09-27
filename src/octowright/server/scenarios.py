@@ -120,7 +120,9 @@ async def scenario_start(name: str) -> ScenarioStartResult:
     structured_output=False,
     description=(
         "Start a scenario from a template. Templates support simple {{key}} substitution "
-        "using the provided `args`. Returns the participant table."
+        "using the provided `args`; placeholders must be quoted in the YAML, and a quoted "
+        'placeholder that is the whole value ("{{headed}}") takes the arg\'s type: '
+        "true/false, numbers and null. Returns the participant table."
     ),
 )
 async def scenario_spawn_template(name: str, args: dict[str, Any] | None = None) -> ScenarioStartResult:
