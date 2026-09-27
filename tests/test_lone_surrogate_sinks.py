@@ -190,9 +190,7 @@ def _recording_with_lone_role_name(path: Path) -> Path:
     return path
 
 
-def test_macro_saved_from_a_recording_holding_a_lone_surrogate(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_macro_saved_from_a_recording_holding_a_lone_surrogate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import octowright.macros.storage as storage
 
     monkeypatch.setattr(storage, "MACROS_DIR", tmp_path / "macros")

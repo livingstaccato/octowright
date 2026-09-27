@@ -424,6 +424,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_credential_fill_origin.py",
     "tests/test_macro_artifact_positional_privacy.py",
     "tests/macro_lint/test_cli_export_credential_guard.py",
+    "tests/test_expect_js_equality.py",
+    "tests/test_lone_surrogate_sinks.py",
     "tests/test_macro_nested_scan.py",
     "tests/test_macro_no_text_element_limit.py",
     "tests/test_macro_assertion_privacy.py",

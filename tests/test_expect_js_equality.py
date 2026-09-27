@@ -57,7 +57,9 @@ CASES: list[tuple[Any, Any]] = [
 # support (this one: ERR_NO_TYPESCRIPT) can still run it. Only these shapes are
 # removed, and the stripped text must parse -- a new annotation the list
 # misses fails loudly as a SyntaxError rather than being skipped.
-_TS_ONLY = re.compile(r": \[unknown, unknown\]|: unknown\b|\): boolean|: boolean\b| as unknown\[\]| as Record<string, unknown>")
+_TS_ONLY = re.compile(
+    r": \[unknown, unknown\]|: unknown\b|\): boolean|: boolean\b| as unknown\[\]| as Record<string, unknown>"
+)
 
 
 def _run_ts(tmp_path: Path, source: str) -> Any:
@@ -96,8 +98,7 @@ def test_ts_helper_treats_a_js_undefined_as_python_none(tmp_path: Path) -> None:
     three engines (measured); the TS side sees undefined, so it must equal null."""
     verdicts = _run_ts(
         tmp_path,
-        _TS_PY_EQUALS
-        + "\nconsole.log(JSON.stringify([pyEquals(undefined, null), pyEquals({a: undefined}, {a: null}),"
+        _TS_PY_EQUALS + "\nconsole.log(JSON.stringify([pyEquals(undefined, null), pyEquals({a: undefined}, {a: null}),"
         " pyEquals({a: undefined}, {})]));\n",
     )
     assert verdicts == [True, True, False]

@@ -281,7 +281,6 @@ class TestRecordingDelete:
         assert not jsonl.exists()
         assert stray.exists(), "non-allowlisted suffix should not be unlinked"
 
-
     def test_artifact_removal_runs_off_the_event_loop(
         self,
         client: TestClient,
@@ -306,6 +305,7 @@ class TestRecordingDelete:
         r = client.delete("/api/sessions/offloop00001/recording")
         assert r.status_code == 200
         assert loop_running == [False]
+
 
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 
