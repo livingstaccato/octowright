@@ -170,3 +170,16 @@ async def test_a_screenshot_after_a_password_fill_takes_the_privacy_boundary(
         with pytest.raises(RuntimeError, match="refused"):
             await session.screenshot(target)
         assert not target.exists()
+
+
+async def test_ledger_screenshots_allow_takes_the_screenshot_on_every_engine(
+    session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``OCTOWRIGHT_LEDGER_SCREENSHOTS=allow`` gives screenshots back after a login, recording redaction kept."""
+    monkeypatch.delenv("OCTOWRIGHT_REDACT_INPUTS", raising=False)
+    monkeypatch.setenv("OCTOWRIGHT_LEDGER_SCREENSHOTS", "allow")
+    await session.fill("#pw", SECRET)
+    target = Path(session.log_path).with_suffix(".png")
+    await session.screenshot(target)
+    assert target.exists() and target.stat().st_size > 0
+    assert SECRET not in Path(session.log_path).read_text(encoding="utf-8")

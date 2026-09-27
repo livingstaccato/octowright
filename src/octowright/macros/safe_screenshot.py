@@ -96,6 +96,36 @@ def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
     raise ValueError(f"{POLICY_ENV} must be 'refuse' or 'redact'")
 
 
+LEDGER_POLICY_ENV = "OCTOWRIGHT_LEDGER_SCREENSHOTS"
+
+
+def ledger_screenshot_policy() -> Literal["refuse", "allow"]:
+    """Whether a session holding privacy-ledger values screenshots through the boundary.
+
+    ``refuse`` (the default) sends it through :func:`ledger_screenshot`, which
+    redacts on Chromium and refuses on engines it cannot prove that on.
+    ``allow`` takes the raw screenshot: the operator's way back to screenshots
+    after a login on Firefox/WebKit that keeps recording redaction on, which
+    ``OCTOWRIGHT_REDACT_INPUTS=off`` does not. Anything but ``allow`` means
+    ``refuse`` -- a typo must not decide that a password may reach a PNG.
+    """
+    raw = os.environ.get(LEDGER_POLICY_ENV, "refuse").strip().lower()
+    if raw == "allow":
+        return "allow"
+    if raw not in ("refuse", ""):
+        log.warning("octowright.screenshot.ledger_policy_unknown", env=LEDGER_POLICY_ENV, value=raw)
+    return "refuse"
+
+
+def guards_ledger_screenshot(session: Any) -> bool:
+    """Whether a ledger-holding session's screenshot must take :func:`ledger_screenshot`.
+
+    An installed handler always does: it is the embedding application's own
+    privacy decision, which an operator's environment does not override.
+    """
+    return installed_handler(session) is not None or ledger_screenshot_policy() == "refuse"
+
+
 def enable_redacted_screenshots(session: Any, *, handler: ScreenshotHandler | None = None) -> None:
     """Authorize screenshots on a classified run for this session.
 

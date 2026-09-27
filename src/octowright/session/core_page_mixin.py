@@ -545,12 +545,16 @@ class SessionPageMixin(SessionLike):
         # A session that admitted a value to its privacy ledger -- a typed
         # password, a macro credential -- may be rendering it; raw pixels are a
         # copy no text scrub reaches. Local import: macros imports the session.
+        # OCTOWRIGHT_LEDGER_SCREENSHOTS=allow opts back into raw pixels.
+        from octowright.macros import safe_screenshot
         from octowright.macros.privacy import SESSION_PRIVACY_LEDGER_ATTR, SessionPrivacyLedger
 
         ledger = getattr(self, SESSION_PRIVACY_LEDGER_ATTR, None)
-        if isinstance(ledger, SessionPrivacyLedger) and ledger.values:
-            from octowright.macros import safe_screenshot
-
+        if (
+            isinstance(ledger, SessionPrivacyLedger)
+            and ledger.values
+            and safe_screenshot.guards_ledger_screenshot(self)
+        ):
             await safe_screenshot.ledger_screenshot(self, path, ledger.values)
             return path
 
