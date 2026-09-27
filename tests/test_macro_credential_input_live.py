@@ -42,6 +42,8 @@ PAGES = {
     "/otp": _OTP_BOXES + "<script>document.querySelectorAll('.d').forEach((box, i, all) => "
     "box.addEventListener('input', () => { if (all[i + 1]) all[i + 1].focus(); }));</script>",
     "/form": '<input type="password" id="pw" autofocus>',
+    "/disabled": '<label for="pw">Password</label><input type="password" id="pw" disabled>',
+    "/login": '<label for="pw">Password</label><input type="password" id="pw">',
 }
 
 
@@ -158,6 +160,25 @@ async def test_a_navigation_partway_through_a_type_stops_it(
     with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
         await _run(session, monkeypatch, steps)
     await session.page.wait_for_url(evil + "/form")
+    assert await _values(session, "#pw") == [""]
+
+
+@pytest.mark.parametrize("kind", ["fill", "fill_by"])
+async def test_a_navigation_while_the_fill_waits_on_a_disabled_field_is_refused(
+    session: Any, trusted: str, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The field exists on the trusted page, so the first check passes; the page then moves.
+
+    A plain selector fill waits for the field to be enabled and then fills
+    the foreign page's field: measured on all three engines. The checked fill
+    is tied to the element it checked, so the navigation detaches it, and the
+    second check refuses the new document.
+    """
+    move = {"action": "evaluate", "expression": f"setTimeout(() => {{ location.href = '{evil}/login'; }}, 700)"}
+    steps = [{"action": "navigate", "url": trusted + "/disabled"}, move, _step(kind, "#pw")]
+    with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
+        await _run(session, monkeypatch, steps)
+    await session.page.wait_for_url(evil + "/login")
     assert await _values(session, "#pw") == [""]
 
 
