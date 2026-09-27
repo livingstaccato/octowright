@@ -459,3 +459,43 @@ async def test_second_concurrent_recovery_queues_behind_the_first() -> None:
     assert ok1 is True
     assert ok2 is True
     assert s.context.new_page.await_count == 2
+
+
+async def test_recovery_onto_a_refused_url_recovers_and_reports_the_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It raised after the new page was wired: the new page was orphaned and the dead one stayed active."""
+    from octowright import ssrf_guard
+
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+    s = _session()
+    dead = s.page
+    fresh = s.context.new_page.return_value
+
+    async def refused_goto(*_args: Any, **_kwargs: Any) -> None:
+        ssrf_guard.frame_chain(fresh.main_frame).end("redirect to 'http://169.254.169.254/' refused", failed=False)
+
+    fresh.goto = refused_goto
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
+    assert ok is True
+    assert s._crashed is False
+    assert s.page is fresh and s.pages == [fresh]
+    dead.close.assert_awaited_once()
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["outcome"] == "recovered"
+    assert "169.254.169.254" in inc["navigation_error"]
+
+
+async def test_recovery_onto_a_url_that_fails_to_load_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the policy's verdict is recovered past; a network failure keeps failing the recovery."""
+    from octowright import ssrf_guard
+
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+    s = _session()
+    fresh = s.context.new_page.return_value
+
+    async def failed_goto(*_args: Any, **_kwargs: Any) -> None:
+        ssrf_guard.frame_chain(fresh.main_frame).end("connection reset", failed=True)
+
+    fresh.goto = failed_goto
+    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    assert ok is False
+    assert s._crashed is True

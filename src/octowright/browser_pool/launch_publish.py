@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import (
     _wire_close_evictor,
@@ -121,9 +122,15 @@ def _make_new_tab_redirector(new_session: BrowserSession) -> Any:
                             pass
                     try:
                         if _is_blank_newtab_url(new_page.url):
-                            await new_page.goto(get_default_url())
-                    except Exception:
-                        pass
+                            await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(get_default_url()))
+                    except Exception as exc:
+                        # Best-effort: the tab stays blank. Logged, not
+                        # swallowed, so a refused redirect is findable.
+                        log.debug(
+                            "octowright.launch.new_tab_redirect_failed",
+                            instance_id=new_session.instance_id,
+                            error=repr(exc),
+                        )
             except (
                 SessionClosingError,
                 SessionClosedError,

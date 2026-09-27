@@ -175,6 +175,7 @@ async def test_new_tab_redirector_waits_for_blank_tab_to_settle() -> None:
 
     class FakePage:
         url = "about:blank"
+        main_frame = object()  # the key the navigation's guard verdict is recorded under
 
         async def opener(self) -> None:
             return None  # no opener → a user-opened tab, eligible for redirect

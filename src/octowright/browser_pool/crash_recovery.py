@@ -36,6 +36,7 @@ from octowright import ssrf_guard
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
+from octowright.request_errors import InvalidRequestError
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
@@ -189,7 +190,7 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     session._crash_recoveries += 1
     iid = session.instance_id
     try:
-        await _replace_crashed_page(session, page, reload_timeout_ms, url)
+        navigation_error = await _replace_crashed_page(session, page, reload_timeout_ms, url)
     except Exception as exc:
         _STATS["recovery_failures"] += 1
         _RECOVERY_FAILED.add(1, attributes={"kind": session.kind})
@@ -208,6 +209,10 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     _publish_recovered(session, "recovered")
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
     incident = _record_incident(session, url, "recovered")
+    if navigation_error is not None:
+        # Recovered onto a usable page that is NOT the last URL; say why.
+        log.warning("octowright.crash.recovered_url_refused", instance_id=iid, url=url, error=navigation_error)
+        incident["navigation_error"] = navigation_error
     # H5a: snapshot the recovered page so a postmortem has a frame, not just a marker.
     # Record the incident before awaiting the screenshot; slow runners must not
     # observe "recovered" stats without a visible incident.
@@ -250,7 +255,7 @@ def _record_incident(session: Any, url: str, outcome: str, *, screenshot: str | 
     )
 
 
-async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms: float, last_url: str) -> None:
+async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms: float, last_url: str) -> str | None:
     """Recover by replacing the dead page, NOT reloading it.
 
     A crashed renderer cannot be reloaded — Playwright keeps raising
@@ -264,7 +269,15 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
     Enters its own ``crash_recovery`` lease around this direct Playwright/
     active-target access: called from ``_recover_owned`` it re-enters the same
     task's existing lease for free, but it stays safe if a test or embedder
-    calls it directly."""
+    calls it directly.
+
+    Returns the SSRF policy's refusal of ``last_url`` (or of a hop it redirects
+    to), else ``None``. A refusal does not fail the recovery: the new page is
+    already in the context and wired, so raising would orphan it and leave the
+    dead page as ``session.page``. The session recovers onto the new page --
+    blank or the browser's error page, and usable -- and the caller reports
+    the refusal instead of hiding it. Any other navigation failure still fails
+    the recovery, as before."""
     from octowright.browser_pool.listeners import _wire_listeners
 
     async with session.operation("crash_recovery", wait_timeout_seconds=None):
@@ -275,9 +288,11 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
         # not the event ran first: new_page ends up present exactly once, dead_page
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
-        chain = ssrf_guard.begin_navigation(new_page.main_frame)
-        await new_page.goto(last_url, timeout=timeout_ms)
-        ssrf_guard.raise_if_refused(chain)
+        navigation_error: str | None = None
+        try:
+            await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(last_url, timeout=timeout_ms))
+        except InvalidRequestError as exc:  # only the guard's verdict raises this here
+            navigation_error = str(exc)
         # Put the replacement in the DEAD page's slot rather than at the end, so
         # page indices stay stable across a recovery. Agents hold indices from
         # page_list/page_switch; appending would shift every index at or after the
@@ -299,3 +314,4 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
             await dead_page.close()
         except Exception as exc:
             log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))
+        return navigation_error

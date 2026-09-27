@@ -107,13 +107,17 @@ Known costs, deliberately accepted (this only runs under an opt-in policy):
   carries its real 3xx ``status``, ``redirect_location`` and
   ``served_as: "client_redirect"`` (``client_redirect_of``).
 * **A refused later hop is not always an error to the browser.** Chromium's
-  ``goto`` resolves on the error page, and a popup on firefox and webkit sits
-  on the client-redirect document with no further event. The tool paths
-  therefore read the guard's own verdict (:class:`FrameChain`,
-  :func:`begin_navigation`, :func:`raise_if_refused`): ``navigate``,
-  ``navigate_back``, launch navigation and ``open_url`` raise or report the
-  refusal, and ``open_url``'s popup waits past the client-redirect document
-  (``CLIENT_REDIRECT_MARKER``) to the destination's ``load``.
+  ``goto`` resolves on the error page, and on firefox and webkit a ``goto`` or
+  a popup sits on the client-redirect document with no further event. So the
+  guard records how it ended each frame's navigation (:class:`FrameChain`:
+  refused by the policy, or its fetch failed), and every tool navigation --
+  ``navigate``, ``navigate_back``, launch, the new-tab redirect, ``open_url``
+  and crash recovery -- goes through :func:`guarded_navigation`, which ends the
+  wait on that verdict and raises it. A popup's first request has no frame yet,
+  so its ending is parked until the popup page exists (``_UNFRAMED``).
+  ``open_url``'s popup, which only has load states to wait on, waits past the
+  client-redirect document (``CLIENT_REDIRECT_MARKER``) to the destination's
+  ``domcontentloaded``.
 * **A method-preserving redirect of a form submission is refused** under
   ``block-private``, even to a public host.
 * **Every WebSocket message is relayed through the Playwright driver** once a
@@ -136,7 +140,7 @@ import json
 import re
 import weakref
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, TypeVar, cast
 from urllib.parse import urljoin
 
 from provide.telemetry import get_logger
@@ -146,6 +150,8 @@ from octowright.request_errors import InvalidRequestError
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
+
+T = TypeVar("T")
 
 # Chromium surfaces this as ERR_BLOCKED_BY_CLIENT, which reads correctly in
 # the page and in the network log.
@@ -179,6 +185,10 @@ class RedirectBlocked(ValueError):
     """A hop in the redirect chain is refused by the SSRF policy."""
 
 
+class NavigationFailedError(RuntimeError):
+    """The guard's own fetch of a navigation failed (DNS, reset, TLS): a network error, not a refusal."""
+
+
 async def _check_hop(url: str) -> None:
     """Refuse *url* under the policy, resolving its host."""
     try:
@@ -188,8 +198,8 @@ async def _check_hop(url: str) -> None:
 
 
 #: Names the client-redirect document, so a caller that only sees load states
-#: can tell it is not the destination: a popup's first request has no frame to
-#: record that on (see ``_HopCounter._frame``).
+#: can tell it is not the destination: its ``domcontentloaded`` fires like any
+#: page's, and nothing else about it says "not there yet".
 CLIENT_REDIRECT_MARKER = "octowright-client-redirect"
 IS_CLIENT_REDIRECT_JS = f"() => !!document.querySelector('meta[name=\"{CLIENT_REDIRECT_MARKER}\"]')"
 
@@ -219,62 +229,154 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
 
 
 class FrameChain:
-    """Whether the guard refused a navigation in one frame, for a caller that cannot see it.
+    """Whether the guard ended a navigation in one frame, for a caller that cannot see it.
 
     A caller waiting on the browser alone cannot always tell. On chromium a
     ``goto`` whose LATER hop was refused -- the client-redirect document's own
     navigation, not the ``goto``'s -- resolves on the error page instead of
     raising; on firefox and webkit that hop leaves the client-redirect document
-    in place and fires no event at all, so a popup waiting for a load state
-    waits out its whole timeout (all measured).
+    in place and fires no event at all, so a ``goto`` or a popup waiting for a
+    load state waits out its whole timeout (all measured).
+
+    ``refused`` is set for either ending; ``failed`` says which it was. A hop
+    whose fetch failed (DNS, reset, TLS) is a network error, not the policy
+    refusing the caller's input, and :meth:`error` keeps the two apart.
     """
 
-    __slots__ = ("reason", "refused")
+    __slots__ = ("failed", "reason", "refused")
 
     def __init__(self) -> None:
         self.refused = asyncio.Event()
         self.reason: str | None = None
+        self.failed = False
+
+    def error(self) -> Exception:
+        """The exception a caller raises for this chain's ending."""
+        if self.failed:
+            return NavigationFailedError(self.reason or "navigation failed")
+        return InvalidRequestError(self.reason or "navigation refused by the SSRF policy")
+
+    def end(self, reason: str, *, failed: bool) -> None:
+        self.reason = reason
+        self.failed = failed
+        self.refused.set()
 
 
 _FRAME_CHAINS: weakref.WeakKeyDictionary[Any, FrameChain] = weakref.WeakKeyDictionary()
 
 
-def frame_chain(frame: Any) -> FrameChain:
-    """The guard's record for *frame*, created empty on first use."""
+#: Endings of navigations that had no frame yet, keyed by their request, until
+#: the frame appears. A popup's FIRST request is one (measured on all three
+#: engines): Playwright raises on ``request.frame`` until the popup page
+#: exists, and the popup page arrives after the route handler has already run.
+#: The same request resolves its frame once the page does, so the ending is
+#: handed to that frame's chain on the next look. Bounded: a request whose
+#: frame never appears (nothing else raises there today) must not accumulate.
+_UNFRAMED: weakref.WeakKeyDictionary[Any, tuple[str, bool]] = weakref.WeakKeyDictionary()
+_MAX_UNFRAMED = 64
+
+
+def _park_unframed(request: Any, reason: str, *, failed: bool) -> None:
+    while len(_UNFRAMED) >= _MAX_UNFRAMED:
+        _UNFRAMED.pop(next(iter(_UNFRAMED)), None)
+    try:
+        _UNFRAMED[request] = (reason, failed)
+    except TypeError:  # a request double that cannot be weakly referenced
+        log.debug("octowright.ssrf.unframed_ending_dropped", reason=reason)
+
+
+def _adopt_unframed() -> None:
+    """Hand every parked ending whose request now has a frame to that frame's chain."""
+    for request in list(_UNFRAMED):
+        try:
+            frame = request.frame
+        except Exception:  # still no page for it: keep it parked for the next look
+            continue
+        reason, failed = _UNFRAMED.pop(request)
+        _chain_for(frame).end(reason, failed=failed)
+
+
+def _chain_for(frame: Any) -> FrameChain:
     chain = _FRAME_CHAINS.get(frame)
     if chain is None:
         chain = _FRAME_CHAINS[frame] = FrameChain()
     return chain
 
 
+def frame_chain(frame: Any) -> FrameChain:
+    """The guard's record for *frame*, created empty on first use."""
+    if _UNFRAMED:
+        _adopt_unframed()
+    return _chain_for(frame)
+
+
 def begin_navigation(frame: Any) -> FrameChain | None:
     """A fresh record for a navigation about to start in *frame*; ``None`` with the policy off.
 
-    Pair it with :func:`raise_if_refused` after the ``goto``: on chromium a
-    ``goto`` whose LATER hop the guard refused resolves on the error page
-    instead of raising (measured), so it would report success.
+    Tool navigations use :func:`guarded_navigation`, which pairs this with the
+    wait and :func:`raise_if_refused`: on chromium a ``goto`` whose LATER hop
+    the guard refused resolves on the error page instead of raising
+    (measured), so on its own it would report success.
     """
     if not ssrf.policy_enabled():
         return None
+    if _UNFRAMED:
+        # An earlier navigation's parked ending belongs to that one, not this.
+        _adopt_unframed()
     chain = _FRAME_CHAINS[frame] = FrameChain()
     return chain
 
 
 def raise_if_refused(chain: FrameChain | None) -> None:
-    """Raise the refusal the guard recorded on *chain* since :func:`begin_navigation`, if any."""
+    """Raise how the guard ended *chain* since :func:`begin_navigation`, if it did."""
     if chain is not None and chain.refused.is_set():
-        raise InvalidRequestError(chain.reason or "navigation refused by the SSRF policy")
+        raise chain.error()
+
+
+async def guarded_navigation(frame: Any, navigation: Awaitable[T]) -> T:
+    """Await a tool's own navigation of *frame* (a ``goto``/``go_back`` not yet awaited), with the guard's verdict.
+
+    Every tool navigation goes through here, so none can forget half of it.
+    With the policy off it is just ``await navigation``. With it on, the wait
+    also ends as soon as the guard refuses or fails a hop in *frame* -- on
+    firefox and webkit a refused LATER hop fires no event, so the ``goto``
+    would otherwise wait out its whole timeout -- and it raises that ending
+    (:meth:`FrameChain.error`) instead of the browser's own report of it
+    (``net::ERR_BLOCKED_BY_CLIENT``, which names neither the hop nor the
+    reason) or, on chromium, instead of resolving on the error page. Takes the
+    awaitable rather than the page so the Playwright call stays in the gated
+    caller.
+    """
+    chain = begin_navigation(frame)
+    if chain is None:
+        return await navigation
+    try:
+        ended, result = await _first_of(navigation, chain)
+    except Exception as exc:
+        if chain.refused.is_set():
+            raise chain.error() from exc
+        raise
+    if ended:
+        raise chain.error()
+    return cast("T", result)  # not ended: result is the navigation's own
 
 
 async def until_refused(wait: Awaitable[Any], chain: FrameChain) -> str | None:
-    """Await *wait* unless the guard refuses a navigation in *chain*'s frame first.
+    """Await *wait* unless the guard ends a navigation in *chain*'s frame first.
 
-    Returns the refusal, or ``None`` once *wait* finished. A refusal recorded
-    before the call wins at once -- the frame is fresh, so it is this one's.
+    Returns the ending's reason, or ``None`` once *wait* finished. An ending
+    recorded before the call wins at once -- the frame is fresh, so it is this
+    one's.
     """
+    ended, _result = await _first_of(wait, chain)
+    return chain.reason if ended else None
+
+
+async def _first_of(wait: Awaitable[T], chain: FrameChain) -> tuple[bool, T | None]:
+    """``(True, None)`` if *chain* ended before *wait* finished, else ``(False, wait's result)``."""
     if chain.refused.is_set():
         _discard(wait)
-        return chain.reason
+        return True, None
     waiting = asyncio.ensure_future(wait)
     refused = asyncio.ensure_future(chain.refused.wait())
     try:
@@ -286,9 +388,8 @@ async def until_refused(wait: Awaitable[Any], chain: FrameChain) -> str | None:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
     if chain.refused.is_set():
-        return chain.reason
-    waiting.result()
-    return None
+        return True, None
+    return False, waiting.result()
 
 
 def _discard(wait: Awaitable[Any]) -> None:
@@ -317,9 +418,9 @@ class _HopCounter:
             return request.frame
         except Exception as exc:
             # A service-worker request has no frame, and nor does a popup's
-            # first navigation (measured: Playwright raises until the frame
-            # exists). Neither is bounded by the hop limit or recorded on a
-            # FrameChain; say so rather than dropping both silently.
+            # first navigation (measured: Playwright raises until the popup
+            # page exists). Neither is bounded by the hop limit; an ending of
+            # one is parked until its frame appears (``_UNFRAMED``).
             log.debug("octowright.ssrf.request_without_frame", error=repr(exc))
             return None
 
@@ -333,16 +434,16 @@ class _HopCounter:
             raise RedirectBlocked(f"redirect chain reaching {target!r} exceeded {MAX_REDIRECT_HOPS} hops")
         self._hops[frame] = hops
 
-    def reset(self, request: Any, refusal: str | None = None) -> None:
-        """End *request*'s frame's chain; *refusal* says the navigation was refused or failed."""
+    def reset(self, request: Any, refusal: str | None = None, *, failed: bool = False) -> None:
+        """End *request*'s frame's chain; *refusal* says the navigation was refused, or *failed*."""
         frame = self._frame(request)
         if frame is None:
+            if refusal is not None:
+                _park_unframed(request, refusal, failed=failed)
             return
         self._hops.pop(frame, None)
         if refusal is not None:
-            chain = frame_chain(frame)
-            chain.reason = refusal
-            chain.refused.set()
+            frame_chain(frame).end(refusal, failed=failed)
 
 
 async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None:
@@ -353,7 +454,7 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None
         # The browser would have shown a network error; say so rather than
         # leaving the intercepted request unanswered.
         log.debug("octowright.ssrf.navigation_fetch_failed", url=request.url, error=repr(exc))
-        hops.reset(request, refusal=f"navigation to {request.url!r} failed: {exc}")
+        hops.reset(request, refusal=f"navigation to {request.url!r} failed: {exc}", failed=True)
         await route.abort("failed")
         return
     location = response.headers.get("location")

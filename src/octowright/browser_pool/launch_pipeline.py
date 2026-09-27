@@ -304,15 +304,15 @@ async def post_context_setup(
                 log_path=str(log_path),
             )
 
-            # target_url is validated before allocation in
-            # BrowserPool._launch_impl, so by here it is known-safe; a goto
-            # failure is a real navigation error (logged + returned as
-            # nav_warning), not a policy rejection.
+            # target_url itself is validated before allocation in
+            # BrowserPool._launch_impl. What fails here is logged and returned
+            # as nav_warning, and is either a real navigation error or, under
+            # an SSRF policy, the guard refusing (or failing to fetch) a LATER
+            # hop of target_url's redirect chain -- guarded_navigation raises
+            # that verdict rather than letting the launch read as a success.
             nav_error: str | None = None
             try:
-                chain = ssrf_guard.begin_navigation(page.main_frame)
-                await page.goto(target_url)
-                ssrf_guard.raise_if_refused(chain)
+                await ssrf_guard.guarded_navigation(page.main_frame, page.goto(target_url))
             except Exception as _nav_exc:
                 nav_error = str(_nav_exc)
                 log.warning(

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,7 +16,6 @@ from provide.telemetry import get_logger
 from octowright import ssrf, ssrf_guard
 from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
-from octowright.request_errors import InvalidRequestError
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.a11y_dragdrop import run_a11y_dragdrop
@@ -351,9 +351,9 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
 
     @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
-        chain = ssrf_guard.begin_navigation(self.page.main_frame)
-        response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
-        ssrf_guard.raise_if_refused(chain)
+        response = await ssrf_guard.guarded_navigation(
+            self.page.main_frame, self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
+        )
         url = self.page.url
         title = await bounded(self.page.title(), operation="browser_navigate_back")
         self.recorder.record("navigate_back", url=url)
@@ -366,34 +366,55 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         A redirect reaches the popup as a client-redirect document, and that
         document's ``domcontentloaded`` is not the destination's: waiting for
         it alone returned ``open_url`` on the stub (measured on firefox and
-        webkit). Its ``load`` never fires -- it replaces itself while still
-        parsing -- so ``load`` is the destination's. A refused hop after it
-        fires no event at all on those engines, which is why every wait also
-        ends on the guard's word. The whole wait shares one navigation budget.
+        webkit). So while the page is still the stub, this waits for the NEXT
+        ``domcontentloaded`` -- the unredirected popup's own settle point, not
+        ``load``, which a single hanging image on the destination held until
+        the navigation timeout (measured on firefox and webkit). The listener
+        goes on before the probe, so a destination that loads during the probe
+        is not missed. A refused or failed hop fires no event at all on those
+        engines, which is why every wait also ends on the guard's word. The
+        whole wait shares one navigation budget.
         """
         deadline = time.monotonic() + DEFAULT_NAV_TIMEOUT_MS / 1000
 
-        def remaining_ms() -> float:
-            return max(1.0, (deadline - time.monotonic()) * 1000)
+        def remaining_s() -> float:
+            return max(0.001, deadline - time.monotonic())
 
         chain = ssrf_guard.frame_chain(page.main_frame)
         refusal = await ssrf_guard.until_refused(
-            page.wait_for_load_state("domcontentloaded", timeout=remaining_ms()), chain
+            page.wait_for_load_state("domcontentloaded", timeout=remaining_s() * 1000), chain
         )
-        if refusal is None:
+        while refusal is None:
+            loaded: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+            def on_loaded(_page: Any, loaded: asyncio.Future[None] = loaded) -> None:
+                if not loaded.done():
+                    loaded.set_result(None)
+
+            page.on("domcontentloaded", on_loaded)
             try:
-                on_stub = await bounded(page.evaluate(ssrf_guard.IS_CLIENT_REDIRECT_JS), operation="browser_open_url")
-            except SessionCallTimeoutError:
-                raise
-            except Exception as exc:  # the document was replaced under the probe: still navigating
-                log.debug("octowright.open_url.redirect_probe_failed", error=repr(exc))
-                on_stub = True
-            if on_stub:
-                refusal = await ssrf_guard.until_refused(
-                    page.wait_for_load_state("load", timeout=remaining_ms()), chain
-                )
-        if refusal is not None:
-            raise InvalidRequestError(refusal)
+                if not await self._on_client_redirect(page):
+                    return
+                try:
+                    refusal = await ssrf_guard.until_refused(asyncio.wait_for(loaded, remaining_s()), chain)
+                except TimeoutError:
+                    raise TimeoutError(
+                        f"popup did not leave the redirect document within {DEFAULT_NAV_TIMEOUT_MS} ms"
+                    ) from None
+            finally:
+                page.remove_listener("domcontentloaded", on_loaded)
+        raise chain.error()
+
+    @gated_operation("browser_open_url_settle")
+    async def _on_client_redirect(self, page: Any) -> bool:
+        """Whether *page* is still the guard's client-redirect document."""
+        try:
+            return bool(await bounded(page.evaluate(ssrf_guard.IS_CLIENT_REDIRECT_JS), operation="browser_open_url"))
+        except SessionCallTimeoutError:
+            raise
+        except Exception as exc:  # the document was replaced under the probe: still navigating
+            log.debug("octowright.open_url.redirect_probe_failed", error=repr(exc))
+            return True
 
     @gated_operation("browser_open_url")
     async def open_url(
@@ -420,9 +441,9 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         if target == "tab":
             new_page = await self.context.new_page()
             try:
-                chain = ssrf_guard.begin_navigation(new_page.main_frame)
-                await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
-                ssrf_guard.raise_if_refused(chain)
+                await ssrf_guard.guarded_navigation(
+                    new_page.main_frame, new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                )
             except Exception as exc:
                 # Surface the failure to the caller — open_url is a user-action
                 # path, so a swallowed nav must not be reported as ok=True.
