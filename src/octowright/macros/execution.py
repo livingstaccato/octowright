@@ -644,6 +644,8 @@ async def _run_macro_impl(
                     sensitive_values=run_values,
                 )
                 payload.update(assertions.fields(run_values))
+                if audit.offsite:  # a failed run is still one that typed a credential off-site
+                    payload["credential_fill_offsite"] = list(audit.offsite)
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.

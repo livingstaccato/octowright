@@ -417,9 +417,18 @@ Entries are exact origins (`scheme://host[:port]`): no wildcard, path or
 `{{placeholder}}`, which `macro_lint` reports and replay refuses. Identity and
 contextual arguments (`{{email}}`, `{{username}}`) are not checked.
 `OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn` logs and runs the step instead,
-recording `credential_fill_offsite: [{step, action, origin}]` in the run result;
+recording `credential_fill_offsite: [{step, action, origin}]` in the run result,
+and in the failure payload when a later step fails;
 `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` turns this and every other credential
 check off.
+
+The origin checked is the one of the frame that owns the element the value is
+typed into, read when it is typed: the element is resolved first and the
+credential typed into that same element, so a page that navigates during the
+fill's wait, or a selector that enters a frame
+(`iframe >> internal:control=enter-frame >> #pw`), cannot move it to an origin
+nobody checked. A credential passed to a called macro under another name
+(`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
 
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`
 refuses a credential in a URL, code or outbound field, types a credential only

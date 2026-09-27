@@ -294,3 +294,19 @@ async def test_warn_mode_records_an_origin_once_however_often_it_is_read(
         {"step": 0, "action": "fill", "origin": "https://evil.example"},
         {"step": 0, "action": "fill", "origin": "https://other.example"},
     ]
+
+
+@pytest.mark.anyio
+async def test_warn_mode_keeps_the_record_when_a_later_step_fails(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run that let a credential onto a foreign origin and then failed is the one to report it."""
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS", "warn")
+    session = _session(tmp_path, launch="https://app.example.test/", current="https://evil.example/login")
+    session.type_text.side_effect = RuntimeError("the next step broke")
+    with pytest.raises(RuntimeError) as caught:
+        await _run(monkeypatch, session, [_step("fill"), _step("type", "{{email}}")])
+    [payload] = caught.value.args
+    assert payload["failed_at_step"] == 1
+    assert payload["credential_fill_offsite"] == [{"step": 0, "action": "fill", "origin": "https://evil.example"}]
+    assert SECRET not in repr(payload)
