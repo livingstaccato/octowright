@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from octowright import credential_sinks
+from octowright import credential_input, credential_sinks
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.session import upload_paths
 from tests.macro_lint.test_cli_export_execution import _install, _Recorder
@@ -217,6 +217,9 @@ def test_the_script_renders_the_live_rules_not_a_copy() -> None:
     assert inspect.getsource(credential_sinks.offsite_credential_origin) in source
     assert inspect.getsource(upload_paths.check_upload_path) in source
     assert inspect.getsource(upload_paths.upload_roots) in source
+    # How a credential is typed: the session's own helpers, so the two cannot drift.
+    assert inspect.getsource(credential_input.checked_fill) in source
+    assert inspect.getsource(credential_input.checked_type) in source
 
 
 # --- the default upload root is worked out where the script runs ----------------------------
