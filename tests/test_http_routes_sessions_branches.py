@@ -21,6 +21,7 @@ test_http_server_writes.py suites don't pin:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -280,6 +281,31 @@ class TestRecordingDelete:
         assert not jsonl.exists()
         assert stray.exists(), "non-allowlisted suffix should not be unlinked"
 
+
+    def test_artifact_removal_runs_off_the_event_loop(
+        self,
+        client: TestClient,
+        isolated_recordings: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The removal ``rmtree``s whole video/download/frame-cache dirs; on
+        the loop that stalls every live browser the leader serves."""
+        _write_recording(isolated_recordings, "offloop00001")
+        original = session_recording_routes._remove_session_artifacts
+        loop_running: list[bool] = []
+
+        def spy(*args: Any, **kwargs: Any) -> tuple[list[str], int, int]:
+            try:
+                asyncio.get_running_loop()
+                loop_running.append(True)
+            except RuntimeError:
+                loop_running.append(False)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(session_recording_routes, "_remove_session_artifacts", spy)
+        r = client.delete("/api/sessions/offloop00001/recording")
+        assert r.status_code == 200
+        assert loop_running == [False]
 
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 

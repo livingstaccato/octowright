@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,11 @@ async def recording_delete(request: Request) -> SafeJSONResponse:
     if jsonl is None:
         return SafeJSONResponse({"error": f"no recording found for session {sid!r}"}, status_code=404)
 
-    removed, files_removed, dirs_removed = _remove_session_artifacts(sid, jsonl, state.RECORDINGS_DIR)
+    # Off the loop: this rmtree()s whole video, download and frame-cache
+    # trees, and the leader's loop drives every live browser meanwhile.
+    removed, files_removed, dirs_removed = await asyncio.to_thread(
+        _remove_session_artifacts, sid, jsonl, state.RECORDINGS_DIR
+    )
     state.log.info("recording_deleted", session_id=sid, files=files_removed, dirs=dirs_removed)
     await publish_dashboard_invalidation("sessions")
     return SafeJSONResponse(
