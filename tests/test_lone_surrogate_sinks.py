@@ -270,7 +270,7 @@ def test_no_module_writes_json_with_ensure_ascii_false_directly() -> None:
         "_json_text.py",  # the safe writer itself
         # Builds scrub VARIANTS of a value (an in-memory string to match
         # against), never text that is encoded or written.
-        "macros/privacy.py",
+        "macros/scrub_engine.py",
     }
     offenders = [
         str(path.relative_to(_SRC))
