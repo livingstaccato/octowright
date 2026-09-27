@@ -155,14 +155,21 @@ def substitute(
     args: dict[str, Any],
     *,
     trusted_origins: frozenset[Origin] | set[Origin] = frozenset(),
+    credential_args: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
 
     *trusted_origins* (``own_site_origins(session)``) is the one exemption: a
     credential in the ``headers`` of an action whose pattern spells out one of
-    them. The rules are ``octowright.credential_sinks``'s, shared with the
-    exported CLI.
+    them. *credential_args* are credential-tier whatever they are named: the
+    args of a called macro that its caller's credential reached. The rules are
+    ``octowright.credential_sinks``'s, shared with the exported CLI.
     """
     return expand_actions(
-        actions, args, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, trusted_origins=trusted_origins
+        actions,
+        args,
+        is_credential=is_credential_arg,
+        placeholder=PLACEHOLDER_RE,
+        trusted_origins=trusted_origins,
+        credential_args=credential_args,
     )

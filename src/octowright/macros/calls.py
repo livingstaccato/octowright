@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from octowright.credential_sinks import CREDENTIAL_CALL_MARKER
 from octowright.macros.nesting import MacroLoader, iter_nested_actions
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
 from octowright.macros.substitution import own_site_origins
@@ -66,7 +67,13 @@ async def dispatch_macro_call(
         raise RuntimeError(f"{_RECURSION_PREFIX} recursion depth exceeded ({resolved_max_depth}) at {next_chain}")
 
     called = load_macro(called_name)
-    called_actions = substitute(called.get("actions", []), call_args, trusted_origins=own_site_origins(session))
+    # Taint follows the value: an arg the caller's credential was substituted
+    # into stays credential-tier in the callee, whatever the callee calls it.
+    marked = action.get(CREDENTIAL_CALL_MARKER)
+    tainted = frozenset(str(name) for name in marked) if isinstance(marked, list) else frozenset()
+    called_actions = substitute(
+        called.get("actions", []), call_args, trusted_origins=own_site_origins(session), credential_args=tainted
+    )
 
     executed, skipped = 1, 0
     for subaction in called_actions:

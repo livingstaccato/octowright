@@ -193,6 +193,13 @@ ALLOWED_ORIGINS_KEY = "allowed_origins"
 #: put under this key is discarded first, so a macro cannot unmark a step.
 CREDENTIAL_FILL_MARKER = "_octowright_credential_args"
 CREDENTIAL_FILL_ORIGINS_ENV = "OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS"
+#: Set by `expand_actions` on a ``macro_call`` whose ``args`` a credential-tier
+#: arg was substituted into: the CALLEE's arg names it reached. The callee is
+#: expanded with those names credential-tier whatever they are called there
+#: (`expand_actions`' *credential_args*), because classifying by the callee's
+#: own parameter names let a caller launder ``{{password}}`` as ``{{url}}``.
+#: Discarded from the macro first, like `CREDENTIAL_FILL_MARKER`.
+CREDENTIAL_CALL_MARKER = "_octowright_credential_call_args"
 
 _EXACT_ORIGIN = re.compile(r"^https?://[^/?#*{}\[\]@\\\s]+/?$", re.IGNORECASE)
 
@@ -266,7 +273,7 @@ def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
 
 def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
     """*action* without the guard's own inputs, which no session method takes."""
-    guard_only = {CREDENTIAL_FILL_MARKER}
+    guard_only = {CREDENTIAL_FILL_MARKER, CREDENTIAL_CALL_MARKER}
     if action.get("action") in CREDENTIAL_FILL_FIELDS:
         guard_only.add(ALLOWED_ORIGINS_KEY)
     return {key: value for key, value in action.items() if key not in guard_only}
@@ -289,9 +296,14 @@ class _Expander:
         is_credential: Callable[[str], bool],
         placeholder: re.Pattern[str],
         trusted_origins: frozenset[Origin] | set[Origin],
+        credential_args: frozenset[str] = frozenset(),
     ) -> None:
         self.args = args
-        self.is_credential = is_credential
+        # A name the caller's credential reached is credential-tier here too,
+        # whatever it is called (`CREDENTIAL_CALL_MARKER`).
+        self.is_credential = (
+            (lambda key: key in credential_args or is_credential(key)) if credential_args else is_credential
+        )
         self.placeholder = placeholder
         self.trusted_origins = trusted_origins
         self.blocked = credential_sinks_blocked()
@@ -311,7 +323,9 @@ class _Expander:
         kind = str(node.get("action"))
         node = canonical_aliases(kind, node)
         node.pop(CREDENTIAL_FILL_MARKER, None)
+        node.pop(CREDENTIAL_CALL_MARKER, None)
         credentials = self._typed_credentials(kind, node)
+        tainted = self._tainted_call_args(node) if kind == "macro_call" else []
         headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
         expanded = {
             key: self.value(
@@ -322,7 +336,25 @@ class _Expander:
         }
         if credentials:
             expanded[CREDENTIAL_FILL_MARKER] = credentials
+        if tainted:
+            expanded[CREDENTIAL_CALL_MARKER] = tainted
         return expanded
+
+    def _mentions_credential(self, value: Any) -> bool:
+        if isinstance(value, str):
+            return any(self.is_credential(name) for name in self.placeholder.findall(value))
+        if isinstance(value, dict):
+            return any(self._mentions_credential(item) for item in value.values())
+        if isinstance(value, list):
+            return any(self._mentions_credential(item) for item in value)
+        return False
+
+    def _tainted_call_args(self, node: dict[str, Any]) -> list[str]:
+        """The callee arg names a credential-tier arg is substituted into, anywhere in the value."""
+        call_args = node.get("args")
+        if not isinstance(call_args, dict):
+            return []
+        return sorted(str(key) for key, value in call_args.items() if self._mentions_credential(value))
 
     def _typed_credentials(self, kind: str, node: dict[str, Any]) -> list[str]:
         """The credential-tier args a typing step puts into the page, by name."""
@@ -361,14 +393,23 @@ def expand_actions(
     is_credential: Callable[[str], bool],
     placeholder: re.Pattern[str] | str,
     trusted_origins: frozenset[Origin] | set[Origin] = frozenset(),
+    credential_args: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
 
     Every action comes back alias-canonical (see `canonical_aliases`), so the
     guard and the dispatcher read the same field. *trusted_origins* is the one
     exemption: a credential in the ``headers`` of an action whose pattern names
-    one of them, scheme, host and port.
+    one of them, scheme, host and port. *credential_args* are names that are
+    credential-tier whatever *is_credential* says: a called macro's args that
+    its caller's credential reached (`CREDENTIAL_CALL_MARKER`).
     """
     compiled = re.compile(placeholder) if isinstance(placeholder, str) else placeholder
-    expander = _Expander(args, is_credential=is_credential, placeholder=compiled, trusted_origins=trusted_origins)
+    expander = _Expander(
+        args,
+        is_credential=is_credential,
+        placeholder=compiled,
+        trusted_origins=trusted_origins,
+        credential_args=credential_args,
+    )
     return [expander.value(copy.deepcopy(action)) for action in actions]
