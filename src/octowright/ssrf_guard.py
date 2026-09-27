@@ -118,6 +118,13 @@ _FOLLOWED_REDIRECTS = frozenset({301, 302, 303, 307, 308})
 
 _EVERY_URL = re.compile(".*")
 
+#: The only schemes a redirect may lead to. A browser refuses a 3xx to any
+#: other scheme as a network error (measured: ERR_UNSAFE_REDIRECT on chromium,
+#: "not HTTP(S)" on webkit, NS_ERROR_CORRUPTED_CONTENT on firefox), and the
+#: policy has no host to check for ``javascript:`` -- served as a client
+#: redirect, it ran as script in the redirecting URL's origin on all three.
+_REDIRECT_SCHEMES = frozenset({"http", "https"})
+
 
 class RedirectBlocked(ValueError):
     """A hop in the redirect chain is refused by the SSRF policy."""
@@ -159,7 +166,9 @@ class _HopCounter:
 
     Each hop of a chain is its own navigation now, so the browser's own
     redirect limit never applies and ``/loop -> /loop`` would spin forever.
-    Reset whenever a frame is served a real (non-redirect) response.
+    Reset whenever a frame's chain ends: a real (non-redirect) response is
+    served, or a hop is refused or fails. An abort that left its count behind
+    would start the frame's next, unrelated chain partway to the limit.
     """
 
     def __init__(self) -> None:
@@ -169,7 +178,10 @@ class _HopCounter:
     def _frame(request: Any) -> Any:
         try:
             return request.frame
-        except Exception:  # a service-worker request has no frame
+        except Exception as exc:  # a service-worker request has no frame
+            # Such a request is not bounded by the hop limit; say so rather
+            # than dropping the bound silently.
+            log.debug("octowright.ssrf.request_without_frame", url=getattr(request, "url", None), error=repr(exc))
             return None
 
     def step(self, request: Any, target: str) -> None:
@@ -196,6 +208,7 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None
         # The browser would have shown a network error; say so rather than
         # leaving the intercepted request unanswered.
         log.debug("octowright.ssrf.navigation_fetch_failed", url=request.url, error=repr(exc))
+        hops.reset(request)
         await route.abort("failed")
         return
     location = response.headers.get("location")
@@ -204,6 +217,9 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter) -> None
         await route.fulfill(response=response)
         return
     target = urljoin(request.url, location)
+    scheme = target.partition(":")[0].strip().lower()
+    if scheme not in _REDIRECT_SCHEMES:
+        raise RedirectBlocked(f"redirect to a {scheme!r} URL refused; only http(s) redirects are followed")
     await _check_hop(target)
     method = request.method.upper()
     becomes_get = method == "GET" or response.status == 303 or (response.status in {301, 302} and method == "POST")
@@ -240,6 +256,7 @@ async def _handle_route(route: Any, request: Any, hops: _HopCounter) -> None:
             await _serve_navigation(route, request, hops)
         except RedirectBlocked as exc:
             log.warning("octowright.ssrf.redirect_blocked", url=request.url, method=request.method, error=str(exc))
+            hops.reset(request)
             await route.abort(_ABORT_REASON)
     except Exception as exc:  # pragma: no cover - route already gone
         # A route whose page navigated away raises on fulfill and abort alike.

