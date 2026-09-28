@@ -183,7 +183,7 @@ def patched_runners(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             raise raise_on[action["action"]]
         return (1, 0)
 
-    async def fake_suggest(session: Any, action: dict[str, Any]) -> str | None:
+    async def fake_suggest(session: Any, action: dict[str, Any], **_kwargs: Any) -> str | None:
         return None
 
     monkeypatch.setattr(_execution, "load_macro", fake_load)

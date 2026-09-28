@@ -25,7 +25,7 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values, with_session_ledger
+from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values, with_session_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -356,7 +356,7 @@ async def _capture_screenshot(
                 await safe_screenshot.redacted_screenshot(
                     session,
                     {"action": "screenshot", "path": str(path)},
-                    with_session_ledger(session, sensitive_values).values,
+                    with_session_values(session, sensitive_values),
                     root=run_dir,
                 )
             except Exception as exc:  # Best-effort evidence must not hide macro results.

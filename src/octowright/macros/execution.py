@@ -32,7 +32,7 @@ from octowright.macros.privacy import (
     MacroArgPrivacy,
     PrivacyLedger,
     install_sensitive_recorder,
-    with_session_ledger,
+    with_session_values,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
@@ -256,20 +256,6 @@ async def _dispatch_classified_screenshot(
     raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
 
 
-def _failure_scrub_values(session: SessionLike, run_ledger: PrivacyLedger) -> tuple[str, ...]:
-    """What a failure payload is scrubbed of: this run's values and the session's, each matched anywhere.
-
-    The session ledger also holds values admitted outside any macro -- a
-    password the input classification hid from a direct ``browser_fill`` -- and
-    the page may have echoed one into the console or a request the payload
-    carries. Flattened: the ledger's word bounds are for the recording, where
-    scrubbing a typed ``admin`` inside ``#admin-menu`` broke saved selectors.
-    The payload is returned to the client, so an echo glued to identifier
-    characters (``hunter2-reset``) is scrubbed here too.
-    """
-    return with_session_ledger(session, run_ledger.values).values
-
-
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
     return run_ledger.values if run_ledger is not None else ()
 
@@ -372,7 +358,7 @@ async def _dispatch_one(
             # The pixels can show what the session admitted outside this run, too.
             # Flattened on purpose: screenshot redaction matches every value
             # anywhere (see safe_screenshot.redacted_screenshot).
-            screenshot_values = with_session_ledger(session, run_values).values
+            screenshot_values = with_session_values(session, run_values)
             return await _dispatch_classified_screenshot(session, action, screenshot_values)
 
         if action.get("action") in conditional.CONDITIONAL_ACTIONS:
@@ -470,8 +456,8 @@ async def _build_failure_payload(
     *,
     name: str,
     index: int,
-    action: dict[str, Any],
-    actions: list[dict[str, Any]],
+    written: list[dict[str, Any]],
+    macros: RunMacros,
     executed: int,
     safe_original: str,
     sensitive_values: tuple[str, ...],
@@ -480,7 +466,10 @@ async def _build_failure_payload(
 
     Each producer is tried separately so one failing does not cost the caller
     the other two: its own error is recorded IN the payload rather than raised
-    over the dispatch failure the payload exists to explain.
+    over the dispatch failure the payload exists to explain. *written* is the
+    macro's steps before substitution: the fields echoing them are not
+    scrubbed of *sensitive_values*, the page-derived ones are (see
+    `failure_context`).
     """
     if sensitive_values:
         # The generic diagnostic producer persists raw HTML and a raw
@@ -495,9 +484,11 @@ async def _build_failure_payload(
         except Exception as secondary:
             bundle = {"diagnostic_error": repr(secondary)}
 
-    redacted_action = _scrub_sensitive_values(_redact_action(action), sensitive_values)
+    shown = failure_context.written_actions(written[: index + 1], lambda called: _macro_privacy(macros, called))
     try:
-        fix_suggestion = _scrub_sensitive_values(await _suggest_fix(session, redacted_action), sensitive_values)
+        fix_suggestion = await _suggest_fix(
+            session, shown[index], scrub_page=lambda text: _scrub_sensitive_values(text, sensitive_values)
+        )
     except Exception as secondary:
         fix_suggestion = None
         bundle["healing_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
@@ -513,14 +504,12 @@ async def _build_failure_payload(
         "failed_at_step": index,
         # Partial-state signal: a multi-step macro that fails midway has
         # already applied steps 0..index-1 to the live browser. Surface both
-        # the count and the (credential-redacted) descriptors of what landed so
-        # the agent can reason about the half-applied state instead of seeing
-        # an opaque error.
+        # the count and the steps that landed, as the macro wrote them, so the
+        # agent can reason about the half-applied state instead of seeing an
+        # opaque error.
         "executed": executed,
-        "executed_actions": [
-            _scrub_sensitive_values(_redact_action(done), sensitive_values) for done in actions[:index]
-        ],
-        "failed_action": redacted_action,
+        "executed_actions": shown[:index],
+        "failed_action": shown[index],
         "original": safe_original,
         "bundle": bundle,
         # The console tail and final URL were already in `bundle`; the failing
@@ -638,7 +627,7 @@ async def _run_macro_impl(
                     macros=macros,
                 )
             except Exception as exc:
-                run_values = _failure_scrub_values(session, run_ledger)
+                run_values = failure_context.failure_scrub_values(session, run_ledger.values)
                 safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
                 if not run_values:
                     failure_cause = exc
@@ -651,8 +640,8 @@ async def _run_macro_impl(
                     session,
                     name=name,
                     index=index,
-                    action=action,
-                    actions=actions,
+                    written=macro.get("actions", []),
+                    macros=macros,
                     executed=executed,
                     safe_original=safe_original,
                     sensitive_values=run_values,

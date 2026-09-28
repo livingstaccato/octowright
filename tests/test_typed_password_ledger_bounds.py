@@ -113,21 +113,18 @@ def test_macro_values_still_match_inside_longer_words() -> None:
     assert privacy.scrub_sensitive_values("abcd abcde", ("abcd",)) == "<redacted> <redacted>e"
 
 
-def test_merging_the_session_ledger_keeps_a_typed_password_word_bounded() -> None:
-    """``with_session_ledger`` merges ledgers: the run's values still match anywhere, typed ones as tokens."""
+def test_merging_the_session_ledger_is_flat_and_longest_first() -> None:
+    """``with_session_values`` merges the run's values with the session's, as one flat tuple.
+
+    Flat because every caller matches each value anywhere (a failure payload's
+    page text, a screenshot); the word bounds stay with the recorder's scrub.
+    """
     session, _inner = _typed(TYPED)
 
-    merged = privacy.with_session_ledger(session, ["tok-3f9a"])
+    merged = privacy.with_session_values(session, ["tok-3f9a", TYPED])
 
-    assert merged.word_bounded == frozenset({TYPED})
-    assert merged.scrub("Administrator admin tok-3f9a-x") == "Administrator <redacted> <redacted>-x"
-
-
-def test_a_value_the_run_also_holds_is_scrubbed_anywhere() -> None:
-    """A run's own classified value is the stronger claim, whichever ledger held it first."""
-    session, _inner = _typed(TYPED)
-
-    assert privacy.with_session_ledger(session, [TYPED]).word_bounded == frozenset()
+    assert merged == ("tok-3f9a", TYPED)
+    assert privacy.with_session_values(object(), ["tok-3f9a"]) == ("tok-3f9a",)
 
 
 async def test_a_macro_failure_payload_scrubs_a_typed_password_anywhere(monkeypatch: Any) -> None:

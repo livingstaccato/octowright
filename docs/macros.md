@@ -492,10 +492,21 @@ captures. A macro's own values are scrubbed wherever they appear (one shorter
 than four characters only on a word boundary); a typed password is scrubbed only
 where it stands as a whole identifier, because it is
 often an ordinary word (`admin`) and replacing it inside `#admin-menu` broke the
-selectors of a macro saved from the recording. A failure payload, which goes
-back to the MCP client, is scrubbed of the run's and the session's values by the
-first rule, a typed password included, so an echo glued to other characters
-(`hunter2-reset`) does not reach it.
+selectors of a macro saved from the recording.
+
+A failure payload goes back to the MCP client, and its fields follow two rules.
+The text the page produced -- `original` (the exception), the console tail,
+`failed_requests`, `page_errors`, the `assertions` block, the A11y
+tree inside `healing_suggestion`, and the error of any producer that failed --
+is scrubbed of the run's and the session's values by the first rule, a typed
+password included, so an echo glued to other characters (`hunter2-reset`) does
+not reach it. The fields that echo the macro itself -- `failed_action`,
+`executed_actions`, and the step `healing_suggestion` names -- show each step as
+the macro wrote it, before substitution, and are not scrubbed of those values:
+a placeholder stays `{{order}}` rather than showing what it expanded to, and a
+typed `admin` does not rewrite the macro's own `#admin-menu`. Two structural
+redactions still apply there: a `fill`, `type` or `expect_no_text` value is
+`<redacted>`, and a `macro_call`'s arguments are redacted as `args_used` is.
 
 **Blind-scrub policy.** `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY` selects one of
 three strict modes:

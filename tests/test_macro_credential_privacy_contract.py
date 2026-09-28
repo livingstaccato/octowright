@@ -78,6 +78,15 @@ def _session() -> MagicMock:
     return session
 
 
+async def _healer_echoing_its_inputs(_session: Any, action: dict[str, Any], *, scrub_page: Any) -> str:
+    """A healer that repeats both of its inputs: the step, and page text naming the value.
+
+    The step is the macro as written, so it holds the placeholder, never the
+    value; the page's text reaches the suggestion only through *scrub_page*.
+    """
+    return f"replace {action} after seeing {scrub_page(f'page says {PASSWORD}')}"
+
+
 @pytest.mark.asyncio
 async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exception_chain(
     monkeypatch: pytest.MonkeyPatch,
@@ -96,11 +105,7 @@ async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exc
             return_value={"actions": [{"action": "fill", "selector": "#password", "value": "{{password}}"}]},
         ),
         patch.object(execution, "_push_status", AsyncMock()),
-        patch.object(
-            execution,
-            "_suggest_fix",
-            AsyncMock(return_value=f"replace selector after seeing {PASSWORD}"),
-        ),
+        patch.object(execution, "_suggest_fix", _healer_echoing_its_inputs),
         pytest.raises(RuntimeError) as caught,
     ):
         await execution.run_macro(
