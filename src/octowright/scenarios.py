@@ -18,7 +18,7 @@ from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
 )
-from octowright.scenario_templates import substitute_placeholders, unquoted_placeholder_hint
+from octowright.scenario_templates import near_miss_hint, substitute_placeholders, unquoted_placeholder_hint
 
 # ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
 # their canonical home is ``octowright.scenarios_pool``. They are NOT re-
@@ -315,11 +315,13 @@ def _validate_optional_ints(
     for field_name in fields:
         value = raw.get(field_name)
         if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
-            # A template arg substituted as text stays a string ("1280"); say how
-            # to get a number rather than leaving the caller to guess.
+            # A quoted YAML number and a template arg substituted as text both
+            # arrive as a string ("1280"), and this validator cannot tell which
+            # loader it serves, so the hint names both fixes.
             raise ValueError(
                 f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer, "
-                f"got {type(value).__name__} {value!r} (a template arg must be passed as a JSON number)"
+                f"got {type(value).__name__} {value!r} (unquote it in the YAML, or pass a JSON number "
+                "as the template arg)"
             )
 
 
@@ -333,7 +335,9 @@ def _validate_optional_bools(
     for field_name in fields:
         value = raw.get(field_name)
         if value is not None and not isinstance(value, bool):
-            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be a boolean")
+            hint = near_miss_hint(value)
+            got = f", got {value!r}{hint}" if hint else ""
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be a boolean{got}")
 
 
 def load_python_scenario(path: Path) -> Scenario:

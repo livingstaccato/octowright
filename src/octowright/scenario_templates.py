@@ -49,6 +49,26 @@ def coerce_scalar(text: str) -> Any:
     return _COERCED.get(text, text)
 
 
+#: Spellings a caller plausibly meant as a bool / null that are NOT coerced
+#: (the rule above is exact lowercase), so a refusal can say how to get one.
+_NEAR_BOOLS = frozenset({"True", "TRUE", "False", "FALSE"})
+_NEAR_NULLS = frozenset({"~", "Null", "NULL"})
+
+
+def near_miss_hint(value: Any) -> str:
+    """How to get the bool / null a refused string spelled, or ``""`` if it spelled neither.
+
+    Only the message changes: coercion stays exactly ``true``/``false``/``null``.
+    """
+    if not isinstance(value, str):
+        return ""
+    if value in _NEAR_BOOLS:
+        return f" (only lowercase true/false are read as a boolean: write {value.lower()}, or pass a JSON bool)"
+    if value in _NEAR_NULLS:
+        return " (only a lowercase null is read as unset: write null, or pass a JSON null)"
+    return ""
+
+
 def _whole_value(value: Any) -> Any:
     # A caller over MCP may pass a real JSON bool/number/null; keep it rather
     # than round-trip it through str. Anything else goes through the text.

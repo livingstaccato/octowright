@@ -312,3 +312,50 @@ def test_a_name_the_macro_grammar_accepts_is_a_whole_value_placeholder_in_a_temp
     )
     scenario = scenarios.load_scenario_template("brace", {"a{b": "true"})
     assert scenario.participants[0].record_video is True
+
+
+# --- The messages when a spelling is not coerced ------------------------------
+#
+# Coercion stays exact-lowercase only; these pin that the refusal says how to
+# get the bool / null the caller meant, and that the integer hint does not
+# blame a template arg for a hand-written scenario.
+
+
+@pytest.mark.parametrize("text", ["True", "TRUE", "False", "FALSE"])
+def test_a_capitalised_bool_says_to_use_lowercase_or_a_json_bool(fresh_scenarios, text):
+    with pytest.raises(ValueError, match="must be a boolean") as info:
+        _typed(fresh_scenarios, video=text)
+    message = str(info.value)
+    assert f"{text!r}" in message
+    assert "lowercase" in message and "JSON bool" in message
+
+
+@pytest.mark.parametrize("text", ["~", "Null", "NULL"])
+def test_a_null_spelling_that_is_not_coerced_says_to_use_lowercase_null(fresh_scenarios, text):
+    with pytest.raises(ValueError, match="must be a boolean") as info:
+        _typed(fresh_scenarios, video=text)
+    message = str(info.value)
+    assert "lowercase null" in message and "JSON null" in message
+
+
+@pytest.mark.parametrize("text", ["True", "~"])
+def test_the_coercion_itself_is_unchanged(fresh_scenarios, text):
+    """Decided: only exact lowercase true/false/null coerce; the rest stay strings."""
+    assert _typed(fresh_scenarios, p=text).participants[0].persona == text
+
+
+def test_a_quoted_integer_in_a_hand_written_scenario_is_not_blamed_on_a_template_arg(fresh_scenarios):
+    scenarios, _template_dir = fresh_scenarios
+    content = 'name: s\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    viewport_w: "1280"\n'
+    with pytest.raises(ValueError, match="must be an integer") as info:
+        scenarios.load_yaml_scenario(content, "s")
+    message = str(info.value)
+    assert "unquote" in message
+    assert "a template arg must be passed" not in message
+
+
+def test_a_non_string_non_bool_still_gets_the_plain_message(fresh_scenarios):
+    scenarios, _template_dir = fresh_scenarios
+    content = "name: s\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    record_video: [1]\n"
+    with pytest.raises(ValueError, match=r"'record_video' must be a boolean$"):
+        scenarios.load_yaml_scenario(content, "s")
