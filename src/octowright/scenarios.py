@@ -317,12 +317,28 @@ def _validate_optional_ints(
         if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
             # A quoted YAML number and a template arg substituted as text both
             # arrive as a string ("1280"), and this validator cannot tell which
-            # loader it serves, so the hint names both fixes.
+            # loader it serves, so the hint names both fixes. Only for such a
+            # string: unquoting ``true``, a list or "wide" would not make an
+            # integer of it.
+            hint = (
+                " (unquote it in the YAML, or pass a JSON number as the template arg)"
+                if _is_integer_text(value)
+                else ""
+            )
             raise ValueError(
                 f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer, "
-                f"got {type(value).__name__} {value!r} (unquote it in the YAML, or pass a JSON number "
-                "as the template arg)"
+                f"got {type(value).__name__} {value!r}{hint}"
             )
+
+
+def _is_integer_text(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _validate_optional_bools(

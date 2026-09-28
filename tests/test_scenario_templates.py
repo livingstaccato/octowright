@@ -359,3 +359,14 @@ def test_a_non_string_non_bool_still_gets_the_plain_message(fresh_scenarios):
     content = "name: s\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    record_video: [1]\n"
     with pytest.raises(ValueError, match=r"'record_video' must be a boolean$"):
         scenarios.load_yaml_scenario(content, "s")
+
+
+@pytest.mark.parametrize("value", ["true", "[1280]", "'wide'", "'12.5'"])
+def test_the_unquote_hint_is_only_for_a_string_that_is_an_integer(fresh_scenarios, value):
+    """Unquoting ``true``, a list or ``"wide"`` would not make it an integer, so the hint misleads."""
+    scenarios, _template_dir = fresh_scenarios
+    content = f"name: s\nparticipants:\n  - persona: cosmo\n    kind: chromium\n    viewport_w: {value}\n"
+    with pytest.raises(ValueError, match=r"'viewport_w' must be an integer, got \w+ .*\S$") as info:
+        scenarios.load_yaml_scenario(content, "s")
+    message = str(info.value)
+    assert "unquote" not in message and "JSON number" not in message
