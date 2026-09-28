@@ -102,9 +102,12 @@ class SessionRecoveredEvent:
     crashing past the recovery cap — relaunch / the page is unstable).
 
     ``recovered_elsewhere`` is True when a ``recovered`` session's fresh page
-    did NOT reach the dead page's URL (refused by the SSRF policy, or its
-    navigation failed); ``navigation_error`` says why. The browser is usable,
-    but the client must navigate again before it carries on."""
+    is NOT at the dead page's URL, judged by where the page actually is
+    (refused by the SSRF policy, or its navigation failed). The browser is
+    usable, but the client must navigate again before it carries on.
+    ``navigation_error`` says why the navigation failed -- also with
+    ``recovered_elsewhere`` False, when the page reached its URL but its load
+    timed out after commit."""
 
     instance_id: str
     kind: str

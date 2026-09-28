@@ -110,9 +110,13 @@ notifications/octowright/browser_recovered — a renderer-crash recovery resolve
   params: { instance_id, kind, label, profile, outcome, attempts, log_path,
             navigation_error, recovered_elsewhere, hint }
   outcome: "recovered" | "failed" | "exhausted"
-  recovered_elsewhere: true when a "recovered" page did NOT reach the dead page's
-            last URL (refused by the SSRF policy, or its navigation failed);
-            navigation_error says why, else null. Navigate again before continuing.
+  recovered_elsewhere: true when a "recovered" page is NOT at the dead page's
+            last URL, judged by where the page is (refused by the SSRF policy,
+            or its navigation failed). Navigate again before continuing.
+  navigation_error: why the navigation failed, else null -- also set, with
+            recovered_elsewhere false, when the page reached its last URL but
+            its load timed out after commit.
+  "failed" includes a fresh page that itself crashed loading the last URL.
 
 notifications/octowright/driver_died       — the shared Playwright driver died
   params: { restart_count, relaunch_mode, lost_count, lost_instance_ids, hint }

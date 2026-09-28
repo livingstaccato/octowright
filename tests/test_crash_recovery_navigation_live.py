@@ -15,11 +15,21 @@ said the page was elsewhere.
 The dead page here is a live one handed to ``_recover`` directly: what is
 under test is the swap and its report, not the crash signal
 (``test_recovery_giveup_live.py`` drives a real renderer crash).
+
+Two more ways the report was wrong. A load that timed out AFTER the navigation
+committed was reported as "NOT at its last URL" while the page was at it. And a
+replacement that itself crashed loading its last URL was swapped in as a
+usable recovery elsewhere, while its own crash listener scheduled a second
+recovery behind this one.
 """
 
 from __future__ import annotations
 
+import asyncio
 import socket
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
@@ -71,5 +81,100 @@ async def test_recovery_onto_a_url_that_fails_to_load_recovers_elsewhere(
         # The session is usable: the next navigation works.
         await session.navigate("data:text/html,<title>after</title>")
         assert await session.page.title() == "after"
+    finally:
+        await pool.shutdown()
+
+
+class _SlowImage(BaseHTTPRequestHandler):
+    """``/page`` commits at once and never finishes loading: its image never answers."""
+
+    def do_GET(self) -> None:
+        srv: Any = self.server
+        if self.path == "/hang.png":
+            srv.release.wait(60)
+            return
+        body = b'<!doctype html><title>slow</title><img src="/hang.png">'
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def slow_page() -> Iterator[str]:
+    srv: Any = ThreadingHTTPServer(("127.0.0.1", 0), _SlowImage)
+    srv.daemon_threads = True
+    srv.release = threading.Event()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{srv.server_address[1]}/page"
+    srv.release.set()
+    srv.shutdown()
+
+
+@pytest.mark.parametrize("policy", ["off", "block-private"])
+async def test_a_load_that_times_out_at_the_last_url_is_a_recovery_at_it(
+    kind: str, policy: str, slow_page: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", policy)
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_ALLOW", "127.0.0.1")
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    pool = BrowserPool(recordings_dir=tmp_path)
+    try:
+        try:
+            inst = await pool.launch(kind=kind, headed=False, url="data:text/html,<title>start</title>")
+        except Exception as exc:  # engine not installed on this host
+            pytest.skip(f"{kind} unavailable: {exc}")
+        session = pool.get(inst["instance_id"])
+        incidents.reset()
+        assert await crash_recovery._recover(session, session.page, 2_000, slow_page) is True
+        assert session.page.url == slow_page
+        (incident,) = incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)
+        assert incident["outcome"] == "recovered" and "Timeout" in incident["navigation_error"]
+        assert incident["recovered_elsewhere"] is False
+        (event,) = [e for e in events if getattr(e, "outcome", None) == "recovered"]
+        assert event.recovered_elsewhere is False and event.navigation_error == incident["navigation_error"]
+    finally:
+        await pool.shutdown()
+
+
+#: A URL whose load crashes the renderer, per engine (measured, Playwright 1.62).
+#: Chromium's goto raises ``net::ERR_ABORTED`` a beat BEFORE the crash event;
+#: Firefox's raises ``Page crashed`` after it, with the page closed or not yet.
+#: WebKit has none: ``about:crash`` just times out.
+_CRASHING_URL = {"chromium": "chrome://crash", "firefox": "about:crashcontent"}
+
+
+async def test_a_replacement_that_crashes_loading_fails_the_recovery_once(
+    kind: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if kind not in _CRASHING_URL:
+        pytest.skip(f"no URL is known to crash a {kind} renderer on load")
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "off")
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    pool = BrowserPool(recordings_dir=tmp_path)
+    try:
+        try:
+            inst = await pool.launch(kind=kind, headed=False, url="data:text/html,<title>start</title>")
+        except Exception as exc:  # engine not installed on this host
+            pytest.skip(f"{kind} unavailable: {exc}")
+        session = pool.get(inst["instance_id"])
+        incidents.reset()
+        dead = session.page
+        session._crashed = True
+        assert await crash_recovery._recover(session, dead, 15_000, _CRASHING_URL[kind]) is False
+        assert session.page is dead and session.pages == [dead]
+        assert session._crashed is True
+        # Nothing else is left to run: the replacement's own crash scheduled no second recovery.
+        await asyncio.sleep(1)
+        assert not [t for t in session._bg_tasks if not t.done()]
+        assert [e.outcome for e in events if type(e).__name__ == "SessionRecoveredEvent"] == ["failed"]
+        assert [i["outcome"] for i in incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)] == ["failed"]
+        assert all(page.is_closed() for page in session.context.pages if page is not dead)
     finally:
         await pool.shutdown()

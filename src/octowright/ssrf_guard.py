@@ -249,7 +249,7 @@ def _note_served(request: Any, *, client_redirect: bool) -> None:
         _SERVED.pop(request, None)
         _SERVED[request] = client_redirect
     except TypeError:  # a request double that cannot be weakly referenced
-        log.debug("octowright.ssrf.served_document_untracked", url=getattr(request, "url", None))
+        log.debug("octowright.ssrf.served_document_untracked")
 
 
 def served_client_redirect_last(frame: Any) -> bool:

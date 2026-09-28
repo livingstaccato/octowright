@@ -586,3 +586,62 @@ async def test_a_recovery_at_the_last_url_says_so(monkeypatch: pytest.MonkeyPatc
     await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     (event,) = events
     assert event.outcome == "recovered" and event.recovered_elsewhere is False and event.navigation_error is None
+
+
+@pytest.mark.parametrize("page_url", ["https://example.com", "https://EXAMPLE.com:443/#top"])
+async def test_a_slow_load_at_the_last_url_is_a_recovery_at_it(monkeypatch: pytest.MonkeyPatch, page_url: str) -> None:
+    """A load timeout AFTER the navigation committed was reported as "NOT at its last URL"."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.url = page_url
+    fresh.goto = AsyncMock(side_effect=TimeoutError("Page.goto: Timeout 15000ms exceeded."))
+    assert await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com") is True
+    (event,) = events
+    assert event.outcome == "recovered" and event.recovered_elsewhere is False
+    assert "Timeout" in event.navigation_error  # still said, for information
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert "Timeout" in inc["navigation_error"] and inc["recovered_elsewhere"] is False
+
+
+async def test_a_replacement_that_crashes_loading_fails_the_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It was swapped in as "recovered elsewhere" while its own crash scheduled a second recovery."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    dead = s.page
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.close = AsyncMock()
+
+    async def crashing_goto(*_args: Any, **_kwargs: Any) -> None:
+        s.pages.append(fresh)  # the context "page" event registered it first
+        # What the page's crash listener sees: a replacement this recovery owns.
+        assert crash_recovery.claim_replacement_crash(fresh) is True
+        raise RuntimeError("Page.goto: Page crashed")
+
+    fresh.goto = crashing_goto
+    assert await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com") is False
+    assert s._crashed is True
+    assert s.page is dead and s.pages == [dead] and s.page_count == 1
+    fresh.close.assert_awaited_once()
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["outcome"] == "failed"
+    assert [e.outcome for e in events] == ["failed"]
+    # A crash event arriving late for the failed replacement is still its recovery's, not a new one.
+    assert crash_recovery.claim_replacement_crash(fresh) is True
+
+
+async def test_a_recovered_page_that_crashes_later_is_recovered_again() -> None:
+    """Once swapped in, the replacement is the session's page: its next crash is a crash like any other."""
+    s = _session()
+    fresh = s.context.new_page.return_value
+    assert await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com") is True
+    assert crash_recovery.claim_replacement_crash(fresh) is False
+    assert crash_recovery.claim_replacement_crash(None) is False

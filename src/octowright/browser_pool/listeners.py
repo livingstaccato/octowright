@@ -197,6 +197,12 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         session._crashed = True
         _CRASHED.add(1, attributes={"kind": session.kind})
         crash_recovery.note_crash()
+        if crash_recovery.claim_replacement_crash(crashed_page):
+            # The fresh page a recovery is loading crashed: that recovery
+            # reports it as its own failure, and the crash already published
+            # stands. Recovering it too would replace the replacement.
+            log.warning("octowright.crash.replacement_crashed", instance_id=instance_id, kind=session.kind)
+            return
         log.warning(
             "octowright.browser.page_crashed",
             instance_id=instance_id,

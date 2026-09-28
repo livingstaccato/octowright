@@ -42,7 +42,7 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "runs inside the same route callback: fetches the navigation once and fulfills or aborts it "
         "before the request is released",
     ),
-    "ssrf_guard.py:_HopCounter.reset": (
+    "ssrf_guard.py:_end_chain": (
         "event-critical",
         "runs inside the same route callback: reads the request's URL to log a dropped stale ending",
     ),
