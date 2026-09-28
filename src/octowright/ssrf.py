@@ -18,22 +18,23 @@ This module adds an opt-in host policy, gated like the other network opt-outs:
 * ``off`` (DEFAULT) — no host check.
 * ``block-private`` — refuse `http(s)` to a *literal* IP in any non-public range
   (loopback, link-local incl. the metadata range, RFC1918, multicast, reserved,
-  unspecified) and to `localhost` / `*.localhost` / well-known metadata
-  hostnames.
+  unspecified), to `localhost` / `*.localhost` / well-known metadata
+  hostnames, and -- in the resolving checks below -- to a name that resolves
+  to a non-public address or does not resolve at all.
 
 `OCTOWRIGHT_SSRF_ALLOW` is a comma-separated host allowlist that overrides the
 block for legitimate internal targets. An operator who sets the policy to an
 *unrecognized* token gets the protective mode (their intent was clearly to turn
 something on), not a silent disable.
 
-Two layers, deliberately split:
+Three entry points, deliberately split:
 
 * :func:`check_navigation_url` is synchronous and classifies the host *as
   spelled* -- literal IPs in every WHATWG encoding, and the known names above.
   It never touches DNS, so it is safe from any caller.
 * :func:`check_navigation_url_resolved` is the async entry point every
-  navigation path awaits (tool pre-flight and each redirect hop the
-  ``ssrf_guard`` validates). After the literal check it resolves a
+  navigation path awaits (tool pre-flight, and in ``ssrf_guard`` every
+  navigation request's own URL plus each redirect ``Location`` it follows). After the literal check it resolves a
   non-allowlisted hostname with ``getaddrinfo`` in a worker thread and refuses
   the URL if **any** answer is non-public -- a browser may connect to whichever
   address it likes from a multi-answer set. A name that does not resolve is
@@ -42,8 +43,8 @@ Two layers, deliberately split:
   check" must not read as "checked and public".
 * :func:`check_request_url_cached` is the same check for subresources (every
   image, script, fetch/XHR and WebSocket ``ssrf_guard`` sees -- the first URL
-  only: a subresource's redirect hops never reach it, see ``ssrf_guard``), with a short
-  per-host verdict cache so a page's hundredth request to a CDN does not pay
+  only: a subresource's redirect hops never reach it, see ``ssrf_guard``), with
+  a short per-host verdict cache so a page's hundredth request to a CDN does not pay
   its own ``getaddrinfo``.
 
 What this still cannot close -- the DNS-rebinding window

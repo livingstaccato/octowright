@@ -560,7 +560,7 @@ def _telemetry_fake_source(
     user_data_dir: Any = None,
 ) -> Any:
     """Duck-typed handoff/relaunch source carrying a REAL SessionOperationGate
-    -- Task 8's close_original=True path drives ``_operation_gate`` directly
+    -- the close_original=True path drives ``_operation_gate`` directly
     via ``close_with_preparation``, so a bare SimpleNamespace can no longer
     stand in (mirrors ``tests/test_handoff.py::_fake_source``)."""
     from octowright.session.operation.gate import SessionOperationGate

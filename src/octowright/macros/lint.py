@@ -8,13 +8,15 @@
 Pure module — no I/O, no MCP dependency. Surfaces probable mistakes before
 the runtime fails partway through with a generic error: missing required
 fields, unknown action types, lifecycle actions that don't belong in
-macros, empty conditional branches, and string literals that look like
-credentials but aren't parameterized.
+macros, empty conditional branches, string literals that look like
+credentials but aren't parameterized, an ``allowed_origins`` replay would
+refuse, and an ``expect_no_text`` still holding the recording's redaction
+marker.
 
 The set of supported simple actions and their required fields is mirrored
-from `octowright.macros._dispatch_simple`; conditional action shapes mirror
-`octowright.conditional`. The lifecycle / replay-skip set mirrors
-`octowright.macros._REPLAY_SKIP`.
+from `octowright.macros.runtime.dispatch_simple`; conditional action shapes
+mirror `octowright.conditional`. The lifecycle / replay-skip set mirrors
+`octowright.macros.runtime._REPLAY_SKIP`.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from .substitution import SEMANTIC_FINDER_KEYS
 # ---------------------------------------------------------------------------
 
 # Map: simple action name -> tuple of REQUIRED field names.
-# Mirrors `octowright.macros._dispatch_simple`.
+# Mirrors `octowright.macros.runtime.dispatch_simple`.
 _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
     "click": ("selector",),
@@ -77,7 +79,7 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
 }
 
 # Lifecycle / inspection actions that the runtime silently skips during
-# replay. Mirrors `octowright.macros._REPLAY_SKIP`.
+# replay. Mirrors `octowright.macros.runtime._REPLAY_SKIP`.
 _REPLAY_SKIP: frozenset[str] = frozenset({"launch", "close", "snapshot"})
 
 # Conditional action names. Mirrors `octowright.conditional.CONDITIONAL_ACTIONS`.

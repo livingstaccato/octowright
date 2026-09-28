@@ -10,9 +10,8 @@ Live replay (``macros.substitution``) and the exported macro CLI both expand
 renders this module's source verbatim into every generated script
 (:func:`octowright.artifacts.script_export.render_macro_cli`), the way it
 renders ``drawn_text``. So it imports only the standard library and every name
-it defines is fair game in the script's namespace. The exported CLI used to
-substitute with a plain ``re.sub`` and no guard at all, so a macro that
-``macro_run`` refused ran to completion as a script.
+it defines is fair game in the script's namespace, and a macro that
+``macro_run`` refuses is refused by the script too.
 
 The classifier that decides which arg is a credential is NOT here: it lives in
 ``macros.privacy`` and the script carries its own rendering of it. Callers pass

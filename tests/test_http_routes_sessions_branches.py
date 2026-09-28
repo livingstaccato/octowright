@@ -498,8 +498,7 @@ class TestSelectorValidate:
 
     async def test_session_busy_timeout_error_maps_to_503(self, fakes: dict[str, Any]) -> None:
         """A SessionBusyTimeoutError from the gate maps to 503, distinctly
-        from the generic locator-exception 400 branch -- locks in Task 10's
-        Step 5 error-mapping contract."""
+        from the generic locator-exception 400 branch."""
         from octowright.session.operation.gate import SessionBusyTimeoutError
 
         pool: _FakePool = fakes["pool"]
@@ -520,8 +519,7 @@ class TestSelectorValidate:
 
     async def test_session_closing_error_maps_to_409(self, fakes: dict[str, Any]) -> None:
         """A SessionClosingError from the gate maps to 409, not the generic
-        locator-exception 400 branch -- locks in Task 10's Step 5
-        error-mapping contract."""
+        locator-exception 400 branch."""
         from octowright.session.operation.gate import SessionClosingError
 
         pool: _FakePool = fakes["pool"]

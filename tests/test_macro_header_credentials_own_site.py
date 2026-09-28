@@ -81,7 +81,7 @@ def test_a_mocked_body_stays_refused_even_on_the_own_site() -> None:
 
 
 def test_another_port_on_the_launch_host_is_not_the_own_site() -> None:
-    """c-0001: comparing hostnames trusted every port on localhost.
+    """Comparing hostnames would trust every port on localhost.
 
     A launch at http://localhost:3000 exempted a header for
     http://localhost:45678/**, where another local user may be listening.
@@ -330,7 +330,7 @@ def test_the_session_base_url_is_the_one_the_context_was_launched_with(tmp_path:
 
 
 def test_a_relaunch_builds_its_session_with_the_original_launch_url(tmp_path: Any) -> None:
-    """c-0015: the replacement is published inside pool.launch, so it must be BUILT trusted right.
+    """The replacement is published inside pool.launch, so it must be BUILT trusted right.
 
     Handoff/relaunch open the replacement at the page's current URL, which a
     macro may have chosen. Correcting ``launch_url`` after ``pool.launch``

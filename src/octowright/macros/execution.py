@@ -113,9 +113,10 @@ _MACRO_RUN_DURATION = histogram(
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
 
-# Console messages attached to a macro failure payload. Errors are claimed
-# first (see ``_select_console_tail``), so this bounds payload size rather
-# than being a window a chatty page can flush the useful line out of.
+# Console messages attached to a macro failure payload. Half the window is
+# kept for the plain tail and the rest goes to the newest diagnostic-level
+# messages (see ``_select_console_tail``), so a chatty page cannot flush the
+# useful line out of it.
 MACRO_FAILURE_CONSOLE_TAIL = 10
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
@@ -483,7 +484,8 @@ async def _build_failure_payload(
     """
     if sensitive_values:
         # The generic diagnostic producer persists raw HTML and a raw
-        # screenshot. Classified macros may have rendered an argument into
+        # screenshot. The page may render a value this run or the session
+        # ledger holds (a classified argument, a password typed earlier) into
         # either, so do not invoke it. Composition roots can retain their own
         # explicitly safe evidence at the authorized screenshot boundary.
         bundle: dict[str, Any] = {"diagnostic_suppressed": "classified macro arguments"}

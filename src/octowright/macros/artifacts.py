@@ -327,7 +327,7 @@ async def _capture_screenshot(
     sensitive_values: tuple[str, ...] = (),
 ) -> None:
     # Re-enters run_macro_artifact's own "macro_artifact_run" lease (same
-    # task, Task 2 reentrancy) -- both call sites already hold it, so this
+    # task, so the gate lets it re-enter) -- both call sites already hold it, so this
     # never queues; it exists so the page check and screenshot call don't run
     # unguarded outside any operation boundary.
     async with session.operation("macro_artifact_run"):

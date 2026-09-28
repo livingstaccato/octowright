@@ -9,10 +9,13 @@
 sink guard lets ``{{password}}`` through -- but it never asked WHICH page it was
 typed into. A shared macro that navigates to https://evil.example/login and
 then fills ``{{password}}`` handed the secret to attacker JavaScript with no
-sink ever named (c-0001). Before a fill/type whose value came from a
-credential-tier arg, the page's current origin is now compared with the
-session's own origins (launch URL, persona base_url), plus any the step lists
-literally in ``allowed_origins`` for a sign-in hop.
+sink ever named. For a fill/type whose value came from a credential-tier arg,
+the origin is compared with the session's own origins (launch URL, persona
+base_url), plus any the step lists literally in ``allowed_origins`` for a
+sign-in hop: before dispatch on the frame the value would land in
+(``session.target_url``), then on the document that actually receives it -- the
+frame owning the filled element, or for a type the focused document before each
+key (``octowright.credential_input``).
 """
 
 from __future__ import annotations

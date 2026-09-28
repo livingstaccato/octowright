@@ -13,6 +13,12 @@ SIGSEGV) — so recovery opens a FRESH page in the surviving context, navigates 
 to the dead page's URL, and swaps it in. The session keeps its instance_id,
 profile, and context. This module wires that off the crash listener.
 
+A navigation that fails -- refused by the SSRF policy (``guarded_navigation``)
+or any network error -- does not fail the recovery: the fresh page is already
+wired, so the session recovers onto it and says why, as the incident's
+``navigation_error`` and the ``browser_recovered`` event's
+``recovered_elsewhere`` / ``navigation_error``.
+
 Bounding (so a page that crashes on every reload doesn't loop forever): a
 per-session attempt counter capped at ``CRASH_RECOVERY_MAX``, with a crash-loop
 reset — if it has been quiet for ``CRASH_RECOVERY_RESET_SECONDS`` the counter

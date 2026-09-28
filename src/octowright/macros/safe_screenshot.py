@@ -339,8 +339,9 @@ async def ledger_screenshot(session: Any, path: Path, sensitive_values: tuple[st
     which redacts, proves nothing is rendered, and refuses on an engine it
     cannot prove that on. It does not consult ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS``:
     that ``refuse`` default governs a macro run, and applied here it would make
-    every screenshot after a login fail. ``OCTOWRIGHT_REDACT_INPUTS=off`` keeps
-    typed values out of the ledger and so restores the raw screenshot.
+    every screenshot after a login fail. The caller consults
+    ``OCTOWRIGHT_LEDGER_SCREENSHOTS`` (:func:`guards_ledger_screenshot`), whose
+    ``allow`` takes the raw screenshot instead unless a handler is installed.
 
     *path* was already chosen and contained by the caller, so it is its own root.
     """

@@ -5,7 +5,7 @@
 
 """One DRY boundary for a COMPLETE browser tool workflow.
 
-Task 5 decorated every session method with ``@gated_operation`` so a direct
+Every session method is decorated with ``@gated_operation``, so a direct
 Python call is always serialized. This helper defines a wider boundary
 around a whole MCP-tool call — a composite like ``browser_click(...,
 response_mode="outline")`` dispatches a click AND builds an outline

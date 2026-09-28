@@ -32,7 +32,7 @@ def _fake_source(
     disable_automation_controlled: bool = False,
 ) -> Any:
     """A duck-typed handoff/relaunch source carrying a REAL
-    ``SessionOperationGate`` -- Task 8 routes ``close_original=True`` through
+    ``SessionOperationGate`` -- ``close_original=True`` routes through
     ``close_with_preparation``, which drives ``_operation_gate`` directly and
     calls ``session.operation(...)`` from inside the preparation callback, so
     a bare ``SimpleNamespace`` (no gate, no ``.operation``) can no longer
@@ -446,7 +446,7 @@ async def test_a_replacement_keeps_the_original_launch_url(monkeypatch: pytest.M
     async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
         # As the real launch does: build the session from the options, then
         # publish it -- where browser_list and a concurrent macro_run can see it
-        # -- all before returning (c-0015).
+        # -- all before returning.
         replacement.launch_url = kwargs.get("trusted_launch_url") or kwargs.get("url")
         pool._sessions["new01"] = replacement
         seen_while_listed.append(pool._sessions["new01"].launch_url)

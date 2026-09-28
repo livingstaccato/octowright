@@ -409,9 +409,9 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     if not path.exists():
         raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
     # Every character PyYAML treats as a line break, not only CR/LF. The
-    # substitution below no longer goes through YAML text, so this is no longer
-    # what stops injection -- but a persona or URL containing a line break is
-    # never what a caller meant, and refusing it keeps the error they got.
+    # substitution below does not go through YAML text, so this is not what
+    # stops injection -- but a persona or URL containing a line break is never
+    # what a caller meant.
     for k, v in args.items():
         if any(c in str(v) for c in _YAML_LINE_BREAKS):
             raise ValueError(f"scenario template arg {k!r} contains a newline (a YAML line break)")

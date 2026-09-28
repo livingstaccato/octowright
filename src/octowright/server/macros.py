@@ -132,7 +132,15 @@ def macro_digest(name: str | None = None, recording_path: str | None = None, max
     return macro_artifacts.macro_digest(name=name, recording_path=recording_path, max_chars=max_chars)
 
 
-@mcp.tool(structured_output=False, description="Export a saved macro as an import-safe Python argparse CLI script.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Export a saved macro as an import-safe Python argparse CLI script. The script enforces "
+        "replay's guards: it types a credential only on an origin passed as --trusted-origin (or "
+        "listed in the step's allowed_origins), uploads only from the upload roots, and runs "
+        "expect_network_clean / expect_no_text, printing what each passing check saw."
+    ),
+)
 def macro_export_cli(
     name: str,
     out_path: str | None = None,

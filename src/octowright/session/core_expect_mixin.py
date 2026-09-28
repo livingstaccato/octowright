@@ -193,7 +193,7 @@ class SessionExpectMixin(SessionLike):
         The error carries counts only, because a failed URL or an exception
         message can carry a credential.
         """
-        # Before anything waits, so a window that cannot be judged fails at once.
+        # Before anything waits: a bad option, or a window that cannot be judged, fails at once.
         strict_option("expect_network_clean", require_settled)
         window = self._network.window(since)
         self.enable_inflight_tracking()

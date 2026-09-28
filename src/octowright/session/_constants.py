@@ -24,8 +24,8 @@ DEFAULT_PREVIEW_CHARS = 4000
 #: session's console ring buffer. The page decides how long a message is, and
 #: the recorder JSON-serialises and flushes every row synchronously, so a page
 #: logging a stringified multi-megabyte API response cost that much memory,
-#: event-loop time and disk per call -- with the global recording ceiling off
-#: by default. Longer text keeps this prefix plus a marker naming the original
+#: event-loop time and disk per call, and the recording's own ceiling
+#: (``OCTOWRIGHT_RECORDING_MAX_BYTES``, 512 MiB) bounds only the file. Longer text keeps this prefix plus a marker naming the original
 #: length (``text_truncated`` / ``text_length`` on the row).
 #: ``MACRO_FAILURE_CONSOLE_TEXT_CHARS`` is the tighter cap for the one payload
 #: that rides the MCP transport.

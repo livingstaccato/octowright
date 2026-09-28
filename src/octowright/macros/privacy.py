@@ -595,11 +595,13 @@ def with_session_ledger(session: Any, values: Iterable[str]) -> PrivacyLedger:
     ``browser_fill`` -- and the page may still render it. Reads the ledger
     without creating one.
 
-    A ledger, not a flat tuple: a flat tuple scrubbed a typed ``admin`` inside
-    ``Administrator`` and ``#admin-menu`` again, which is what
-    `PrivacyLedger.word_bounded` exists to prevent. *values* are the run's own
-    classified values and match anywhere, so a value held both ways is
-    scrubbed anywhere (`PrivacyLedger.add`).
+    The merge keeps each session value's word-bounded status, and *values*
+    (the run's own classified values) match anywhere, so a value held both
+    ways is scrubbed anywhere (`PrivacyLedger.add`). Every current caller
+    takes ``.values``, which drops the bounds on purpose: a failure payload
+    goes back to the MCP client and a screenshot is pixels, so there a typed
+    password is replaced wherever it appears. The bounds matter only for the
+    recording, whose own scrub reads the session ledger directly.
     """
     merged = PrivacyLedger(values)
     ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)

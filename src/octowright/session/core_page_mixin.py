@@ -204,9 +204,10 @@ def _check_url_shape(url: str) -> str | None:
 
 def _reject_unsafe_url(url: str) -> None:
     """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
-    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
-    navigation entry point (navigate / open_url / launch) and macro replay
-    routes through here, so one call covers them all.
+    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. This
+    is the synchronous, DNS-free form; the navigation entry points (navigate /
+    open_url / launch, and so macro replay) run the resolving
+    :func:`reject_unsafe_url_resolved` instead, which covers this check too.
 
     The type is load-bearing, not decoration: ``BrowserPool.launch``
     classifies by ``isinstance``, so a sibling check added here as a plain

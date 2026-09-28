@@ -6,7 +6,7 @@
 """How a classified value is found and replaced: its spellings, their patterns, the walk.
 
 Split out of ``macros.privacy``, which decides WHICH values are classified and
-re-exports everything here. Standard library only.
+re-exports what its callers import from here. Standard library only.
 """
 
 from __future__ import annotations

@@ -247,10 +247,13 @@ class BrowserSession(
     _tracked_pages: WeakKeyDictionary[Page, list[tuple[str, Any]]] = field(
         default_factory=WeakKeyDictionary, repr=False
     )
-    # Applied to page-derived text before it is written to disk (the markdown
-    # cache). Installed by macros.privacy.install_sensitive_recorder so the
-    # session scrubs a macro's credential values without importing the macro
-    # layer -- the recorder is protected the same way, by a wrapper.
+    # Applied to page-derived text the recorder wrapper does not see: the
+    # markdown cache, captures, the websocket sidecar and (through
+    # ``input_redaction.live_scrubbed``) the in-memory console, page-error and
+    # network buffers. Installed by macros.privacy.install_sensitive_recorder
+    # -- for a macro's credential values, or a typed password the recorder
+    # redacted -- so the session scrubs the privacy ledger without importing
+    # the macro layer; the recorder is protected the same way, by a wrapper.
     durable_text_scrubber: DurableTextScrubber | None = field(default=None, repr=False)
     _last_mcp_navigation: str | None = None
     # Set by _notify_call_timeout when a Playwright call ran past its budget.

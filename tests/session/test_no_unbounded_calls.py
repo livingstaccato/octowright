@@ -8,11 +8,11 @@
 The incident: ``page.title()`` / ``page.content()`` / ``page.evaluate()`` (and
 their ``Frame`` equivalents) take no ``timeout`` at all, so a target that
 stops answering hangs the calling coroutine forever -- a full ``make ci`` run
-wedged for 12.6 hours against a broken WebKit. Task 1 wrapped every known
-site in ``octowright.session.timeouts.bounded()``; F2 of its review found 17
-more that hand enumeration had missed. This is the AST-scan backstop the
-review demanded so a THIRD round is not required by hand: nothing here fails
-if a refactor quietly reverts a site to a bare ``await self.page.title()``,
+wedged for 12.6 hours against a broken WebKit. Every known site is wrapped
+in ``octowright.session.timeouts.bounded()``, and hand enumeration had already
+missed 17 of them once. This is the AST-scan backstop, so a new or reverted
+site is caught mechanically: without it nothing fails if a refactor quietly
+reverts a site to a bare ``await self.page.title()``,
 which is exactly the gap ``tests/aria_redaction/test_no_unscrubbed_sinks.py``
 closes for the credential-scrubbing sinks ("the leak was not one bug in one
 place"), and the pattern this file follows.

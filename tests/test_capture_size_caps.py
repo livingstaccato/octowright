@@ -6,10 +6,11 @@
 """Page-controlled output is bounded per event, before it is serialised.
 
 A visited page decides how big a console message, a websocket frame or an
-error body is. The global disk ceilings are off by default, and where they are
-on they were checked only after the full payload had been copied,
-base64-expanded and ``json.dumps``'d -- so one multi-megabyte event cost its
-full size in memory (and, for console, on disk) regardless. These pin the
+error body is. The global disk ceilings (``OCTOWRIGHT_RECORDING_MAX_BYTES``,
+``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``) bound whole files, and are checked only
+after a row has been built -- so without a per-event cap one multi-megabyte
+event cost its full size in memory, copies and serialisation (and, for
+console, on disk) regardless. These pin the
 per-event caps that bound it at the source.
 """
 

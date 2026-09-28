@@ -6,7 +6,13 @@ your client talks to) and a Starlette HTTP server on `http://127.0.0.1:6286/` (w
 of copying log paths and shelling out to `npx playwright show-trace` by hand.
 
 Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
-`octowright_dashboard_url` MCP tool), or just open the URL directly.
+`octowright_dashboard_url` MCP tool, which returns a ready-to-open single-use
+`/pair#<code>` link), or run `octowright dashboard [--open]` in a terminal.
+Dashboard pairing is **on by default**, so the bare URL shows a pairing page
+until the browser has been paired; `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` set
+to a falsey token turns it off. An inline `--no-singleton` leader has no
+lockfile for `octowright dashboard` to read: it prints a pairing URL to stderr
+at startup, and `octowright_dashboard_url` still works.
 
 ## What you get
 
@@ -21,8 +27,10 @@ Ask your MCP client `"give me the octowright dashboard URL"` (it'll call the
   `GET /api/personas/sizes` (a single directory-size scan over Octowright's
   profile config dir).
 - **Closed-session cleanup** — closed-session rows expose an `⊗` delete
-  button on hover; clicking removes the JSONL recording, video, trace, and
-  screenshots from disk via `DELETE /api/sessions/{id}/recording`. Live
+  button on hover; clicking removes the JSONL recording and its sidecars
+  (markdown, websocket cache, HAR, trace, video, indexes, captures), the
+  session's failure dumps, video directory, downloads and frame cache from disk
+  via `DELETE /api/sessions/{id}/recording`, which lists what it removed. Live
   sessions reject the call with 409 (close them first).
 - **Per-session debugger** — click any session for a two-column page with the
   live browser preview or embedded session video on the left, action timeline

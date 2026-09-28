@@ -14,7 +14,10 @@ so the validator runs for both code paths that can drive an upload:
 
 Keeping a single validator in the session layer means a recorded macro
 cannot be replayed to exfiltrate arbitrary files just because its action
-JSON was hand-edited.
+JSON was hand-edited. The exported macro CLI is a third path: it embeds
+:func:`upload_roots` and :func:`check_upload_path` verbatim
+(``artifacts.script_export``), so a standalone script enforces the same
+allowlist.
 """
 
 from __future__ import annotations

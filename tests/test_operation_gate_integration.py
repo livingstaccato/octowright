@@ -631,7 +631,7 @@ async def test_ceiling_abort_produces_the_same_error_type_regardless_of_where_it
 
     - ``inside_prepare_then_teardown``: the cancellation lands in
       ``context.close()``, which ``close_helpers.prepare_then_teardown``
-      catches and RETURNS rather than raising (round 2's scenario, the
+      catches and RETURNS rather than raising (the
       other test above). ``close_operation``'s body never sees an
       exception, ``outcome`` stays ``"ok"``, and ``_release_close`` returns
       without converting anything -- the raw ``CancelledError`` reaches
@@ -1066,7 +1066,7 @@ async def test_failure_bundle_is_captured_before_manual_waiter(
 
 
 def test_gate_operation_names_never_enter_the_replay_or_recorder_vocabulary() -> None:
-    """Task 9's fixed operation names are pure in-process scheduling labels
+    """The gate's fixed operation names are pure in-process scheduling labels
     for ``SessionOperationGate.operation(...)`` -- gate acquire/release/
     timeout never touch the session's JSONL recorder, so these names must
     never collide with a real macro action kind, replay rename/drop key, or

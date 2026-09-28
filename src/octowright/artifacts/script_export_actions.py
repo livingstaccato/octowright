@@ -7,8 +7,8 @@
 
 Carrying the ``if/elif kind == ...`` chain inline in ``script_export``'s
 template string means branches get added by hand as gaps are noticed, which is
-how such a chain ends up covering 13 of ``macros.runtime._ACTION_MAP``'s 29 kinds
-while ending in ``raise RuntimeError("unsupported macro action in exported
+how such a chain once covered 13 of the 29 kinds ``macros.runtime._ACTION_MAP``
+then held, while ending in ``raise RuntimeError("unsupported macro action in exported
 CLI")`` — so exporting a macro containing an ordinary ``hover``, ``evaluate`` or
 ``screenshot`` produced a script that aborted on it.
 

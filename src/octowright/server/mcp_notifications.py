@@ -22,7 +22,10 @@ Notification methods:
     executing), and an actionable ``hint`` instead of a close ``reason``.
   * ``notifications/octowright/browser_recovered`` — a renderer-crash recovery
     resolved; ``outcome`` is recovered|failed|exhausted (the accurate follow-up
-    to a ``browser_crashed`` with ``recovering=true``).
+    to a ``browser_crashed`` with ``recovering=true``). ``recovered_elsewhere``
+    is true when a recovered page did not reach its last URL (refused by the
+    SSRF policy, or its navigation failed), with ``navigation_error`` saying
+    why: the browser is usable, but the client must navigate again.
   * ``notifications/octowright/driver_died`` — the shared driver died and these
     sessions were lost (``lost_instance_ids``); ``relaunch_mode`` says whether
     they're being auto-reopened.

@@ -76,7 +76,10 @@ class _FakeLocator:
 
     @property
     def first(self) -> _FakeLocator:
-        """A credential step takes the first match, as a selector fill does."""
+        """A credential ``fill``/``type`` step takes the first match, as the same step without one does.
+
+        A credential ``fill_by`` never calls this: it resolves strictly, as ``Locator.fill`` does.
+        """
         self._rec.record(f"locator.first:{self._label}")
         return self
 
@@ -758,7 +761,7 @@ def test_a11y_dragdrop_defaults_match_the_engine(monkeypatch: pytest.MonkeyPatch
 def test_a11y_dragdrop_releases_on_failed_verify(monkeypatch: pytest.MonkeyPatch) -> None:
     """The trap: a verify that never passes must still press release_key.
 
-    Task 1's fix round removed exactly this bug from the engine -- a grabbed
+    The engine had exactly this bug once -- a grabbed
     widget left stuck is indistinguishable from a grab that never registered.
     """
     action = {

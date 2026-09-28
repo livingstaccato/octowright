@@ -12,8 +12,11 @@ something will ask), and exposes ``get_network_requests`` for
 the dashboard / MCP tools to read back filtered slices with cursor-based
 pagination.
 
-Split out of ``core_ops_mixin`` to keep that file under the 500-LOC ratchet
-and to give network-capture concerns a single home.
+Split out of ``core_ops_mixin`` to keep that file under the repository's LOC
+ceiling and to give network-capture concerns a single home. A navigation the
+SSRF guard answered with a client-redirect document is recorded with the 3xx
+the server really sent (``ssrf_guard.client_redirect_of``,
+``served_as: "client_redirect"``), not the synthetic 200 the browser saw.
 """
 
 from __future__ import annotations

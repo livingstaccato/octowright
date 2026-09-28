@@ -1847,8 +1847,7 @@ class TestCloseCoordinatorFinallyResilience:
     @pytest.mark.anyio
     async def test_response_computation_failure_does_not_hang(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A session double missing an attribute close_response needs (the
-        exact failure mode that motivated this hardening -- see Task 8's
-        report) fails the close cleanly with a bounded timeout instead of
+        exact failure mode that motivated this hardening) fails the close cleanly with a bounded timeout instead of
         hanging every caller of reservation.wait() forever."""
         from octowright.browser_pool import close_helpers as _lc
         from octowright.session.operation.gate import SessionOperationGate
