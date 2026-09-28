@@ -123,15 +123,31 @@ async def _values(session: Any, selector: str) -> list[str]:
     return list(await session.page.eval_on_selector_all(selector, "els => els.map((el) => el.value)"))
 
 
-@pytest.mark.parametrize("kind", ["fill", "fill_by", "type", "type_keys"])
+@pytest.mark.parametrize("kind", ["fill", "type", "type_keys"])
 async def test_a_selector_with_two_matches_fills_the_first(
     session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    """Password + confirm: the selector (or the label, which "Confirm password" also has) matches both, and the first is filled, as a selector fill does."""
+    """Password + confirm: the selector matches both, and the first is filled, as a selector fill does."""
     await _run(session, monkeypatch, [{"action": "navigate", "url": trusted + "/confirm"}, _step(kind, "input")])
     assert await _values(session, "input") == [SECRET, ""]
 
 
+async def test_a_label_with_two_matches_is_a_strict_mode_error_as_without_a_credential(
+    session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``fill_by`` is a locator fill, which is strict: "Confirm password" matches the label too.
+
+    A credential must not quietly choose between them when the same step with
+    any other value raises.
+    """
+    goto = {"action": "navigate", "url": trusted + "/confirm"}
+    errors = []
+    for placeholder, args in (("{{note}}", {"note": "plain"}), ("{{password}}", {"password": SECRET})):
+        with pytest.raises(RuntimeError) as raised:
+            await _run(session, monkeypatch, [goto, _step("fill_by", "", placeholder)], **args)
+        errors.append(raised.value.args[0]["original"])
+    assert all("strict mode violation" in error for error in errors), errors
+    assert await _values(session, "input") == ["", ""]
 @pytest.mark.parametrize("kind", ["fill", "fill_by"])
 async def test_a_field_re_rendered_while_the_fill_waits_is_still_filled(
     session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
@@ -204,6 +220,12 @@ async def test_the_exported_cli_fills_the_first_of_two_matches(trusted: str, kin
     lengths = "[...document.querySelectorAll('input')].map((el) => el.value.length).join()"
     probe = {"action": "expect_js", "expression": lengths, "equals": f"{len(SECRET)},0"}
     await _run_cli([{"action": "navigate", "url": trusted + "/confirm"}, _step(kind, "input"), probe], trusted)
+
+
+async def test_the_exported_cli_fill_by_is_strict_about_two_matches(trusted: str) -> None:
+    actions = [{"action": "navigate", "url": trusted + "/confirm"}, _step("fill_by", "")]
+    with pytest.raises(RuntimeError, match="strict mode violation"):
+        await _run_cli(actions, trusted)
 
 
 async def test_the_exported_cli_stops_a_type_the_page_moves_partway(trusted: str, evil: str) -> None:

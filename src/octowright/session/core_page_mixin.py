@@ -544,7 +544,7 @@ class SessionPageMixin(SessionLike):
         if check is None:
             await self._target().fill(selector, value, timeout=budget)
         else:  # into a checked document only; see octowright.credential_input
-            await self._checked_fill(self._target().locator(selector), value, check, budget)
+            await self._checked_fill(self._target().locator(selector), value, check, budget, strict=False)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("macro_credential_fill_origin")

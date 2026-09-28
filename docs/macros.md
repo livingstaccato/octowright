@@ -423,8 +423,10 @@ and in the failure payload when a later step fails;
 check off.
 
 The origin checked is that of the document that receives the value, at the
-moment it receives it. A `fill` / `fill_by` takes the selector's first match,
-checks the frame that owns it and fills that element; if the element is
+moment it receives it. A `fill` / `fill_by` picks its element as it would
+without a credential (a `fill` selector's first match; a `fill_by` locator
+strictly, so a label that also matches "Confirm password" is Playwright's
+strict-mode error), checks the frame that owns it and fills that element; if the element is
 replaced (a re-render, or a navigation during the fill's wait) it resolves
 the selector again and re-checks, so a hydrated form is still filled and a
 page that moved to another origin is refused. A `type` goes one key at a

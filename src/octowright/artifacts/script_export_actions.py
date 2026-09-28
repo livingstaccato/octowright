@@ -354,6 +354,7 @@ else:
         action.get("value", ""),
         check,
         action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+        strict=False,
     )
 executed += 1
 """,
@@ -497,6 +498,7 @@ else:
         action.get("value", ""),
         check,
         action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+        strict=True,
     )
 executed += 1
 """,

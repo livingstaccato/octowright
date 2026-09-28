@@ -22,9 +22,10 @@ standalone script has one page and no gate.
 wait re-resolves the selector after a navigation, so a trusted page that holds
 a disabled field and then moves to a foreign origin with an enabled one gets
 the value filled on the foreign origin. That was measured on chromium, firefox
-and webkit. So :func:`checked_fill` resolves the FIRST match (non-strict, as a
-selector fill is), checks the frame that owns it, and fills that element
-handle. When the element is replaced the handle detaches. That covers a
+and webkit. So :func:`checked_fill` resolves the element as the same step without a
+credential would -- a selector ``fill`` its first match, a ``fill_by``
+strictly, raising on several -- checks the frame that owns it, and fills that
+element handle. When the element is replaced the handle detaches. That covers a
 re-render and a navigation, and all three engines report it at once as "not
 attached". The fill then re-resolves and re-checks, so a re-rendered field is
 still filled, and a navigated one is refused. Remaining window: inside the
@@ -79,12 +80,21 @@ async def _release(handle: Any) -> None:
         pass
 
 
-async def checked_fill(session: Any, locator: Any, value: str, check: Callable[[str], None], timeout_ms: float) -> None:
-    """Fill *locator*'s first match, but only in a document *check* accepts; see the module docstring."""
+async def checked_fill(
+    session: Any, locator: Any, value: str, check: Callable[[str], None], timeout_ms: float, *, strict: bool
+) -> None:
+    """Fill *locator*, but only in a document *check* accepts; see the module docstring.
+
+    ``strict`` picks the element as the same step without a credential does:
+    a selector ``fill`` takes the first match (``page.fill``), and a
+    ``fill_by`` raises Playwright's strict-mode error on several
+    (``Locator.fill``), which ``Locator.element_handle`` raises too.
+    """
     deadline = time.monotonic() + timeout_ms / 1000
+    target = locator if strict else locator.first
     async with session.operation("macro_credential_fill_origin"):
         while True:
-            handle = await locator.first.element_handle(timeout=_ms_left(deadline))
+            handle = await target.element_handle(timeout=_ms_left(deadline))
             try:
                 owner = await handle.owner_frame()
                 check(str(getattr(owner, "url", "") or ""))

@@ -52,9 +52,15 @@ class SessionLocatorMixin(SessionLike):
     # Re-enter the caller's own "browser_fill" / "browser_type" lease (same
     # task), so the check and the input it guards are one gated operation.
     @gated_operation("macro_credential_fill_origin")
-    async def _checked_fill(self, locator: Any, value: str, check: FillOriginCheck, timeout_ms: int) -> None:
-        """Fill *locator*'s first match only in a document *check* accepts; see ``octowright.credential_input``."""
-        await credential_input.checked_fill(self, locator, value, check, timeout_ms)
+    async def _checked_fill(
+        self, locator: Any, value: str, check: FillOriginCheck, timeout_ms: int, *, strict: bool
+    ) -> None:
+        """Fill *locator* only in a document *check* accepts; see ``octowright.credential_input``.
+
+        ``strict`` as the same step without a credential: a selector fill takes
+        the first match, a ``fill_by`` raises on several.
+        """
+        await credential_input.checked_fill(self, locator, value, check, timeout_ms, strict=strict)
 
     @gated_operation("macro_credential_fill_origin")
     async def _checked_type(
@@ -111,7 +117,7 @@ class SessionLocatorMixin(SessionLike):
         if check is None:
             await locator.fill(value, timeout=budget)
         else:
-            await self._checked_fill(locator, value, check, budget)
+            await self._checked_fill(locator, value, check, budget, strict=True)
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 
