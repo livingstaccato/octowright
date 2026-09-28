@@ -284,9 +284,14 @@ are load-bearing:
   exception is a macro credential: `_keystroke` then presses through the
   focused element's handle (see `octowright.credential_input`), which is the
   page keyboard's press after a focus, so the held Shift still applies.
-- **Shift is released in a `finally`.** A latched modifier corrupts every
-  later keystroke on that page, including another tool's, so a raising press
-  must not leave it down.
+- **Shift is released in a `finally`, under its own 2s bound.** A latched
+  modifier corrupts every later keystroke on that page, including another
+  tool's, so a raising press must not leave it down. The bound is there because
+  a credential step's `asyncio.timeout` cancels a wedged press exactly once:
+  the release after it then ran with nothing bounding it, and a target that
+  answered neither held the session gate forever. A release that does not
+  answer is logged (`core_page_mixin.shift_release_timed_out`), not raised, so
+  the press's own outcome is what the caller sees.
 
 A character with no key on the layout (accented, emoji, any non-ASCII) falls
 back to Playwright's own text insertion: it has no scancode to send, and a

@@ -128,6 +128,27 @@ def _sanitize_url_for_span(url: str) -> str:
         return url
 
 
+#: How long a Shift release may take. It runs in a ``finally``, often after a
+#: credential step's budget cancelled a wedged press: that budget cancels
+#: once, so without a bound of its own a target that answers neither holds
+#: the session gate forever.
+_SHIFT_RELEASE_TIMEOUT_SECONDS = 2.0
+
+
+async def _release_shift(keyboard: Any) -> None:
+    """``keyboard.up("Shift")`` under its own short bound; a release that does not answer is logged, not raised.
+
+    Not raised because it is cleanup: the press's own outcome (its error, or
+    the budget's cancellation propagating through this ``finally``) is what
+    the caller must see.
+    """
+    try:
+        async with asyncio.timeout(_SHIFT_RELEASE_TIMEOUT_SECONDS):
+            await keyboard.up("Shift")
+    except TimeoutError:
+        log.warning("core_page_mixin.shift_release_timed_out", timeout_s=_SHIFT_RELEASE_TIMEOUT_SECONDS)
+
+
 #: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
 #: (they are not encoded, not rejected — deleted), so they can be used to hide
 #: the second slash of an authority from a naive string test.
@@ -508,7 +529,7 @@ class SessionPageMixin(SessionLike):
             # Release even if the press raises, or the modifier stays latched
             # and every later keystroke on this page -- including another
             # tool's -- arrives shifted.
-            await keyboard.up("Shift")
+            await _release_shift(keyboard)
 
     @gated_operation("browser_type")
     async def type_text(self, selector: str, text: str, delay_ms: int | None, *, key_mode: str | None = None) -> None:

@@ -14,6 +14,8 @@ keys with Shift genuinely down, and that the default path is untouched.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -151,6 +153,31 @@ class TestKeystrokeMode:
         with pytest.raises(RuntimeError, match="boom"):
             await subj.type_text("#console", "A", None, key_mode="keys")
         assert ("up", "Shift") in _keyboard_sequence(subj)
+
+    @pytest.mark.anyio
+    async def test_a_wedged_press_and_a_wedged_release_do_not_hang_the_step(self, tmp_path: Path) -> None:
+        """The step's budget cancels a wedged press once; the Shift release after it needs a bound of its own.
+
+        A credential step runs under one ``asyncio.timeout``, which cancels
+        exactly once. The release in the ``finally`` then ran with nothing
+        bounding it, so a target that answered neither held the session gate
+        forever.
+        """
+        subj = _make_subject(tmp_path)
+
+        async def wedged(*_args: Any, **_kwargs: Any) -> None:
+            await asyncio.Event().wait()
+
+        sink = MagicMock()
+        sink.press = AsyncMock(side_effect=wedged)
+        subj.page.keyboard.up = AsyncMock(side_effect=wedged)
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(5):  # the test's own backstop: the bug is a hang
+                async with asyncio.timeout(0.1):  # the credential step's budget
+                    await subj._keystroke(sink, "A", 100)
+        assert time.monotonic() - started < 4
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
 
     @pytest.mark.anyio
     async def test_unmappable_character_falls_back_to_text_insertion(self, tmp_path: Path) -> None:
