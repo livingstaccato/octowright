@@ -36,7 +36,6 @@ from octowright import ssrf_guard
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
-from octowright.request_errors import InvalidRequestError
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
@@ -51,9 +50,10 @@ if TYPE_CHECKING:
 log = get_logger(__name__)
 
 
-def _publish_recovered(session: Any, outcome: RecoveryOutcome) -> None:
+def _publish_recovered(session: Any, outcome: RecoveryOutcome, navigation_error: str | None = None) -> None:
     """Publish the accurate recovery outcome so the MCP client learns whether the
-    crash self-healed (keep going) or it must relaunch. Best-effort; never raises."""
+    crash self-healed (keep going), self-healed onto a page that is not at its
+    last URL (navigate again), or it must relaunch. Best-effort; never raises."""
     from octowright.browser_pool.session_event_bus import SessionRecoveredEvent, session_event_bus
 
     with contextlib.suppress(Exception):
@@ -66,6 +66,8 @@ def _publish_recovered(session: Any, outcome: RecoveryOutcome) -> None:
                 outcome=outcome,
                 attempts=session._crash_recoveries,
                 log_path=str(session.log_path),
+                navigation_error=navigation_error,
+                recovered_elsewhere=navigation_error is not None,
             )
         )
 
@@ -206,13 +208,15 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     session._crashed = False
     _STATS["recoveries"] += 1
     _RECOVERED.add(1, attributes={"kind": session.kind})
-    _publish_recovered(session, "recovered")
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
     incident = _record_incident(session, url, "recovered")
     if navigation_error is not None:
         # Recovered onto a usable page that is NOT the last URL; say why.
-        log.warning("octowright.crash.recovered_url_refused", instance_id=iid, url=url, error=navigation_error)
+        log.warning("octowright.crash.recovered_url_failed", instance_id=iid, url=url, error=navigation_error)
         incident["navigation_error"] = navigation_error
+    # Published only once the outcome is whole: a client told plain "recovered"
+    # carries on against a page that never reached its URL.
+    _publish_recovered(session, "recovered", navigation_error)
     # H5a: snapshot the recovered page so a postmortem has a frame, not just a marker.
     # Record the incident before awaiting the screenshot; slow runners must not
     # observe "recovered" stats without a visible incident.
@@ -271,13 +275,23 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
     task's existing lease for free, but it stays safe if a test or embedder
     calls it directly.
 
-    Returns the SSRF policy's refusal of ``last_url`` (or of a hop it redirects
-    to), else ``None``. A refusal does not fail the recovery: the new page is
-    already in the context and wired, so raising would orphan it and leave the
-    dead page as ``session.page``. The session recovers onto the new page --
-    blank or the browser's error page, and usable -- and the caller reports
-    the refusal instead of hiding it. Any other navigation failure still fails
-    the recovery, as before."""
+    Returns why ``last_url`` was not reached -- the SSRF policy's refusal of it
+    (or of a hop it redirects to), or any other navigation failure (DNS, reset,
+    timeout) -- else ``None``. A failed navigation does not fail the recovery:
+    the new page is already in the context and wired, so raising would orphan
+    it and leave the dead page as ``session.page``. The session recovers onto
+    the new page -- blank, partly loaded or the browser's error page, and
+    usable -- and the caller reports the failure instead of hiding it.
+
+    The one exception is a replacement that is itself closed when its
+    navigation fails (its context or browser went away): there is nothing
+    usable to swap in, so it is taken out of ``session.pages`` -- the context
+    ``page`` event may already have put it there -- and the recovery fails.
+    Measured (Playwright 1.62): firefox and webkit report the page closed by
+    the time ``goto`` raises; chromium does too when the context closes, but
+    when only the page is closed its ``goto`` raises ``net::ERR_ABORTED`` a
+    beat before ``is_closed()`` turns true, so that page is swapped in and its
+    own close event follows, as for a tab closed right after a recovery."""
     from octowright.browser_pool.listeners import _wire_listeners
 
     async with session.operation("crash_recovery", wait_timeout_seconds=None):
@@ -291,7 +305,12 @@ async def _replace_crashed_page(session: SessionLike, dead_page: Any, timeout_ms
         navigation_error: str | None = None
         try:
             await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(last_url, timeout=timeout_ms))
-        except InvalidRequestError as exc:  # only the guard's verdict raises this here
+        except Exception as exc:
+            if new_page.is_closed():
+                if new_page in session.pages:
+                    session.pages.remove(new_page)
+                    session.page_count = len(session.pages)
+                raise
             navigation_error = str(exc)
         # Put the replacement in the DEAD page's slot rather than at the end, so
         # page indices stay stable across a recovery. Agents hold indices from

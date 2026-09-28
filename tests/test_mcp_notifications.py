@@ -204,8 +204,33 @@ def test_recovered_notification_per_outcome() -> None:
     recovered = notif("recovered")
     assert recovered["outcome"] == "recovered" and "usable" in recovered["hint"].lower()
     assert "no relaunch" in recovered["hint"].lower() or "no action" in recovered["hint"].lower()
+    assert recovered["recovered_elsewhere"] is False and recovered["navigation_error"] is None
     assert "relaunch" in notif("failed")["hint"].lower()
     assert "relaunch" in notif("exhausted")["hint"].lower()
+
+
+def test_a_recovery_elsewhere_says_the_page_is_not_at_its_last_url() -> None:
+    """A plain 'usable again' hint told the client to carry on against a page that never reached its URL."""
+    from octowright.browser_pool.events import SessionRecoveredEvent
+
+    event = SessionRecoveredEvent(
+        "r1",
+        "chromium",
+        "p",
+        None,
+        "recovered",
+        1,
+        "/tmp/r1.jsonl",
+        navigation_error="net::ERR_NAME_NOT_RESOLVED",
+        recovered_elsewhere=True,
+    )
+    params = _build_notification(event).message.params
+    assert params["recovered_elsewhere"] is True
+    assert params["navigation_error"] == "net::ERR_NAME_NOT_RESOLVED"
+    hint = params["hint"].lower()
+    assert "not at its last url" in hint and "navigate" in hint
+    reconstructed = payload_to_message(notification_payload(event))
+    assert reconstructed.message.params == params
 
 
 def test_driver_died_notification_per_mode() -> None:

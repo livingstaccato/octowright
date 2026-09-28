@@ -177,7 +177,7 @@ Octowright builds JSON-RPC notifications for exceptional situations from `browse
 | Method | Fires when | Key params |
 |--------|-----------|------------|
 | `notifications/octowright/browser_crashed` | a renderer crash is observed (`page.on("crash")`), OR a target stops answering within its call budget (`scope="unresponsive"`) | `recovering` (auto-recovery scheduled → WAIT for `browser_recovered`, don't relaunch; always `false` for `scope="unresponsive"`), `scope` (`renderer`/`process`/`unresponsive`), `hint` |
-| `notifications/octowright/browser_recovered` | a renderer-crash recovery resolved | `outcome` (`recovered` = usable again, continue / `failed` / `exhausted` = relaunch), `attempts`, `hint` |
+| `notifications/octowright/browser_recovered` | a renderer-crash recovery resolved | `outcome` (`recovered` = usable again, continue / `failed` / `exhausted` = relaunch), `attempts`, `recovered_elsewhere` (`true` when a `recovered` page did NOT reach the dead page's last URL -- refused by the SSRF policy or its navigation failed -- so navigate again before continuing), `navigation_error` (why, else `null`), `hint`. Published only once the navigation outcome is known. |
 | `notifications/octowright/driver_died` | the shared driver died and sessions were lost | `lost_instance_ids`, `relaunch_mode`, `restart_count`, `hint` (points at `octowright_status().pool.lost_sessions`) |
 | `notifications/octowright/session_closed` | a session left the pool | `reason` (`agent_close`/`user_close`/`external_disconnect`/`crashed`/`shutdown`) |
 

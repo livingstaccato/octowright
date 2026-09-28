@@ -175,6 +175,7 @@ async def test_recover_failure_publishes_failed_event(monkeypatch: pytest.Monkey
     monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
     s = _session()
     s.context.new_page.return_value.goto = AsyncMock(side_effect=RuntimeError("Target closed"))
+    s.context.new_page.return_value.is_closed = MagicMock(return_value=True)
     await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     assert len(events) == 1 and events[0].outcome == "failed"
 
@@ -280,6 +281,7 @@ async def test_recover_foreign_page_appends_without_swap() -> None:
 async def test_recover_failure_records_failed_incident() -> None:
     s = _session()
     s.context.new_page.return_value.goto = AsyncMock(side_effect=RuntimeError("Target closed"))
+    s.context.new_page.return_value.is_closed = MagicMock(return_value=True)
     ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
     assert ok is False
     assert s._crashed is True  # left crashed → LLM sees "relaunch"
@@ -469,6 +471,7 @@ async def test_recovery_onto_a_refused_url_recovers_and_reports_the_refusal(monk
     s = _session()
     dead = s.page
     fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
 
     async def refused_goto(*_args: Any, **_kwargs: Any) -> None:
         ssrf_guard.frame_chain(fresh.main_frame).end("redirect to 'http://169.254.169.254/' refused", failed=False)
@@ -484,18 +487,102 @@ async def test_recovery_onto_a_refused_url_recovers_and_reports_the_refusal(monk
     assert "169.254.169.254" in inc["navigation_error"]
 
 
-async def test_recovery_onto_a_url_that_fails_to_load_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the policy's verdict is recovered past; a network failure keeps failing the recovery."""
+async def test_recovery_onto_a_url_that_fails_to_load_recovers_and_reports_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed fetch raised after the new page was wired: it was orphaned and the dead page stayed active."""
     from octowright import ssrf_guard
 
     monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
     s = _session()
+    dead = s.page
     fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
 
     async def failed_goto(*_args: Any, **_kwargs: Any) -> None:
         ssrf_guard.frame_chain(fresh.main_frame).end("connection reset", failed=True)
 
     fresh.goto = failed_goto
-    ok = await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
+    assert ok is True
+    assert s._crashed is False
+    assert s.page is fresh and s.pages == [fresh]
+    dead.close.assert_awaited_once()
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["outcome"] == "recovered" and "connection reset" in inc["navigation_error"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("Page.goto: net::ERR_CONNECTION_REFUSED"), TimeoutError("Page.goto: Timeout 15000ms exceeded.")],
+)
+async def test_recovery_with_the_policy_off_recovers_past_a_failed_navigation(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """The same with no policy: the page swap finishes and the failure is reported, not raised."""
+    monkeypatch.delenv("OCTOWRIGHT_SSRF_POLICY", raising=False)
+    s = _session()
+    dead = s.page
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.goto = AsyncMock(side_effect=error)
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
+    assert ok is True
+    assert s._crashed is False
+    assert s.page is fresh and s.pages == [fresh] and s.page_count == 1
+    dead.close.assert_awaited_once()
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["outcome"] == "recovered" and str(error) in inc["navigation_error"]
+
+
+async def test_recovery_fails_without_orphaning_a_replacement_that_closed() -> None:
+    """A replacement that died with its navigation is not swapped in, and is not left in the page list."""
+    s = _session()
+    dead = s.page
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=True)
+
+    async def closing_goto(*_args: Any, **_kwargs: Any) -> None:
+        s.pages.append(fresh)  # the context "page" event registered it first
+        raise RuntimeError("Page.goto: Target page, context or browser has been closed")
+
+    fresh.goto = closing_goto
+    ok = await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com")
     assert ok is False
     assert s._crashed is True
+    assert s.page is dead and s.pages == [dead] and s.page_count == 1
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["outcome"] == "failed"
+
+
+async def test_a_recovery_elsewhere_is_published_with_its_navigation_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It was published as a plain 'recovered' before the failure was known, saying nothing about the URL."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.goto = AsyncMock(side_effect=RuntimeError("net::ERR_NAME_NOT_RESOLVED"))
+
+    def incident_recorded_first(event: Any) -> None:
+        (inc,) = incidents.recent(category="renderer_crash")
+        assert inc.get("navigation_error") == event.navigation_error
+        events.append(event)
+
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", incident_recorded_first)
+    await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    (event,) = events
+    assert event.outcome == "recovered"
+    assert event.recovered_elsewhere is True
+    assert "ERR_NAME_NOT_RESOLVED" in event.navigation_error
+
+
+async def test_a_recovery_at_the_last_url_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com")
+    (event,) = events
+    assert event.outcome == "recovered" and event.recovered_elsewhere is False and event.navigation_error is None

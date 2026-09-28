@@ -99,7 +99,12 @@ class SessionRecoveredEvent:
     ``outcome``: ``recovered`` (a fresh page replaced the dead one in the same
     browser — usable again, no relaunch needed), ``failed`` (replacement failed,
     the browser process likely died — relaunch), or ``exhausted`` (the page keeps
-    crashing past the recovery cap — relaunch / the page is unstable)."""
+    crashing past the recovery cap — relaunch / the page is unstable).
+
+    ``recovered_elsewhere`` is True when a ``recovered`` session's fresh page
+    did NOT reach the dead page's URL (refused by the SSRF policy, or its
+    navigation failed); ``navigation_error`` says why. The browser is usable,
+    but the client must navigate again before it carries on."""
 
     instance_id: str
     kind: str
@@ -108,6 +113,8 @@ class SessionRecoveredEvent:
     outcome: RecoveryOutcome
     attempts: int
     log_path: str
+    navigation_error: str | None = None
+    recovered_elsewhere: bool = False
 
 
 @dataclass(slots=True, frozen=True)

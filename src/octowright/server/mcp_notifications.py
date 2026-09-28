@@ -79,6 +79,10 @@ _RECOVERY_HINTS = {
     "failed": "auto-recovery failed (the browser process likely died) — relaunch it with browser_launch",
     "exhausted": "the page keeps crashing past the recovery cap — relaunch with browser_launch; the page/site may be unstable",
 }
+_RECOVERED_ELSEWHERE_HINT = (
+    "the crashed page was replaced by a fresh page in the same browser, but it is NOT at its last URL "
+    "(navigation_error says why) — the browser is usable; navigate again before continuing"
+)
 
 log = get_logger(__name__)
 
@@ -129,7 +133,11 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 "outcome": event.outcome,
                 "attempts": event.attempts,
                 "log_path": event.log_path,
-                "hint": _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
+                "navigation_error": event.navigation_error,
+                "recovered_elsewhere": event.recovered_elsewhere,
+                "hint": _RECOVERED_ELSEWHERE_HINT
+                if event.recovered_elsewhere
+                else _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
             },
         }
     if isinstance(event, SessionCrashedEvent):
