@@ -18,7 +18,7 @@ import asyncio
 from typing import Any
 
 from octowright import ssrf_guard
-from tests.ssrf_guard.test_chain_walk import _Frame, _handle, _Request, _Response, _Route
+from tests.ssrf_guard.test_chain_walk import _Frame, _handle, _hop, _Request, _Response, _Route
 from tests.ssrf_guard.test_chain_walk import policy_on as policy_on  # autouse: block-private, public answers
 
 
@@ -65,21 +65,20 @@ async def test_a_refusal_of_an_older_navigation_does_not_end_a_newer_chain() -> 
 
 async def test_an_older_navigation_does_not_reset_the_newer_chains_hop_count() -> None:
     """A stale ending popped the frame's hop count, loosening the newer chain's loop bound."""
-    hops = ssrf_guard._HopCounter()
     frame = _Frame()
     older = _Request("https://public.test/older", frame=frame)
     route, entered, release = _held_route(older, _Response(200))
-    handling = asyncio.ensure_future(_handle(route, older, hops))
+    handling = asyncio.ensure_future(_handle(route, older))
     await asyncio.wait_for(entered.wait(), 2)
     ssrf_guard.begin_navigation(frame)
     for i in range(ssrf_guard.MAX_REDIRECT_HOPS):
         request = _Request(f"https://loop.test/{i}", frame=frame)
-        await _handle(_Route({request.url: _Response(302, "https://loop.test/")}, request), request, hops)
+        await _handle(_Route({request.url: _Response(302, "https://loop.test/")}, request), request)
     release.set()
     await handling
     request = _Request("https://loop.test/last", frame=frame)
     last = _Route({request.url: _Response(302, "https://loop.test/")}, request)
-    await _handle(last, request, hops)
+    await _handle(last, request)
     assert last.aborted == "blockedbyclient", "the stale ending reset the newer chain's hop count"
 
 
@@ -106,3 +105,15 @@ async def test_a_navigation_begun_after_the_tools_still_ends_its_chain() -> None
     request = _Request("https://public.test/next", frame=frame)
     await _handle(_Route({request.url: _Response(302, "http://169.254.169.254/")}, request), request)
     assert chain is not None and chain.refused.is_set()
+
+
+async def test_a_tool_navigation_does_not_inherit_the_old_chains_hop_count() -> None:
+    """The count was per FRAME: an old chain 18 hops in left a fresh tool navigation 2 hops to live."""
+    frame = _Frame()
+    for i in range(ssrf_guard.MAX_REDIRECT_HOPS - 2):
+        route = await _hop(frame, f"https://old.test/{i}", _Response(302, f"https://old.test/{i + 1}"))
+        assert route.aborted is None
+    ssrf_guard.begin_navigation(frame)
+    for step in ("https://tool.test/1", "https://tool.test/2", "https://tool.test/3"):
+        route = await _hop(frame, step, _Response(302, step + "x"))
+        assert route.aborted is None, f"{step} was refused: the tool's chain inherited the old chain's hops"

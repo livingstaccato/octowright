@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 
 from octowright import ssrf
-from octowright.ssrf_guard import MAX_REDIRECT_HOPS, _handle_route, _HopCounter
+from octowright.ssrf_guard import MAX_REDIRECT_HOPS, _handle_route, _request_frame
 
 
 class _Response:
@@ -91,8 +91,8 @@ def _public_answer(host: str, *_args: Any, **_kwargs: Any) -> list[Any]:
     return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
 
 
-async def _handle(route: _Route, request: _Request, hops: _HopCounter | None = None) -> None:
-    await _handle_route(route, request, hops or _HopCounter())
+async def _handle(route: _Route, request: _Request) -> None:
+    await _handle_route(route, request)
 
 
 async def test_a_plain_navigation_is_fetched_once_and_served_from_that_fetch() -> None:
@@ -142,21 +142,19 @@ async def test_a_redirect_without_a_location_is_served_as_is() -> None:
 
 
 async def test_a_redirect_loop_is_bounded_per_frame() -> None:
-    hops = _HopCounter()
     frame = _Frame()
     for _ in range(MAX_REDIRECT_HOPS):
         request = _Request("https://loop.test/", frame=frame)
         route = _Route({"https://loop.test/": _Response(302, "https://loop.test/")}, request)
-        await _handle(route, request, hops)
+        await _handle(route, request)
         assert route.aborted is None
     request = _Request("https://loop.test/", frame=frame)
     route = _Route({"https://loop.test/": _Response(302, "https://loop.test/")}, request)
-    await _handle(route, request, hops)
+    await _handle(route, request)
     assert route.aborted == "blockedbyclient"
 
 
 async def test_a_served_page_resets_the_hop_count() -> None:
-    hops = _HopCounter()
     frame = _Frame()
     for _ in range(MAX_REDIRECT_HOPS):
         for url, response in (
@@ -165,7 +163,7 @@ async def test_a_served_page_resets_the_hop_count() -> None:
         ):
             request = _Request(url, frame=frame)
             route = _Route({url: response}, request)
-            await _handle(route, request, hops)
+            await _handle(route, request)
             assert route.aborted is None
 
 
@@ -335,7 +333,7 @@ async def test_a_redirect_to_a_non_http_scheme_is_refused_before_any_document(lo
     assert route.fulfilled is None and route.fulfilled_body is None
 
 
-async def _hop(hops: _HopCounter, frame: _Frame, url: str, response: _Response | None) -> _Route:
+async def _hop(frame: _Frame, url: str, response: _Response | None) -> _Route:
     """One navigation in *frame*; ``None`` makes its fetch fail."""
     request = _Request(url, frame=frame)
     route = _Route({url: response} if response is not None else {}, request)
@@ -345,28 +343,25 @@ async def _hop(hops: _HopCounter, frame: _Frame, url: str, response: _Response |
             raise RuntimeError("connection reset")
 
         route.fetch = failing  # type: ignore[method-assign]
-    await _handle(route, request, hops)
+    await _handle(route, request)
     return route
 
 
 @pytest.mark.parametrize("ending", ["blocked", "failed"])
 async def test_a_chain_that_ends_in_an_abort_does_not_count_against_the_next(ending: str) -> None:
     """18 hops and then a refusal or a failed fetch: the next 3-hop chain is its own."""
-    hops = _HopCounter()
     frame = _Frame()
     for i in range(MAX_REDIRECT_HOPS - 2):
-        assert (
-            await _hop(hops, frame, f"https://a.test/{i}", _Response(302, f"https://a.test/{i + 1}"))
-        ).aborted is None
+        assert (await _hop(frame, f"https://a.test/{i}", _Response(302, f"https://a.test/{i + 1}"))).aborted is None
     last = f"https://a.test/{MAX_REDIRECT_HOPS - 2}"
     if ending == "blocked":
-        end = await _hop(hops, frame, last, _Response(302, "http://169.254.169.254/"))
+        end = await _hop(frame, last, _Response(302, "http://169.254.169.254/"))
         assert end.aborted == "blockedbyclient"
     else:
-        end = await _hop(hops, frame, last, None)
+        end = await _hop(frame, last, None)
         assert end.aborted == "failed"
     for step in ("https://sso.test/1", "https://sso.test/2", "https://sso.test/3"):
-        route = await _hop(hops, frame, step, _Response(302, step + "x"))
+        route = await _hop(frame, step, _Response(302, step + "x"))
         assert route.aborted is None, f"{step} was refused: the aborted chain's hops were still counted"
 
 
@@ -385,5 +380,9 @@ async def test_a_request_without_a_frame_is_logged_not_silently_skipped(monkeypa
             seen.append(event)
 
     monkeypatch.setattr(ssrf_guard, "log", _Log())
-    assert _HopCounter._frame(_Frameless()) is None
+    assert _request_frame(_Frameless()) is None
+    assert seen == ["octowright.ssrf.request_without_frame"]
+    seen.clear()
+    # The navigation route path takes the request's record through its own lookup.
+    assert ssrf_guard.chain_at_start(_Frameless()) is None
     assert seen == ["octowright.ssrf.request_without_frame"]

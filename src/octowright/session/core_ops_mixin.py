@@ -388,7 +388,12 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         ``crash``). A popup that closes after a ``domcontentloaded`` that was
         not the stub's has reached its destination and is settled, as it is
         with the policy off; one that closes while still on the stub never got
-        there, which is an error (measured on all three engines).
+        there, which is an error (measured on all three engines). The probe
+        alone cannot always say which: the ``domcontentloaded`` awaited first
+        may have been the stub's and the page closed before any probe, or the
+        probe could not tell and the close followed. So at a close the guard's
+        own record of what it last served the frame counts too
+        (:func:`ssrf_guard.served_client_redirect_last`).
         """
         deadline = time.monotonic() + DEFAULT_NAV_TIMEOUT_MS / 1000
 
@@ -404,7 +409,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         on_stub = False
         while refusal is None:
             if page.is_closed():
-                return self._closed_popup(on_stub)
+                return self._closed_popup(page, on_stub)
             probe, refusal, event = await self._next_popup_event(page, chain, remaining_s())
             if probe is False:
                 return None
@@ -412,7 +417,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
             if event == "crash":
                 raise RuntimeError("popup crashed before it reached its destination")
             if event == "close":
-                return self._closed_popup(on_stub)
+                return self._closed_popup(page, on_stub)
             if event == "domcontentloaded":
                 on_stub = False  # a domcontentloaded after the stub's: probe what it loaded
         raise chain.error()
@@ -451,9 +456,13 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         return probe, refusal, None if refusal is not None else changed.result()
 
     @staticmethod
-    def _closed_popup(on_stub: bool) -> None:
-        """Settle a popup that closed itself: done unless it closed on the redirect document."""
-        if on_stub:
+    def _closed_popup(page: Any, on_stub: bool) -> None:
+        """Settle a popup that closed itself: done unless it closed on the redirect document.
+
+        *on_stub* is what the probe saw; the guard's record covers the
+        orderings in which the probe never saw the stub it was on.
+        """
+        if on_stub or ssrf_guard.served_client_redirect_last(page.main_frame):
             raise RuntimeError("popup closed before it left the redirect document")
 
     @gated_operation("browser_open_url_settle")

@@ -231,6 +231,46 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
         return None
 
 
+#: Every navigation document the guard served, keyed by its request, in the
+#: order served, with whether it was a client-redirect document. Read by
+#: :func:`served_client_redirect_last`. Keyed by request, not frame: a popup's
+#: first request has no frame while it is served (see ``_UNFRAMED``) and
+#: resolves to it later. Bounded like ``_UNFRAMED``; only the newest entries
+#: can be the one a frame is showing.
+_SERVED: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
+_MAX_SERVED = 256
+
+
+def _note_served(request: Any, *, client_redirect: bool) -> None:
+    while len(_SERVED) >= _MAX_SERVED:
+        _SERVED.pop(next(iter(_SERVED)), None)
+    try:
+        # Re-inserted, so the dict's order stays the order served.
+        _SERVED.pop(request, None)
+        _SERVED[request] = client_redirect
+    except TypeError:  # a request double that cannot be weakly referenced
+        log.debug("octowright.ssrf.served_document_untracked", url=getattr(request, "url", None))
+
+
+def served_client_redirect_last(frame: Any) -> bool:
+    """Whether the last navigation document the guard served *frame* was its client-redirect document.
+
+    What a caller that only saw load states cannot tell after the fact: a
+    ``domcontentloaded`` it awaited may have been the redirect document's, and
+    a page that has since closed can no longer be asked. Readable after the
+    page closed (measured on all three engines).
+    """
+    last = False
+    for request, client_redirect in list(_SERVED.items()):
+        try:
+            served_frame = request.frame
+        except Exception:  # still no page for it (or never will be): not this frame's
+            continue
+        if served_frame is frame:
+            last = client_redirect
+    return last
+
+
 class FrameChain:
     """Whether the guard ended a navigation in one frame, for a caller that cannot see it.
 
@@ -244,14 +284,26 @@ class FrameChain:
     ``refused`` is set for either ending; ``failed`` says which it was. A hop
     whose fetch failed (DNS, reset, TLS) is a network error, not the policy
     refusing the caller's input, and :meth:`error` keeps the two apart.
+
+    ``hops`` counts the consecutive guard-issued redirects of the chain in
+    progress. Each hop of a chain is its own navigation here, so the browser's
+    own redirect limit never applies and ``/loop -> /loop`` would spin forever.
+    It lives on the record rather than on the frame so that a tool navigation,
+    which begins a fresh record, starts from zero: counted per frame, an older
+    chain 18 hops in left the tool's own URL two redirects to live. It is reset
+    whenever a chain in this record ends -- a real (non-redirect) response is
+    served, or a hop is refused or fails -- since the frame's next navigation
+    the page starts itself continues in the same record, and an abort that left
+    its count behind would start that unrelated chain partway to the limit.
     """
 
-    __slots__ = ("failed", "reason", "refused")
+    __slots__ = ("failed", "hops", "reason", "refused")
 
     def __init__(self) -> None:
         self.refused = asyncio.Event()
         self.reason: str | None = None
         self.failed = False
+        self.hops = 0
 
     def error(self) -> Exception:
         """The exception a caller raises for this chain's ending."""
@@ -320,8 +372,9 @@ def begin_navigation(frame: Any) -> FrameChain | None:
     record: on chromium a ``goto`` whose LATER hop the guard refused resolves
     on the error page instead of raising (measured), so the wait alone would
     report success. An ending of a navigation the guard was already handling
-    in *frame* went to the record this one replaces (see
-    :meth:`_HopCounter.reset`), so it cannot end this one.
+    in *frame* went to the record this one replaces (see :func:`_end_chain`),
+    so it cannot end this one, and that navigation's redirects are not counted
+    against this one's bound (:attr:`FrameChain.hops`).
     """
     if not ssrf.policy_enabled():
         return None
@@ -398,76 +451,59 @@ def _discard(wait: Awaitable[Any]) -> None:
         close()
 
 
-class _HopCounter:
-    """Consecutive guard-issued redirects per frame.
+def _request_frame(request: Any) -> Any:
+    """*request*'s frame, or ``None`` (logged) when it has none."""
+    try:
+        return request.frame
+    except Exception as exc:
+        # A service-worker request has no frame, and nor does a popup's first
+        # navigation (measured: Playwright raises until the popup page exists).
+        # Neither is bounded by the hop limit; an ending of one is parked until
+        # its frame appears (``_UNFRAMED``).
+        log.debug("octowright.ssrf.request_without_frame", error=repr(exc))
+        return None
 
-    Each hop of a chain is its own navigation now, so the browser's own
-    redirect limit never applies and ``/loop -> /loop`` would spin forever.
-    Reset whenever a frame's chain ends: a real (non-redirect) response is
-    served, or a hop is refused or fails. An abort that left its count behind
-    would start the frame's next, unrelated chain partway to the limit.
+
+def _step(chain: FrameChain | None, target: str) -> None:
+    """Count one guard-issued redirect, to *target*, against *chain*'s bound."""
+    if chain is None:
+        return
+    chain.hops += 1
+    if chain.hops > MAX_REDIRECT_HOPS:
+        raise RedirectBlocked(f"redirect chain reaching {target!r} exceeded {MAX_REDIRECT_HOPS} hops")
+
+
+def _end_chain(request: Any, chain: FrameChain | None, refusal: str | None = None, *, failed: bool = False) -> None:
+    """End *request*'s chain; *refusal* says the navigation was refused, or *failed*.
+
+    *chain* is the frame's record as it was when the guard started on
+    *request* (:func:`chain_at_start`), and its hop count is reset whichever
+    record is current. If a tool navigation has begun a fresh one since, the
+    ending belongs to the navigation it replaced and is dropped: recorded, it
+    would end the tool's chain -- and cancel its ``goto`` -- for a URL the tool
+    never asked for.
     """
-
-    def __init__(self) -> None:
-        self._hops: weakref.WeakKeyDictionary[Any, int] = weakref.WeakKeyDictionary()
-
-    @staticmethod
-    def _frame(request: Any) -> Any:
-        try:
-            return request.frame
-        except Exception as exc:
-            # A service-worker request has no frame, and nor does a popup's
-            # first navigation (measured: Playwright raises until the popup
-            # page exists). Neither is bounded by the hop limit; an ending of
-            # one is parked until its frame appears (``_UNFRAMED``).
-            log.debug("octowright.ssrf.request_without_frame", error=repr(exc))
-            return None
-
-    def step(self, request: Any, target: str) -> None:
-        frame = self._frame(request)
-        if frame is None:
-            return
-        hops = self._hops.get(frame, 0) + 1
-        if hops > MAX_REDIRECT_HOPS:
-            self._hops.pop(frame, None)
-            raise RedirectBlocked(f"redirect chain reaching {target!r} exceeded {MAX_REDIRECT_HOPS} hops")
-        self._hops[frame] = hops
-
-    def reset(
-        self, request: Any, chain: FrameChain | None, refusal: str | None = None, *, failed: bool = False
-    ) -> None:
-        """End *request*'s chain; *refusal* says the navigation was refused, or *failed*.
-
-        *chain* is the frame's record as it was when the guard started on
-        *request* (:func:`chain_at_start`). If a tool navigation has begun a
-        fresh one since, this ending belongs to the navigation it replaced and
-        is dropped: recorded, it would end the tool's chain -- and cancel its
-        ``goto`` -- for a URL the tool never asked for, and popping the hop
-        count would loosen the new chain's loop bound.
-        """
-        frame = self._frame(request)
-        if frame is None:
-            if refusal is not None:
-                _park_unframed(request, refusal, failed=failed)
-            return
-        if chain is not None and _FRAME_CHAINS.get(frame) is not chain:
-            log.debug("octowright.ssrf.stale_navigation_ending_dropped", url=request.url, reason=refusal)
-            return
-        self._hops.pop(frame, None)
+    if chain is not None:
+        chain.hops = 0
+    frame = _request_frame(request)
+    if frame is None:
         if refusal is not None:
-            frame_chain(frame).end(refusal, failed=failed)
+            _park_unframed(request, refusal, failed=failed)
+        return
+    if chain is not None and _FRAME_CHAINS.get(frame) is not chain:
+        log.debug("octowright.ssrf.stale_navigation_ending_dropped", url=request.url, reason=refusal)
+        return
+    if refusal is not None:
+        frame_chain(frame).end(refusal, failed=failed)
 
 
 def chain_at_start(request: Any) -> FrameChain | None:
     """The record a navigation *request* belongs to, taken when the guard starts on it; ``None`` without a frame."""
-    try:
-        frame = request.frame
-    except Exception:  # a popup's first request, or a service worker's: see _HopCounter._frame
-        return None
-    return frame_chain(frame)
+    frame = _request_frame(request)
+    return None if frame is None else frame_chain(frame)
 
 
-async def _serve_navigation(route: Any, request: Any, hops: _HopCounter, chain: FrameChain | None) -> None:
+async def _serve_navigation(route: Any, request: Any, chain: FrameChain | None) -> None:
     """Fetch a navigation once and hand the page only what was validated."""
     try:
         response = await route.fetch(max_redirects=0)
@@ -475,12 +511,13 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter, chain: 
         # The browser would have shown a network error; say so rather than
         # leaving the intercepted request unanswered.
         log.debug("octowright.ssrf.navigation_fetch_failed", url=request.url, error=repr(exc))
-        hops.reset(request, chain, refusal=f"navigation to {request.url!r} failed: {exc}", failed=True)
+        _end_chain(request, chain, refusal=f"navigation to {request.url!r} failed: {exc}", failed=True)
         await route.abort("failed")
         return
     location = response.headers.get("location")
     if response.status not in _FOLLOWED_REDIRECTS or not location:
-        hops.reset(request, chain)
+        _end_chain(request, chain)
+        _note_served(request, client_redirect=False)
         await route.fulfill(response=response)
         return
     target = urljoin(request.url, location)
@@ -495,8 +532,9 @@ async def _serve_navigation(route: Any, request: Any, hops: _HopCounter, chain: 
             f"{response.status} redirect of a {request.method} navigation to {target!r} would re-send the "
             "request body to a hop this guard could only check by submitting it again; refused under block-private"
         )
-    hops.step(request, target)
+    _step(chain, target)
     _CLIENT_REDIRECTS[request] = {"status": response.status, "status_text": response.status_text, "location": target}
+    _note_served(request, client_redirect=True)
     # A NEW navigation, which comes back through this handler -- see the
     # module docstring for why the 3xx itself is never handed to the browser.
     await route.fulfill(status=200, content_type="text/html", body=_client_redirect(target))
@@ -512,7 +550,7 @@ async def _handle_subresource(route: Any, request: Any) -> None:
     await route.fallback()
 
 
-async def _handle_route(route: Any, request: Any, hops: _HopCounter) -> None:
+async def _handle_route(route: Any, request: Any) -> None:
     """Abort a request the policy refuses; serve a navigation from its own validated fetch."""
     try:
         if not request.is_navigation_request():
@@ -523,10 +561,10 @@ async def _handle_route(route: Any, request: Any, hops: _HopCounter) -> None:
         chain = chain_at_start(request)
         try:
             await _check_hop(request.url)
-            await _serve_navigation(route, request, hops, chain)
+            await _serve_navigation(route, request, chain)
         except RedirectBlocked as exc:
             log.warning("octowright.ssrf.redirect_blocked", url=request.url, method=request.method, error=str(exc))
-            hops.reset(request, chain, refusal=str(exc))
+            _end_chain(request, chain, refusal=str(exc))
             await route.abort(_ABORT_REASON)
     except Exception as exc:  # pragma: no cover - route already gone
         # A route whose page navigated away raises on fulfill and abort alike.
@@ -560,13 +598,8 @@ async def install_navigation_guard(context: Any) -> None:
     """
     if not ssrf.policy_enabled():
         return
-    hops = _HopCounter()
-
-    async def handler(route: Any, request: Any) -> None:
-        await _handle_route(route, request, hops)
-
     await bounded(
-        context.route("**/*", handler),
+        context.route("**/*", _handle_route),
         operation="browser_install_navigation_guard",
     )
     route_web_socket = getattr(context, "route_web_socket", None)

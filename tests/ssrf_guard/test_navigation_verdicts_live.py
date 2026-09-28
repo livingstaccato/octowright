@@ -24,6 +24,7 @@ hop. These cover what it left open:
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -33,6 +34,7 @@ from typing import Any
 
 import pytest
 
+from octowright import ssrf_guard
 from octowright.browser_pool import crash_recovery, incidents
 from octowright.browser_pool.pool import BrowserPool
 from octowright.request_errors import InvalidRequestError
@@ -77,6 +79,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/blocked": f"http://localhost:{port}/secret",
             "/to-closes-on-load": "/closes-on-load",
             "/to-closes-while-parsing": "/closes-while-parsing",
+            "/to-hang": "/hang",
         }
         if path in redirects:
             self.send_response(302)
@@ -196,6 +199,33 @@ async def test_a_popup_that_closes_while_parsing_returns_at_once(pool: Any, base
     result = await session.open_url(f"{base}{path}", target="window")
     assert time.monotonic() - started < 10, "a closed popup was waited on until the navigation timeout"
     assert result.get("error") is None or "closed" in result["error"], result
+
+
+@pytest.mark.parametrize(("path", "on_stub"), [("/to-hang", True), ("/start", False)])
+async def test_a_closed_popup_still_says_whether_it_was_on_the_stub(
+    pool: Any, base: str, path: str, on_stub: bool
+) -> None:
+    """What ``_settle_guarded_popup`` asks at a close its own probe never saw coming.
+
+    ``/to-hang``'s destination never answers, so the popup stays on the stub.
+    The popup's first request has no frame while it is served; the record must
+    still resolve to the popup's frame, and after the page has closed.
+    """
+    session = await _launch(pool, f"{base}/start")
+    async with session.page.expect_popup() as info:
+        await session.page.evaluate("u => { window.open(u, '_blank', 'popup') }", f"{base}{path}")
+    popup = await info.value
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            if await popup.evaluate(ssrf_guard.IS_CLIENT_REDIRECT_JS) is on_stub and popup.url != "about:blank":
+                break
+        except Exception:  # the document is being replaced under the probe: ask again
+            pass
+        await asyncio.sleep(0.1)
+    assert ssrf_guard.served_client_redirect_last(popup.main_frame) is on_stub
+    await popup.close()
+    assert ssrf_guard.served_client_redirect_last(popup.main_frame) is on_stub
 
 
 async def test_crash_recovery_onto_a_refused_url_recovers_and_reports_it(pool: Any, base: str) -> None:
