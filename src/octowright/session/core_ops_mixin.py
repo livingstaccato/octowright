@@ -405,35 +405,50 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         while refusal is None:
             if page.is_closed():
                 return self._closed_popup(on_stub)
-            changed: asyncio.Future[str] = asyncio.get_running_loop().create_future()
-            handlers = {
-                event: functools.partial(_resolve_once, changed, event)
-                for event in ("domcontentloaded", "close", "crash")
-            }
-            for event, handler in handlers.items():
-                page.on(event, handler)
-            try:
-                probe = await self._on_client_redirect(page)
-                if probe is False:
-                    return
-                on_stub = on_stub or probe is True
-                try:
-                    refusal = await ssrf_guard.until_refused(asyncio.wait_for(changed, remaining_s()), chain)
-                except TimeoutError:
-                    raise TimeoutError(
-                        f"popup did not leave the redirect document within {DEFAULT_NAV_TIMEOUT_MS} ms"
-                    ) from None
-            finally:
-                for event, handler in handlers.items():
-                    page.remove_listener(event, handler)
-            if refusal is None:
-                outcome = changed.result()
-                if outcome == "crash":
-                    raise RuntimeError("popup crashed before it reached its destination")
-                if outcome == "close":
-                    return self._closed_popup(on_stub)
+            probe, refusal, event = await self._next_popup_event(page, chain, remaining_s())
+            if probe is False:
+                return None
+            on_stub = on_stub or probe is True
+            if event == "crash":
+                raise RuntimeError("popup crashed before it reached its destination")
+            if event == "close":
+                return self._closed_popup(on_stub)
+            if event == "domcontentloaded":
                 on_stub = False  # a domcontentloaded after the stub's: probe what it loaded
         raise chain.error()
+
+    @gated_operation("browser_open_url_settle")
+    async def _next_popup_event(
+        self, page: Any, chain: ssrf_guard.FrameChain, budget_s: float
+    ) -> tuple[bool | None, str | None, str | None]:
+        """Probe *page* for the stub and, while on it, wait for its next event.
+
+        Returns ``(probe, refusal, event)``: the probe's answer (see
+        :meth:`_on_client_redirect`); the guard's refusal if it ended the wait;
+        and the event that did -- ``domcontentloaded``, ``close`` or ``crash``
+        -- else ``None``. The listeners go on before the probe, so an event
+        during it is not missed.
+        """
+        changed: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        handlers = {
+            event: functools.partial(_resolve_once, changed, event) for event in ("domcontentloaded", "close", "crash")
+        }
+        for event, handler in handlers.items():
+            page.on(event, handler)
+        try:
+            probe = await self._on_client_redirect(page)
+            if probe is False:
+                return probe, None, None
+            try:
+                refusal = await ssrf_guard.until_refused(asyncio.wait_for(changed, budget_s), chain)
+            except TimeoutError:
+                raise TimeoutError(
+                    f"popup did not leave the redirect document within {DEFAULT_NAV_TIMEOUT_MS} ms"
+                ) from None
+        finally:
+            for event, handler in handlers.items():
+                page.remove_listener(event, handler)
+        return probe, refusal, None if refusal is not None else changed.result()
 
     @staticmethod
     def _closed_popup(on_stub: bool) -> None:
