@@ -265,3 +265,27 @@ def test_the_default_staging_dir_is_the_running_users(monkeypatch: pytest.Monkey
     exec(source, namespace)  # executing the generated artefact is the point
     asyncio.run(namespace["run_guarded"](trusted_origins=()))
     assert str(inside.resolve()) in rec.args_for("set_input_files")[-1]
+
+
+@pytest.mark.parametrize("kind", ["fill", "type"])
+def test_a_credential_step_waits_what_the_same_step_without_one_does(
+    monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """A step without a credential passes no timeout, so Playwright's own 30s applies; a credential step matches it."""
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    step = {"action": kind, "selector": "#pw", ("value" if kind == "fill" else "text"): "{{password}}"}
+    actions = [{"action": "navigate", "url": "https://app.example.test/login"}, step]
+    namespace: dict[str, Any] = {}
+    exec(render_macro_cli(name="m", macro={"parameters": ["password"], "actions": actions}), namespace)
+    budgets: list[Any] = []
+
+    async def fill(_session: Any, _locator: Any, _value: str, _check: Any, timeout_ms: float) -> None:
+        budgets.append(timeout_ms)
+
+    async def type_(_session: Any, _locator: Any, _text: str, _check: Any, **kwargs: Any) -> None:
+        budgets.append(kwargs["timeout_ms"])
+
+    namespace["checked_fill"], namespace["checked_type"] = fill, type_
+    asyncio.run(namespace["run_m"](password=SECRET, trusted_origins=("https://app.example.test",)))
+    assert budgets == [30000]
