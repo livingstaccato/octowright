@@ -130,25 +130,36 @@ def test_a_value_the_run_also_holds_is_scrubbed_anywhere() -> None:
     assert privacy.with_session_ledger(session, [TYPED]).word_bounded == frozenset()
 
 
-async def test_a_macro_failure_payload_keeps_administrator(monkeypatch: Any) -> None:
-    """The failure scrub reads the merged ledger, so a typed ``admin`` leaves ``#admin-menu`` intact."""
+async def test_a_macro_failure_payload_scrubs_a_typed_password_anywhere(monkeypatch: Any) -> None:
+    """A failure payload leaves the machine, so it scrubs every ledger value anywhere, bounded or not.
+
+    The word bound is the recording's (above): it keeps saved selectors
+    replayable. A payload is read by the MCP client, so an echo glued to
+    identifier characters (``hunter2-reset``, ``user_hunter2``) must not reach
+    it in clear, in the exception or in a failed request's body.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     import pytest
 
     from octowright.macros import execution
 
+    typed = "hunter2"  # pragma: allowlist secret -- a fixture, never a real credential
     session = MagicMock()
     session.durable_text_scrubber = None
-    privacy.admit_redacted_input(session, TYPED)
-    session.click = AsyncMock(side_effect=RuntimeError("timed out waiting for #admin-menu (admin)"))
+    privacy.admit_redacted_input(session, typed)
+    session.click = AsyncMock(side_effect=RuntimeError("reset link hunter2-reset for user_hunter2 expired"))
     session.diagnostic_bundle = AsyncMock(return_value={})
-    monkeypatch.setattr(
-        execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#admin-menu"}]}
+    body = '{"error": "account user_hunter2 is locked", "next": "/hunter2-reset"}'
+    session.get_network_requests = MagicMock(
+        return_value={"requests": [{"url": "https://app.test/api", "status": 409, "response_body": body}]}
     )
+    monkeypatch.setattr(execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#go"}]})
     monkeypatch.setattr(execution, "_push_status", AsyncMock())
     monkeypatch.setattr(execution, "_suggest_fix", AsyncMock(return_value=None))
     with pytest.raises(RuntimeError) as raised:
         await execution._run_macro_impl(session, "m", {"token": "fixture-run-token"}, slowmo_ms=0)
-    original = raised.value.args[0]["original"]
-    assert "#admin-menu" in original and "(admin)" not in original
+    payload = raised.value.args[0]
+    assert typed not in payload["original"], payload["original"]
+    assert typed not in repr(payload["failed_requests"]), payload["failed_requests"]
+    assert payload["failed_requests"], "the failing request must still be reported, scrubbed"

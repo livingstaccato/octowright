@@ -68,15 +68,13 @@ log = get_logger(__name__)
 # import back into this module.
 
 
-def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...] | PrivacyLedger) -> Any:
-    """*value* scrubbed of *sensitive_values*; a ledger keeps its word-bounded values bounded."""
-    if isinstance(sensitive_values, PrivacyLedger):
-        return _privacy_scrub_sensitive_values(
-            value,
-            sensitive_values.values,
-            marker=_REDACTED_MACRO_VALUE,
-            word_bounded=sensitive_values.word_bounded,
-        )
+def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    """*value* scrubbed of every one of *sensitive_values*, wherever it appears.
+
+    A flat tuple on purpose: this scrubs what leaves the machine (failure
+    payloads, returned to the MCP client), and a tuple cannot carry the
+    recording's word bounds, so no caller can pass them here by mistake.
+    """
     return _privacy_scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
 
 
@@ -257,16 +255,18 @@ async def _dispatch_classified_screenshot(
     raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
 
 
-def _failure_scrub_values(session: SessionLike, run_ledger: PrivacyLedger) -> PrivacyLedger:
-    """What a failure payload is scrubbed of: this run's values and the session's.
+def _failure_scrub_values(session: SessionLike, run_ledger: PrivacyLedger) -> tuple[str, ...]:
+    """What a failure payload is scrubbed of: this run's values and the session's, each matched anywhere.
 
     The session ledger also holds values admitted outside any macro -- a
     password the input classification hid from a direct ``browser_fill`` -- and
     the page may have echoed one into the console or a request the payload
-    carries. A ledger rather than a tuple, so a password typed into a field
-    stays word-bounded here as it is in the recording.
+    carries. Flattened: the ledger's word bounds are for the recording, where
+    scrubbing a typed ``admin`` inside ``#admin-menu`` broke saved selectors.
+    The payload is returned to the client, so an echo glued to identifier
+    characters (``hunter2-reset``) is scrubbed here too.
     """
-    return with_session_ledger(session, run_ledger.values)
+    return with_session_ledger(session, run_ledger.values).values
 
 
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
@@ -473,7 +473,7 @@ async def _build_failure_payload(
     actions: list[dict[str, Any]],
     executed: int,
     safe_original: str,
-    sensitive_values: PrivacyLedger,
+    sensitive_values: tuple[str, ...],
 ) -> dict[str, Any]:
     """Assemble the failure payload from three independently-fallible producers.
 
@@ -481,7 +481,7 @@ async def _build_failure_payload(
     the other two: its own error is recorded IN the payload rather than raised
     over the dispatch failure the payload exists to explain.
     """
-    if sensitive_values.values:
+    if sensitive_values:
         # The generic diagnostic producer persists raw HTML and a raw
         # screenshot. Classified macros may have rendered an argument into
         # either, so do not invoke it. Composition roots can retain their own
@@ -625,7 +625,7 @@ async def _run_macro_impl(
             failure: RuntimeError | None = None
             failure_cause: Exception | None = None
             safe_original: str | None = None
-            run_values = PrivacyLedger()
+            run_values: tuple[str, ...] = ()
             try:
                 executed_count, skipped_count = await _dispatch_one(
                     session,
@@ -638,7 +638,7 @@ async def _run_macro_impl(
             except Exception as exc:
                 run_values = _failure_scrub_values(session, run_ledger)
                 safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
-                if not run_values.values:
+                if not run_values:
                     failure_cause = exc
             if safe_original is not None:
                 # Leave the raw dispatch handler before asking any diagnostic
@@ -655,7 +655,7 @@ async def _run_macro_impl(
                     safe_original=safe_original,
                     sensitive_values=run_values,
                 )
-                payload.update(assertions.fields(run_values.values, word_bounded=run_values.word_bounded))
+                payload.update(assertions.fields(run_values))
                 payload.update(_offsite_fields(audit))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
