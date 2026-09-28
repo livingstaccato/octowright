@@ -120,7 +120,7 @@ Known costs, deliberately accepted (this only runs under an opt-in policy):
   so its ending is parked until the popup page exists (``_UNFRAMED``).
   ``open_url``'s popup, which only has load states to wait on, waits past the
   client-redirect document (``CLIENT_REDIRECT_MARKER``) to the destination's
-  ``domcontentloaded``.
+  ``domcontentloaded`` -- or to the popup closing itself, which fires none.
 * **A method-preserving redirect of a form submission is refused** under
   ``block-private``, even to a public host.
 * **Every WebSocket message is relayed through the Playwright driver** once a
