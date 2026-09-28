@@ -51,6 +51,14 @@ def _closed_port() -> int:
         return int(sock.getsockname()[1])
 
 
+#: Pages that close their own window, as an OAuth popup does once it has
+#: handed its result back to the opener.
+_SELF_CLOSING = {
+    "/closes-on-load": b"<!doctype html><title>done</title><script>addEventListener('load', () => window.close())</script>",
+    "/closes-while-parsing": b"<!doctype html><title>done</title><script>window.close()</script>",
+}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         srv: Any = self.server
@@ -67,6 +75,8 @@ class _Handler(BaseHTTPRequestHandler):
             "/to-slow-page": "/slow-page",
             "/later-blocked": "/blocked",
             "/blocked": f"http://localhost:{port}/secret",
+            "/to-closes-on-load": "/closes-on-load",
+            "/to-closes-while-parsing": "/closes-while-parsing",
         }
         if path in redirects:
             self.send_response(302)
@@ -74,7 +84,9 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if path == "/slow-page":
+        if path in _SELF_CLOSING:
+            body = _SELF_CLOSING[path]
+        elif path == "/slow-page":
             # DOMContentLoaded does not wait for an image; load does.
             body = b'<!doctype html><title>Slow</title><h1>slow</h1><img src="/hang">'
         else:
@@ -162,6 +174,28 @@ async def test_a_popup_returns_at_domcontentloaded_redirected_or_not(pool: Any, 
     assert result.get("error") is None, result
     assert result["url"] == f"{base}/slow-page"
     assert time.monotonic() - started < 10, "the popup waited for load, not domcontentloaded"
+
+
+@pytest.mark.parametrize("path", ["/closes-on-load", "/to-closes-on-load"])
+async def test_a_popup_that_closes_itself_on_load_returns_at_once(pool: Any, base: str, path: str) -> None:
+    """The redirect probe read the closed page as "still navigating" and waited out the whole budget."""
+    session = await _launch(pool, f"{base}/start")
+    started = time.monotonic()
+    result = await session.open_url(f"{base}{path}", target="window")
+    assert time.monotonic() - started < 10, "a closed popup was waited on until the navigation timeout"
+    # As with the policy off: the popup reached its destination before it closed.
+    assert result.get("error") is None, result
+    assert result["url"] == f"{base}/closes-on-load"
+
+
+@pytest.mark.parametrize("path", ["/closes-while-parsing", "/to-closes-while-parsing"])
+async def test_a_popup_that_closes_while_parsing_returns_at_once(pool: Any, base: str, path: str) -> None:
+    """Whether its DOMContentLoaded fires first differs by engine (as with the policy off); the wait must not."""
+    session = await _launch(pool, f"{base}/start")
+    started = time.monotonic()
+    result = await session.open_url(f"{base}{path}", target="window")
+    assert time.monotonic() - started < 10, "a closed popup was waited on until the navigation timeout"
+    assert result.get("error") is None or "closed" in result["error"], result
 
 
 async def test_crash_recovery_onto_a_refused_url_recovers_and_reports_it(pool: Any, base: str) -> None:
