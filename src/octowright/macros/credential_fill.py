@@ -25,10 +25,12 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright.credential_input import CredentialInputStopped
 from octowright.credential_sinks import (
     CREDENTIAL_FILL_MARKER,
     credential_fill_mode,
     credential_fill_refusal,
+    credential_input_stopped,
     offsite_credential_origin,
 )
 from octowright.macros.substitution import own_site_origins
@@ -72,13 +74,17 @@ async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) ->
     (``session.fill_origin``), on the document that actually receives the
     value, as it receives it (``octowright.credential_input``): a navigation
     during the fill's wait or partway through a type, or a selector that
-    enters a frame, is what moved it.
+    enters a frame, is what moved it. A type the page moved partway through
+    on its own origin is stopped there too, and reported naming this step.
     """
     check = _OriginCheck(session, action) if action.get(CREDENTIAL_FILL_MARKER) else None
     if check is not None:
         check(await session.target_url())
     with fill_origin_check(check):
-        yield
+        try:
+            yield
+        except CredentialInputStopped as exc:
+            raise credential_input_stopped(action, str(exc)) from exc
 
 
 class _OriginCheck:

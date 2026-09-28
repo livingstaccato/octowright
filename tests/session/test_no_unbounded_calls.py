@@ -54,6 +54,15 @@ _UNBOUNDED_METHODS = frozenset(
         "expose_function",
         "route",
         "unroute",
+        # JSHandle / ElementHandle calls with no `timeout` either, added with
+        # the credential step's per-key lookup, which made one of each per
+        # character: a wedged renderer held the session gate forever.
+        "evaluate_handle",
+        "content_frame",
+        "owner_frame",
+        "get_properties",
+        "json_value",
+        "dispose",
     }
 )
 
@@ -80,6 +89,20 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
     # `source.evaluate(...)` -- a genuine Locator.evaluate, already bounded by
     # Playwright's own action timeout.
     "session/a11y_dragdrop.py": frozenset({("run_a11y_dragdrop", "source")}),
+    # The credential step (stdlib-only, so it cannot import bounded(): the
+    # exported CLI renders it verbatim). Every one of these runs inside
+    # `_within`, one `asyncio.timeout` of the step's budget around the whole
+    # fill or type, and `_release` gives the disposes a bound of their own.
+    "credential_input.py": frozenset(
+        {
+            ("fill", "handle"),
+            ("_focused", "frame"),
+            ("_focused", "answer"),
+            ("_focused", "stop"),
+            ("_focused", "owner"),
+            ("_release", "handle"),
+        }
+    ),
     "session/core_page_mixin.py": frozenset(
         {
             # `loc = self._target().locator(selector).first` two statements
@@ -184,7 +207,8 @@ def test_no_unbounded_title_content_or_evaluate_calls() -> None:
         if found:
             offenders[rel] = found
     assert not offenders, (
-        "a Playwright Page/Frame .title()/.content()/.evaluate() call is not "
+        "a Playwright call with no timeout of its own (Page/Frame .title()/.content()/.evaluate(), "
+        "a setup call, or a handle call) is not "
         "wrapped in octowright.session.timeouts.bounded() -- a wedged target "
         "hangs this call forever (the 2026-08-29 incident). Wrap it, or add a "
         "commented ALLOWED entry, keyed (enclosing function, receiver), if it "

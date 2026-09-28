@@ -348,13 +348,16 @@ check = _credential_check(state, index, action, trusted)
 if check is None:
     await _target(state).fill(action["selector"], action.get("value", ""))
 else:
-    await checked_fill(
-        _ScriptSession(state),
-        _target(state).locator(action["selector"]),
-        action.get("value", ""),
-        check,
-        action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
-        strict=False,
+    await _credential_input(
+        action,
+        checked_fill(
+            _ScriptSession(state),
+            _target(state).locator(action["selector"]),
+            action.get("value", ""),
+            check,
+            action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+            strict=False,
+        ),
     )
 executed += 1
 """,
@@ -363,13 +366,16 @@ check = _credential_check(state, index, action, trusted)
 if check is None:
     await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
 else:
-    await checked_type(
-        _ScriptSession(state),
-        _target(state).locator(action["selector"]),
-        action.get("text", ""),
-        check,
-        delay_ms=action.get("delay_ms"),
-        timeout_ms=_DEFAULT_ACTION_TIMEOUT_MS,
+    await _credential_input(
+        action,
+        checked_type(
+            _ScriptSession(state),
+            _target(state).locator(action["selector"]),
+            action.get("text", ""),
+            check,
+            delay_ms=action.get("delay_ms"),
+            timeout_ms=_DEFAULT_ACTION_TIMEOUT_MS,
+        ),
     )
 executed += 1
 """,
@@ -492,13 +498,16 @@ check = _credential_check(state, index, action, trusted)
 if check is None:
     await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
 else:
-    await checked_fill(
-        _ScriptSession(state),
-        _locator(_target(state), action),
-        action.get("value", ""),
-        check,
-        action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
-        strict=True,
+    await _credential_input(
+        action,
+        checked_fill(
+            _ScriptSession(state),
+            _locator(_target(state), action),
+            action.get("value", ""),
+            check,
+            action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
+            strict=True,
+        ),
     )
 executed += 1
 """,

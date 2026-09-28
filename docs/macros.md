@@ -426,17 +426,34 @@ The origin checked is that of the document that receives the value, at the
 moment it receives it. A `fill` / `fill_by` picks its element as it would
 without a credential (a `fill` selector's first match; a `fill_by` locator
 strictly, so a label that also matches "Confirm password" is Playwright's
-strict-mode error), checks the frame that owns it and fills that element; if the element is
-replaced (a re-render, or a navigation during the fill's wait) it resolves
-the selector again and re-checks, so a hydrated form is still filled and a
-page that moved to another origin is refused. A `type` goes one key at a
-time and, before each key, checks the document that has focus, so keys
-follow focus like a keyboard's (an auto-advancing one-time-code form works)
-and a page that navigates partway through stops the rest of the value. A
-selector that enters a frame (`iframe >> internal:control=enter-frame >> #pw`)
-is checked on that frame. What is left is the single driver round trip
-inside one Playwright fill or keypress, between focusing the element and
-dispatching the input. A credential passed to a called macro under another name
+strict-mode error), checks the frame that owns it and fills that element; if
+the element is replaced (a re-render, or a navigation during the fill's wait)
+it resolves the selector again and re-checks, so a hydrated form is still
+filled and a page that moved to another origin is refused. A `type` goes one
+key at a time and, before each key, checks the document that has focus. Keys
+follow focus within one document like a keyboard's (an auto-advancing
+one-time-code form works), and the rest of the value is stopped, failing the step with an
+error that names the step and never the value, when:
+
+- the document with focus is not the one that received the previous key --
+  any navigation, same-origin included (a sign-in that lands on a dashboard
+  whose search box takes focus), or focus moving into another frame. A
+  foreign document is refused naming its origin;
+- focus is on `<body>` or nothing, which is where it falls when the field
+  is re-rendered away, so a truncated value is never reported as typed;
+- focus moved to an element that takes no text (a button, a link) other than
+  the one the first key went to.
+
+A selector that enters a frame (`iframe >> internal:control=enter-frame >> #pw`)
+is checked on that frame. What is left: the single driver round trip inside
+one Playwright fill or keypress, between focusing the element and dispatching
+the input; and focus the page moves to another text field of the *same*
+document, which is followed by design, so a single-page app that swaps its
+view in place (`history.pushState`) and focuses a search box receives the rest
+of the value. The whole step, typing included, is bounded by the action
+timeout (`OCTOWRIGHT_ACTION_TIMEOUT_MS`), as a `type` without a credential is.
+
+A credential passed to a called macro under another name
 (`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
 
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`

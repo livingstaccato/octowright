@@ -7,8 +7,10 @@
 
 The origin check (``octowright.credential_input``) must not cost what the
 selector-based fill and type always did: the first of several matches, a field
-re-rendered while the fill waits, and keys that follow focus. And a type that
-the page moves partway through must stop, not finish on the new origin. Each
+re-rendered while the fill waits, and keys that follow focus within one
+document. And a type that the page moves partway through must stop, not finish
+in the new document: another origin's, the same origin's, or on ``<body>``
+once the field is re-rendered away. Each
 is measured on all three engines; the attack cases the check exists for are in
 ``test_macro_credential_fill_frame_live``.
 """
@@ -44,6 +46,16 @@ PAGES = {
     "/form": '<input type="password" id="pw" autofocus>',
     "/disabled": '<label for="pw">Password</label><input type="password" id="pw" disabled>',
     "/login": '<label for="pw">Password</label><input type="password" id="pw">',
+    # Where a same-origin sign-in lands: its search box takes focus on load.
+    "/dashboard": '<input id="q" autofocus aria-label="Search">',
+    # Three characters in, the field is re-rendered away; focus falls to <body>.
+    "/rerenders": '<div id="c"><input type="password" id="pw"></div><script>'
+    "document.getElementById('pw').addEventListener('input', (e) => { if (e.target.value.length === 3) "
+    "document.getElementById('c').innerHTML = '<input type=\"password\" id=\"pw\">'; });</script>",
+    # Three characters in, the page moves focus to a button of the same document.
+    "/to-button": '<input type="password" id="pw"><button id="b">Show</button><script>'
+    "document.getElementById('pw').addEventListener('input', (e) => { if (e.target.value.length === 3) "
+    "document.getElementById('b').focus(); });</script>",
 }
 
 
@@ -148,6 +160,8 @@ async def test_a_label_with_two_matches_is_a_strict_mode_error_as_without_a_cred
         errors.append(raised.value.args[0]["original"])
     assert all("strict mode violation" in error for error in errors), errors
     assert await _values(session, "input") == ["", ""]
+
+
 @pytest.mark.parametrize("kind", ["fill", "fill_by"])
 async def test_a_field_re_rendered_while_the_fill_waits_is_still_filled(
     session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
@@ -177,6 +191,40 @@ async def test_a_navigation_partway_through_a_type_stops_it(
         await _run(session, monkeypatch, steps)
     await session.page.wait_for_url(evil + "/form")
     assert await _values(session, "#pw") == [""]
+
+
+@pytest.mark.parametrize("kind", ["type", "type_keys"])
+async def test_a_same_origin_navigation_partway_through_a_type_stops_it(
+    session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """The origin is trusted, but the document is not the one the first keys went to: its search box gets nothing."""
+    steps = [{"action": "navigate", "url": f"{trusted}/moves?to={trusted}/dashboard"}, _step(kind, "#pw", delay_ms=50)]
+    with pytest.raises(RuntimeError, match=r"stopped typing credential arg \{\{password\}\}") as raised:
+        await _run(session, monkeypatch, steps)
+    assert SECRET not in str(raised.value) and SECRET[3:] not in str(raised.value)
+    await session.page.wait_for_url(trusted + "/dashboard")
+    assert await _values(session, "#q") == [""]
+
+
+@pytest.mark.parametrize("kind", ["type", "type_keys"])
+async def test_a_field_re_rendered_partway_through_a_type_stops_it(
+    session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Focus falls to <body> when the field goes; the step fails rather than report a truncated value as typed."""
+    steps = [{"action": "navigate", "url": trusted + "/rerenders"}, _step(kind, "#pw", delay_ms=50)]
+    with pytest.raises(RuntimeError, match=r"stopped typing credential arg \{\{password\}\}.*nothing that takes text"):
+        await _run(session, monkeypatch, steps)
+    assert await _values(session, "#pw") == [""]
+
+
+@pytest.mark.parametrize("kind", ["type", "type_keys"])
+async def test_focus_moved_to_a_button_partway_through_a_type_stops_it(
+    session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    steps = [{"action": "navigate", "url": trusted + "/to-button"}, _step(kind, "#pw", delay_ms=50)]
+    with pytest.raises(RuntimeError, match=r"stopped typing credential arg \{\{password\}\}.*takes no text"):
+        await _run(session, monkeypatch, steps)
+    assert await _values(session, "#pw") == [SECRET[:3]]
 
 
 @pytest.mark.parametrize("kind", ["fill", "fill_by"])
@@ -225,6 +273,15 @@ async def test_the_exported_cli_fills_the_first_of_two_matches(trusted: str, kin
 async def test_the_exported_cli_fill_by_is_strict_about_two_matches(trusted: str) -> None:
     actions = [{"action": "navigate", "url": trusted + "/confirm"}, _step("fill_by", "")]
     with pytest.raises(RuntimeError, match="strict mode violation"):
+        await _run_cli(actions, trusted)
+
+
+async def test_the_exported_cli_stops_a_type_a_same_origin_navigation_moves(trusted: str) -> None:
+    actions = [
+        {"action": "navigate", "url": f"{trusted}/moves?to={trusted}/dashboard"},
+        _step("type", "#pw", delay_ms=50),
+    ]
+    with pytest.raises(RuntimeError, match=r"stopped typing credential arg \{\{password\}\}"):
         await _run_cli(actions, trusted)
 
 

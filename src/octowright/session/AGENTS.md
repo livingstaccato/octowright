@@ -27,7 +27,12 @@ block never got to record anything. The same launch now raises
 Every one of those call sites is wrapped, and the AST scan in
 `tests/session/test_no_unbounded_calls.py` now covers `add_init_script`,
 `expose_binding`, `expose_function`, `route` and `unroute` alongside the
-original three, so a new setup call cannot quietly reintroduce it.
+original three, so a new setup call cannot quietly reintroduce it. It also
+covers the handle calls (`evaluate_handle`, `content_frame`, `owner_frame`,
+`get_properties`, `json_value`, `dispose`), which a credential `type` makes
+once per character: `octowright.credential_input` is stdlib-only (the exported
+CLI renders it), so it bounds each whole step with one `asyncio.timeout` and
+is allowlisted by function rather than wrapping each call in `bounded()`.
 
 ### Websocket observation
 

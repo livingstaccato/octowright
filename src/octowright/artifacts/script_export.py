@@ -453,6 +453,14 @@ def _credential_check(state: dict[str, Any], index: int, action: dict[str, Any],
     return lambda url: _check_credential_fill(state, index, action, trusted, url=url)
 
 
+async def _credential_input(action: dict[str, Any], typing: Any) -> None:
+    # A credential step the page stopped partway names the step, as replay does.
+    try:
+        await typing
+    except CredentialInputStopped as exc:
+        raise credential_input_stopped(action, str(exc)) from exc
+
+
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}

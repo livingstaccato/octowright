@@ -271,6 +271,15 @@ def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
     )
 
 
+def credential_input_stopped(action: dict[str, Any], reason: str) -> RuntimeError:
+    """A credential step that stopped partway, naming the step and why -- never the value, nor how much was typed."""
+    names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
+    return RuntimeError(
+        f"macro {action.get('action')} stopped typing credential arg {names}: {reason}. "
+        "The rest of the value was not typed; re-run the step once the page has settled."
+    )
+
+
 def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
     """*action* without the guard's own inputs, which no session method takes."""
     guard_only = {CREDENTIAL_FILL_MARKER, CREDENTIAL_CALL_MARKER}

@@ -474,7 +474,7 @@ class SessionPageMixin(SessionLike):
                 await asyncio.sleep(delay_ms / 1000)
 
     @gated_operation("browser_type")
-    async def _keystroke(self, sink: Any, char: str) -> None:
+    async def _keystroke(self, sink: Any, char: str, timeout_ms: float | None = None) -> None:
         """One physical key for *char*, pressed through *sink*.
 
         *sink* is the page keyboard, or, for a credential, the focused
@@ -485,20 +485,24 @@ class SessionPageMixin(SessionLike):
         A character the layout has no physical key for (accented, emoji, any
         non-ASCII) falls back to Playwright's own text insertion: it has no
         scancode to send, so a guessed key would be worse than the payload.
+
+        ``timeout_ms`` bounds an element sink's ``press``/``type``, which is
+        what a credential step passes; the page keyboard takes none.
         """
+        bound = {} if timeout_ms is None else {"timeout": timeout_ms}
         stroke = keystroke_for(char)
         if stroke is None:
             log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
-            await sink.type(char)
+            await sink.type(char, **bound)
             return
         code, shift_held = stroke
         if not shift_held:
-            await sink.press(code)
+            await sink.press(code, **bound)
             return
         keyboard = self.page.keyboard
         await keyboard.down("Shift")
         try:
-            await sink.press(code)
+            await sink.press(code, **bound)
         finally:
             # Release even if the press raises, or the modifier stays latched
             # and every later keystroke on this page -- including another
