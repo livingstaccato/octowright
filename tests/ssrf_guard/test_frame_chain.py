@@ -26,7 +26,6 @@ def test_with_the_policy_off_no_record_is_made(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.delenv("OCTOWRIGHT_SSRF_POLICY")
     frame = _Frame()
     assert ssrf_guard.begin_navigation(frame) is None
-    ssrf_guard.raise_if_refused(None)
     assert frame not in ssrf_guard._FRAME_CHAINS
 
 
@@ -36,8 +35,8 @@ async def test_a_refused_hop_is_recorded_on_its_frame() -> None:
     request = _Request("https://public.test/", frame=frame)
     await _handle(_Route({"https://public.test/": _Response(302, "http://169.254.169.254/")}, request), request)
     assert chain is not None and chain.refused.is_set()
-    with pytest.raises(InvalidRequestError, match=r"169\.254\.169\.254"):
-        ssrf_guard.raise_if_refused(chain)
+    assert isinstance(chain.error(), InvalidRequestError)
+    assert "169.254.169.254" in str(chain.error())
 
 
 async def test_a_client_redirect_and_a_served_page_refuse_nothing() -> None:
@@ -47,13 +46,13 @@ async def test_a_client_redirect_and_a_served_page_refuse_nothing() -> None:
         request = _Request(url, frame=frame)
         await _handle(_Route({url: response}, request), request)
     assert chain is not None and not chain.refused.is_set()
-    ssrf_guard.raise_if_refused(chain)
 
 
 async def test_begin_navigation_forgets_an_earlier_refusal() -> None:
     frame = _Frame()
     ssrf_guard.frame_chain(frame).refused.set()
-    ssrf_guard.raise_if_refused(ssrf_guard.begin_navigation(frame))
+    chain = ssrf_guard.begin_navigation(frame)
+    assert chain is not None and not chain.refused.is_set()
 
 
 async def test_until_refused_returns_when_the_wait_finishes() -> None:
@@ -121,8 +120,8 @@ async def test_a_refusal_of_a_popups_first_request_reaches_the_popup_once_it_exi
     request.page_exists = True
     chain = ssrf_guard.frame_chain(request.frame)
     assert chain.refused.is_set()
-    with pytest.raises(InvalidRequestError, match=r"169\.254\.169\.254"):
-        ssrf_guard.raise_if_refused(chain)
+    assert isinstance(chain.error(), InvalidRequestError)
+    assert "169.254.169.254" in str(chain.error())
 
 
 async def test_a_parked_ending_is_not_read_as_a_later_navigations() -> None:
@@ -130,7 +129,8 @@ async def test_a_parked_ending_is_not_read_as_a_later_navigations() -> None:
     await _handle(_Route({"https://public.test/r": _Response(302, "http://169.254.169.254/")}, request), request)
     request.page_exists = True
     # A navigation begun on the popup afterwards starts clean.
-    ssrf_guard.raise_if_refused(ssrf_guard.begin_navigation(request.frame))
+    chain = ssrf_guard.begin_navigation(request.frame)
+    assert chain is not None and not chain.refused.is_set()
 
 
 def test_parked_endings_are_bounded() -> None:
@@ -154,9 +154,9 @@ async def test_a_failed_fetch_is_recorded_as_a_failure_not_a_refusal() -> None:
     route.fetch = failing  # type: ignore[method-assign]
     await _handle(route, request)
     assert chain is not None and chain.refused.is_set() and chain.failed
-    with pytest.raises(ssrf_guard.NavigationFailedError, match="connection reset") as info:
-        ssrf_guard.raise_if_refused(chain)
-    assert not isinstance(info.value, InvalidRequestError)
+    error = chain.error()
+    assert isinstance(error, ssrf_guard.NavigationFailedError) and "connection reset" in str(error)
+    assert not isinstance(error, InvalidRequestError)
 
 
 async def test_guarded_navigation_with_the_policy_off_just_awaits(monkeypatch: pytest.MonkeyPatch) -> None:
