@@ -52,15 +52,14 @@ class SessionLocatorMixin(SessionLike):
     # Re-enter the caller's own "browser_fill" / "browser_type" lease (same
     # task), so the check and the input it guards are one gated operation.
     @gated_operation("macro_credential_fill_origin")
-    async def _checked_fill(
-        self, locator: Any, value: str, check: FillOriginCheck, timeout_ms: int, *, strict: bool
-    ) -> None:
+    async def _checked_fill(self, locator: Any, value: str, check: FillOriginCheck, timeout_ms: int) -> None:
         """Fill *locator* only in a document *check* accepts; see ``octowright.credential_input``.
 
-        ``strict`` as the same step without a credential: a selector fill takes
-        the first match, a ``fill_by`` raises on several.
+        *locator* is the element the same step without a credential would
+        fill: ``locator.first`` for a selector fill, the strict locator itself
+        for a ``fill_by``, which raises on several.
         """
-        await credential_input.checked_fill(self, locator, value, check, timeout_ms, strict=strict)
+        await credential_input.checked_fill(self, locator, value, check, timeout_ms)
 
     @gated_operation("macro_credential_fill_origin")
     async def _checked_type(
@@ -69,7 +68,10 @@ class SessionLocatorMixin(SessionLike):
         """Type *text* one key at a time, each into a focused document *check* accepts.
 
         ``keys`` presses physical keys (``key_mode="keys"``) through the same
-        per-key check; see ``octowright.credential_input``.
+        per-key check; see ``octowright.credential_input``. The step may take
+        the action timeout plus ``len(text) * delay_ms``
+        (``credential_input.typing_budget_ms``): the pauses the step asked for
+        are not counted against the page.
         """
         send = self._keystroke if keys else credential_input.type_character
         await credential_input.checked_type(
@@ -117,7 +119,7 @@ class SessionLocatorMixin(SessionLike):
         if check is None:
             await locator.fill(value, timeout=budget)
         else:
-            await self._checked_fill(locator, value, check, budget, strict=True)
+            await self._checked_fill(locator, value, check, budget)
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 

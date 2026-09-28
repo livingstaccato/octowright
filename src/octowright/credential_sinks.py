@@ -270,9 +270,18 @@ def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
     )
 
 
-def credential_input_stopped(action: dict[str, Any], reason: str) -> RuntimeError:
-    """A credential step that stopped partway, naming the step and why -- never the value, nor how much was typed."""
+def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bool = True) -> RuntimeError:
+    """A credential step that stopped, naming the step and why -- never the value, nor how much was typed.
+
+    ``started`` is ``CredentialInputStopped.started``: a step stopped before
+    anything went to the page says so, rather than that it stopped partway.
+    """
     names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
+    if not started:
+        return RuntimeError(
+            f"macro {action.get('action')} did not start typing credential arg {names}: {reason}. "
+            "Nothing was typed; re-run the step once the page has settled."
+        )
     return RuntimeError(
         f"macro {action.get('action')} stopped typing credential arg {names}: {reason}. "
         "The rest of the value was not typed; re-run the step once the page has settled."

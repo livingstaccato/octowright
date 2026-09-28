@@ -84,7 +84,7 @@ async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) ->
         try:
             yield
         except CredentialInputStopped as exc:
-            raise credential_input_stopped(action, str(exc)) from exc
+            raise credential_input_stopped(action, str(exc), started=exc.started) from exc
 
 
 class _OriginCheck:

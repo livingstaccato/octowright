@@ -22,10 +22,10 @@ standalone script has one page and no gate.
 wait re-resolves the selector after a navigation, so a trusted page that holds
 a disabled field and then moves to a foreign origin with an enabled one gets
 the value filled on the foreign origin. That was measured on chromium, firefox
-and webkit. So :func:`checked_fill` resolves the element as the same step without a
-credential would -- a selector ``fill`` its first match, a ``fill_by``
-strictly, raising on several -- checks the frame that owns it, and fills that
-element handle. When the element is replaced the handle detaches. That covers a
+and webkit. So :func:`checked_fill` resolves the locator its caller passes -- the one the
+same step without a credential would fill: a selector ``fill``'s first match,
+a ``fill_by`` strictly, raising on several -- checks the frame that owns it,
+and fills that element handle. When the element is replaced the handle detaches. That covers a
 re-render and a navigation, and all three engines report it at once as "not
 attached". The fill then re-resolves and re-checks, so a re-rendered field is
 still filled, and a navigated one is refused. Remaining window: inside the
@@ -50,9 +50,14 @@ element's handle. The rest of the value is stopped
   property holding a per-step token, and every later key requires it. A
   navigated document is a new ``document`` object without the mark, and
   ``history.pushState`` keeps the old one, measured on all three engines;
-* focus is on ``<body>``, the root element or nothing -- where it lands when
-  the focused field is removed (measured on all three engines), so a
-  re-render would otherwise swallow the rest of the value and report success;
+* focus moved to ``<body>``, the root element or nothing after an element took
+  the first key -- where it lands when the focused field is removed (measured
+  on all three engines), so a re-render would otherwise swallow the rest of
+  the value and report success. The first key itself may go to ``<body>`` of
+  the checked document, as it may go to any element: a target that cannot
+  take focus (a canvas console, a ``div`` with no ``tabindex``) leaves focus
+  there and reads keys from the document, and the same step without a
+  credential types there. Later keys then need focus still on that ``<body>``;
 * focus moved to an element that takes no text (a button, a link) and is not
   the one the first key went to. Focus moving to another text field of the
   same document is followed, which is what an auto-advancing code needs.
@@ -65,15 +70,19 @@ design, so a single-page app that swaps its view in place (``pushState``) and
 focuses a search box gets the rest of the value; and a document restored from
 the back/forward cache during the same step still carries its mark.
 
-**Time.** Nothing here may hang the session gate its caller holds. The whole
-step, retries and typing and the pause between keys, runs under one
-``asyncio.timeout`` of the step's budget (``asyncio.timeout`` rather than
-``wait_for``, which would run it in another task and lose the gate's
-re-entry), and each Playwright call that takes a ``timeout`` is given what is
-left. A step that spends the budget raises :class:`CredentialInputStopped`.
-That matches the same step without a credential: Playwright's own
-``page.type(delay=..., timeout=...)`` fails once the typing outlasts the
-timeout, measured on all three engines.
+**Time.** Nothing here may hang the session gate its caller holds. A fill's
+budget is its timeout; a type's is its timeout plus ``len(text) * delay_ms``
+(:func:`typing_budget_ms`), because the pauses the step asked for are not the
+page being slow. That is more than Playwright's own ``page.type(delay=...,
+timeout=...)`` allows, which counts the pauses and fails partway once the
+typing outlasts the timeout (measured on all three engines). Each Playwright
+call that takes a ``timeout`` is given what is left of the budget, so its own
+error, which names what it waited for, is what a selector that never matches
+reports. The whole step runs under one ``asyncio.timeout`` a second longer
+(``asyncio.timeout`` rather than ``wait_for``, which would run it in another
+task and lose the gate's re-entry): a backstop for the calls that take no
+timeout. A step it stops, or that reaches its deadline between keys, raises
+:class:`CredentialInputStopped`, saying whether anything was typed.
 """
 
 from __future__ import annotations
@@ -92,18 +101,22 @@ _credential_input_log = logging.getLogger(__name__)
 #: ``{frame: el}`` when focus is inside a child frame, and ``{stop: why}``
 #: otherwise. ``first`` marks the document (and the element) the first key
 #: goes to; every later key needs that mark, so the answer is decided in the
-#: page and a plain input costs this one round trip.
+#: page and a plain input costs this one round trip. The first key may go to
+#: ``<body>`` or the root element: a target that cannot take focus (a canvas
+#: console, a ``div`` with no ``tabindex``) leaves focus there and listens on
+#: the document. Later keys then need focus still on that same element.
 FOCUSED_ELEMENT_JS = """([key, token, first]) => {
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
   if (el && (el.localName === 'iframe' || el.localName === 'frame')) return {frame: el};
-  if (!el || el === document.body || el === document.documentElement) return {stop: 'nothing'};
+  if (!el) return {stop: 'nothing'};
   if (first) {
     Object.defineProperty(document, key, {value: {token, el}, configurable: true});
     return el;
   }
   const mark = Object.getOwnPropertyDescriptor(document, key);
   if (!mark || !mark.value || mark.value.token !== token) return {stop: 'document'};
+  if (el === document.body || el === document.documentElement) return el === mark.value.el ? el : {stop: 'nothing'};
   const textless = ['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'];
   const takesText = el.isContentEditable || el.localName === 'textarea'
     || (el.localName === 'input' && !textless.includes(el.type));
@@ -128,8 +141,15 @@ _DETACHED_MARKERS = ("not attached to the DOM", "Execution context was destroyed
 class CredentialInputStopped(RuntimeError):
     """The rest of a credential was not typed. The message says why, never what was typed.
 
-    The caller names the step (``credential_sinks.credential_input_stopped``).
+    ``started`` is whether any of the value went to the page first: a step
+    stopped before its first key (or before the fill) typed nothing, and the
+    caller must not say it stopped partway. The caller names the step
+    (``credential_sinks.credential_input_stopped``).
     """
+
+    def __init__(self, reason: str, *, started: bool = True) -> None:
+        super().__init__(reason)
+        self.started = started
 
 
 def credential_input_detached(exc: BaseException) -> bool:
@@ -162,40 +182,64 @@ async def _release(handles: list[Any]) -> None:
             _credential_input_log.debug("credential_input: handle dispose failed: %s", type(result).__name__)
 
 
-async def _within(timeout_ms: float, step: Awaitable[None]) -> None:
-    """Await *step*, raising :class:`CredentialInputStopped` once *timeout_ms* is spent."""
-    budget = asyncio.timeout(timeout_ms / 1000)
+#: How long past the step's budget the backstop waits. Each Playwright call
+#: is given what is left of the budget, so when the two expired together the
+#: backstop usually won, and a selector that never matched was reported as a
+#: step that stopped partway instead of as Playwright's "waiting for
+#: locator(...)". The grace lets Playwright's own timeout, which names what it
+#: waited for, fire first; the backstop is for a call that takes no timeout.
+_BACKSTOP_GRACE_MS = 1000.0
+
+
+class _Progress:
+    """Whether any of the value has gone to the page yet."""
+
+    started = False
+
+
+def _stopped(budget_ms: float, progress: _Progress) -> CredentialInputStopped:
+    if progress.started:
+        return CredentialInputStopped(f"the credential step did not finish within {budget_ms:g}ms")
+    return CredentialInputStopped(
+        f"the credential step did not start within {budget_ms:g}ms: the page did not answer before anything was typed",
+        started=False,
+    )
+
+
+async def _within(budget_ms: float, progress: _Progress, step: Awaitable[None]) -> None:
+    """Await *step*, raising :class:`CredentialInputStopped` once *budget_ms* and the grace are spent."""
+    backstop = asyncio.timeout((budget_ms + _BACKSTOP_GRACE_MS) / 1000)
     try:
-        async with budget:
+        async with backstop:
             await step
     except TimeoutError:
-        if not budget.expired():
+        if not backstop.expired():
             raise
-        raise CredentialInputStopped(f"the credential step did not finish within {timeout_ms:g}ms") from None
+        raise _stopped(budget_ms, progress) from None
 
 
-async def checked_fill(
-    session: Any, locator: Any, value: str, check: Callable[[str], None], timeout_ms: float, *, strict: bool
-) -> None:
+async def checked_fill(session: Any, locator: Any, value: str, check: Callable[[str], None], timeout_ms: float) -> None:
     """Fill *locator*, but only in a document *check* accepts; see the module docstring.
 
-    ``strict`` picks the element as the same step without a credential does:
-    a selector ``fill`` takes the first match (``page.fill``), and a
-    ``fill_by`` raises Playwright's strict-mode error on several
-    (``Locator.fill``), which ``Locator.element_handle`` raises too.
+    *locator* is used as given, so the caller picks the element as the same
+    step without a credential does: a selector ``fill`` passes
+    ``locator.first`` (``page.fill`` takes the first match), and a
+    ``fill_by`` the locator itself, whose ``element_handle`` raises
+    Playwright's strict-mode error on several, as ``Locator.fill`` does.
     """
     deadline = time.monotonic() + timeout_ms / 1000
-    target = locator if strict else locator.first
+    progress = _Progress()
     handles: list[Any] = []
 
     async def fill() -> None:
         async with session.operation("macro_credential_fill_origin"):
             while True:
-                handle = await target.element_handle(timeout=_ms_left(deadline))
+                handle = await locator.element_handle(timeout=_ms_left(deadline))
                 handles.append(handle)
                 owner = await handle.owner_frame()
                 check(str(getattr(owner, "url", "") or ""))
                 try:
+                    progress.started = True
                     await handle.fill(value, timeout=_ms_left(deadline))
                     return
                 except Exception as exc:
@@ -203,7 +247,7 @@ async def checked_fill(
                         raise
 
     try:
-        await _within(timeout_ms, fill())
+        await _within(timeout_ms, progress, fill())
     finally:
         await _release(handles)
 
@@ -250,31 +294,49 @@ async def checked_type(
     timeout_ms: float,
     send: Callable[[Any, str, float], Awaitable[None]] = type_character,
 ) -> None:
-    """Type *text* into *locator*'s first match, re-checking where each key goes; see the module docstring.
+    """Type *text* into *locator*, re-checking where each key goes; see the module docstring.
 
-    *send* delivers one character through the focused element's handle,
-    within the milliseconds it is given. Its default is Playwright's text
-    typing, and live replay's ``key_mode="keys"`` passes a physical-key press
-    instead. ``delay_ms`` is the pause between two keys, and each check comes
-    after that pause, just before the key.
+    *locator* is focused as given: the caller passes ``locator.first``, as a
+    selector ``type`` takes the first match. *send* delivers one character
+    through the focused element's handle, within the milliseconds it is
+    given. Its default is Playwright's text typing, and live replay's
+    ``key_mode="keys"`` passes a physical-key press instead. ``delay_ms`` is
+    the pause between two keys, and each check comes after that pause, just
+    before the key. The step's budget is :func:`typing_budget_ms`.
     """
-    deadline = time.monotonic() + timeout_ms / 1000
+    budget_ms = typing_budget_ms(timeout_ms, text, delay_ms)
+    deadline = time.monotonic() + budget_ms / 1000
+    progress = _Progress()
     # Per step, so a mark an earlier step left on the same document is not this one's.
     token = secrets.token_hex(8)
     handles: list[Any] = []
 
     async def type_all() -> None:
         async with session.operation("macro_credential_fill_origin"):
-            await locator.first.focus(timeout=_ms_left(deadline))
+            await locator.focus(timeout=_ms_left(deadline))
             for index, char in enumerate(text):
                 if index and delay_ms:
                     await asyncio.sleep(delay_ms / 1000)
-                await _checked_key(session, char, check, send, deadline, token, not index, handles)
+                if index and time.monotonic() >= deadline:
+                    # Stopped here rather than by the next key's 1ms Playwright
+                    # timeout, whose message would not say the rest was not typed.
+                    raise _stopped(budget_ms, progress)
+                await _checked_key(session, char, check, send, deadline, token, not index, handles, progress)
 
     try:
-        await _within(timeout_ms, type_all())
+        await _within(budget_ms, progress, type_all())
     finally:
         await _release(handles)
+
+
+def typing_budget_ms(timeout_ms: float, text: str, delay_ms: float | None) -> float:
+    """What a credential ``type`` may take: the action timeout plus the step's own pauses.
+
+    ``timeout_ms`` bounds what the page takes to answer; a ``delay_ms`` the
+    macro asked for between keys is not the page being slow, so it is added
+    rather than counted against it (``len(text) * delay_ms``).
+    """
+    return timeout_ms + len(text) * (delay_ms or 0)
 
 
 async def _checked_key(
@@ -286,6 +348,7 @@ async def _checked_key(
     token: str,
     first: bool,
     handles: list[Any],
+    progress: _Progress,
 ) -> None:
     async with session.operation("macro_credential_fill_origin"):
         while True:
@@ -302,6 +365,7 @@ async def _checked_key(
             if stop is not None:
                 raise CredentialInputStopped(_STOPPED_BECAUSE.get(stop, stop))
             try:
+                progress.started = True
                 await send(element, char, _ms_left(deadline))
                 return
             except Exception as exc:

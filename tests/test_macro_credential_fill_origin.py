@@ -20,6 +20,7 @@ key (``octowright.credential_input``).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -313,3 +314,26 @@ async def test_warn_mode_keeps_the_record_when_a_later_step_fails(
     assert payload["failed_at_step"] == 1
     assert payload["credential_fill_offsite"] == [{"step": 0, "action": "fill", "origin": "https://evil.example"}]
     assert SECRET not in repr(payload)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("started", "said", "not_said"),
+    [
+        (False, r"did not start typing credential arg \{\{password\}\}.*Nothing was typed", "rest of the value"),
+        (True, r"stopped typing credential arg \{\{password\}\}.*rest of the value was not typed", "Nothing was typed"),
+    ],
+)
+async def test_a_stopped_step_says_whether_anything_was_typed(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, started: bool, said: str, not_said: str
+) -> None:
+    """A step whose page never answered typed nothing; it must not be reported as stopped partway."""
+    from octowright.credential_input import CredentialInputStopped
+
+    session = _session(tmp_path, launch="https://app.example.test/", current="https://app.example.test/login")
+    session.type_text.side_effect = CredentialInputStopped("the page did not answer", started=started)
+    with pytest.raises(RuntimeError) as caught:
+        await _run(monkeypatch, session, [_step("type")])
+    message = caught.value.args[0]["original"]
+    assert re.search(said, message), message
+    assert not_said not in message

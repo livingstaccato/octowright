@@ -548,7 +548,7 @@ class SessionPageMixin(SessionLike):
         check = pending_fill_origin_check()
         if check is not None:  # one key at a time, each into a checked document; see credential_input
             await self._checked_type(
-                self._target().locator(selector), text, check, delay_ms=delay_ms, keys=key_mode == "keys"
+                self._target().locator(selector).first, text, check, delay_ms=delay_ms, keys=key_mode == "keys"
             )
         elif key_mode == "keys":
             await self._type_as_keystrokes(selector, text, delay_ms)
@@ -570,7 +570,7 @@ class SessionPageMixin(SessionLike):
         if check is None:
             await self._target().fill(selector, value, timeout=budget)
         else:  # into a checked document only; see octowright.credential_input
-            await self._checked_fill(self._target().locator(selector), value, check, budget, strict=False)
+            await self._checked_fill(self._target().locator(selector).first, value, check, budget)
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("macro_credential_fill_origin")

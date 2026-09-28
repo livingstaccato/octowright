@@ -581,8 +581,13 @@ error that names the step and never the value, when:
   any navigation, same-origin included (a sign-in that lands on a dashboard
   whose search box takes focus), or focus moving into another frame. A
   foreign document is refused naming its origin;
-- focus is on `<body>` or nothing, which is where it falls when the field
-  is re-rendered away, so a truncated value is never reported as typed;
+- focus moved to `<body>` or nothing after an element took the first key,
+  which is where it falls when the field is re-rendered away, so a truncated
+  value is never reported as typed. The first key itself may go to `<body>`
+  of the checked document: a target that cannot take focus (a canvas console,
+  a `div` with no `tabindex`) leaves focus there and reads keys from the
+  document, and the same step without a credential types there too. Later
+  keys then need focus to stay on `<body>` of that document;
 - focus moved to an element that takes no text (a button, a link) other than
   the one the first key went to.
 
@@ -593,11 +598,25 @@ the input; and focus the page moves to another text field of the *same*
 document, which is followed by design, so a single-page app that swaps its
 view in place (`history.pushState`) and focuses a search box receives the rest
 of the value; and a document the back/forward cache restores during the step,
-which is the same document as before. The whole step -- retries, every key and
-the pause between keys -- is bounded by one budget: a `fill`/`fill_by` step's
-`timeout_ms`, else the action timeout (`OCTOWRIGHT_ACTION_TIMEOUT_MS`, default
-15000), which is also what a `type` gets. A step that spends it fails, as a
-`type` without a credential does once its typing outlasts the timeout.
+which is the same document as before. The whole step -- retries and every key --
+is bounded by one budget: a `fill`/`fill_by` step's `timeout_ms`, else the
+action timeout (`OCTOWRIGHT_ACTION_TIMEOUT_MS`, default 15000). A `type` gets
+the action timeout **plus** `len(text) * delay_ms`, in both key modes: the
+pauses the step asked for are not the page being slow, so they are not counted
+against it. That is deliberately more than a `type` without a credential in
+the default text mode gets: Playwright's `page.type(delay=, timeout=)` counts
+the pauses, and fails partway once the typing outlasts the timeout (measured
+on all three engines: ten keys 100ms apart under a 300ms timeout stop after 2-3
+keys; twenty under 1500ms after 13-15). A `key_mode: keys` type without a
+credential has no whole-step bound at all. Each Playwright call is given what
+is left of the budget, and the step's own backstop fires one second after it,
+so a selector that never matches fails with Playwright's own "waiting for
+locator(...)" error rather than as a step that stopped. A step the backstop
+does stop says whether anything was typed: "did not start typing ... Nothing
+was typed" when the page never answered before the first key, "stopped typing
+... The rest of the value was not typed" otherwise. An exported script's
+credential step waits what its step without a credential does when the step
+names no `timeout_ms`: Playwright's own 30s default.
 
 A credential passed to a called macro under another name
 (`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.

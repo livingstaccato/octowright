@@ -140,6 +140,10 @@ _BLIND_SCRUB_POLICY_ENV = {BLIND_SCRUB_POLICY_ENV!r}
 _TIER_RANK = {{"contextual": 1, "identity": 2, "credential": 3}}
 _MAX_ENCODING_DEPTH = 3
 _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
+# What an exported fill/type waits when the step names no timeout: it passes
+# none, so Playwright's own default applies, and a credential step, which has
+# to pass one, passes the same. The script sets no default timeout of its own.
+_PLAYWRIGHT_DEFAULT_TIMEOUT_MS = 30000
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
 _PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
@@ -454,11 +458,11 @@ def _credential_check(state: dict[str, Any], index: int, action: dict[str, Any],
 
 
 async def _credential_input(action: dict[str, Any], typing: Any) -> None:
-    # A credential step the page stopped partway names the step, as replay does.
+    # A credential step the page stopped names the step, as replay does.
     try:
         await typing
     except CredentialInputStopped as exc:
-        raise credential_input_stopped(action, str(exc)) from exc
+        raise credential_input_stopped(action, str(exc), started=exc.started) from exc
 
 
 {evidence_helpers}

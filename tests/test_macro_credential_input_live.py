@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from octowright.browser_pool.pool import BrowserPool
+from octowright.credential_input import CredentialInputStopped
 from octowright.macros import execution
 
 pytestmark = pytest.mark.live_browser
@@ -56,6 +57,10 @@ PAGES = {
     "/to-button": '<input type="password" id="pw"><button id="b">Show</button><script>'
     "document.getElementById('pw').addEventListener('input', (e) => { if (e.target.value.length === 3) "
     "document.getElementById('b').focus(); });</script>",
+    # A console that draws its own text: a div with no tabindex, so focus stays
+    # on <body>, and the page reads keys from the document.
+    "/console": '<div id="screen"></div><script>document.addEventListener("keydown", (e) => { '
+    "if (e.key.length === 1) document.getElementById('screen').textContent += e.key; });</script>",
 }
 
 
@@ -182,6 +187,22 @@ async def test_an_auto_advancing_code_gets_one_digit_per_box(
 
 
 @pytest.mark.parametrize("kind", ["type", "type_keys"])
+async def test_a_target_that_cannot_take_focus_gets_the_whole_credential(
+    session: Any, trusted: str, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Focus stays on <body>, where the page listens; the same step without a credential types there too.
+
+    The first key accepts <body> of the checked document as its target, as it
+    accepts the element it goes to; later keys need focus to stay there.
+    """
+    screen = "document.getElementById('screen').textContent"
+    for placeholder, args in (("{{note}}", {"note": SECRET}), ("{{password}}", {"password": SECRET})):
+        steps = [{"action": "navigate", "url": trusted + "/console"}, _step(kind, "#screen", placeholder)]
+        await _run(session, monkeypatch, steps, **args)
+        assert await session.page.evaluate(screen) == SECRET, placeholder
+
+
+@pytest.mark.parametrize("kind", ["type", "type_keys"])
 async def test_a_navigation_partway_through_a_type_stops_it(
     session: Any, trusted: str, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -225,6 +246,28 @@ async def test_focus_moved_to_a_button_partway_through_a_type_stops_it(
     with pytest.raises(RuntimeError, match=r"stopped typing credential arg \{\{password\}\}.*takes no text"):
         await _run(session, monkeypatch, steps)
     assert await _values(session, "#pw") == [SECRET[:3]]
+
+
+@pytest.mark.parametrize("kind", ["fill", "fill_by"])
+async def test_a_fill_whose_target_never_appears_reports_what_playwright_waited_for(
+    session: Any, trusted: str, kind: str
+) -> None:
+    """A typo'd selector is Playwright's "waiting for ...", as without a credential, not a step "stopped partway".
+
+    Driven through the session under a bound origin check, which is the
+    credential path a macro step takes, without the macro's failure payload
+    around it.
+    """
+    from octowright.session.fill_origin import fill_origin_check
+
+    await session.navigate(trusted + "/login")
+    with fill_origin_check(lambda _url: None), pytest.raises(Exception) as raised:
+        if kind == "fill":
+            await session.fill("#no-such-field", SECRET, timeout_ms=500)
+        else:
+            await session.fill_by(SECRET, label="No such field", timeout_ms=500)
+    assert not isinstance(raised.value, CredentialInputStopped), raised.value
+    assert "waiting for" in str(raised.value) and "exceeded" in str(raised.value), raised.value
 
 
 @pytest.mark.parametrize("kind", ["fill", "fill_by"])

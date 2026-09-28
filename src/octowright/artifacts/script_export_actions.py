@@ -352,11 +352,10 @@ else:
         action,
         checked_fill(
             _ScriptSession(state),
-            _target(state).locator(action["selector"]),
+            _target(state).locator(action["selector"]).first,
             action.get("value", ""),
             check,
-            action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
-            strict=False,
+            action.get("timeout_ms") or _PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
         ),
     )
 executed += 1
@@ -370,11 +369,11 @@ else:
         action,
         checked_type(
             _ScriptSession(state),
-            _target(state).locator(action["selector"]),
+            _target(state).locator(action["selector"]).first,
             action.get("text", ""),
             check,
             delay_ms=action.get("delay_ms"),
-            timeout_ms=_DEFAULT_ACTION_TIMEOUT_MS,
+            timeout_ms=_PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
         ),
     )
 executed += 1
@@ -505,8 +504,7 @@ else:
             _locator(_target(state), action),
             action.get("value", ""),
             check,
-            action.get("timeout_ms") or _DEFAULT_ACTION_TIMEOUT_MS,
-            strict=True,
+            action.get("timeout_ms") or _PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
         ),
     )
 executed += 1

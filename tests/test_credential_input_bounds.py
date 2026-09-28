@@ -12,7 +12,10 @@ in ``test_macro_credential_input_live``):
 
 * nothing bounded the per-key calls, so a wedged renderer hung the step, and
   the session gate it holds, forever; and the step's budget did not bound the
-  typing, only the retries;
+  typing, only the retries. The budget now counts what the page takes, not
+  the pauses the step asked for, and backs Playwright's own timeouts up
+  rather than racing them, so a selector that never matches is reported by
+  Playwright;
 * every key asked a plain ``<input>`` for its ``content_frame()``;
 * a handle was leaked when the focused-element lookup returned no element, or
   when ``content_frame()`` raised;
@@ -140,7 +143,7 @@ async def test_a_wedged_focus_lookup_fails_the_step_within_its_budget() -> None:
     calls: list[str] = []
     session = _Session(_Frame(calls, _never))
     started = time.monotonic()
-    with pytest.raises(CredentialInputStopped, match="did not finish within 200ms"):
+    with pytest.raises(CredentialInputStopped, match="did not start within 200ms"):
         await credential_input.checked_type(session, _Locator(calls), "abc", _accept, delay_ms=None, timeout_ms=200)
     assert time.monotonic() - started < 2
 
@@ -154,21 +157,9 @@ async def test_a_wedged_owner_frame_fails_the_fill_within_its_budget() -> None:
 
     element.owner_frame = wedged  # type: ignore[method-assign]
     session = _Session(_Frame(calls, lambda: element))
-    with pytest.raises(CredentialInputStopped, match="did not finish within 200ms"):
-        await credential_input.checked_fill(session, _Locator(calls, element), "v", _accept, 200, strict=False)
+    with pytest.raises(CredentialInputStopped, match="did not start within 200ms"):
+        await credential_input.checked_fill(session, _Locator(calls, element), "v", _accept, 200)
     assert element.disposed
-
-
-async def test_the_budget_bounds_the_typing_not_only_the_retries() -> None:
-    """Ten keys a hundred milliseconds apart do not fit in 300ms, as ``page.type(delay=, timeout=)`` would not."""
-    calls: list[str] = []
-    element = _Handle(calls, element=True)
-    session = _Session(_Frame(calls, lambda: element))
-    with pytest.raises(CredentialInputStopped, match="did not finish within 300ms"):
-        await credential_input.checked_type(
-            session, _Locator(calls), "abcdefghij", _accept, delay_ms=100, timeout_ms=300
-        )
-    assert 0 < len(element.typed) < 10
 
 
 async def test_each_key_is_given_what_is_left_of_the_budget() -> None:
@@ -178,7 +169,8 @@ async def test_each_key_is_given_what_is_left_of_the_budget() -> None:
     await credential_input.checked_type(session, _Locator(calls), "abc", _accept, delay_ms=20, timeout_ms=5000)
     timeouts = [timeout for _char, timeout in element.typed]
     assert [char for char, _timeout in element.typed] == list("abc")
-    assert all(timeout is not None and 0 < timeout <= 5000 for timeout in timeouts), timeouts
+    # The budget is the action timeout plus the step's own pauses, 3 * 20ms.
+    assert all(timeout is not None and 0 < timeout <= 5060 for timeout in timeouts), timeouts
     assert timeouts == sorted(timeouts, reverse=True)
 
 
@@ -224,3 +216,106 @@ async def test_a_failed_dispose_is_logged_not_swallowed(caplog: pytest.LogCaptur
     with caplog.at_level(logging.DEBUG, logger=credential_input.__name__):
         await credential_input.checked_type(session, _Locator(calls), "a", _accept, delay_ms=None, timeout_ms=5000)
     assert any("dispose" in record.getMessage() for record in caplog.records), caplog.records
+
+
+class _PlaywrightTimeout(Exception):
+    """Playwright's own ``TimeoutError``, which names what it waited for."""
+
+
+class _NeverMatches(_Locator):
+    """A selector nothing matches: Playwright waits out the timeout it is given, then says what it waited for."""
+
+    async def _wait_out(self, timeout: float | None) -> None:
+        assert timeout is not None
+        await asyncio.sleep(timeout / 1000)
+        raise _PlaywrightTimeout(f"Timeout {timeout:g}ms exceeded.\n  - waiting for locator('#no-such-field')")
+
+    async def focus(self, timeout: float | None = None) -> None:
+        await self._wait_out(timeout)
+
+    async def element_handle(self, timeout: float | None = None) -> _Handle:
+        await self._wait_out(timeout)
+        raise AssertionError("unreachable")
+
+
+async def test_a_fill_whose_selector_never_matches_reports_playwrights_wait() -> None:
+    """Playwright's timeout fires first, naming the locator; the step's own bound is only the backstop."""
+    calls: list[str] = []
+    session = _Session(_Frame(calls, _never))
+    for _ in range(5):  # the two used to expire together, and the backstop usually won
+        with pytest.raises(_PlaywrightTimeout, match="waiting for locator"):
+            await credential_input.checked_fill(session, _NeverMatches(calls), "v", _accept, 100)
+
+
+async def test_a_type_whose_selector_never_matches_reports_playwrights_wait() -> None:
+    calls: list[str] = []
+    session = _Session(_Frame(calls, _never))
+    for _ in range(5):
+        with pytest.raises(_PlaywrightTimeout, match="waiting for locator"):
+            await credential_input.checked_type(
+                session, _NeverMatches(calls), "abc", _accept, delay_ms=None, timeout_ms=100
+            )
+
+
+async def test_a_step_stopped_before_its_first_key_says_nothing_was_typed() -> None:
+    calls: list[str] = []
+    session = _Session(_Frame(calls, _never))
+    with pytest.raises(CredentialInputStopped, match="did not start") as raised:
+        await credential_input.checked_type(session, _Locator(calls), "abc", _accept, delay_ms=None, timeout_ms=100)
+    assert raised.value.started is False
+
+
+async def test_a_step_stopped_partway_says_so() -> None:
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    answers = iter([element, element])
+
+    async def lookup() -> Any:
+        return next(answers, None) or await _never()
+
+    session = _Session(_Frame(calls, lookup))
+    with pytest.raises(CredentialInputStopped, match="did not finish") as raised:
+        await credential_input.checked_type(session, _Locator(calls), "abcd", _accept, delay_ms=None, timeout_ms=100)
+    assert raised.value.started is True
+    assert [char for char, _timeout in element.typed] == ["a", "b"]
+
+
+async def test_the_pauses_between_keys_are_not_counted_against_the_budget() -> None:
+    """Ten keys a hundred milliseconds apart under a 300ms action timeout: the budget is 300 + 10 * 100."""
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    session = _Session(_Frame(calls, lambda: element))
+    await credential_input.checked_type(session, _Locator(calls), "abcdefghij", _accept, delay_ms=100, timeout_ms=300)
+    assert [char for char, _timeout in element.typed] == list("abcdefghij")
+
+
+async def test_slow_keys_still_spend_the_budget() -> None:
+    """What the page takes to answer is counted: keys that take 100ms each stop a 300ms step partway."""
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    session = _Session(_Frame(calls, lambda: element))
+
+    async def slow(handle: Any, char: str, timeout_ms: float) -> None:
+        await asyncio.sleep(0.1)
+        await handle.type(char, timeout=timeout_ms)
+
+    with pytest.raises(CredentialInputStopped, match="did not finish within 300ms"):
+        await credential_input.checked_type(
+            session, _Locator(calls), "abcdefghij", _accept, delay_ms=None, timeout_ms=300, send=slow
+        )
+    assert 0 < len(element.typed) < 10
+
+
+async def test_a_fill_uses_the_locator_it_is_given() -> None:
+    """The caller chooses ``locator.first`` (a selector fill) or the strict locator (``fill_by``)."""
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    session = _Session(_Frame(calls, lambda: element))
+
+    class _Strict(_Locator):
+        @property
+        def first(self) -> _Locator:
+            raise AssertionError("checked_fill must not narrow the locator it was given")
+
+    await credential_input.checked_fill(session, _Strict(calls, element), "v", _accept, 5000)
+    assert "fill" in calls
