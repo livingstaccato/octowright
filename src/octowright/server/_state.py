@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
@@ -164,6 +165,30 @@ class _ProfiledMCPServer(MCPServer):
     def __init__(self, *args: Any, allowed_tools: set[str] | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._allowed_tools = allowed_tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        """Call a tool, and tell the client why it failed.
+
+        mcp 2.2 reduces an exception that is not a ``ToolError`` to ``Error
+        executing tool <name>`` and keeps the cause for the server log. Every
+        octowright tool fails that way -- a ``ValueError``, an
+        ``InvalidRequestError``, Playwright's ``TimeoutError`` -- and that text
+        is what the agent acts on: the selector Playwright waited for, the SSRF
+        refusal, the unknown launch option. So the cause goes back to the
+        client in mcp 2.0's form, ``Error executing tool <name>: <cause>``.
+        Octowright scrubs credentials from its own errors before they get here.
+        """
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            cause = exc.__cause__
+            # A nested tool's crash is wrapped once per level; name the original.
+            while isinstance(cause, UnexpectedToolError) and cause.__cause__ is not None:
+                cause = cause.__cause__
+            if cause is None:
+                raise
+            log.debug("octowright.tool.failed", tool=name, error_type=type(cause).__name__, exc_info=cause)
+            raise ToolError(f"Error executing tool {name}: {cause}") from cause
 
     def tool(
         self,
