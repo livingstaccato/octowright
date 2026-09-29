@@ -510,6 +510,26 @@ video: /…/smoke/smoke.webm
 - `--redact-errors` works as before and the `video:` line carries only a path,
   but the video itself is not redacted: it shows whatever the page displayed.
   Treat it with the same care as the session recording.
+- **Size.** `octowright test` launches at `OCTOWRIGHT_VIEWPORT_W` x
+  `OCTOWRIGHT_VIEWPORT_H` (default 1280x800, so unset nothing changes), and
+  the video is recorded at exactly that size -- octowright pins Playwright's
+  `record_video_size` to the viewport, since Playwright's own default scales
+  the video down to fit 800x800 (a 1920x1080 page otherwise records at
+  800x450, measured on all three engines):
+
+  ```bash
+  OCTOWRIGHT_VIEWPORT_W=1920 OCTOWRIGHT_VIEWPORT_H=1080 \
+      octowright test --sequence sequences/smoke.json --record-video
+  ```
+
+- **Pace.** `OCTOWRIGHT_MACRO_SLOWMO_MS=<ms>` applies to every macro
+  `octowright test` runs, suites and sequences alike: it waits that long
+  before each action (see [Watching execution](#watching-execution)). For a
+  pause at one point of a macro there is no sleep action; use
+  `{"action": "evaluate", "expression": "new Promise(r => setTimeout(r, 1500))"}`,
+  which holds the page still for 1.5s. An `evaluate` is bounded by
+  `OCTOWRIGHT_UNBOUNDED_CALL_TIMEOUT_SECONDS` (30s by default), so keep each
+  pause under that.
 
 ## Artifact bundles
 
