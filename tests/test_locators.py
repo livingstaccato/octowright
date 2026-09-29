@@ -47,7 +47,7 @@ class FakeLocator:
     async def inner_text(self) -> str:
         return self._inner_text_value
 
-    async def evaluate(self, _script: str) -> Any:
+    async def evaluate(self, _script: str, timeout: float | None = None) -> Any:
         if self._evaluate_raises:
             raise RuntimeError("evaluate failed")
         return self._evaluate_value
