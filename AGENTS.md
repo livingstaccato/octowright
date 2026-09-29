@@ -113,7 +113,7 @@ Only entries carrying something `ls` plus the module docstring would not tell yo
 | `src/octowright/browser_pool/launch_helpers.py` | Shared per-launch wiring (recorder, listeners, init scripts); `build_recording_kwargs` assembles the video+HAR context kwargs under the pool's recordings root |
 | `src/octowright/browser_pool/_assets/*.js` | Init scripts injected into every page (title tag, corner badge, macro pill) |
 | `src/octowright/server/_request_context.py` | Republishes each MCP request's context into a contextvar via a `ServerMiddleware`. MCP 2.0 removed the SDK's own `request_ctx`, and the progress heartbeat + idempotent dispatch read it *ambiently* (no `ctx` parameter on the ~130 tools, so nothing leaks into the client schema). Also normalizes `_meta`, which 2.0 made a plain dict with snake_cased spec keys. |
-| `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp` (an `mcp.server.mcpserver.MCPServer` subclass), `scenario_pool`, and the plugin registry (`resolved_plugins`) that each enabled session-kind plugin's pool is reached through — see `OCTOWRIGHT_PLUGINS` |
+| `src/octowright/server/_state.py` | Shared singletons: `pool`, `mcp` (an `mcp.server.mcpserver.MCPServer` subclass), `scenario_pool`, and the plugin registry (`resolved_plugins`) that each enabled session-kind plugin's pool is reached through — see `OCTOWRIGHT_PLUGINS`. Its `call_tool` also restores a failing tool's cause in the client's error (`Error executing tool <name>: <cause>`): mcp 2.2 reduced any non-`ToolError` exception to the bare `Error executing tool <name>`, which hid every octowright failure message from the agent |
 | `packages/octowright-terminal/` | The terminal session-kind plugin (PTY/SSH/telnet), a separate distribution reaching core only through the `octowright.session_kinds` entry point. Core has no terminal-specific code left. See **Terminal Sessions (plugin)** and the package's own README. |
 | `src/octowright/macros/` (package) | Record → save → replay pipeline; `execution.py` runs macros, `storage.py` reads/writes JSON, `runtime.py` dispatches actions, `semantic.py` summarizes recordings into human-readable digests (pure helpers, no MCP-tool registry dep — the `@mcp.tool macro_explain` wrapper lives in `server/macros.py`). **Replay classification invariant:** every event the recorder emits must be replayable, skipped, or stripped — `dispatch_simple` counts an unclassified kind as an *error*, so a strip-list that drifts from the recorder turns passive rows into mass bogus failures (a recorded 608-frame socket stream once reported 608 failures per replay). `RECORDER_NOISE` is therefore *derived* rather than hand-mirrored between `runtime.py` and `recording_import.py`, and a test scans `recorder.record` call sites to fail on any NEW unclassified event. |
 | `src/octowright/dashboard_events.py` | Pure in-process pub/sub for dashboard SSE/WS fanout; lives at the package root so `server/` MCP-tool modules don't have to reach up into the `http/` layer |
@@ -134,7 +134,7 @@ describes, so it loads only when you work there. Each is an `AGENTS.md` with a
 
 | File | Covers |
 |------|--------|
-| `src/octowright/browser_pool/AGENTS.md` | launch-time + page-level extra HTTP headers, host-relative navigation, protected close, per-engine launch health and the `InvalidRequestError` classification |
+| `src/octowright/browser_pool/AGENTS.md` | launch-time + page-level extra HTTP headers, host-relative navigation, protected close, per-engine launch health and the `InvalidRequestError` classification, the Chromium 153 download crash and telling a dead browser process from a closed window |
 | `src/octowright/session/AGENTS.md` | the operation gate, bounded unbounded-Playwright calls, websocket observation, aria credential scrubbing, `key_mode="keys"`, ARIA keyboard drag-and-drop |
 | `src/octowright/macros/AGENTS.md` | listing a large macro corpus (`macro_list` bounds, `response_mode`, cursors) |
 | `src/octowright/cli/AGENTS.md` | `octowright doctor` -- what each probe proves and why it runs in a child interpreter |
@@ -277,3 +277,15 @@ is decides it, not the error: a load that timed out after commit is at its last
 URL (`navigation_error` set, `recovered_elsewhere=false`). A replacement that
 itself crashes loading the last URL fails the recovery rather than being swapped
 in, and its crash is left to that recovery instead of scheduling a second one.
+
+A dead browser **process** is not a closed window, though Playwright reports
+both identically (and never forwards the exit signal to a client).
+`browser_pool/process_crash` reads the answer from the OS: the browser pid is
+resolved from `/proc` at launch, and a browser already gone at the first
+evicting close signal -- or, for a headed Chromium, one that left its
+`SingletonLock` behind -- is a crash (`CrashScope="process"`,
+`reason="crashed"`, a `browser_process_crash` incident in `crash.recent`,
+`download_save_error` `cause: browser_crashed`). Measurements, margins and the
+reopen policy are in `docs/telemetry.md`. The crash that exposed this -- Chrome
+153's first headed download killing its browser -- is avoided at launch by
+`browser_pool/download_history` (`OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY`).

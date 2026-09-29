@@ -64,6 +64,8 @@ _REPLAY_PASSIVE = {
     # it is the 608-bogus-errors bug. See test_replay_passive_covers_recorder.
     "page_crash",
     "page_recovered",
+    # A dead browser PROCESS (browser_pool/process_crash); an outcome, like page_crash.
+    "browser_crash",
     "try_each_succeeded",
     "try_each_branch_failed",
     "try_suppressed",

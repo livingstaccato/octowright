@@ -56,6 +56,14 @@ def _pool_session_figures(rows: list[dict[str, Any]]) -> tuple[int, int, list[di
     return live_browsers, protected_browsers, operation_gates
 
 
+def _recent_crashes(*, limit: int) -> list[dict[str, Any]]:
+    """Renderer and browser-process crash incidents, oldest→newest, newest ``limit``."""
+    from octowright.browser_pool import incidents
+
+    kinds = {incidents.CATEGORY_RENDERER_CRASH, incidents.CATEGORY_BROWSER_PROCESS_CRASH}
+    return [r for r in incidents.recent() if r.get("category") in kinds][-limit:]
+
+
 def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any) -> dict[str, Any]:
     """Roll the stability signals into one verdict and log loudly when degraded,
     so the operator doesn't have to be watching status to notice instability.
@@ -65,6 +73,7 @@ def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any
         driver_restarts=pool.driver_restart_count(),
         recovery_failures=crash_recovery_mod.recovery_stats()["recovery_failures"],
         recovery_exhausted=counts.get("exhausted", 0),
+        process_crashes=len(incidents_mod.recent(category=incidents_mod.CATEGORY_BROWSER_PROCESS_CRASH)),
     )
     if verdict["status"] != "ok":
         log.warning("octowright.health.degraded", status=verdict["status"], reasons=verdict["reasons"])
@@ -473,7 +482,10 @@ def octowright_status() -> dict[str, Any]:
             # macOS each record is enriched at read time with the correlated
             # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
             # so it can't be attached when the incident is first recorded).
-            "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
+            # Renderer crashes AND browser-process crashes (a dead browser, not a
+            # closed window -- see browser_pool/process_crash), each tagged by
+            # its `category`: both are real crashes with a report to correlate.
+            "recent": _crash_reports.enrich(_recent_crashes(limit=10)),
             # A DIFFERENT scope, kept as a SEPARATE key rather than folded into
             # "recent": a target that stopped answering within its call budget
             # (session/timeouts.py's SessionCallTimeoutError) has no macOS

@@ -47,7 +47,7 @@ dependencies = [
     # _config -- and httpx2/httpcore2 expose both with identical shapes.
     "httpx2>=2.5.0",
     "mcp>=2.0.0",
-    "playwright>=1.47.0",
+    "playwright>=1.63.0",
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
     "click>=8.1",
@@ -561,6 +561,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_telemetry_fixes.py",
     "tests/test_title_prefix.py",
     "tests/test_unresponsive_target_event.py",
+    "tests/test_conftest_config_isolation.py",
+    "tests/test_download_history_launch_wiring.py",
     "tests/test_generic_screenshot_privacy.py",
     "tests/test_live_buffers_scrub_ledger.py",
     "tests/test_typed_password_ledger_bounds.py",

@@ -32,7 +32,9 @@ def _worse(a: str, b: str) -> str:
     return a if _RANK[a] >= _RANK[b] else b
 
 
-def assess(*, driver_restarts: int, recovery_failures: int, recovery_exhausted: int) -> dict[str, Any]:
+def assess(
+    *, driver_restarts: int, recovery_failures: int, recovery_exhausted: int, process_crashes: int = 0
+) -> dict[str, Any]:
     """Return ``{"status": ok|degraded|critical, "reasons": [...]}``.
 
     Each non-zero signal degrades health and adds a human-readable reason; the
@@ -51,6 +53,9 @@ def assess(*, driver_restarts: int, recovery_failures: int, recovery_exhausted: 
         status = _worse(status, _DEGRADED)
     if recovery_exhausted > 0:
         reasons.append(f"{recovery_exhausted} session(s) hit the crash-recovery cap — a crash loop")
+        status = _worse(status, _DEGRADED)
+    if process_crashes > 0:
+        reasons.append(f"{process_crashes} browser process crash(es) — the whole browser died, not a closed window")
         status = _worse(status, _DEGRADED)
 
     if driver_restarts >= CRITICAL_DRIVER_RESTARTS or recovery_failures >= CRITICAL_RECOVERY_FAILURES:

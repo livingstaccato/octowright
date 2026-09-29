@@ -12,7 +12,7 @@ matters, and the proxy is only as good as the assumption behind it: that a
 bare ``asyncio.CancelledError`` escaping a tool handler would be treated as a
 transport failure rather than a tool error. This module verifies that
 assumption against the real ``mcp`` library instead of asserting it in prose
--- a real ``MCPServer`` and ``ClientSession`` joined by memory object
+-- octowright's real ``MCPServer`` subclass and a ``ClientSession`` joined by memory object
 streams, with the ceiling fired at a genuinely wedged tool call.
 
 Why it is worth a separate module: the failure it guards against is not
@@ -36,15 +36,16 @@ import asyncio
 import anyio
 import pytest
 from mcp.client.session import ClientSession
-from mcp.server.mcpserver import MCPServer
 from mcp.shared.message import SessionMessage
 
+from octowright.server._state import _ProfiledMCPServer
 from octowright.session.operation.gate import SessionOperationGate
 
 
 async def test_ceiling_breach_surfaces_as_a_tool_error_not_a_dead_connection() -> None:
     gate = SessionOperationGate("one", "chromium", queue_timeout_seconds=30)
-    server = MCPServer(name="octowright-ceiling-probe")
+    # Octowright's own server: what the client reads is its error text.
+    server = _ProfiledMCPServer(name="octowright-ceiling-probe")
     entered = asyncio.Event()
     never = asyncio.Event()
 
