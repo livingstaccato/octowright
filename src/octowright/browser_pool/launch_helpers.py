@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.browser_pool.download_history import prune_download_history
 from octowright.browser_pool.restore_prompt import clear_crash_restore_prompt
 from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
@@ -410,6 +411,11 @@ async def _open_browser_context(
             # "Restore pages?" bubble covering the page we just navigated to.
             # See restore_prompt.
             clear_crash_restore_prompt(pdir)
+            # Chromium 153 kills its browser process on the first download of a
+            # headed run while the profile holds any download-history row. See
+            # download_history.
+            if kind == "chromium":
+                prune_download_history(pdir)
         else:
             user_data_dir = session_user_data_dir
         context = await browser_type.launch_persistent_context(

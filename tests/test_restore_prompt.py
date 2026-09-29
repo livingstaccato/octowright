@@ -11,9 +11,10 @@ that profile open with a "Chrome didn't shut down correctly / Restore pages?"
 bubble, and the flag is sticky: it survives until a run of that same profile
 exits cleanly, which an agent-driven browser frequently never does.
 
-Octowright is a reliable source of dirty exits — the crash under investigation
-kills the browser process outright, ``octowright restart`` SIGKILLs the leader,
-and the orphan reaper kills browsers whose driver died. Two of a real machine's
+Octowright is a reliable source of dirty exits — the Chromium 153 first-download
+crash (``download_history``) kills the browser process outright, ``octowright
+restart`` SIGKILLs the leader, and the orphan reaper kills browsers whose driver
+died. Two of a real machine's
 27 persona profiles were sitting at ``Crashed`` when this was written.
 """
 

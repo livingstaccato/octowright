@@ -227,6 +227,51 @@ forwarded case. `label` names the ARGUMENT (`"har_path"`); a label naming a
 *distinct* input (`macro name 'x'`, where the name is not the resolved path) is
 useful and unaffected.
 
+### The Chromium 153 first-download crash, and telling a crash from a close
+
+**The crash.** Chrome for Testing 153.0.8010.12 (`chromium-1243`, Playwright
+1.63 -- what a fresh install of the published wheel resolves to, while this
+repo's lock still pins 1.62/`chromium-1234`) kills its own **browser process**
+~0.3 s into the first download of a headed run whenever the profile's
+`History` holds a download row at startup and Playwright controls downloads.
+It is a use-after-free on the UI thread (`Received signal 11 SI_KERNEL ...
+General Protection Fault`, registers full of PartitionAlloc's `0xcd` freed
+byte), not a CHECK -- there is no message to quote; the field's earlier SIGTRAP
+attribution came from unrelated `chrome-headless-shell` renderers in a
+concurrent test run, and `/var/log/apport.log` shows the headed browser pids
+dying of signal 11 (one, on 09-23, of SIGTRAP -- its message was not captured). Nothing in octowright causes it:
+raw Playwright with no octowright code, no extension and no download listener
+crashed 7/7. `download_history.prune_download_history` deletes the rows before
+every Chromium persistent launch (full matrix in its docstring;
+`OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY` in `docs/env-vars.md`). It is per launch
+because Chromium re-inserts the rows from `shared_proto_db` at startup.
+`tests/test_download_history_live.py` is the live proof -- meaningful only when
+run against Playwright 1.63 (`uv run --with playwright==1.63.0 pytest ...`),
+since `chromium-1234` does not crash.
+
+**Detection.** `process_crash` resolves each persistent context's browser pid
+from `/proc` at session construction (`launch_publish._build_session_object`)
+and judges the exit at the first evicting close signal
+(`listeners._accept_external_close`). Three things are load-bearing:
+
+- **Judge only the live identity.** The close events Playwright fires for
+  octowright's OWN close arrive after the session left `_sessions`, when the
+  process is already gone -- judging them would report every agent close as a
+  crash. `_accept_external_close` skips the verdict for a non-current identity.
+- **Judge at the first evicting signal, not later.** Liveness is only
+  meaningful then: on a Firefox user close the context `close` (and the
+  `save_as` rejection) arrive after a clean exit. For the same reason the
+  download path waits for the verdict (`wait_for_exit_verdict`) instead of
+  sampling.
+- **Bias toward "closed".** A process crash can reopen a window under
+  `OCTOWRIGHT_DRIVER_RELAUNCH`; a misjudged user close must never do that. An
+  unresolved pid, unreadable `/proc`, or reused pid all read as a close.
+
+Chromium rewrites `/proc/<pid>/cmdline` into ONE space-joined string, so the
+matcher has a second path for that shape; WebKit's root is the `pw_run.sh`
+wrapper (killing only the wrapper leaves MiniBrowser and its pipe alive, and
+nothing fires -- crash tests must signal MiniBrowser).
+
 ### Type-checking the injected assets (`_assets/*.js`)
 
 The five init scripts injected into every page are **type-checked in place**,

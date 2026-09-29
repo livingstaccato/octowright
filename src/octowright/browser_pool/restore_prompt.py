@@ -16,8 +16,8 @@ launch of that persona from then on.
 Octowright is a reliable source of dirty exits, which is why this is its problem
 to clean up rather than the operator's:
 
-* the headed-Chromium browser-process abort under investigation kills the whole
-  browser, not a renderer;
+* the headed Chromium 153 first-download crash (see ``download_history``) kills
+  the whole browser, not a renderer;
 * ``octowright restart`` SIGKILLs the leader, and browsers die with their driver;
 * the orphan reaper kills browsers whose driver is already gone.
 

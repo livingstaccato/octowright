@@ -134,7 +134,7 @@ describes, so it loads only when you work there. Each is an `AGENTS.md` with a
 
 | File | Covers |
 |------|--------|
-| `src/octowright/browser_pool/AGENTS.md` | launch-time + page-level extra HTTP headers, host-relative navigation, protected close, per-engine launch health and the `InvalidRequestError` classification |
+| `src/octowright/browser_pool/AGENTS.md` | launch-time + page-level extra HTTP headers, host-relative navigation, protected close, per-engine launch health and the `InvalidRequestError` classification, the Chromium 153 download crash and telling a dead browser process from a closed window |
 | `src/octowright/session/AGENTS.md` | the operation gate, bounded unbounded-Playwright calls, websocket observation, aria credential scrubbing, `key_mode="keys"`, ARIA keyboard drag-and-drop |
 | `src/octowright/macros/AGENTS.md` | listing a large macro corpus (`macro_list` bounds, `response_mode`, cursors) |
 | `src/octowright/cli/AGENTS.md` | `octowright doctor` -- what each probe proves and why it runs in a child interpreter |
@@ -260,3 +260,15 @@ best-effort and the LLM should treat `octowright_status()` -- `health`,
 `crash.recent`, `crash.unresponsive_recent`, `pool.lost_sessions` -- as the
 authoritative check. Payload fields, the `unresponsive` `CrashScope`, and the
 innermost-lease publishing rule are documented in `docs/telemetry.md`.
+
+A dead browser **process** is not a closed window, though Playwright reports
+both identically (and never forwards the exit signal to a client).
+`browser_pool/process_crash` reads the answer from the OS: the browser pid is
+resolved from `/proc` at launch, and a browser already gone at the first
+evicting close signal -- or, for a headed Chromium, one that left its
+`SingletonLock` behind -- is a crash (`CrashScope="process"`,
+`reason="crashed"`, a `browser_process_crash` incident in `crash.recent`,
+`download_save_error` `cause: browser_crashed`). Measurements, margins and the
+reopen policy are in `docs/telemetry.md`. The crash that exposed this -- Chrome
+153's first headed download killing its browser -- is avoided at launch by
+`browser_pool/download_history` (`OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY`).
