@@ -334,7 +334,7 @@ async def _run_producer(
     # _in_producer). Never reset: this task's context is its own copy.
     _in_producer.set(True)
     try:
-        if asyncio.iscoroutinefunction(fn):
+        if inspect.iscoroutinefunction(fn):
             result = await fn(*args, **kwargs)
         else:
             result = await asyncio.to_thread(fn, *args, **kwargs)
@@ -383,16 +383,16 @@ def _idempotent_dispatch(fn: Callable[..., Any]) -> Callable[..., Any]:
             # Nested call from inside a composite tool's own handler: run it
             # inline, in this same task, with no slot of its own (see
             # _in_producer for why a second producer task would deadlock).
-            if asyncio.iscoroutinefunction(fn):
+            if inspect.iscoroutinefunction(fn):
                 return await fn(*args, **kwargs)
             return await asyncio.to_thread(fn, *args, **kwargs)
         if not defaults.IDEMPOTENCY_ENABLED:
-            if asyncio.iscoroutinefunction(fn):
+            if inspect.iscoroutinefunction(fn):
                 return await fn(*args, **kwargs)
             return await asyncio.to_thread(fn, *args, **kwargs)
         raw_key = _current_key()
         if raw_key is None:
-            if asyncio.iscoroutinefunction(fn):
+            if inspect.iscoroutinefunction(fn):
                 return await fn(*args, **kwargs)
             return await asyncio.to_thread(fn, *args, **kwargs)
         key = _storage_key(raw_key, fn, args, kwargs)

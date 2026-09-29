@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import inspect
 import os
 import time
 from collections.abc import Awaitable, Callable
@@ -117,7 +118,7 @@ def _progress_heartbeat(fn: Callable[..., Any]) -> Callable[..., Any]:
     pass straight through. ``functools.wraps`` preserves the signature so the server's
     Context injection and input schema still resolve through this wrapper.
     """
-    if not asyncio.iscoroutinefunction(fn):
+    if not inspect.iscoroutinefunction(fn):
         return fn
 
     tool_name = getattr(fn, "__name__", "")
