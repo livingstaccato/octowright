@@ -473,6 +473,44 @@ octowright test --kind chromium --persona buyer --sequence sequences/smoke.json 
 - The sequence stops at the first failing macro; later steps are reported as
   skipped. One JUnit testcase per step. `--sequence` and `--tag` are exclusive.
 
+### Recording a video of the run
+
+`--record-video` records the test browser (off by default; without it nothing
+about the run or its output changes):
+
+```bash
+octowright test --kind chromium --persona buyer --sequence sequences/smoke.json \
+    --artifacts "$OCTOWRIGHT_RECORDINGS/smoke" --redact-errors --record-video
+```
+
+```
+1/2 passed
+report: /…/smoke/octowright-report.xml
+video: /…/smoke/smoke.webm
+```
+
+- The video is read only after the browser has closed, through Playwright's
+  own `Video.path()`: a page's `.webm` exists from the start but stays empty
+  until its context closes, so it is never copied early.
+- With `--artifacts` it is copied there as `<sequence-stem>.webm`. A page the
+  run opened later (a popup, a new tab) records its own video, copied as
+  `<stem>-2.webm`, `<stem>-3.webm`, … in the order the pages opened. Each
+  `video:` line follows the `report:` line, in that same order. Copies are
+  written `0600`, like the session recording.
+- Without `--artifacts` the video stays where Playwright wrote it, in the
+  launch's directory under `$OCTOWRIGHT_RECORDINGS/videos/`, and that path is
+  printed.
+- A **failed** run keeps its video and prints its path -- including a run that
+  raised, or whose browser failed to close cleanly. That is usually the video
+  you want.
+- `[test]` suites (no `--sequence`) record one video per test, copied as
+  `<macro>.webm` when `--artifacts` is given (a macro name is reduced to a safe
+  file name first). With `--max-parallel` above 1 the `video:` lines come in
+  the order tests finished.
+- `--redact-errors` works as before and the `video:` line carries only a path,
+  but the video itself is not redacted: it shows whatever the page displayed.
+  Treat it with the same care as the session recording.
+
 ## Artifact bundles
 
 Macro artifact tools produce durable, token-light bundles for macro reuse and
