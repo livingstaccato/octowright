@@ -55,6 +55,7 @@ from octowright.session.operation.gate import (
     SessionClosingError,
     SessionOperationAbortedError,
 )
+from octowright.session.timeouts import bounded
 
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
@@ -346,11 +347,8 @@ async def _settle_crash_signal(session: SessionLike, page: Any) -> None:
 
     Re-enters the caller's ``crash_recovery`` lease, as the other helpers here do."""
     try:
-        async with (
-            session.operation("crash_recovery", wait_timeout_seconds=None),
-            asyncio.timeout(_CRASH_SETTLE_SECONDS),
-        ):
-            await page.evaluate("1")
+        async with session.operation("crash_recovery", wait_timeout_seconds=None):
+            await bounded(page.evaluate("1"), operation="crash_recovery_probe", timeout=_CRASH_SETTLE_SECONDS)
     except Exception as exc:
         log.debug("octowright.crash.replacement_probe_failed", error=repr(exc))
 
