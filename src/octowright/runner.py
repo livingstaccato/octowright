@@ -91,8 +91,8 @@ async def run_suite(
                 url="about:blank",
                 headed=False,
                 label=f"test-{t['name']}",
-                viewport_w=1280,
-                viewport_h=800,
+                viewport_w=defaults.DEFAULT_VIEWPORT_W,
+                viewport_h=defaults.DEFAULT_VIEWPORT_H,
                 profile=persona,
                 **runner_video.launch_kwargs(videos),
             )
@@ -224,8 +224,8 @@ async def run_sequence_file(
         url="about:blank",
         headed=False,
         label=f"sequence-{Path(sequence).stem}",
-        viewport_w=1280,
-        viewport_h=800,
+        viewport_w=defaults.DEFAULT_VIEWPORT_W,
+        viewport_h=defaults.DEFAULT_VIEWPORT_H,
         profile=persona,
         **runner_video.launch_kwargs(videos),
     )
