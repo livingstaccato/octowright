@@ -124,11 +124,13 @@ async def _signal_death(kind: str, sig: int, tmp_path: Path, events: list[Any], 
 
 
 @pytest.mark.parametrize("kind", ["chromium", "firefox", "webkit"])
-@pytest.mark.parametrize("sig", [signal.SIGSEGV, signal.SIGTRAP, signal.SIGKILL], ids=["SEGV", "TRAP", "KILL"])
+# By name: parametrize runs at collection, before the Linux-only skip, and
+# Windows has no SIGTRAP or SIGKILL.
+@pytest.mark.parametrize("sig", ["SIGSEGV", "SIGTRAP", "SIGKILL"], ids=["SEGV", "TRAP", "KILL"])
 async def test_a_signal_death_is_reported_as_a_process_crash(
-    kind: str, sig: int, tmp_path: Path, events: list[Any]
+    kind: str, sig: str, tmp_path: Path, events: list[Any]
 ) -> None:
-    await _signal_death(kind, sig, tmp_path, events)
+    await _signal_death(kind, getattr(signal, sig), tmp_path, events)
 
 
 @pytest.mark.parametrize("kind", ["chromium", "firefox", "webkit"])
