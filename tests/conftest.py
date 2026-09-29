@@ -78,12 +78,34 @@ def pytest_configure(config: pytest.Config) -> None:
     that touches them isolates them itself. A temp config home is not the
     blanket hermeticity it can look like.
     """
-    global _TEST_CONFIG_HOME
     del config
+    _relocate_user_config()
+
+
+def _relocate_user_config() -> None:
+    """Install the throwaway config tree once; see ``pytest_configure``.
+
+    Also called at this module's import, BEFORE ``_install_pool_leak_tracking``
+    imports ``browser_pool.pool`` -- which imports ``defaults``, which resolves
+    ``PROFILES_DIR`` right then. pytest imports conftest before it calls
+    ``pytest_configure``, so doing this only in the hook left ``PROFILES_DIR``
+    on the developer's real tree and every labelled launch in the suite created
+    a profile there (``test_conftest_config_isolation.py``).
+    """
+    global _TEST_CONFIG_HOME
+    if _TEST_CONFIG_HOME is not None:
+        return
     os.environ.pop("OCTOWRIGHT_PLUGINS", None)
     _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="octowright-test-config-")
     os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
     os.environ["APPDATA"] = _TEST_CONFIG_HOME
+    # The state half the docstring above says is NOT covered, for the two paths
+    # an ordinary launch writes: a stub-pool test with no recordings_dir of its
+    # own otherwise leaves JSONL (and manifest rows) in the developer's real
+    # ~/.local/state/octowright/sessions. Spawned daemons still isolate
+    # XDG_STATE_HOME themselves.
+    os.environ["OCTOWRIGHT_RECORDINGS"] = os.path.join(_TEST_CONFIG_HOME, "sessions")
+    os.environ["OCTOWRIGHT_SESSION_MANIFEST"] = os.path.join(_TEST_CONFIG_HOME, "session-manifest.json")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -169,6 +191,7 @@ def _install_pool_leak_tracking() -> None:
     BrowserPool._ensure_pw = ensure_tracked  # type: ignore[method-assign]
 
 
+_relocate_user_config()
 _install_pool_leak_tracking()
 
 
