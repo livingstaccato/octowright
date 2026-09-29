@@ -43,6 +43,10 @@ CATEGORY_DRIVER_LOST = "driver_lost"
 # recorded from session/timeouts.py's call budget rather than observed like
 # a renderer crash, and it has no crash report to correlate.
 CATEGORY_UNRESPONSIVE_TARGET = "unresponsive_target"
+# The browser PROCESS died while its session was live (a signal death, not a
+# window the user closed) -- see browser_pool/process_crash. Distinct from
+# renderer_crash: the context is gone with it, so there is no page to replace.
+CATEGORY_BROWSER_PROCESS_CRASH = "browser_process_crash"
 
 _RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)

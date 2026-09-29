@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright.browser_pool import process_crash
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import (
     _wire_close_evictor,
@@ -207,6 +208,10 @@ def _build_session_object(
         _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
         operation_queue_timeout_seconds=operation_queue_timeout_seconds,
     )
+    if user_data_dir is not None:
+        # Playwright never says whether its browser died on a signal or closed
+        # its windows; the OS does. See process_crash.
+        new_session._browser_process = process_crash.find_browser_process(kind, user_data_dir)
     # Wire up video tracking — page.video is only non-None when record_video_dir was set.
     if launch_options.record_video and page.video is not None:
         new_session._video = page.video

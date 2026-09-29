@@ -52,6 +52,7 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
     recordings_root = session.log_path.parent
     target_dir = recordings_root / "downloads" / session.instance_id
     target_dir.mkdir(parents=True, exist_ok=True)
+    failure: Exception | None = None
     async with session.operation("download_save"):
         suggested = download.suggested_filename
         target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
@@ -74,8 +75,43 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
             session._pending_download_events.clear()
             return record
         except Exception as e:
-            session.recorder.record("download_save_error", error=repr(e), url=download.url)
+            failure = e
+    # Outside the lease: waiting for the close verdict must not hold the gate.
+    await _record_save_error(session, download, failure)
     return {}
+
+
+# How long a save that died with its browser waits for the close signal to judge
+# the exit. The rejection lands a few ms BEFORE that signal (2 ms in the field);
+# teardown drains background tasks for 1 s before cancelling them.
+EXIT_VERDICT_WAIT_SECONDS = 2.0
+
+_CAUSES = {"crashed": "browser_crashed", "closed": "browser_closed"}
+
+
+async def _record_save_error(session: BrowserSession, download: Any, failure: Exception | None) -> None:
+    """Record why a download was lost, naming a browser crash when that is why.
+
+    Only a ``TargetClosedError`` waits, and it waits for the verdict the
+    evicting close listener computes (``process_crash``) rather than sampling
+    the process itself: on a Firefox user close this rejection arrives after
+    the browser has already exited cleanly, so a sample here would call it a
+    crash. Recorded in ``finally`` so a teardown cancelling the wait cannot
+    drop the row.
+    """
+    from octowright.browser_pool import process_crash
+
+    fields: dict[str, Any] = {"error": repr(failure), "url": download.url}
+    try:
+        if type(failure).__name__ == "TargetClosedError":
+            verdict = await process_crash.wait_for_exit_verdict(session, timeout=EXIT_VERDICT_WAIT_SECONDS)
+            if verdict is not None:
+                fields["cause"] = _CAUSES[verdict]
+            incident = getattr(session, "_process_crash_incident", None)
+            if verdict == "crashed" and incident is not None:
+                incident["lost_downloads"] = int(incident.get("lost_downloads", 0)) + 1
+    finally:
+        session.recorder.record("download_save_error", **fields)
 
 
 async def wait_for_download_impl(session: BrowserSession, timeout_ms: int) -> dict[str, Any]:

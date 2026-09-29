@@ -163,6 +163,32 @@ def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | No
     return _schedule_relaunch(pool, descriptors, mode)
 
 
+def relaunch_planned(session: Any) -> bool:
+    """Whether a session lost now would be reopened (mode on, not a relaunch itself)."""
+    return _mode() != "off" and not getattr(session, "_auto_relaunched", False)
+
+
+def on_browser_process_crash(pool: Any, session: Any, closing: Any) -> asyncio.Task[None] | None:
+    """One browser PROCESS died (``process_crash``): a dead driver's policy, for one session.
+
+    Surfaced in ``pool.lost_sessions`` like a driver loss, and reopened onto
+    its last URL/profile only under the same ``OCTOWRIGHT_DRIVER_RELAUNCH``
+    opt-in -- a misjudged window close must never bring a window back unasked.
+    Loop-guarded the same way: a relaunched session that crashes again is
+    surfaced, not reopened. The relaunch awaits ``closing`` first, so the dead
+    context's profile lock is released before the replacement takes it.
+    """
+    desc = _descriptor(session)
+    incident = session._process_crash_incident
+    record = {"ts": incident["ts"], "reason": "browser_process_crashed", **desc, "relaunched_to": None}
+    _LOST.append(record)
+    if not relaunch_planned(session):
+        return None
+    return _schedule_relaunch(
+        pool, [{**desc, "lost_record": record, "closing": closing, "crash_incident": incident}], _mode()
+    )
+
+
 def _publish_driver_died(pool: Any, descriptors: list[dict[str, Any]], mode: str) -> None:
     """Proactively tell the MCP client the shared driver died and which sessions
     were lost (and whether they're being auto-reopened). Best-effort; never raises."""
@@ -241,15 +267,20 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
         raise RuntimeError(f"replacement session {final_id!r} closed before relaunch completed")
     fresh._auto_relaunched = True
     desc["lost_record"]["relaunched_to"] = final_id
-    _DRIVER_LOST.add(1, attributes={"outcome": "relaunched", "kind": desc["kind"]})
-    incidents.record(
-        incidents.CATEGORY_DRIVER_LOST,
-        instance_id=old_id,
-        kind=desc["kind"],
-        url=desc["url"],
-        outcome="relaunched",
-        new_instance_id=final_id,
-    )
+    crash_incident = desc.get("crash_incident")
+    if crash_incident is not None:
+        # A single browser-process crash, not a driver loss: update its own record.
+        crash_incident.update(outcome="relaunched", new_instance_id=final_id)
+    else:
+        _DRIVER_LOST.add(1, attributes={"outcome": "relaunched", "kind": desc["kind"]})
+        incidents.record(
+            incidents.CATEGORY_DRIVER_LOST,
+            instance_id=old_id,
+            kind=desc["kind"],
+            url=desc["url"],
+            outcome="relaunched",
+            new_instance_id=final_id,
+        )
     log.info("octowright.driver_relaunch.relaunched", old_instance_id=old_id, new_instance_id=final_id, mode=mode)
 
 

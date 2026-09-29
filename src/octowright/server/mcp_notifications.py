@@ -146,6 +146,17 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 "executing, this is not a crash and Octowright does not auto-recover it. Retry or wait if "
                 "the work may still finish; relaunch this session with browser_launch if it stays unresponsive"
             )
+        elif event.scope == "process":
+            # The whole browser died (process_crash), not a tab: its context is
+            # gone, so there is no page to replace -- only a relaunch.
+            hint = (
+                "the browser process itself crashed (not a window the user closed) and the session is gone; "
+                "Octowright is reopening it on its last URL — see octowright_status().pool.lost_sessions for "
+                "the old→new instance_id"
+                if event.recovering
+                else "the browser process itself crashed (not a window the user closed) and the session is "
+                "gone — relaunch it with browser_launch (octowright_status().pool.lost_sessions has its last URL)"
+            )
         elif event.recovering:
             hint = (
                 "the page crashed — Octowright is auto-recovering it (replacing the page); "
