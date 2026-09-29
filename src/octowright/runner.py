@@ -14,7 +14,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright import defaults, personas, sequences
+from octowright import defaults, personas, runner_video, sequences
 from octowright import macros as macro_mod
 from octowright._paths import reject_unsafe_path
 from octowright.mcp_types import TestSuiteCaseResult, TestSuiteResult
@@ -47,14 +47,23 @@ async def run_suite(
     max_parallel: int = 1,
     persona: str | None = None,
     redact_errors: bool = False,
+    artifacts: Path | None = None,
+    videos: list[Path] | None = None,
 ) -> TestSuiteResult:
     """Discover test macros, run each in an ephemeral browser, collect results, write JUnit XML.
 
     Discovery uses the global MACROS_DIR from octowright.macros.storage; override
     that via the OCTOWRIGHT_MACROS_DIR env var if you need a different directory.
+
+    *videos*, when given, records every test's browser and appends each
+    finalised video to it as that test's browser closes (completion order), even
+    when the test fails. With *artifacts* they are copied there as
+    ``<macro>.webm`` -- see ``octowright.runner_video``. *artifacts* is used
+    for nothing else here.
     """
     if max_parallel < 1:
         raise ValueError("max_parallel must be >= 1")
+    video_root = runner_video.artifacts_root(artifacts) if videos is not None else None
 
     entries = macro_mod.list_macros()
     tests: list[dict[str, Any]] = []
@@ -72,6 +81,7 @@ async def run_suite(
         ok = True
         err: str | None = None
         teardown_warning: str | None = None
+        watch: runner_video.RunVideos | None = None
         try:
             # Tests start on about:blank so they don't accidentally depend on the global
             # DEFAULT_URL (which points at the production site and is CSP-locked).
@@ -84,9 +94,12 @@ async def run_suite(
                 viewport_w=1280,
                 viewport_h=800,
                 profile=persona,
+                **runner_video.launch_kwargs(videos),
             )
             iid = launch_result["instance_id"]
             session = pool.get(iid)
+            if videos is not None:
+                watch = await runner_video.RunVideos.watch(session)
             await macro_mod.run_macro(session=session, name=t["name"], args={})
         except Exception as e:
             ok = False
@@ -111,6 +124,8 @@ async def run_suite(
                         # Test already failed — append close failure to the
                         # primary error so the JUnit report carries both.
                         err = f"{err}; close failed: {close_err}" if err else close_err
+            if watch is not None and videos is not None:
+                videos.extend(await watch.finalise(artifacts=video_root, stem=t["name"]))
         duration = (datetime.now(UTC) - start).total_seconds()
         result: TestSuiteCaseResult = {
             "name": t["name"],
@@ -178,6 +193,7 @@ async def run_sequence_file(
     redact_errors: bool,
     out_path: str | None,
     pool: Any,
+    videos: list[Path] | None = None,
 ) -> TestSuiteResult:
     """Run a macro sequence file in one browser of *persona*, as a test suite.
 
@@ -189,6 +205,12 @@ async def run_sequence_file(
     credential its persona cannot supply fails without a browser. The sequence
     stops at the first failing macro; later steps are reported skipped, never
     as passed or as failures of their own. One JUnit testcase per step.
+
+    *videos*, when given, records the browser and receives the finalised video
+    paths after it closes -- in a ``finally``, so a failed or interrupted run
+    still leaves them. With *artifacts* they are copied there as
+    ``<sequence-stem>.webm`` (later pages ``<stem>-2.webm``, ...); see
+    ``octowright.runner_video``.
     """
     steps = sequences.load_sequence(Path(sequence))
     persona_obj = personas.load_persona(persona) if persona else None
@@ -205,10 +227,14 @@ async def run_sequence_file(
         viewport_w=1280,
         viewport_h=800,
         profile=persona,
+        **runner_video.launch_kwargs(videos),
     )
     iid = launched["instance_id"]
+    watch: runner_video.RunVideos | None = None
     try:
         session = pool.get(iid)
+        if videos is not None:
+            watch = await runner_video.RunVideos.watch(session)
         failed = False
         for name, args in zip(names, args_list, strict=True):
             if failed:
@@ -223,7 +249,7 @@ async def run_sequence_file(
                 error = redact_error(exc) if redact_errors else str(exc)
                 results.append({"name": name, "ok": False, "error": error, "duration": _since(start)})
     finally:
-        await pool.close(iid, force=True)
+        await _close_and_collect(pool, iid, watch, videos, artifacts=artifacts, stem=Path(sequence).stem)
 
     passed = sum(1 for r in results if r["ok"])
     report_path = reject_unsafe_path(
@@ -238,6 +264,28 @@ async def run_sequence_file(
         "report_path": str(report_path),
         "results": results,
     }
+
+
+async def _close_and_collect(
+    pool: Any,
+    iid: str,
+    watch: runner_video.RunVideos | None,
+    videos: list[Path] | None,
+    *,
+    artifacts: Path | None,
+    stem: str,
+) -> None:
+    """Close the browser, then -- even if the close raised -- collect its videos.
+
+    Playwright finishes writing a video only when its context closes, so the
+    collection must follow the close; it must also survive a close that
+    failed, because a run that went wrong is the one whose video is wanted.
+    """
+    try:
+        await pool.close(iid, force=True)
+    finally:
+        if watch is not None and videos is not None:
+            videos.extend(await watch.finalise(artifacts=artifacts, stem=stem))
 
 
 def _since(start: datetime) -> float:

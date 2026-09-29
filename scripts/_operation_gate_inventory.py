@@ -92,6 +92,12 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "cached-property-only",
         "initializes the cached page list before the session is published without browser I/O",
     ),
+    "runner_video.py:RunVideos._add": (
+        "cached-property-only",
+        "the context page-event callback of `octowright test --record-video`: reads page.video, a "
+        "Python-side attribute holding the Video handle (no IPC), and appends it to a list; the "
+        "listener itself is registered under the literal record_video_watch operation",
+    ),
     "session/core.py:BrowserSession._target": (
         "cached-property-only",
         "returns the cached active-frame/page reference without dereferencing Playwright",

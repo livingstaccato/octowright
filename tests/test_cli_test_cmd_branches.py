@@ -271,3 +271,88 @@ class TestTestCmdSequence:
         assert result.exit_code == 0, result.output
         assert captured["persona"] == "lab"
         assert captured["redact_errors"] is True
+
+
+def _patch_recording_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+    video: str,
+    *,
+    capture: dict[str, Any],
+    raises: BaseException | None = None,
+    failed: int = 0,
+) -> None:
+    """A run_sequence_file that 'records' one video the way the runner does:
+    appended to the caller's list, before any exception escapes."""
+    from pathlib import Path
+
+    from octowright import runner as _runner
+
+    async def fake_run_sequence_file(**kwargs: Any) -> dict[str, Any]:
+        capture.update(kwargs)
+        if kwargs.get("videos") is not None:
+            kwargs["videos"].append(Path(video))
+        if raises is not None:
+            raise raises
+        return _result(passed=2 - failed, failed=failed, total=2)
+
+    monkeypatch.setattr(_runner, "run_sequence_file", fake_run_sequence_file)
+    from octowright import browser_pool as _bp
+
+    pool_stub = MagicMock()
+    pool_stub.shutdown = AsyncMock()
+    monkeypatch.setattr(_bp, "BrowserPool", lambda *_a, **_kw: pool_stub)
+
+
+class TestTestCmdRecordVideo:
+    def test_the_flag_asks_the_runner_for_videos(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        sequence = tmp_path / "repair.json"
+        sequence.write_text("[]")
+        captured: dict[str, Any] = {}
+        _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture=captured)
+        result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video"])
+        assert result.exit_code == 0, result.output
+        assert captured["videos"] == [__import__("pathlib").Path("/rec/ev/repair.webm")]
+
+    def test_the_video_line_follows_the_report_line(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        sequence = tmp_path / "repair.json"
+        sequence.write_text("[]")
+        _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture={})
+        result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video"])
+        assert result.stdout == "2/2 passed\nreport: /tmp/junit.xml\nvideo: /rec/ev/repair.webm\n"
+
+    def test_without_the_flag_nothing_changes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        sequence = tmp_path / "repair.json"
+        sequence.write_text("[]")
+        captured: dict[str, Any] = {}
+        _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture=captured)
+        result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence)])
+        assert captured["videos"] is None
+        assert result.stdout == "2/2 passed\nreport: /tmp/junit.xml\n"
+
+    def test_a_failed_run_still_prints_its_video(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        sequence = tmp_path / "repair.json"
+        sequence.write_text("[]")
+        _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture={}, failed=1)
+        result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video", "--redact-errors"])
+        assert result.exit_code == 1
+        assert result.stdout.endswith("report: /tmp/junit.xml\nvideo: /rec/ev/repair.webm\n")
+
+    def test_a_run_that_raises_still_prints_its_video(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        sequence = tmp_path / "repair.json"
+        sequence.write_text("[]")
+        _patch_recording_sequence(
+            monkeypatch, "/rec/ev/repair.webm", capture={}, raises=OSError(f"cannot open {PLANTED}")
+        )
+        result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video", "--redact-errors"])
+        assert result.exit_code == 1
+        assert "video: /rec/ev/repair.webm\n" in result.output
+        assert "test run failed: OSError" in result.output
+        assert PLANTED not in result.output
+
+    def test_suite_receives_videos_and_artifacts(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
+        captured: dict[str, Any] = {}
+        _patch_runner(monkeypatch, return_value=_result(passed=1, failed=0, total=1), capture=captured)
+        result = CliRunner().invoke(cli, ["test", "--record-video", "--artifacts", str(tmp_path / "ev")])
+        assert result.exit_code == 0, result.output
+        assert captured["videos"] == []
+        assert str(captured["artifacts"]) == str(tmp_path / "ev")

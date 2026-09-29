@@ -11,6 +11,10 @@ test-discovery does not accidentally collect it as a test module.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Coroutine
+from pathlib import Path
+from typing import Any
+
 import click
 from provide.telemetry import setup_telemetry, shutdown_telemetry
 
@@ -46,6 +50,15 @@ from octowright.mcp_types import TestSuiteResult
     default=False,
     help="Record failures as macro, step and action only; never exception text.",
 )
+@click.option(
+    "--record-video",
+    is_flag=True,
+    default=False,
+    help=(
+        "Record each browser and print 'video: <path>' per video, failed runs included. With --artifacts, "
+        "copied there as <sequence-stem>.webm (or <macro>.webm); later pages get -2, -3, ..."
+    ),
+)
 def test(
     kind: str,
     tag: str | None,
@@ -55,20 +68,23 @@ def test(
     sequence_path: str | None,
     artifacts_dir: str | None,
     redact_errors: bool,
+    record_video: bool,
 ) -> None:
     """Run all `[test]`-tagged macros from MACROS_DIR, or one sequence file. Outputs JUnit XML."""
-    import asyncio
-    from pathlib import Path
-
     from octowright import runner
     from octowright.browser_pool import BrowserPool
-    from octowright.sequences import SequenceError
 
     if sequence_path and tag:
         raise click.UsageError("--sequence and --tag are exclusive")
     artifacts = Path(artifacts_dir) if artifacts_dir else None
     if artifacts is not None and out_path is None:
         out_path = str(artifacts / "octowright-report.xml")
+    # Filled by the runner as each browser closes -- also on a run that raises,
+    # which is why it is a list the runner appends to rather than a result key.
+    videos: list[Path] | None = [] if record_video else None
+    # Only with --record-video: a suite uses --artifacts for nothing else, so
+    # without the flag its call is exactly what it always was.
+    suite_video_kwargs: dict[str, Any] = {"artifacts": artifacts, "videos": videos} if record_video else {}
 
     setup_telemetry()
 
@@ -87,6 +103,7 @@ def test(
                     redact_errors=redact_errors,
                     out_path=out_path,
                     pool=pool,
+                    videos=videos,
                 )
             return await runner.run_suite(
                 kind=kind,
@@ -96,24 +113,44 @@ def test(
                 max_parallel=max_parallel,
                 persona=persona,
                 redact_errors=redact_errors,
+                **suite_video_kwargs,
             )
         finally:
             await pool.shutdown()
 
     try:
-        try:
-            result = asyncio.run(_run())
-        except SequenceError as exc:
-            # Sequence errors name the step and argument, never a resolved value.
-            click.echo(f"sequence refused: {exc}", err=True)
-            raise SystemExit(1) from None
-        except Exception as exc:
-            if not redact_errors:
-                raise
-            click.echo(f"test run failed: {runner.redact_error(exc)}", err=True)
-            raise SystemExit(1) from None
-        click.echo(f"{result['passed']}/{result['total']} passed")
-        click.echo(f"report: {result['report_path']}")
-        raise SystemExit(0 if result["failed"] == 0 else 1)
+        _run_and_report(_run, redact_errors=redact_errors, videos=videos)
     finally:
         shutdown_telemetry()
+
+
+def _run_and_report(
+    run: Callable[[], Coroutine[Any, Any, TestSuiteResult]], *, redact_errors: bool, videos: list[Path] | None
+) -> None:
+    """Run the suite and print its summary, report and video lines; exits the process."""
+    import asyncio
+
+    from octowright import runner
+    from octowright.sequences import SequenceError
+
+    try:
+        result = asyncio.run(run())
+    except SequenceError as exc:
+        # Sequence errors name the step and argument, never a resolved value.
+        click.echo(f"sequence refused: {exc}", err=True)
+        raise SystemExit(1) from None
+    except Exception as exc:
+        _echo_videos(videos)
+        if not redact_errors:
+            raise
+        click.echo(f"test run failed: {runner.redact_error(exc)}", err=True)
+        raise SystemExit(1) from None
+    click.echo(f"{result['passed']}/{result['total']} passed")
+    click.echo(f"report: {result['report_path']}")
+    _echo_videos(videos)
+    raise SystemExit(0 if result["failed"] == 0 else 1)
+
+
+def _echo_videos(videos: list[Path] | None) -> None:
+    for video in videos or []:
+        click.echo(f"video: {video}")
