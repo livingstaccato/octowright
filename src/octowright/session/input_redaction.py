@@ -13,6 +13,7 @@ they do with the answer is one rule, and it had been written twice with the
 
 from __future__ import annotations
 
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -46,6 +47,20 @@ def classify_credential_field(info: Any) -> bool | None:
     if info.get("type") == "password":
         return True
     return info.get("ac") in _CREDENTIAL_AUTOCOMPLETE
+
+
+def probe_timeout_ms(deadline: float) -> int:
+    """What is left of a step's *deadline* (``time.monotonic()``) for the redaction probe, at least 1ms.
+
+    The probe classifies an element the step then fills or types, so it gets
+    the step's remaining time, never Playwright's own 30s default: without a
+    timeout, a selector that never matches waited that default before the
+    step's own ``timeout_ms`` even started. At least 1ms because Playwright
+    reads ``timeout=0`` as "no timeout". A probe that runs out answers
+    ``None``, which redacts -- the safe direction -- and the step's own action
+    then fails with Playwright's error naming what it waited for.
+    """
+    return max(1, int((deadline - time.monotonic()) * 1000))
 
 
 async def recorded_input_value(session: Any, value: str, probe: Callable[[], Awaitable[bool | None]]) -> str:

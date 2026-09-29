@@ -72,7 +72,7 @@ class _Session:
         self.metadata_timeouts.append(timeout_ms)
         return {}
 
-    async def _redacted_or_original(self, selector: str, value: str) -> str:
+    async def _redacted_or_original(self, selector: str, value: str, **_kwargs: Any) -> str:
         return value
 
     def operation(self, *args: Any, **kwargs: Any) -> Any:

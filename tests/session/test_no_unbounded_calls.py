@@ -83,7 +83,8 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
     # PARAMETER, not an inline `.locator(...)` chain this scanner could
     # recognise structurally, so it needs an explicit entry.
     "session/aria_redaction.py": frozenset({("collect_credential_values", "locator.first")}),
-    # Same shape: `locator.first.evaluate(...)` on a Locator parameter.
+    # Same shape: `locator.first.evaluate(..., timeout=...)` on a Locator
+    # parameter, given what is left of the fill_by's budget.
     "session/core_locator_mixin.py": frozenset({("_is_password_locator", "locator.first")}),
     # `source = target.locator(source_selector)` a few statements above, then
     # `source.evaluate(...)` -- a genuine Locator.evaluate, already bounded by
@@ -106,8 +107,9 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
     "session/core_page_mixin.py": frozenset(
         {
             # `loc = self._target().locator(selector).first` two statements
-            # above, then `loc.evaluate(...)` -- a genuine Locator.evaluate,
-            # just not inline where a syntactic check could see `.locator(`.
+            # above, then `loc.evaluate(..., timeout=...)` -- a Locator.evaluate
+            # given what is left of the step's budget, just not inline where a
+            # syntactic check could see `.locator(`.
             ("_is_password_input", "loc"),
             # `_evaluate_truthy`'s `target.evaluate(expression)` is the
             # predicate `_poll_until` calls on every iteration of a

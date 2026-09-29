@@ -16,6 +16,7 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from provide.telemetry import get_logger
@@ -24,7 +25,12 @@ from octowright import credential_input
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
 from octowright.session.fill_origin import FillOriginCheck, pending_fill_origin_check
-from octowright.session.input_redaction import CREDENTIAL_FIELD_JS, classify_credential_field, recorded_input_value
+from octowright.session.input_redaction import (
+    CREDENTIAL_FIELD_JS,
+    classify_credential_field,
+    probe_timeout_ms,
+    recorded_input_value,
+)
 from octowright.session.operation.gate import gated_operation
 
 log = get_logger(__name__)
@@ -32,22 +38,26 @@ log = get_logger(__name__)
 
 class SessionLocatorMixin(SessionLike):
     @gated_operation("session_locator_redaction")
-    async def _is_password_locator(self, locator: Any) -> bool | None:
+    async def _is_password_locator(self, locator: Any, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS) -> bool | None:
         """Best-effort credential check for semantic-locator actions.
 
         Same contract as ``core_page_mixin._is_password_input``: ``None`` when
         the field cannot be classified.
         """
         try:
-            info = await locator.first.evaluate(CREDENTIAL_FIELD_JS)
+            info = await locator.first.evaluate(CREDENTIAL_FIELD_JS, timeout=timeout_ms)
         except Exception as exc:
             log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
             return None
         return classify_credential_field(info)
 
     @gated_operation("session_locator_redaction")
-    async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
-        return await recorded_input_value(self, value, lambda: self._is_password_locator(locator))
+    async def _redacted_or_original_for_locator(
+        self, locator: Any, value: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS
+    ) -> str:
+        return await recorded_input_value(
+            self, value, lambda: self._is_password_locator(locator, timeout_ms=timeout_ms)
+        )
 
     # Re-enter the caller's own "browser_fill" / "browser_type" lease (same
     # task), so the check and the input it guards are one gated operation.
@@ -112,9 +122,14 @@ class SessionLocatorMixin(SessionLike):
     @gated_operation("browser_fill")
     async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
-        locator = await self._locator(**finders)
-        recorded_value = await self._redacted_or_original_for_locator(locator, value)
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        # The probe spends the step's time, not Playwright's 30s default; the
+        # fill keeps the full budget so its error names the timeout asked for.
+        deadline = time.monotonic() + budget / 1000
+        locator = await self._locator(**finders)
+        recorded_value = await self._redacted_or_original_for_locator(
+            locator, value, timeout_ms=probe_timeout_ms(deadline)
+        )
         check = pending_fill_origin_check()
         if check is None:
             await locator.fill(value, timeout=budget)

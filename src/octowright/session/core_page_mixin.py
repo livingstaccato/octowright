@@ -30,7 +30,12 @@ from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
 from octowright.session.fill_origin import pending_fill_origin_check
-from octowright.session.input_redaction import CREDENTIAL_FIELD_JS, classify_credential_field, recorded_input_value
+from octowright.session.input_redaction import (
+    CREDENTIAL_FIELD_JS,
+    classify_credential_field,
+    probe_timeout_ms,
+    recorded_input_value,
+)
 from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
@@ -439,7 +444,7 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("click", **recorded_kwargs)
 
     @gated_operation("session_input_redaction")
-    async def _is_password_input(self, selector: str) -> bool | None:
+    async def _is_password_input(self, selector: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS) -> bool | None:
         """Best-effort check: does *selector* resolve to a credential input?
 
         ``None`` when the field cannot be classified -- a Playwright/JS error,
@@ -454,20 +459,22 @@ class SessionPageMixin(SessionLike):
         appropriate autocomplete hint still get scrubbed.
 
         Uses ``locator.first.evaluate(...)`` so multi-match selectors don't
-        raise.
+        raise, bounded by *timeout_ms* (see ``input_redaction.probe_timeout_ms``).
         """
         try:
             loc = self._target().locator(selector).first
-            info = await loc.evaluate(CREDENTIAL_FIELD_JS)
+            info = await loc.evaluate(CREDENTIAL_FIELD_JS, timeout=timeout_ms)
         except Exception as exc:
             log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
             return None
         return classify_credential_field(info)
 
     @gated_operation("session_input_redaction")
-    async def _redacted_or_original(self, selector: str, value: str) -> str:
+    async def _redacted_or_original(
+        self, selector: str, value: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS
+    ) -> str:
         """What the JSONL row records for *value* typed into *selector*."""
-        return await recorded_input_value(self, value, lambda: self._is_password_input(selector))
+        return await recorded_input_value(self, value, lambda: self._is_password_input(selector, timeout_ms=timeout_ms))
 
     # Re-enters the SAME "browser_type" lease its only caller (type_text)
     # already holds -- the gate grants re-entry by owning-task identity, and
@@ -543,8 +550,9 @@ class SessionPageMixin(SessionLike):
         """
         if key_mode not in (None, "text", "keys"):
             raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
+        deadline = time.monotonic() + DEFAULT_ACTION_TIMEOUT_MS / 1000
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
-        recorded_text = await self._redacted_or_original(selector, text)
+        recorded_text = await self._redacted_or_original(selector, text, timeout_ms=probe_timeout_ms(deadline))
         check = pending_fill_origin_check()
         if check is not None:  # one key at a time, each into a checked document; see credential_input
             await self._checked_type(
@@ -564,8 +572,9 @@ class SessionPageMixin(SessionLike):
         """Fill a CSS selector, waiting at most ``timeout_ms``. See ``click``
         for why ``None`` resolves to the default instead of being forwarded."""
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        deadline = time.monotonic() + budget / 1000
         meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
-        recorded_value = await self._redacted_or_original(selector, value)
+        recorded_value = await self._redacted_or_original(selector, value, timeout_ms=probe_timeout_ms(deadline))
         check = pending_fill_origin_check()
         if check is None:
             await self._target().fill(selector, value, timeout=budget)
