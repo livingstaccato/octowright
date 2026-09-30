@@ -155,7 +155,8 @@ class SessionIOMixin(SessionLike):
             self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
         fh = getattr(self, "_websocket_fh", None)
         if fh is None:
-            fh = self.websocket_path.open("a", encoding="utf-8")
+            # newline="": text mode writes "\r\n" on Windows, a byte per line the ceiling does not count.
+            fh = self.websocket_path.open("a", encoding="utf-8", newline="")
             self._websocket_fh = fh
             self._websocket_last_flush_ts = now
             self._websocket_frames_since_flush = 0
