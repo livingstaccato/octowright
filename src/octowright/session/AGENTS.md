@@ -290,8 +290,13 @@ are load-bearing:
   a credential step's `asyncio.timeout` cancels a wedged press exactly once:
   the release after it then ran with nothing bounding it, and a target that
   answered neither held the session gate forever. A release that does not
-  answer is logged (`core_page_mixin.shift_release_timed_out`), not raised, so
-  the press's own outcome is what the caller sees.
+  answer (`core_page_mixin.shift_release_timed_out`) or raises -- a page
+  closed under it raises `TargetClosedError` --
+  (`core_page_mixin.shift_release_failed`) is logged, not raised, so the
+  press's own outcome is what the caller sees. The bound is `bounded()`,
+  caught inside the caller's gated operation, so a release timeout never
+  escapes it to fire the gate's `on_call_timeout` hook and report the session
+  unresponsive.
 
 A character with no key on the layout (accented, emoji, any non-ASCII) falls
 back to Playwright's own text insertion: it has no scancode to send, and a

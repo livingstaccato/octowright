@@ -155,6 +155,27 @@ class TestKeystrokeMode:
         assert ("up", "Shift") in _keyboard_sequence(subj)
 
     @pytest.mark.anyio
+    async def test_a_release_that_raises_does_not_replace_the_press_error(self, tmp_path: Path) -> None:
+        """The release is cleanup: a TargetClosedError from it must not hide why the press failed."""
+        subj = _make_subject(tmp_path)
+        subj._target = lambda: _make_target()  # type: ignore[attr-defined]
+        subj.page.keyboard.press = AsyncMock(side_effect=RuntimeError("boom"))
+        subj.page.keyboard.up = AsyncMock(side_effect=RuntimeError("Target page, context or browser has been closed"))
+        with pytest.raises(RuntimeError, match="boom"):
+            await subj.type_text("#console", "A", None, key_mode="keys")
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
+
+    @pytest.mark.anyio
+    async def test_a_release_that_raises_after_a_good_press_is_logged_not_raised(self, tmp_path: Path) -> None:
+        subj = _make_subject(tmp_path)
+        subj.page.keyboard.up = AsyncMock(side_effect=RuntimeError("Target page, context or browser has been closed"))
+        sink = MagicMock()
+        sink.press = AsyncMock()
+        await subj._keystroke(sink, "A", 100)
+        sink.press.assert_awaited_once()
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
+
+    @pytest.mark.anyio
     async def test_a_wedged_press_and_a_wedged_release_do_not_hang_the_step(self, tmp_path: Path) -> None:
         """The step's budget cancels a wedged press once; the Shift release after it needs a bound of its own.
 

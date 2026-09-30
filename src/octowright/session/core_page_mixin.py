@@ -39,7 +39,7 @@ from octowright.session.input_redaction import (
 from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
-from octowright.session.timeouts import bounded
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 log = get_logger(__name__)
 
@@ -141,17 +141,27 @@ _SHIFT_RELEASE_TIMEOUT_SECONDS = 2.0
 
 
 async def _release_shift(keyboard: Any) -> None:
-    """``keyboard.up("Shift")`` under its own short bound; a release that does not answer is logged, not raised.
+    """``keyboard.up("Shift")`` under its own short bound; a release that fails is logged, not raised.
 
     Not raised because it is cleanup: the press's own outcome (its error, or
     the budget's cancellation propagating through this ``finally``) is what
-    the caller must see.
+    the caller must see -- whether the release did not answer or raised (a
+    page closed under it raises ``TargetClosedError``).
+
+    ``bounded()``, as for every other Playwright call with no timeout of its
+    own, and caught here, inside the caller's gated operation: a
+    ``SessionCallTimeoutError`` escaping that operation would fire the gate's
+    ``on_call_timeout`` hook and report the session unresponsive for a
+    cleanup step.
     """
     try:
-        async with asyncio.timeout(_SHIFT_RELEASE_TIMEOUT_SECONDS):
-            await keyboard.up("Shift")
-    except TimeoutError:
+        await bounded(
+            keyboard.up("Shift"), operation="browser_type_shift_release", timeout=_SHIFT_RELEASE_TIMEOUT_SECONDS
+        )
+    except SessionCallTimeoutError:
         log.warning("core_page_mixin.shift_release_timed_out", timeout_s=_SHIFT_RELEASE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        log.warning("core_page_mixin.shift_release_failed", error=repr(exc))
 
 
 #: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
