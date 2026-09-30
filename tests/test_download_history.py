@@ -189,7 +189,19 @@ def _plain_count(db: Path) -> int:
         con.close()
 
 
-@pytest.mark.parametrize("dirname", ["hash#dir", "pct%20dir", "q?mark", "all #?%20 of them"])
+# Windows forbids "?" in a file name, so those two cases exist only on POSIX.
+_NO_QUESTION_MARK = pytest.mark.skipif(os.name == "nt", reason="Windows file names cannot contain '?'")
+
+
+@pytest.mark.parametrize(
+    "dirname",
+    [
+        "hash#dir",
+        "pct%20dir",
+        pytest.param("q?mark", marks=_NO_QUESTION_MARK),
+        pytest.param("all #?%20 of them", marks=_NO_QUESTION_MARK),
+    ],
+)
 def test_a_profile_path_with_uri_metacharacters_is_still_pruned(tmp_path: Path, dirname: str) -> None:
     """``file:{path}?mode=rw`` read ``#`` as a fragment, ``?`` as a query and
     ``%20`` as a space, so the prune opened the wrong file (or none) and was
