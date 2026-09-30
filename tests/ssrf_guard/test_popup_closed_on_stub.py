@@ -167,3 +167,11 @@ def test_a_parked_stub_does_not_override_a_later_real_document() -> None:
     ssrf_guard._note_served(_Request(frame), client_redirect=False)  # the destination, served after it
     request.page_frame = frame
     assert ssrf_guard.served_client_redirect_last(frame) is False
+
+
+def test_the_stubs_own_commit_keeps_it_whatever_url_chromium_reports() -> None:
+    """Chromium reports a popup's committed stub as chrome-error://chromewebdata/ (measured); a URL check cleared it."""
+    frame = _NavigatingFrame("chrome-error://chromewebdata/")
+    ssrf_guard._note_served(_Request(frame), client_redirect=True)  # type: ignore[arg-type]
+    ssrf_guard.note_frame_navigated(frame)
+    assert ssrf_guard.served_client_redirect_last(frame) is True

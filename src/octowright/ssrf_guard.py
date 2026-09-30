@@ -232,28 +232,28 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
         return None
 
 
-#: What the guard last served each frame's navigation: ``(seq, stub_url)``,
-#: where ``stub_url`` is the URL its client-redirect document was served for,
-#: or ``None`` for a real document. Per frame, so heavy navigation elsewhere
-#: cannot evict a popup's entry; ``seq`` orders it against entries that were
-#: parked while their request had no frame (``_SERVED_UNFRAMED``). Read by
-#: :func:`served_client_redirect_last`.
-_SERVED_LAST: weakref.WeakKeyDictionary[Any, tuple[int, str | None]] = weakref.WeakKeyDictionary()
+#: What the guard last served each frame's navigation: ``(seq, state)``.
+#: ``state`` is ``"real"`` for a real document, ``"stub"`` for its
+#: client-redirect document not yet committed, and ``"stub_committed"`` once
+#: it has; the frame's next commit replaces it (:func:`note_frame_navigated`).
+#: Per frame, so heavy navigation elsewhere cannot evict a popup's entry;
+#: ``seq`` orders it against entries that were parked while their request had
+#: no frame (``_SERVED_UNFRAMED``). Read by :func:`served_client_redirect_last`.
+_SERVED_LAST: weakref.WeakKeyDictionary[Any, tuple[int, str]] = weakref.WeakKeyDictionary()
 
 #: The same for a navigation whose request had no frame when it was served --
 #: a popup's first request (see ``_UNFRAMED``) -- until the frame appears.
 #: Bounded like ``_UNFRAMED``.
-_SERVED_UNFRAMED: weakref.WeakKeyDictionary[Any, tuple[int, str | None]] = weakref.WeakKeyDictionary()
+_SERVED_UNFRAMED: weakref.WeakKeyDictionary[Any, tuple[int, str]] = weakref.WeakKeyDictionary()
 _MAX_SERVED_UNFRAMED = 64
 
 _served_seq = itertools.count(1)
 
+#: What the frame's next commit makes of a record (:func:`note_frame_navigated`).
+_AFTER_COMMIT = {"stub": "stub_committed", "stub_committed": "real"}
 
-def _without_fragment(url: Any) -> str:
-    return str(url or "").partition("#")[0]
 
-
-def _record_served(frame: Any, entry: tuple[int, str | None]) -> None:
+def _record_served(frame: Any, entry: tuple[int, str]) -> None:
     """Record *entry* for *frame* unless a later one is already there."""
     current = _SERVED_LAST.get(frame)
     if current is None or current[0] < entry[0]:
@@ -274,7 +274,7 @@ def _adopt_served_unframed() -> None:
 
 
 def _note_served(request: Any, *, client_redirect: bool) -> None:
-    entry = (next(_served_seq), _without_fragment(request.url) if client_redirect else None)
+    entry = (next(_served_seq), "stub" if client_redirect else "real")
     try:
         frame = request.frame
     except Exception:  # a popup's first request: no frame until its page exists
@@ -291,22 +291,21 @@ def _note_served(request: Any, *, client_redirect: bool) -> None:
 
 
 def note_frame_navigated(frame: Any) -> None:
-    """A document committed in *frame*: unless it is the client-redirect document, the stub is gone.
+    """A document committed in *frame*: the stub's own commit, or the document that replaced it.
 
-    Every commit, including the ones the guard never served -- a
-    service-worker response, a same-document ``history`` move to another
-    URL -- replaces what the frame shows, so a stub recorded for another URL
-    is no longer the frame's document. Registered for every page of a
-    guarded context (:func:`install_navigation_guard`).
+    Counted, not compared by URL: chromium reports a popup's committed stub as
+    ``chrome-error://chromewebdata/`` (measured, Playwright 1.62), so the URL
+    does not say which document committed. The commit after the stub's own
+    replaces it, whoever served it -- the guard, a service worker the route
+    never sees, or the browser's error page for a refused hop. Registered for
+    every page of a guarded context (:func:`install_navigation_guard`).
     """
     if _SERVED_UNFRAMED:
         _adopt_served_unframed()
     try:
         entry = _SERVED_LAST.get(frame)
-        if entry is None or entry[1] is None:
-            return
-        if _without_fragment(getattr(frame, "url", None)) != entry[1]:
-            _SERVED_LAST[frame] = (entry[0], None)
+        if entry is not None and entry[1] in _AFTER_COMMIT:
+            _SERVED_LAST[frame] = (entry[0], _AFTER_COMMIT[entry[1]])
     except TypeError:  # a frame double that cannot be weakly referenced
         log.debug("octowright.ssrf.frame_navigation_untracked")
 
@@ -326,9 +325,8 @@ def served_client_redirect_last(frame: Any) -> bool:
     a page that has since closed can no longer be asked. Readable after the
     page closed (measured on all three engines). True once the guard served
     the frame a client-redirect document, until it serves the frame a real
-    one or the frame commits a document at another URL
-    (:func:`note_frame_navigated`). A document the guard never saw that
-    commits at the stub's own URL is not told apart.
+    one or the frame commits another document after the stub's own
+    (:func:`note_frame_navigated`).
     """
     if _SERVED_UNFRAMED:
         _adopt_served_unframed()
@@ -336,7 +334,7 @@ def served_client_redirect_last(frame: Any) -> bool:
         entry = _SERVED_LAST.get(frame)
     except TypeError:  # a frame double that cannot be weakly referenced
         return False
-    return entry is not None and entry[1] is not None
+    return entry is not None and entry[1] != "real"
 
 
 class FrameChain:

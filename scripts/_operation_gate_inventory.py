@@ -46,6 +46,11 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "runs inside the same route callback: reads the request's URL to log a dropped stale ending",
     ),
+    "ssrf_guard.py:_watch_page": (
+        "event-critical",
+        "Playwright context page listener: registers note_frame_navigated on a new page before it "
+        "commits anything, so it cannot wait for a lease",
+    ),
     "ssrf_guard.py:_handle_subresource": (
         "event-critical",
         "runs inside the same route callback: aborts or releases a subresource request",
