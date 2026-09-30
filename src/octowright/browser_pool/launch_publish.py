@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright.browser_pool import process_crash
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import (
     _wire_close_evictor,
@@ -306,6 +307,11 @@ async def _prepare_session_before_publication(
         viewport_info=viewport_info,
         operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
     )
+    if user_data_dir is not None:
+        # Playwright never says whether its browser died on a signal or closed
+        # its windows; the OS does. See process_crash. Resolved before the
+        # close evictor is wired below, so its first signal can be judged.
+        new_session._browser_process = await process_crash.resolve_browser_process(kind, user_data_dir)
     new_session.attach_console()
     await new_session.measure_frame_inset(page)
     await pool._expose_viewport_binding(context, new_session)

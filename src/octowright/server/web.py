@@ -127,10 +127,7 @@ def _resolve_host_ips(host: str) -> list[str]:
     ips: list[str] = []
     seen: set[str] = set()
     for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        ip = str(sockaddr[0])
+        ip = str(info[4][0])
         if ip not in seen:
             seen.add(ip)
             ips.append(ip)

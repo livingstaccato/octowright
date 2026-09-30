@@ -11,7 +11,7 @@ from weakref import WeakSet
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter
-from octowright.browser_pool import crash_recovery
+from octowright.browser_pool import crash_recovery, driver_relaunch, process_crash
 from octowright.browser_pool.events import SessionCloseReason, SessionCrashedEvent
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.session import BrowserSession
@@ -108,6 +108,48 @@ def adopt_untracked_pages(session: BrowserSession, context: Any) -> int:
     return adopted
 
 
+def _accept_external_close(pool: BrowserPool, session: BrowserSession) -> None:
+    """Hand an external close signal to the pool, judging HOW the browser went.
+
+    Only the session's current identity is judged, and only at the first
+    evicting signal: later signals, and the close events Playwright fires for
+    octowright's OWN close (the session has already left ``_sessions``), are
+    no-ops for the acceptance seam -- judging them would read our teardown's
+    dead process as a crash. See ``process_crash`` for why liveness at this
+    moment tells a crash from a closed window.
+    """
+    instance_id = session.instance_id
+    if pool._sessions.get(instance_id) is not session:
+        stale: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
+        pool._accept_external_close_nowait(instance_id, expected_session=session, reason=stale)
+        return
+    # Read BEFORE the acceptance seam, which installs a reservation of its own:
+    # a close that already owns this session (a draining browser_close, a
+    # handoff, a fluid relaunch) must never be answered by a crash relaunch.
+    close_owned = _close_already_owned(pool, session)
+    try:
+        reason = process_crash.classify_external_close(session, relaunch_allowed=not close_owned)
+    except Exception as exc:
+        # Judging HOW it went is diagnostics; evicting it is correctness. A
+        # failure in the first must never skip the second.
+        log.warning("octowright.browser.exit_classification_failed", instance_id=instance_id, error=repr(exc))
+        reason = "crashed" if getattr(session, "_crashed", False) else "user_close"
+    entry = pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
+    if getattr(session, "_process_crash_incident", None) is not None:
+        try:
+            driver_relaunch.on_browser_process_crash(pool, session, entry)
+        except Exception as exc:
+            log.warning("octowright.browser.process_crash_surface_failed", instance_id=instance_id, error=repr(exc))
+
+
+def _close_already_owned(pool: BrowserPool, session: BrowserSession) -> bool:
+    """Whether a close already owns this session's teardown."""
+    closing = pool._closing_sessions.get(session.instance_id)
+    if closing is not None and closing.session is session:
+        return True
+    return bool(getattr(getattr(session, "_operation_gate", None), "close_reserved", False))
+
+
 def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     """When the underlying browser/context/all-pages is closed externally (OS
     close button, crash, persistent-context flush, etc.), drop the session from
@@ -143,9 +185,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
     """
 
     def _evict(*_: Any) -> None:
-        instance_id = session.instance_id
-        reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
-        pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
+        _accept_external_close(pool, session)
 
     def _on_page_close(*_: Any) -> None:
         instance_id = session.instance_id
@@ -173,8 +213,7 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         # ALIVE. Accept the close synchronously here too — scheduling a LATER
         # normal pool.close would leave a window in which work could still be
         # admitted against a session whose last page is already gone.
-        reason: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
-        pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
+        _accept_external_close(pool, session)
 
     def _on_page_crash(crashed_page: Any = None, *_: Any) -> None:
         instance_id = session.instance_id

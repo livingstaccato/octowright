@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from provide.telemetry import get_logger
 
 from octowright import scenarios_pool as _scenario_pool_mod
@@ -164,6 +165,37 @@ class _ProfiledMCPServer(MCPServer):
     def __init__(self, *args: Any, allowed_tools: set[str] | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._allowed_tools = allowed_tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        """Call a tool, and tell the client why it failed.
+
+        mcp 2.1 (``UnexpectedToolError``, hence the ``mcp>=2.1`` floor) reduces
+        an exception that is not a ``ToolError`` to ``Error executing tool
+        <name>`` and keeps the cause for the server log. Every octowright tool
+        fails that way -- a ``ValueError``, an ``InvalidRequestError``,
+        Playwright's ``TimeoutError`` -- and that text is what the agent acts
+        on: the selector Playwright waited for, the SSRF refusal, the unknown
+        launch option. So the cause goes back to the client in mcp 2.0's form,
+        ``Error executing tool <name>: <cause>``. Octowright scrubs credentials
+        from its own errors before they get here.
+
+        Re-raising as ``ToolError`` has a cost: mcp logs a ``ToolError`` at INFO
+        with no traceback, so a genuine bug would vanish from the default log.
+        The original is therefore logged HERE, once, at ERROR with its
+        traceback. A deliberate ``ToolError`` from a tool never reaches this
+        branch (it is not an ``UnexpectedToolError``) and keeps mcp's own INFO line.
+        """
+        try:
+            return await super().call_tool(name, arguments, context)
+        except UnexpectedToolError as exc:
+            cause = exc.__cause__
+            # A nested tool's crash is wrapped once per level; name the original.
+            while isinstance(cause, UnexpectedToolError) and cause.__cause__ is not None:
+                cause = cause.__cause__
+            if cause is None:
+                raise
+            log.error("octowright.tool.failed", tool=name, error_type=type(cause).__name__, exc_info=cause)
+            raise ToolError(f"Error executing tool {name}: {cause}") from cause
 
     def tool(
         self,
@@ -329,7 +361,8 @@ mcp = _ProfiledMCPServer(
         "notifications/octowright/browser_crashed (a page crashed; if recovering=true Octowright is "
         "auto-replacing the page — WAIT for browser_recovered, do NOT relaunch yet; scope=unresponsive means "
         "the target merely stopped answering, not a crash — it is never auto-recovered, so wait/retry or "
-        "relaunch as the hint says); "
+        "relaunch as the hint says; scope=process means the whole browser process died, not a closed "
+        "window — the session is gone: relaunch, or with auto-reopen on use pool.lost_sessions); "
         "notifications/octowright/browser_recovered (outcome=recovered → the page is usable again, just "
         "continue; outcome=failed|exhausted → relaunch with browser_launch); "
         "notifications/octowright/driver_died (the shared driver died and these sessions were lost — if "

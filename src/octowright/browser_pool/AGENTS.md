@@ -227,6 +227,66 @@ forwarded case. `label` names the ARGUMENT (`"har_path"`); a label naming a
 *distinct* input (`macro name 'x'`, where the name is not the resolved path) is
 useful and unaffected.
 
+### The Chromium 153 first-download crash, and telling a crash from a close
+
+**The crash.** Chrome for Testing 153.0.8010.12 (`chromium-1243`, Playwright
+1.63 -- what a fresh install of the published wheel resolves to, while this
+which this repo's lock now pins too) kills its own **browser process**
+~0.3 s into the first download of a headed run whenever the profile's
+`History` holds a download row at startup and Playwright controls downloads.
+It is a use-after-free on the UI thread (`Received signal 11 SI_KERNEL ...
+General Protection Fault`, registers full of PartitionAlloc's `0xcd` freed
+byte), not a CHECK -- there is no message to quote; the field's earlier SIGTRAP
+attribution came from unrelated `chrome-headless-shell` renderers in a
+concurrent test run, and `/var/log/apport.log` shows the headed browser pids
+dying of signal 11 (one, on 09-23, of SIGTRAP -- its message was not captured). Nothing in octowright causes it:
+raw Playwright with no octowright code, no extension and no download listener
+crashed 7/7. `download_history.prune_download_history` deletes the rows before
+every Chromium persistent launch -- a `profile` AND a `session=True` tmpdir,
+which is reused per label and so carries rows into its next launch (full
+matrix in its docstring; run via `asyncio.to_thread`, awaited before launch;
+`OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY` in `docs/env-vars.md`). It is per launch
+because Chromium re-inserts the rows from `shared_proto_db` at startup.
+`tests/test_download_history_live.py` is the live proof (profile and session
+tmpdir) -- meaningful on `chromium-1243`, which the lock now pins; `chromium-1234`
+does not crash.
+
+**Detection.** `process_crash` resolves each persistent context's browser pid
+from `/proc` just after session construction
+(`launch_publish._prepare_session_before_publication`, through
+`process_crash.resolve_browser_process`, i.e. in a worker thread; `stat` is read
+only for a process whose argv already named the profile) and judges the exit at
+the first evicting close signal (`listeners._accept_external_close`). Four
+things are load-bearing:
+
+- **Judge only the live identity.** The close events Playwright fires for
+  octowright's OWN close arrive after the session left `_sessions`, when the
+  process is already gone -- judging them would report every agent close as a
+  crash. `_accept_external_close` skips the verdict for a non-current identity.
+- **Judge at the first evicting signal, not later.** Liveness is only
+  meaningful then: on a Firefox user close the context `close` (and the
+  `save_as` rejection) arrive after a clean exit. For the same reason the
+  download path waits for the verdict (`wait_for_exit_verdict`) instead of
+  sampling.
+- **Only lock evidence may reopen.** An unresolved pid, unreadable `/proc`, or
+  reused pid all read as a close. The other misread -- an orderly close seen
+  after a loop stall, on an engine judged by liveness alone -- reads as a
+  crash, so the incident records `evidence` (`singleton_lock` / `liveness`) and
+  a `liveness` crash is labelled but never reopened under
+  `OCTOWRIGHT_DRIVER_RELAUNCH`. Neither is a session whose teardown a close
+  already owns (`pool._closing_sessions`, or the gate's `close_reserved`, read
+  BEFORE the acceptance seam installs its own reservation): a draining
+  `browser_close`, a handoff, a fluid relaunch.
+- **Eviction never depends on classification.** `_accept_external_close`
+  catches a classifier failure, logs `octowright.browser.exit_classification_failed`,
+  and still evicts as an external close; `classify_external_close` sets the
+  verdict event in a `finally`, so a waiting download save is not left to time out.
+
+Chromium rewrites `/proc/<pid>/cmdline` into ONE space-joined string, so the
+matcher has a second path for that shape; WebKit's root is the `pw_run.sh`
+wrapper (killing only the wrapper leaves MiniBrowser and its pipe alive, and
+nothing fires -- crash tests must signal MiniBrowser).
+
 ### Type-checking the injected assets (`_assets/*.js`)
 
 The five init scripts injected into every page are **type-checked in place**,

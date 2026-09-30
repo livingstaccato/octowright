@@ -246,6 +246,14 @@ class BrowserSession(
     # and detect crash loops vs occasional crashes.
     _crash_recoveries: int = field(default=0, repr=False)
     _last_crash_monotonic: float = field(default=0.0, repr=False)
+    # The OS process behind a persistent context, resolved at launch, and how
+    # the first evicting close signal judged its exit ("crashed"/"closed"). See
+    # browser_pool/process_crash: Playwright reports a browser-process crash and
+    # a user closing the last window identically.
+    _browser_process: Any = field(default=None, repr=False)
+    _exit_verdict: str | None = field(default=None, repr=False)
+    _exit_verdict_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _process_crash_incident: dict[str, Any] | None = field(default=None, repr=False)
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1

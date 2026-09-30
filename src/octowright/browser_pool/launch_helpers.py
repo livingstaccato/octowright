@@ -10,12 +10,14 @@ write."""
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.browser_pool.download_history import prune_download_history
 from octowright.browser_pool.restore_prompt import clear_crash_restore_prompt
 from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
 from octowright.browser_pool.viewport import ViewportInfo, ViewportMode
@@ -367,6 +369,28 @@ async def select_launch_page(context: Any) -> Any:
     return await context.new_page()
 
 
+async def _prune_chromium_download_history(kind: str, user_data_dir: Path) -> None:
+    """Chromium 153 kills its browser process on the first download of a headed
+    run while the user-data-dir holds any download-history row. See
+    download_history. Blocking SQLite, so off the loop -- but awaited, so it is
+    done before the browser opens the database."""
+    if kind == "chromium":
+        await asyncio.to_thread(prune_download_history, user_data_dir)
+
+
+async def _prepare_session_user_data_dir(kind: str, session_dir: Path) -> None:
+    """A ``session=True`` tmpdir is reused by every launch sharing its label, so
+    it carries download rows into the next launch exactly like a profile --
+    including the relaunch after the crash those rows cause. The stale-lock
+    prune comes first for the same reason as on a profile: a crashed browser
+    leaves its ``SingletonLock`` behind, and the download prune refuses a dir
+    that still holds one."""
+    if kind != "chromium":
+        return
+    prune_stale_singleton_locks(session_dir)
+    await _prune_chromium_download_history(kind, session_dir)
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -410,8 +434,11 @@ async def _open_browser_context(
             # "Restore pages?" bubble covering the page we just navigated to.
             # See restore_prompt.
             clear_crash_restore_prompt(pdir)
+            await _prune_chromium_download_history(kind, pdir)
         else:
             user_data_dir = session_user_data_dir
+            if session_user_data_dir is not None:
+                await _prepare_session_user_data_dir(kind, Path(session_user_data_dir))
         context = await browser_type.launch_persistent_context(
             user_data_dir,
             headless=headless,
