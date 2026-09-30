@@ -52,7 +52,14 @@ def _wire_listeners(session: BrowserSession, page: Any) -> None:
     page.on("dialog", session._handle_dialog)
     page.on("download", session._handle_download)
     page.on("response", session._handle_response)
+    page.on("close", lambda: session._forget_page_requests(page))
     page.on("requestfailed", session._handle_request_failed)
+    # Request start/end tracking is lazy (``enable_inflight_tracking``); once a
+    # session has it, every page it opens later gets it too. The failure
+    # counters above stay unconditional so a failure is never missed.
+    if session._inflight_tracking:
+        session._track_page_requests(page)
+    page.on("pageerror", session._handle_page_error)
     page.on("websocket", session._handle_websocket)
     page.on("load", lambda: session._schedule_markdown_capture(page=page, force=True))
     # If the close evictor has already attached its per-page handler, wire it
@@ -229,6 +236,12 @@ def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:
         session._crashed = True
         _CRASHED.add(1, attributes={"kind": session.kind})
         crash_recovery.note_crash()
+        if crash_recovery.claim_replacement_crash(crashed_page):
+            # The fresh page a recovery is loading crashed: that recovery
+            # reports it as its own failure, and the crash already published
+            # stands. Recovering it too would replace the replacement.
+            log.warning("octowright.crash.replacement_crashed", instance_id=instance_id, kind=session.kind)
+            return
         log.warning(
             "octowright.browser.page_crashed",
             instance_id=instance_id,

@@ -14,6 +14,7 @@ from typing import Any
 from provide.telemetry import get_logger
 
 import octowright.macros as macro_mod
+from octowright._json_text import dumps_utf8_safe
 from octowright._tracing import counter, set_attrs, span
 from octowright.artifacts.digest import digest_macro, digest_recording_text
 from octowright.artifacts.evidence import EvidenceBuilder
@@ -22,8 +23,9 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
+from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import blind_scrub_arg_values, redact_args, scrub_sensitive_values
+from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values, with_session_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -38,7 +40,8 @@ def _cap_macro(name: str) -> str:
 def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
     macro = load_macro(name)
     args_used = dict(args or {})
-    blind_scrub_arg_values(args_used)
+    privacy = _privacy(macro)
+    privacy.blind_scrub(args_used)
     missing_args = _missing_args(macro, args_used)
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
@@ -64,7 +67,7 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         "ok": not missing_args,
         "macro": name,
         "missing_args": missing_args,
-        "args_used": redact_args(args_used),
+        "args_used": privacy.redact(args_used),
         "paths": {
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),
@@ -115,8 +118,10 @@ def export_macro_cli(
     include_evidence: bool = True,
 ) -> dict[str, Any]:
     macro = load_macro(name)
+    _refuse_unbound_assertions(name, macro)
     args_used = dict(args or {})
-    blind_scrub_arg_values(args_used)
+    privacy = _privacy(macro)
+    privacy.blind_scrub(args_used)
     store = ArtifactStore()
     target = store.resolve_macro_export_path(name, out_path)
     write_macro_cli(path=target, name=name, macro=macro, args=args_used, include_evidence=include_evidence)
@@ -140,6 +145,31 @@ def export_macro_cli(
     return {"ok": True, "macro": name, "path": str(target), "import_safe": True}
 
 
+def _refuse_unbound_assertions(name: str, macro: dict[str, Any]) -> None:
+    """Refuse a macro whose expect_no_text still holds the recording's redaction marker.
+
+    Replay refuses that step, and so does the exported script, but only once it
+    reaches it; a script that can never pass is not worth writing. Nested steps
+    (conditional and ``try`` branches) count against the top-level step holding them.
+    """
+    actions = macro.get("actions")
+    actions = actions if isinstance(actions, list) else []
+    steps = [index for index, action in enumerate(actions) if _holds_unbound_assertion(action)]
+    if steps:
+        where = ", ".join(f"step {index}" for index in steps)
+        raise ValueError(f"macro {name!r} cannot be exported at {where}: {REDACTED_TEXT_REFUSAL}")
+
+
+def _holds_unbound_assertion(node: Any) -> bool:
+    if isinstance(node, list):
+        return any(_holds_unbound_assertion(item) for item in node)
+    if not isinstance(node, dict):
+        return False
+    if node.get("action") == "expect_no_text" and node.get("text") == REDACTED_ASSERTION_TEXT:
+        return True
+    return any(_holds_unbound_assertion(value) for value in node.values())
+
+
 async def run_macro_artifact(
     session: Any,
     name: str,
@@ -158,7 +188,10 @@ async def run_macro_artifact(
     async with session.operation("macro_artifact_run"):
         macro = load_macro(name)
         args_used = dict(args or {})
-        sensitive_values = blind_scrub_arg_values(args_used)
+        # The view macro_run builds: an expect_no_text argument is secret
+        # whatever it is named, so every record below uses it, not the name alone.
+        privacy = _privacy(macro)
+        sensitive_values = privacy.blind_scrub(args_used)
         store = ArtifactStore()
         artifact_dir = store.macro_dir(name)
         runs_dir = artifact_dir / "runs"
@@ -222,7 +255,7 @@ async def run_macro_artifact(
             status=status,
             instance_id=str(getattr(session, "instance_id", "")),
             macro=name,
-            args_used=args_used,
+            args_used=privacy.redact(args_used),
             executed=executed,
             skipped=skipped,
             error=error,
@@ -294,7 +327,7 @@ async def _capture_screenshot(
     sensitive_values: tuple[str, ...] = (),
 ) -> None:
     # Re-enters run_macro_artifact's own "macro_artifact_run" lease (same
-    # task, Task 2 reentrancy) -- both call sites already hold it, so this
+    # task, so the gate lets it re-enter) -- both call sites already hold it, so this
     # never queues; it exists so the page check and screenshot call don't run
     # unguarded outside any operation boundary.
     async with session.operation("macro_artifact_run"):
@@ -318,8 +351,13 @@ async def _capture_screenshot(
                 evidence.screenshot_suppressed(label=label)
                 return
             try:
+                # The session ledger is read at capture time, so the "after"
+                # shot also hides what the run itself admitted.
                 await safe_screenshot.redacted_screenshot(
-                    session, {"action": "screenshot", "path": str(path)}, sensitive_values, root=run_dir
+                    session,
+                    {"action": "screenshot", "path": str(path)},
+                    with_session_values(session, sensitive_values),
+                    root=run_dir,
                 )
             except Exception as exc:  # Best-effort evidence must not hide macro results.
                 evidence.log_excerpt(path=path, offset=0, preview=exc.__class__.__name__)
@@ -362,7 +400,8 @@ def _manifest_for_plan(
         artifact_type="macro",
         name=name,
         source={"type": "macro", "path": str(macro_path(name))},
-        parameters=redact_args(args_used),
+        # The macro's own view, as macro_run uses: not the name-only one.
+        parameters=_privacy(macro).redact(args_used),
         metadata={
             "description": macro.get("description"),
             "action_count": len(macro.get("actions", [])) if isinstance(macro.get("actions"), list) else 0,
@@ -412,7 +451,7 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         "artifact_type": manifest.get("artifact_type"),
         "name": manifest.get("name"),
         "source": manifest.get("source"),
-        "parameters": redact_args(manifest.get("parameters") or {}),
+        "parameters": _listing_privacy(manifest.get("name")).redact(manifest.get("parameters") or {}),
         "created_at": manifest.get("created_at"),
         "updated_at": manifest.get("updated_at"),
         "latest_run": manifest.get("latest_run"),
@@ -421,6 +460,24 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         "metadata": manifest.get("metadata", {}),
         "path": str(contained_path),
     }
+
+
+def _privacy(macro: dict[str, Any]) -> MacroArgPrivacy:
+    return MacroArgPrivacy.for_macro(macro.get("actions", []))
+
+
+def _listing_privacy(name: Any) -> MacroArgPrivacy:
+    """The macro's view for a stored manifest, which may predate positional redaction.
+
+    A macro that is gone or unreadable falls back to name-only: the manifest
+    is still listed, and a value written by a current octowright is already
+    redacted on disk.
+    """
+    try:
+        return _privacy(load_macro(str(name)))
+    except Exception:  # A listing must not fail over one unreadable macro.
+        log.debug("octowright.artifacts.listing_privacy_fallback", macro=str(name)[:100])
+        return MacroArgPrivacy()
 
 
 def _all_macro_manifests(store: ArtifactStore) -> list[Path]:
@@ -545,7 +602,7 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
 
     from octowright._paths import atomic_write_text
 
-    atomic_write_text(verification_path, json.dumps(v_res, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(verification_path, dumps_utf8_safe(v_res, indent=2), encoding="utf-8")
 
     manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
     write_artifact_manifest(manifest_path, manifest)

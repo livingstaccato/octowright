@@ -130,6 +130,10 @@ async def launch_profile_locked(
         kind=kind,
         label=label,
         target_url=target_url,
+        # The value the context was opened with, so session.base_url reports
+        # (and the macro header guard trusts) exactly what Playwright resolves
+        # against, without re-reading the persona file.
+        base_url=effective_base_url,
         headless=headless,
         log_path=log_path,
         viewport_info=viewport_info,

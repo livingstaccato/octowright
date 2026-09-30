@@ -7,8 +7,8 @@
 
 Carrying the ``if/elif kind == ...`` chain inline in ``script_export``'s
 template string means branches get added by hand as gaps are noticed, which is
-how such a chain ends up covering 13 of ``macros.runtime._ACTION_MAP``'s 29 kinds
-while ending in ``raise RuntimeError("unsupported macro action in exported
+how such a chain once covered 13 of the 29 kinds ``macros.runtime._ACTION_MAP``
+then held, while ending in ``raise RuntimeError("unsupported macro action in exported
 CLI")`` — so exporting a macro containing an ordinary ``hover``, ``evaluate`` or
 ``screenshot`` produced a script that aborted on it.
 
@@ -27,9 +27,108 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 
 from __future__ import annotations
 
+import inspect
+
+from octowright import request_failures
+from octowright.assertion_warnings import STRICT_OPTIONS, assertion_warning, strict_option, strict_refusal
+from octowright.macros._redact import _REDACT_VALUE_ACTIONS
+
+
+def _network_helpers() -> str:
+    """The session's own network ledger and settle wait, rendered from their source.
+
+    Not hand-mirrored: the copy had drifted (no in-flight bound, a per-tick
+    ``is_closed`` poll instead of a close listener, requests keyed by an ``id``
+    a collected object's successor could reuse). The names below are the ones
+    the rendered source reads.
+    """
+    constants = "".join(
+        f"{name} = {getattr(request_failures, name)!r}\n"
+        for name in (
+            "INFLIGHT_REQUEST_LIMIT",
+            "NETWORK_SETTLE_TIMEOUT_MS",
+            "NETWORK_QUIET_SECONDS",
+            "NETWORK_SETTLE_POLL_SECONDS",
+        )
+    )
+    frozensets = "".join(
+        f"{name} = frozenset({sorted(getattr(request_failures, name))!r})\n"
+        for name in ("ABORTED_REQUEST_FAILURES", "HTTP_ERROR_RESOURCE_TYPES", "LONG_LIVED_RESOURCE_TYPES")
+    )
+    sources = (
+        request_failures.is_http_error,
+        request_failures.request_frame,
+        request_failures.NetworkLedger,
+        request_failures.settle_network,
+        # How a passing check's caveat is worded, and when a step makes it fail, shared with macro_run.
+        assertion_warning,
+        strict_option,
+        strict_refusal,
+    )
+    constants += f"STRICT_OPTIONS = {STRICT_OPTIONS!r}\n"
+    return constants + frozensets + "\n\n" + "\n\n\n".join(inspect.getsource(obj).rstrip() for obj in sources)
+
+
 #: Runtime helpers the dispatch bodies below call. Rendered into the exported
 #: script once, above the action loop.
-STATE_HELPERS = '''
+STATE_HELPERS = (
+    _network_helpers()
+    + """
+
+
+# Action kinds whose text/value is always redacted in logs, as replay redacts them.
+_REDACT_VALUE_ACTIONS = """
+    + repr(sorted(_REDACT_VALUE_ACTIONS))
+    + "\n\n\n"
+    + '''def _watch_network(state: dict[str, Any], page: Any) -> None:
+    """Feed the page's events to the ledger expect_network_clean judges, from the moment it exists.
+
+    Wired as the session wires them, including the close that forgets a
+    closed page's requests. Lazy like the dialog policy: a macro that never
+    asserts it never touches ``page.on``.
+    """
+    if not state["watch_network"]:
+        return
+    # Once per page: open_url watches its tab before goto, and the context's
+    # page event (_watch_context) reports that same tab too.
+    watched = state.setdefault("watched_pages", [])
+    if any(seen is page for seen in watched):
+        return
+    watched.append(page)
+    ledger = state["network"]
+    page.on("request", lambda request: ledger.request_started(request, page))
+    page.on("requestfinished", ledger.request_finished)
+    page.on("requestfailed", ledger.request_failed)
+    page.on("framenavigated", lambda frame: ledger.frame_navigated(frame, page))
+    page.on("framedetached", ledger.frame_detached)
+    page.on("close", lambda: ledger.page_closed(page))
+    page.on("pageerror", ledger.page_error)
+    page.on("response", ledger.response)
+
+
+def _watch_context(state: dict[str, Any], page: Any) -> None:
+    """Watch every page *page*'s context opens later -- a popup or a target=_blank tab included.
+
+    Live replay wires the same listeners on each such page (the context's
+    ``page`` event, ``_register_popup``), so a request that fails in an OAuth
+    popup fails the run there; without this it passed here.
+    """
+    if state["watch_network"]:
+        page.context.on("page", lambda opened: _watch_network(state, opened))
+
+
+def _report_assertion(state: dict[str, Any], index: int, kind: str, observation: dict[str, Any]) -> None:
+    """Print what a passing check saw, as macro_run returns it, and a warning line for a caveat."""
+    record = {"event": "assertion", "index": index, "action": kind, **observation}
+    warning = assertion_warning(kind, observation)
+    if warning is not None:
+        record["warning"] = warning
+    print(json.dumps(_redact_value(record, state["sensitive_values"]), sort_keys=True))
+    if warning is not None:
+        line = {"event": "warning", "index": index, "action": kind, "warning": warning}
+        print(json.dumps(_redact_value(line, state["sensitive_values"]), sort_keys=True))
+
+
 def _page(state: dict[str, Any]) -> Any:
     """The active page — what switch_page/close_page/open_url move between."""
     return state["pages"][state["index"]]
@@ -231,6 +330,7 @@ async def _a11y_dragdrop(state: dict[str, Any], action: dict[str, Any]) -> None:
             pass
         raise
 '''
+)
 
 #: ``kind -> dispatch body``. Each body runs with ``action`` and ``state`` in
 #: scope and is responsible for its own ``executed``/``skipped`` bookkeeping.
@@ -244,11 +344,38 @@ await _target(state).click(action["selector"])
 executed += 1
 """,
     "fill": """
-await _target(state).fill(action["selector"], action.get("value", ""))
+check = _credential_check(state, index, action, trusted)
+if check is None:
+    await _target(state).fill(action["selector"], action.get("value", ""))
+else:
+    await _credential_input(
+        action,
+        checked_fill(
+            _ScriptSession(state),
+            _target(state).locator(action["selector"]).first,
+            action.get("value", ""),
+            check,
+            action.get("timeout_ms") or _PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
+        ),
+    )
 executed += 1
 """,
     "type": """
-await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
+check = _credential_check(state, index, action, trusted)
+if check is None:
+    await _target(state).type(action["selector"], action.get("text", ""), delay=action.get("delay_ms") or 0)
+else:
+    await _credential_input(
+        action,
+        checked_type(
+            _ScriptSession(state),
+            _target(state).locator(action["selector"]).first,
+            action.get("text", ""),
+            check,
+            delay_ms=action.get("delay_ms"),
+            timeout_ms=_PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
+        ),
+    )
 executed += 1
 """,
     "press_key": """
@@ -301,12 +428,64 @@ if mode == "regex" and re.search(expected, actual) is None:
     raise RuntimeError(f"text mismatch: expected pattern {expected!r}, got {actual!r}")
 executed += 1
 """,
+    # ``equals`` null is the truthy check, as the session records and replays
+    # it (``equals is not None``); keying on the key's presence demanded that a
+    # recorded truthy check return null. Python ``==``, so True == 1 as live.
     "expect_js": """
 result = await _target(state).evaluate(action["expression"])
-if "equals" in action and result != action["equals"]:
+if action.get("equals") is not None and result != action["equals"]:
     raise RuntimeError(f"JS assertion failed: expected {action['equals']!r}, got {result!r}")
-if "equals" not in action and not result:
+if action.get("equals") is None and not result:
     raise RuntimeError(f"JS assertion failed: got {result!r}")
+executed += 1
+""",
+    # The whole script is one run, so since="run" counts from zero.
+    "expect_network_clean": """
+require_settled = strict_option(kind, action.get("require_settled", False))
+window = state["network"].window(action.get("since", "run"))
+settle = action.get("settle_timeout_ms")
+settle = NETWORK_SETTLE_TIMEOUT_MS if settle is None else int(settle)
+in_flight = await settle_network(state["network"].pending, settle) if settle > 0 else state["network"].pending()
+observation = {**state["network"].judge(window, bool(action.get("http_errors"))), "in_flight": in_flight}
+untracked = state["network"].since(window)[3]
+if untracked > 0:
+    observation["in_flight_untracked"] = untracked
+refusal = strict_refusal(kind, observation, required=require_settled)
+if refusal is not None:
+    raise RuntimeError(refusal)
+_report_assertion(state, index, kind, observation)
+executed += 1
+""",
+    "mark_network_clean": """
+state["network"].mark()
+executed += 1
+""",
+    # The same drawn_text functions replay calls, rendered verbatim above the
+    # loop (see script_export), so every rule and message is one copy. Replay
+    # also reads Chromium's DOM snapshot; the export has no CDP session, so a
+    # closed shadow root is not checked here.
+    "expect_no_text": """
+forbidden = action["text"]
+check_forbidden_text(forbidden)
+require_match = strict_option(kind, action.get("require_match", False))
+selector = action.get("selector", "body")
+limit = resolve_element_limit(action.get("element_limit"), os.environ)
+target = _target(state)
+summary = new_scan_summary()
+for position, scanned in enumerate(target.frames if selector == "body" and state["frame"] is None else [target]):
+    try:
+        found = await scanned.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector, limit))
+    except Exception as exc:
+        if not skip_gone_frame(summary, position, scanned.is_detached(), exc):
+            raise
+        continue
+    fold_frame_result(summary, position, found, forbidden, selector)
+if summary["truncated"]:
+    raise RuntimeError(truncation_message(selector, limit))
+refusal = strict_refusal(kind, {**summary, "selector": selector}, required=require_match)
+if refusal is not None:
+    raise RuntimeError(refusal)
+_report_assertion(state, index, kind, {**summary, "selector": selector})
 executed += 1
 """,
     "click_by": """
@@ -314,7 +493,20 @@ await _locator(_target(state), action).click(timeout=action.get("timeout_ms"))
 executed += 1
 """,
     "fill_by": """
-await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+check = _credential_check(state, index, action, trusted)
+if check is None:
+    await _locator(_target(state), action).fill(action.get("value", ""), timeout=action.get("timeout_ms"))
+else:
+    await _credential_input(
+        action,
+        checked_fill(
+            _ScriptSession(state),
+            _locator(_target(state), action),
+            action.get("value", ""),
+            check,
+            action.get("timeout_ms") or _PLAYWRIGHT_DEFAULT_TIMEOUT_MS,
+        ),
+    )
 executed += 1
 """,
     "get_text_by": """
@@ -367,10 +559,13 @@ await _a11y_dragdrop(state, action)
 executed += 1
 """,
     "set_input_files": """
-await _target(state).set_input_files(action["selector"], action.get("paths") or action.get("files") or [])
+# The live upload allowlist (session.upload_paths), resolved paths and all.
+await _target(state).set_input_files(action["selector"], _upload_paths(action.get("paths") or action.get("files")))
 executed += 1
 """,
     "upload_files": """
+# Checked before the chooser opens, as live upload_files does.
+paths = _upload_paths(action["paths"])
 target = _target(state)
 trigger = target.locator(action["selector"]) if action.get("selector") is not None else _locator(target, action)
 timeout = action.get("timeout_ms")
@@ -379,7 +574,7 @@ if timeout is None or timeout == 0:
 async with _page(state).expect_file_chooser(timeout=timeout) as chooser_info:
     await trigger.click(timeout=timeout)
 chooser = await chooser_info.value
-await chooser.set_files(action["paths"], timeout=timeout)
+await chooser.set_files(paths, timeout=timeout)
 executed += 1
 """,
     "resize": """
@@ -392,6 +587,9 @@ executed += 1
 """,
     "open_url": """
 new_page = await _page(state).context.new_page()
+# Watched before the load, or a failure during the tab's first page load is
+# missed; a no-op when the context's page event already did it.
+_watch_network(state, new_page)
 await new_page.goto(action["url"])
 state["pages"].append(new_page)
 if state["dialog_policy"] != "manual":

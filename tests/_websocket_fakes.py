@@ -52,6 +52,7 @@ def io_mixin_session(tmp_path: Path) -> Any:
             self._websockets_dropped = 0
             self._websocket_seq = 0
             self._websocket_truncated = False
+            self.durable_text_scrubber = None
 
         def _websocket_cache_path(self) -> Path:
             # Lives on BrowserSession, not the mixin under test.

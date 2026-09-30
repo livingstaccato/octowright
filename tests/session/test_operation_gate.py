@@ -914,7 +914,7 @@ async def test_close_operation_enters_body_for_teardown_of_invalidated_fifo_rese
     """Regression test for IMPORTANT #2: the retained reservation from an
     earlier ``reserve_close`` that external close invalidated must ALSO let
     ``close_operation`` take its bare-yield teardown path once handed back
-    through ``reserve_external_teardown`` -- Task 7's cleanup coordinator
+    through ``reserve_external_teardown`` -- the cleanup coordinator
     needs one pattern (``close_operation(reserve_external_teardown(...))``)
     that works for both the fresh and the FIFO-origin case.
     """

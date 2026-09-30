@@ -42,6 +42,10 @@ class _Recorder:
 
 
 class _Session:
+    launch_url: str | None = None
+    base_url: str | None = None
+    durable_text_scrubber: Any = None
+
     def __init__(self) -> None:
         self.recorder: Any = _Recorder()
 

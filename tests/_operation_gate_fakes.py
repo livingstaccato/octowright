@@ -21,7 +21,7 @@ Other test modules rely on this shape verbatim (several reach
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
-from typing import LiteralString
+from typing import Any, LiteralString
 
 from octowright.session.operation.gate import (
     USE_DEFAULT,
@@ -44,6 +44,12 @@ class OperationAwareFake:
 
     instance_id = "fake-session"
     kind = "chromium"
+    # What a launch with no URL and no persona leaves on a real session; the
+    # macro header guard (``substitution.own_site_origins``) reads both.
+    launch_url: str | None = None
+    base_url: str | None = None
+    # Installed by the first macro run (``privacy.install_sensitive_recorder``).
+    durable_text_scrubber: Any = None
 
     def __init__(self) -> None:
         self._test_operation_gate = SessionOperationGate(
@@ -65,3 +71,14 @@ class OperationAwareFake:
 
     def operation_snapshot(self) -> OperationGateSnapshot:
         return self._test_operation_gate.snapshot()
+
+    # The request-tracking hooks run_macro calls on every SessionLike. A fake
+    # with no network capture has nothing to mark or track.
+    def mark_network_clean_window(self) -> None:
+        return None
+
+    def enable_inflight_tracking(self) -> None:
+        return None
+
+    def disable_inflight_tracking(self) -> bool:
+        return False

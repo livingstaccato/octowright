@@ -41,6 +41,9 @@ def _response(status: int, url: str = "https://app.test/api", body: bytes = b"{}
     response = MagicMock()
     response.status = status
     response.body = AsyncMock(return_value=body)
+    # A declared length: without one the body is not read at all
+    # (test_response_body_read_bounds).
+    response.headers = {"content-length": str(len(body))}
     request = MagicMock()
     request.url = url
     response.request = request

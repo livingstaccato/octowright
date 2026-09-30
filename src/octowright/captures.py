@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text
 from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
 from octowright.capture_summaries import summarize_capture_payload
@@ -156,7 +157,7 @@ def save_capture(
     }
     # Atomic temp-sibling + os.replace so a symlink swapped in at the
     # destination is replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, json.dumps(payload, ensure_ascii=False, indent=2))
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2))
     stat = path.stat()
     cleanup_captures(
         root=root,

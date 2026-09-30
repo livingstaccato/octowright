@@ -1048,10 +1048,10 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
             {"action": "open_url", "url": "https://y"},
             {"action": "switch_page", "index": 1},
             {"action": "close_page"},
-            {"action": "mock_route", "url_pattern": "*", "status": 200, "body": "hi"},
-            {"action": "unmock_route", "url_pattern": "*"},
+            {"action": "mock_route", "pattern": "*", "status": 200, "body": "hi"},
+            {"action": "unmock_route", "pattern": "*"},
             {"action": "set_dialog_policy", "policy": "accept"},
-            {"action": "set_input_files", "selector": "input", "files": ["/tmp/x"]},
+            {"action": "set_input_files", "selector": "input", "paths": ["/tmp/x"]},
             {"action": "if", "selector": "#foo"},
             {"action": "click", "selector": "#bar"},
             {"action": "end_block"},
@@ -1072,7 +1072,7 @@ def test_export_missing_actions_python(tmp_path: Path) -> None:
     assert "lambda route: route.fulfill(status=200, body='hi')" in src
     assert "await page.unroute('*')" in src
     assert "lambda dialog, _policy='accept': asyncio.create_task(getattr(dialog, _policy)())" in src
-    assert "await page.set_input_files('input', ['/tmp/x'])" in src
+    assert "await _upload_target.locator('input').set_input_files(['/tmp/x'])" in src
     assert "if await page.locator('#foo').count() > 0:" in src
     assert "    await page.click('#bar')" in src
 
@@ -1222,7 +1222,7 @@ def test_export_rejects_mock_route_status_injection(tmp_path: Path, fmt: str, ex
         tmp_path / "r.jsonl",
         [
             {"action": "launch", "kind": "chromium", "url": "https://x", "headed": True},
-            {"action": "mock_route", "url_pattern": "*", "status": _INJECTION_INT, "body": "hi"},
+            {"action": "mock_route", "pattern": "*", "status": _INJECTION_INT, "body": "hi"},
         ],
     )
     out_path = tmp_path / f"out.{ext}"
@@ -1305,7 +1305,7 @@ def test_export_normal_recording_still_runs_all_six_guarded_fields(tmp_path: Pat
             {"action": "resize", "width": 1024, "height": 768},
             {"action": "open_url", "url": "https://y"},
             {"action": "switch_page", "index": 1},
-            {"action": "mock_route", "url_pattern": "*", "status": 404, "body": "nope"},
+            {"action": "mock_route", "pattern": "*", "status": 404, "body": "nope"},
             {"action": "set_dialog_policy", "policy": "accept"},
         ],
     )

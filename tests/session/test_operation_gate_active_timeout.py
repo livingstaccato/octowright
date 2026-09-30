@@ -112,7 +112,7 @@ def test_falsey_tokens_keep_it_off(token: str, monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.parametrize("raw", ["abc", "-5", "nan", "inf", "-inf"])
 def test_unparsable_or_nonpositive_falls_back_to_off(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The feature itself is opt-in, so -- unlike Task 1's per-call budget,
+    """The feature itself is opt-in, so -- unlike the per-call budget,
     which falls back to a working default -- a typo here must not silently
     turn on a hardcoded ceiling nobody asked for."""
     monkeypatch.setenv(_ENV, raw)
@@ -188,7 +188,7 @@ async def test_duration_exactly_at_the_ceiling_breaches() -> None:
 
 @pytest.mark.asyncio
 async def test_ceiling_breach_never_fires_the_call_timeout_hook() -> None:
-    """The separation between this backstop and Task 2's per-call
+    """The separation between this backstop and the per-call
     ``on_call_timeout`` hook is the load-bearing claim of the design
     (asserted in this method's own docstring and in ``AGENTS.md``) --
     verify it rather than merely never having wired a hook to accidentally

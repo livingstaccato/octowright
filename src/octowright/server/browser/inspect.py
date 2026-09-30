@@ -122,7 +122,12 @@ def _evaluate_truncated_actions(instance_id: str, expression: str) -> list[Brows
 
 @mcp.tool(
     structured_output=False,
-    description="Screenshot an instance to disk. If path omitted, writes next to the recording.",
+    description=(
+        "Screenshot an instance to disk. If path omitted, writes next to the recording. Once a "
+        "password or macro credential has been typed in the session, the screenshot is taken "
+        "redacted on Chromium and refused on Firefox/WebKit, unless the operator set "
+        "OCTOWRIGHT_LEDGER_SCREENSHOTS=allow."
+    ),
 )
 async def browser_screenshot(instance_id: str, path: str | None = None) -> BrowserScreenshotResult:
     async with browser_operation(pool, instance_id, "browser_screenshot") as session:

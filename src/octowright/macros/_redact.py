@@ -20,7 +20,7 @@ from typing import Any
 # dict is embedded in a RuntimeError payload, a repair-tool response, the
 # macro-pill, or any log line.
 _REDACTED_MACRO_VALUE = "<redacted>"
-_REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by"})
+_REDACT_VALUE_ACTIONS: frozenset[str] = frozenset({"fill", "type", "fill_by", "expect_no_text"})
 
 
 def _redact_action(action: dict[str, Any]) -> dict[str, Any]:

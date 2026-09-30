@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-import ast
 import base64
 import contextlib
+import html as html_lib
 import importlib
 import json
 import os
@@ -17,13 +17,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+import anyio.to_thread
 from playwright.async_api import ConsoleMessage, Page
 from provide.telemetry import get_logger
 
+from octowright._json_text import dumps_utf8_safe
+from octowright._wire_utils import decode_binary_text as _decode_binary_text
 from octowright._wire_utils import looks_like_binary_text as _looks_like_binary_text
 from octowright.defaults import WEBSOCKET_CACHE_FLUSH_FRAMES, WEBSOCKET_CACHE_FLUSH_SECONDS
-from octowright.session import websocket_view
+from octowright.session import markdown_render, websocket_view
+from octowright.session._constants import (
+    BINARY_TEXT_PARSE_MAX_CHARS,
+    CONSOLE_TEXT_MAX_CHARS,
+    WEBSOCKET_FRAME_MAX_BYTES,
+)
 from octowright.session._protocols import SessionLike
+from octowright.session.input_redaction import live_scrubbed
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import bounded
 
@@ -36,29 +45,66 @@ _BYTE_LIMIT_OFF_TOKENS = {"", "0", "off", "never", "none", "disabled", "false", 
 #: survives a churny page.
 WEBSOCKET_REGISTRY_MAX = 64
 #: Chars of a frame preview written to the MAIN session JSONL. The sidecar
-#: keeps a long one (that is the file the read tools serve from); this file has
-#: no ceiling on by default and is read by ``browser_tail_recording``, the
+#: keeps a long one (that is the file the read tools serve from); this file's
+#: only ceiling is a generous 512 MiB and it is read by ``browser_tail_recording``, the
 #: dashboard event stream and ``capture_create(kind="recording")``, none of
 #: which asked about websockets. It was ``""`` for every frame until payload
 #: capture was fixed, so nothing had ever measured what a real one costs there.
 WEBSOCKET_RECORD_PREVIEW_CHARS = 128
 
 
+#: Per-session websocket sidecar ceiling when ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``
+#: is unset. Frames are page-driven, so a socket pushing forever could otherwise
+#: fill the recordings disk.
+WEBSOCKET_MAX_BYTES_DEFAULT = 256 * 1024 * 1024
+
+
 def _websocket_max_bytes() -> int:
     """``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` — per-session WS sidecar byte ceiling.
 
-    OFF (0) by default. A positive value stops appending frames once the sidecar
-    file would exceed it, writing a single ``websocket_truncated`` marker so
-    replay/inspection see the cut. Falsey/unparsable/non-positive keeps it off.
+    ON by default at ``WEBSOCKET_MAX_BYTES_DEFAULT``. Once the sidecar would
+    exceed it, frames stop being appended and a single ``websocket_truncated``
+    marker records the cut. ``0`` or a falsey token removes it; an unparsable
+    or negative value falls back to the default, not to unbounded.
     """
     raw = os.environ.get("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "").strip().lower()
+    if not raw:
+        return WEBSOCKET_MAX_BYTES_DEFAULT
     if raw in _BYTE_LIMIT_OFF_TOKENS:
         return 0
     try:
         value = int(raw)
     except ValueError:
-        return 0
-    return value if value > 0 else 0
+        return WEBSOCKET_MAX_BYTES_DEFAULT
+    return value if value > 0 else WEBSOCKET_MAX_BYTES_DEFAULT
+
+
+def _console_text_fields(text: str) -> dict[str, Any]:
+    """The ``text`` of a console row, capped at ``CONSOLE_TEXT_MAX_CHARS``.
+
+    Applied before the row is appended or serialised, so an oversized message
+    costs its prefix, not its full size, everywhere downstream.
+    """
+    if len(text) <= CONSOLE_TEXT_MAX_CHARS:
+        return {"text": text}
+    return {
+        "text": f"{text[:CONSOLE_TEXT_MAX_CHARS]}…[truncated: {len(text)} chars]",
+        "text_truncated": True,
+        "text_length": len(text),
+    }
+
+
+def _raw_payload_size(payload: Any) -> int | None:
+    """A frame's size as received -- a lower bound on what storing it costs."""
+    if isinstance(payload, memoryview):
+        return payload.nbytes
+    if isinstance(payload, str) and _looks_like_binary_text(payload):
+        # A bytes repr ("b'\\x00...'") spends up to four chars per byte, and
+        # the sidecar stores the DECODED bytes, so only a quarter is certain.
+        return len(payload) // 4
+    if isinstance(payload, bytes | bytearray | str):
+        return len(payload)
+    return None
 
 
 if TYPE_CHECKING:
@@ -75,6 +121,76 @@ class SessionIOMixin(SessionLike):
     _pending_markdown_capture: Any | None
     _last_markdown_capture_error: Exception | None
 
+    def _scrub_websocket_entry(self, entry: dict[str, Any], payload_bytes: bytes | None = None) -> None:
+        """Keep a macro's credential values out of the sidecar, like the recorder does.
+
+        A binary frame cannot be edited byte-for-byte safely, so one holding a
+        value is not stored at all; its size stays, and ``payload_redacted``
+        says why the bytes are missing. *payload_bytes* is checked BEFORE it is
+        base64-encoded into ``payload_b64``, so a frame that is then dropped is
+        never encoded, and a kept one is never decoded back to be checked.
+        """
+        scrub = self.durable_text_scrubber
+        # ``active`` is False while the ledger is empty: a session that ever ran
+        # a macro keeps the scrubber installed, and decoding every binary frame
+        # to scrub it against nothing was the whole cost.
+        live = scrub if scrub is not None and scrub.active else None
+        if live is not None:
+            for key in ("url", "payload_preview", "payload_text"):
+                if isinstance(entry.get(key), str):
+                    entry[key] = live(entry[key])
+        if payload_bytes is None:
+            return
+        if live is not None:
+            text = payload_bytes.decode("utf-8", errors="replace")
+            if live(text) != text:
+                entry["payload_redacted"] = True
+                return
+        entry["payload_b64"] = base64.b64encode(payload_bytes).decode("ascii")
+
+    def _websocket_cache_handle(self, now: float) -> Any:
+        """The session's append handle on the sidecar, opened on first use."""
+        if self.websocket_path is None:
+            self.websocket_path = self._websocket_cache_path()
+            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = getattr(self, "_websocket_fh", None)
+        if fh is None:
+            fh = self.websocket_path.open("a", encoding="utf-8")
+            self._websocket_fh = fh
+            self._websocket_last_flush_ts = now
+            self._websocket_frames_since_flush = 0
+            self._websocket_bytes = 0
+            self._websocket_truncated = False
+        return fh
+
+    def _bounded_ws_payload(
+        self, entry: dict[str, Any], payload: Any, payload_size: int | None, *, limit: int, now: float
+    ) -> tuple[Any, int | None] | None:
+        """Size a frame BEFORE anything copies it; ``None`` means drop it.
+
+        base64 alone is a 4/3 copy and json.dumps another, so the ceiling check
+        on the finished line paid for a frame it then refused. With a ceiling
+        set, a frame that cannot fit is refused here; either way, one frame's
+        payload is cut to ``WEBSOCKET_FRAME_MAX_BYTES`` and flagged, keeping its
+        true size. *payload_size* is the caller's exact (decoded) size when it
+        has one, and is preferred over the estimate from the raw payload.
+        """
+        raw_size = payload_size if payload_size is not None else _raw_payload_size(payload)
+        if raw_size is None:
+            return payload, payload_size
+        if self._ws_frame_cannot_fit(raw_size, limit=limit, now=now):
+            return None
+        # Applied with a ceiling set too: the ceiling is ON by default now, and
+        # only cutting when it was off would have let one frame of up to the
+        # whole ceiling be base64-copied and serialised on the event loop.
+        if raw_size > WEBSOCKET_FRAME_MAX_BYTES:
+            head = payload[:WEBSOCKET_FRAME_MAX_BYTES]
+            entry["payload_truncated"] = True
+            return (head if isinstance(head, str) else bytes(head)), (
+                raw_size if payload_size is None else payload_size
+            )
+        return payload, payload_size
+
     def _append_websocket_cache(
         self,
         *,
@@ -86,6 +202,12 @@ class SessionIOMixin(SessionLike):
         payload_size: int | None = None,
     ) -> None:
         """Persist websocket frames in a dedicated cache file."""
+        # Resolved once per frame and passed down: the ceiling is read by the
+        # pre-encode fit check, the per-frame cap and the final line check, and
+        # one time.monotonic() serves the handle's init stamp and the flush.
+        limit = _websocket_max_bytes()
+        now = time.monotonic()
+        payload_bytes: bytes | None = None
         entry: dict[str, Any] = {
             "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "action": f"websocket_{direction}",
@@ -93,27 +215,21 @@ class SessionIOMixin(SessionLike):
             "url": url,
         }
         if payload is not None:
+            bounded_payload = self._bounded_ws_payload(entry, payload, payload_size, limit=limit, now=now)
+            if bounded_payload is None:
+                return
+            payload, payload_size = bounded_payload
             entry["payload_preview"] = payload_preview or ""
             normalized_size = payload_size
-            payload_b64 = None
 
             if isinstance(payload, bytes | bytearray | memoryview):
                 payload_bytes = bytes(payload)
-                payload_b64 = base64.b64encode(payload_bytes).decode("ascii")
                 if normalized_size is None:
                     normalized_size = len(payload_bytes)
-            elif isinstance(payload, str) and _looks_like_binary_text(payload):
-                try:
-                    decoded = ast.literal_eval(payload)
-                except Exception:
-                    decoded = None
-                if isinstance(decoded, bytes | bytearray | memoryview):
-                    decoded_bytes = bytes(decoded)
-                    payload_b64 = base64.b64encode(decoded_bytes).decode("ascii")
-                    if normalized_size is None:
-                        normalized_size = len(decoded_bytes)
-                else:
-                    entry["payload_text"] = payload
+            elif (decoded := _decode_binary_text(payload, max_chars=BINARY_TEXT_PARSE_MAX_CHARS)) is not None:
+                payload_bytes = decoded
+                if normalized_size is None:
+                    normalized_size = len(payload_bytes)
             else:
                 entry["payload_text"] = payload
             entry["payload_size"] = (
@@ -121,8 +237,9 @@ class SessionIOMixin(SessionLike):
                 if normalized_size is not None
                 else (len(payload) if hasattr(payload, "__len__") else None)
             )
-            if payload_b64 is not None:
-                entry["payload_b64"] = payload_b64
+        # Also appends ``payload_b64`` (or ``payload_redacted``) last, where it
+        # always sat in the row.
+        self._scrub_websocket_entry(entry, payload_bytes)
         # Keep a single append-mode file handle for the session: high-frequency
         # WS feeds (game servers, market data) can fire thousands of frames
         # per second, and re-opening for every frame burns syscalls and inode
@@ -135,23 +252,9 @@ class SessionIOMixin(SessionLike):
         # See defaults.WEBSOCKET_CACHE_FLUSH_FRAMES / SECONDS — imported at
         # module scope above so the hot path doesn't pay a sys.modules
         # lookup per frame.
-        if self.websocket_path is None:
-            self.websocket_path = self._websocket_cache_path()
-            self.websocket_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = getattr(self, "_websocket_fh", None)
-        # One time.monotonic() per call, reused for both the elapsed-time
-        # check and (on first write) the init timestamp / (on flush) the
-        # new last_flush stamp.
-        now = time.monotonic()
-        if fh is None:
-            fh = self.websocket_path.open("a", encoding="utf-8")
-            self._websocket_fh = fh
-            self._websocket_last_flush_ts = now
-            self._websocket_frames_since_flush = 0
-            self._websocket_bytes = 0
-            self._websocket_truncated = False
-        line = json.dumps(entry, ensure_ascii=False) + "\n"
-        if self._ws_over_ceiling(fh, len(line.encode("utf-8"))):
+        fh = self._websocket_cache_handle(now)
+        line = dumps_utf8_safe(entry) + "\n"
+        if self._ws_over_ceiling(fh, len(line.encode("utf-8")), limit=limit):
             return
         fh.write(line)
         # Both fields are dataclass attributes initialized to 0 / 0.0 and
@@ -167,11 +270,21 @@ class SessionIOMixin(SessionLike):
         else:
             self._websocket_frames_since_flush = frames
 
-    def _ws_over_ceiling(self, fh: Any, line_bytes: int) -> bool:
-        """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES``. Return True if this frame
-        must be dropped because the sidecar reached the ceiling, writing a
+    def _ws_frame_cannot_fit(self, raw_size: int, *, limit: int, now: float) -> bool:
+        """Whether a frame of *raw_size* is refused by the ceiling before encoding.
+
+        The raw size is a lower bound on the stored line, so a frame this
+        refuses would have been refused anyway -- only now nothing was copied
+        to find out. Writes the one-time marker exactly as the late check does.
+        """
+        if limit <= 0:
+            return False
+        return self._ws_over_ceiling(self._websocket_cache_handle(now), raw_size, limit=limit, reserve=False)
+
+    def _ws_over_ceiling(self, fh: Any, line_bytes: int, *, limit: int, reserve: bool = True) -> bool:
+        """Enforce ``OCTOWRIGHT_WEBSOCKET_MAX_BYTES`` (*limit*). Return True if this
+        frame must be dropped because the sidecar reached the ceiling, writing a
         one-time ``websocket_truncated`` marker on the edge. Off → always False."""
-        limit = _websocket_max_bytes()
         if limit <= 0:
             return False
         if self._websocket_truncated:
@@ -186,32 +299,29 @@ class SessionIOMixin(SessionLike):
             fh.flush()
             self._websocket_truncated = True
             return True
-        self._websocket_bytes += line_bytes
+        if reserve:
+            self._websocket_bytes += line_bytes
         return False
 
     async def _extract_markdown(self, html: str) -> str:
-        """Convert HTML to markdown using MarkItDown if available."""
+        """Convert HTML to markdown using MarkItDown if available.
+
+        In a worker thread: the conversion is synchronous CPU work (measured at
+        2.09s for a 760KB page) scheduled after every load and main-frame
+        navigation, and on the event loop it stalled every other session's
+        tools, the dashboard and the MCP transport for that long.
+        """
         try:
             import inspect
 
-            markitdown_mod = importlib.import_module("markitdown")
-            converter = markitdown_mod.MarkItDown()
-            rendered = converter.convert(html)
+            # anyio rather than asyncio.to_thread so the trio-parametrised tests
+            # take the same path the asyncio daemon does.
+            rendered = await anyio.to_thread.run_sync(
+                markdown_render.markitdown_convert, importlib.import_module("markitdown"), html
+            )
             if inspect.isawaitable(rendered):
                 rendered = await rendered
-            if isinstance(rendered, str):
-                return rendered
-            if rendered is None:
-                raise ValueError("markitdown conversion returned empty result")
-            for field in ("text", "markdown", "text_content"):
-                candidate = getattr(rendered, field, None)
-                if candidate:
-                    if callable(candidate):
-                        candidate = candidate()
-                    text = str(candidate)
-                    if text.strip():
-                        return text
-            return str(rendered)
+            return markdown_render.rendered_markdown(rendered)
         except Exception as exc:
             # markitdown is optional. Log the failure so a real bug (e.g. a
             # bad markitdown release) is visible during development, but
@@ -223,7 +333,33 @@ class SessionIOMixin(SessionLike):
         clean = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", html)
         clean = re.sub(r"<[^>]+>", " ", clean)
         clean = re.sub(r"\n{3,}", "\n\n", clean)
-        return clean.strip()
+        # Decoded, like the text markitdown produces: the cache is for reading,
+        # and a scrubber matches a credential's raw spelling, not "&amp;".
+        return html_lib.unescape(clean).strip()
+
+    @gated_operation("markdown_capture")
+    async def _refuse_oversized_document(self, target: Any) -> None:
+        """Raise ``MarkdownCaptureTooLarge`` when the page says its HTML is over the cap.
+
+        Best-effort: a measurement that fails or returns something unexpected
+        leaves the decision to the check on the HTML actually read.
+        """
+        try:
+            length = await bounded(
+                target.evaluate(markdown_render.DOCUMENT_HTML_LENGTH_JS), operation="markdown_capture", timeout=10.0
+            )
+        except Exception as exc:
+            log.debug("octowright.markdown.size_probe_failed", error=repr(exc))
+            return
+        if isinstance(length, int) and not isinstance(length, bool):
+            markdown_render.check_html_size(length)
+
+    async def _durable_markdown(self, html: str) -> str:
+        """Markdown for the on-disk cache, with any macro credential scrubbed out."""
+        markdown = await self._extract_markdown(html)
+        if self.durable_text_scrubber is not None:
+            markdown = self.durable_text_scrubber(markdown)
+        return markdown
 
     @gated_operation("markdown_capture")
     async def capture_markdown(self, *, page: Page | None = None, force: bool = False) -> Path | None:
@@ -265,9 +401,16 @@ class SessionIOMixin(SessionLike):
             # honest label here: this runs automatically after nearly every
             # navigate/page-load/launch via _schedule_markdown_capture, so the
             # caller is very often not browser_read_markdown at all.
+            await self._refuse_oversized_document(target)
             html = await bounded(target.content(), operation="markdown_capture", timeout=10.0)
-            markdown = await self._extract_markdown(html)
-            temp_path.write_text(markdown, encoding="utf-8")
+            # Checked again on what was actually returned: the page can grow
+            # between the measurement and the read, and the measurement may
+            # have failed. ``del`` so the HTML is not held beside its markdown.
+            markdown_render.check_html_size(len(html))
+            markdown = await self._durable_markdown(html)
+            del html
+            # "replace": a lone surrogate from the page must not lose the cache.
+            temp_path.write_text(markdown, encoding="utf-8", errors="replace")
             temp_path.replace(path)
             self.markdown_path = path
             self._last_markdown_capture_url = current_url
@@ -322,7 +465,7 @@ class SessionIOMixin(SessionLike):
 
     def attach_console(self) -> None:
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, "text": msg.text}
+            entry = live_scrubbed(self, {"level": msg.type, **_console_text_fields(msg.text)})
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
@@ -356,7 +499,7 @@ class SessionIOMixin(SessionLike):
 
         # Attach console listener so logs from the new tab are collected.
         def _on_console(msg: ConsoleMessage) -> None:
-            entry = {"level": msg.type, "text": msg.text, "page_index": page_index}
+            entry = live_scrubbed(self, {"level": msg.type, **_console_text_fields(msg.text), "page_index": page_index})
             self.console.append(entry)
             self.console_count += 1
             self.recorder.record("console", **entry)
@@ -379,7 +522,8 @@ class SessionIOMixin(SessionLike):
             # What the binding called it, when it says anything at all. Never
             # the key -- see ``_next_websocket_id``.
             "binding_id": binding_id,
-            "url": url,
+            # browser_websocket_summary returns this; see ``live_scrubbed``.
+            "url": live_scrubbed(self, url),
             "opened_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "closed_at": None,
             "framesent": 0,
@@ -499,16 +643,9 @@ class SessionIOMixin(SessionLike):
         binding_id = getattr(websocket, "id", None)
 
         def _binary_preview(payload: Any) -> str:
-            if isinstance(payload, str) and _looks_like_binary_text(payload):
-                # "b'...'" and `b\"...\"` text markers from playwright / logs
-                # are rendered as the true byte length when possible.
-                try:
-                    parsed = ast.literal_eval(payload)
-                except Exception:
-                    parsed = None
-                if isinstance(parsed, bytes | bytearray | memoryview):
-                    return f"[binary payload hidden: {len(parsed)} bytes]"
-
+            # A ``b'...'`` text frame arrives here already decoded by the frame
+            # handler (once, and only when small), so it reports its true
+            # byte length; this never parses anything itself.
             size = len(payload) if hasattr(payload, "__len__") else None
             if size is None:
                 return "[binary payload hidden]"
@@ -543,6 +680,10 @@ class SessionIOMixin(SessionLike):
                     or isinstance(payload, bytes | bytearray | memoryview)
                     or _looks_like_binary_text(payload)
                 )
+                # Parsed ONCE per frame and shared by both previews and the
+                # sidecar, which each used to parse the full payload again.
+                decoded = _decode_binary_text(payload, max_chars=BINARY_TEXT_PARSE_MAX_CHARS)
+                shown = decoded if decoded is not None else payload
                 self.recorder.record(
                     f"websocket_{direction}",
                     id=socket_id,
@@ -553,33 +694,19 @@ class SessionIOMixin(SessionLike):
                     # frame's real length either way, so capping the text
                     # costs nothing a reader of this file needed.
                     payload_preview=_preview_payload(
-                        payload, is_binary=is_binary, max_chars=WEBSOCKET_RECORD_PREVIEW_CHARS
+                        shown, is_binary=is_binary, max_chars=WEBSOCKET_RECORD_PREVIEW_CHARS
                     ),
                     payload_size=(len(payload) if payload is not None and hasattr(payload, "__len__") else None),
                 )
-                cache_payload_size = None
-                if isinstance(payload, bytes | bytearray | memoryview):
-                    cache_payload_size = len(payload)
-                elif isinstance(payload, str) and _looks_like_binary_text(payload):
-                    try:
-                        decoded = ast.literal_eval(payload)
-                    except Exception:
-                        cache_payload_size = len(payload)
-                    else:
-                        if isinstance(decoded, bytes | bytearray | memoryview):
-                            cache_payload_size = len(decoded)
-                        else:
-                            cache_payload_size = len(payload)
-                else:
-                    cache_payload_size = len(payload) if payload is not None and hasattr(payload, "__len__") else None
+                cache_payload_size = len(shown) if shown is not None and hasattr(shown, "__len__") else None
                 self._note_websocket_frame(socket_id, direction, cache_payload_size)
                 try:
                     self._append_websocket_cache(
                         direction=direction,
                         id_=socket_id,
                         url=url,
-                        payload_preview=_preview_payload(payload, is_binary=is_binary),
-                        payload=payload,
+                        payload_preview=_preview_payload(shown, is_binary=is_binary),
+                        payload=shown,
                         payload_size=cache_payload_size,
                     )
                 except Exception:
@@ -596,7 +723,7 @@ class SessionIOMixin(SessionLike):
         def _on_error(error: Any) -> None:
             entry = self._websockets.get(socket_id)
             if entry is not None:
-                entry["error"] = str(error)
+                entry["error"] = live_scrubbed(self, str(error))
             self.recorder.record(
                 "websocket_error",
                 id=socket_id,

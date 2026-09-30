@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
+from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text
 from octowright.artifacts.evidence import redact_preview
 from octowright.artifacts.models import now_iso
@@ -18,7 +18,7 @@ from octowright.macros.privacy import redact_args, scrub_sensitive_values
 
 def _json_write(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2), encoding="utf-8")
     return path
 
 

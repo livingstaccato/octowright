@@ -132,7 +132,15 @@ def macro_digest(name: str | None = None, recording_path: str | None = None, max
     return macro_artifacts.macro_digest(name=name, recording_path=recording_path, max_chars=max_chars)
 
 
-@mcp.tool(structured_output=False, description="Export a saved macro as an import-safe Python argparse CLI script.")
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Export a saved macro as an import-safe Python argparse CLI script. The script enforces "
+        "replay's guards: it types a credential only on an origin passed as --trusted-origin (or "
+        "listed in the step's allowed_origins), uploads only from the upload roots, and runs "
+        "expect_network_clean / expect_no_text, printing what each passing check saw."
+    ),
+)
 def macro_export_cli(
     name: str,
     out_path: str | None = None,
@@ -157,7 +165,11 @@ def macro_export_cli(
         "snapshot) are skipped. Pass `slowmo_ms` to insert a per-action delay (after the "
         "status pill updates, before the action dispatches) so a human can follow along; "
         "default comes from OCTOWRIGHT_MACRO_SLOWMO_MS. Returns {macro, executed, skipped, "
-        "args_used, slowmo_ms}."
+        "args_used, slowmo_ms}, plus `assertions` when the macro ran expect_network_clean or "
+        "expect_no_text: what each saw, with a `warning` on a pass that judged less than asked "
+        "(requests still in flight, a selector that matched nothing). A step can set "
+        "`require_settled: true` (expect_network_clean) or `require_match: true` "
+        "(expect_no_text) to fail on that caveat instead."
     ),
 )
 async def macro_run(

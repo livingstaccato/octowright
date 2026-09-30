@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from octowright.credential_sinks import CREDENTIAL_CALL_MARKER
+from octowright.macros.nesting import MacroLoader, iter_nested_actions
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
+from octowright.macros.substitution import own_site_origins
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -32,6 +35,18 @@ def validate_macro_call_shape(action: dict[str, Any]) -> tuple[str, dict[str, An
     return action["name"], action.get("args", {})
 
 
+def actions_assert_network_clean(actions: Any, load_macro: MacroLoader | None = None) -> bool:
+    """Whether running *actions* can reach an ``expect_network_clean`` step.
+
+    Any depth counts, so an assertion inside ``try``/``if_selector`` or any
+    other container does, and with *load_macro* a ``macro_call`` is followed
+    into the called macro (`nesting.iter_nested_actions`).
+    """
+    return any(
+        action.get("action") == "expect_network_clean" for action in iter_nested_actions(actions, load_macro=load_macro)
+    )
+
+
 async def dispatch_macro_call(
     session: SessionLike,
     action: dict[str, Any],
@@ -52,7 +67,13 @@ async def dispatch_macro_call(
         raise RuntimeError(f"{_RECURSION_PREFIX} recursion depth exceeded ({resolved_max_depth}) at {next_chain}")
 
     called = load_macro(called_name)
-    called_actions = substitute(called.get("actions", []), call_args)
+    # Taint follows the value: an arg the caller's credential was substituted
+    # into stays credential-tier in the callee, whatever the callee calls it.
+    marked = action.get(CREDENTIAL_CALL_MARKER)
+    tainted = frozenset(str(name) for name in marked) if isinstance(marked, list) else frozenset()
+    called_actions = substitute(
+        called.get("actions", []), call_args, trusted_origins=own_site_origins(session), credential_args=tainted
+    )
 
     executed, skipped = 1, 0
     for subaction in called_actions:

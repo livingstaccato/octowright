@@ -12,7 +12,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
-from octowright.config_paths import user_cache_dir, user_config_dir, user_state_dir
+from octowright import drawn_text as _drawn_text
+from octowright.config_paths import upload_staging_dir, user_cache_dir, user_config_dir, user_state_dir
 
 # Default OTel service name. Set as an env-var default (not a constant) so
 # provide.telemetry.setup_telemetry() picks it up via its env-driven
@@ -39,6 +40,16 @@ def set_actual_http_port(port: int) -> None:
 def get_default_url() -> str:
     if os.environ.get("OCTOWRIGHT_DEFAULT_URL"):
         return os.environ["OCTOWRIGHT_DEFAULT_URL"]
+    return new_tab_url()
+
+
+def new_tab_url() -> str:
+    """Octowright's own new-tab page, whatever ``OCTOWRIGHT_DEFAULT_URL`` says.
+
+    Separate from `get_default_url` because some callers need to recognise the
+    daemon's page rather than the operator's chosen landing page: an
+    ``OCTOWRIGHT_DEFAULT_URL`` pointing at the operator's app is that app.
+    """
     port = _bound_http_port if _bound_http_port is not None else int(_DEFAULT_PORT)
     return f"http://127.0.0.1:{port}/new-tab"
 
@@ -144,8 +155,9 @@ GOLDENS_DIR = Path(os.environ.get("OCTOWRIGHT_GOLDENS_DIR", str(_CONFIG_DIR / "g
 # Upload staging directory: the only filesystem location an LLM-driven
 # browser_set_input_files call may read from by default. Additional roots can
 # be allowlisted via OCTOWRIGHT_UPLOAD_ROOTS (os.pathsep-separated). The
-# current working directory is always permitted so test fixtures resolve.
-UPLOAD_STAGING_DIR = Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(_CONFIG_DIR / "uploads")))
+# daemon's CWD is deliberately NOT a root (see session.upload_paths). The rule
+# lives in config_paths so the exported macro CLI can render it.
+UPLOAD_STAGING_DIR = upload_staging_dir()
 UPLOAD_EXTRA_ROOTS_RAW = os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", "")
 
 # Octowright Advisor local state: preferences, lightweight usage summaries,
@@ -493,6 +505,12 @@ HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 #                     user-supplied value may be confidential.
 INPUT_REDACTION_MODE = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
 REDACTED_INPUT_PLACEHOLDER = "<redacted:password>"
+# What a recorded expect_no_text writes in place of its text, which is usually a
+# secret. Deliberately NOT the placeholder above: save_macro binds that one to a
+# credential parameter as a single redacted input field, and an assertion
+# sharing it made every recording containing one either unsavable or ambiguous.
+# Defined with expect_no_text's portable check, which the exported CLI renders.
+REDACTED_ASSERTION_TEXT = _drawn_text.REDACTED_ASSERTION_TEXT
 
 # Env var name controlling whether ``.py`` scenario files are loadable.
 # ``.py`` scenarios run arbitrary Python at module import; default OFF so a

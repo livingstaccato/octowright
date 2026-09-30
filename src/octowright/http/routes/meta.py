@@ -15,7 +15,6 @@ from typing import Any, cast
 
 import yaml as _yaml
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import octowright.http.state as state
@@ -23,13 +22,14 @@ from octowright._paths import atomic_write_text
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.defaults import PROFILES_DIR, SUPPORTED_KINDS
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.routes._common import _read_json_body
 from octowright.macros.lint import lint_macro
 from octowright.personas import _slug as _persona_slug
 from octowright.personas import _validate_persona_yaml_doc
 
 
-def _resolve_persona_dir(name: str) -> Path | JSONResponse:
+def _resolve_persona_dir(name: str) -> Path | SafeJSONResponse:
     """Map a path-param name to its on-disk profile dir, with containment.
 
     The route's ``{name}`` is URL-decoded by Starlette and may carry traversal
@@ -38,21 +38,21 @@ def _resolve_persona_dir(name: str) -> Path | JSONResponse:
     module-level ``PROFILES_DIR`` so a symlink can't escape the tree.
 
     Returns the resolved persona directory on success, or a ready-to-return
-    ``JSONResponse`` describing the rejection.
+    ``SafeJSONResponse`` describing the rejection.
     """
     try:
         slug = _persona_slug(name)
     except ValueError:
-        return JSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
+        return SafeJSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
     candidate = PROFILES_DIR / slug
     resolved = candidate.resolve()
     root = PROFILES_DIR.resolve()
     if resolved != root and root not in resolved.parents:
-        return JSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
+        return SafeJSONResponse({"error": f"invalid persona name {name!r}"}, status_code=400)
     return candidate
 
 
-async def list_personas_endpoint(_request: Request) -> JSONResponse:
+async def list_personas_endpoint(_request: Request) -> SafeJSONResponse:
     rows = state._personas.list_personas()
     out = [
         {
@@ -63,10 +63,10 @@ async def list_personas_endpoint(_request: Request) -> JSONResponse:
         }
         for r in rows
     ]
-    return JSONResponse(out)
+    return SafeJSONResponse(out)
 
 
-async def list_macros_endpoint(_request: Request) -> JSONResponse:
+async def list_macros_endpoint(_request: Request) -> SafeJSONResponse:
     rows = state._macros.list_macros()
     out = [
         {
@@ -77,16 +77,16 @@ async def list_macros_endpoint(_request: Request) -> JSONResponse:
         }
         for r in rows
     ]
-    return JSONResponse(out)
+    return SafeJSONResponse(out)
 
 
-async def macro_repair_preview_endpoint(request: Request) -> JSONResponse:
+async def macro_repair_preview_endpoint(request: Request) -> SafeJSONResponse:
     name = request.path_params["name"]
     try:
         preview = state._macros.repair_preview(name)
     except FileNotFoundError:
-        return JSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
-    return JSONResponse(preview)
+        return SafeJSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
+    return SafeJSONResponse(preview)
 
 
 def _issue_payload(macro: dict[str, Any]) -> list[dict[str, Any]]:
@@ -110,45 +110,45 @@ def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def macro_detail_endpoint(request: Request) -> JSONResponse:
+async def macro_detail_endpoint(request: Request) -> SafeJSONResponse:
     name = request.path_params["name"]
     try:
         macro = state._macros.load_macro(name)
     except FileNotFoundError:
-        return JSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
-    return JSONResponse(macro)
+        return SafeJSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
+    return SafeJSONResponse(macro)
 
 
-async def macro_validate_endpoint(request: Request) -> JSONResponse:
+async def macro_validate_endpoint(request: Request) -> SafeJSONResponse:
     payload, err = await _read_json_body(request)
     if err is not None:
         return err
     macro = payload.get("macro") if isinstance(payload, dict) else None
     if not isinstance(macro, dict):
-        return JSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
-    return JSONResponse(_validation_body(macro))
+        return SafeJSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
+    return SafeJSONResponse(_validation_body(macro))
 
 
-async def macro_update_endpoint(request: Request) -> JSONResponse:
+async def macro_update_endpoint(request: Request) -> SafeJSONResponse:
     name = request.path_params["name"]
     payload, err = await _read_json_body(request)
     if err is not None:
         return err
     macro = payload.get("macro") if isinstance(payload, dict) else None
     if not isinstance(macro, dict):
-        return JSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
+        return SafeJSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
 
     validation = _validation_body(macro)
     if validation["error_count"]:
-        return JSONResponse({"error": "macro validation failed", **validation}, status_code=400)
+        return SafeJSONResponse({"error": "macro validation failed", **validation}, status_code=400)
 
     path = state._macros.write_macro(name=name, macro=macro)
     saved = state._macros.load_macro(name)
     await publish_dashboard_invalidation("macros")
-    return JSONResponse({"ok": True, "name": name, "path": str(path), "macro": saved})
+    return SafeJSONResponse({"ok": True, "name": name, "path": str(path), "macro": saved})
 
 
-async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
+async def persona_sizes_endpoint(_request: Request) -> SafeJSONResponse:
     """GET /api/personas/sizes — bulk disk-size scan via du.
 
     ``du`` can take several seconds on a populous profile root, so the call
@@ -157,10 +157,10 @@ async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
     event stalls for the duration of the scan (up to the 15 s timeout).
     """
     if not PROFILES_DIR.exists():
-        return JSONResponse({})
+        return SafeJSONResponse({})
     entries = [e for e in PROFILES_DIR.iterdir() if e.is_dir()]
     if not entries:
-        return JSONResponse({})
+        return SafeJSONResponse({})
     try:
         # text=True makes subprocess.run return CompletedProcess[str], but
         # asyncio.to_thread can't propagate that overload narrowing through
@@ -186,21 +186,21 @@ async def persona_sizes_endpoint(_request: Request) -> JSONResponse:
                     sizes[Path(parts[1]).name] = int(parts[0]) * 1024
                 except (ValueError, OSError):
                     pass
-        return JSONResponse(sizes)
+        return SafeJSONResponse(sizes)
     except Exception as e:
         state.log.warning("persona_sizes.failed", error=str(e))
-        return JSONResponse({})
+        return SafeJSONResponse({})
 
 
-async def persona_detail_endpoint(request: Request) -> JSONResponse:
+async def persona_detail_endpoint(request: Request) -> SafeJSONResponse:
     """GET /api/personas/{name} — YAML content + per-engine disk usage."""
     name = request.path_params["name"]
     resolved = _resolve_persona_dir(name)
-    if isinstance(resolved, JSONResponse):
+    if isinstance(resolved, SafeJSONResponse):
         return resolved
     yaml_path = resolved / "profile.yaml"
     if not yaml_path.exists():
-        return JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
+        return SafeJSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
 
     yaml_text = yaml_path.read_text(encoding="utf-8")
 
@@ -216,7 +216,7 @@ async def persona_detail_endpoint(request: Request) -> JSONResponse:
     profile_bytes = yaml_path.stat().st_size
     total_bytes = profile_bytes + sum(engine_bytes.values())
 
-    return JSONResponse(
+    return SafeJSONResponse(
         {
             "name": name,
             "yaml": yaml_text,
@@ -227,15 +227,15 @@ async def persona_detail_endpoint(request: Request) -> JSONResponse:
     )
 
 
-async def persona_update_endpoint(request: Request) -> JSONResponse:
+async def persona_update_endpoint(request: Request) -> SafeJSONResponse:
     """PUT /api/personas/{name} — update persona YAML."""
     name = request.path_params["name"]
     resolved = _resolve_persona_dir(name)
-    if isinstance(resolved, JSONResponse):
+    if isinstance(resolved, SafeJSONResponse):
         return resolved
     yaml_path = resolved / "profile.yaml"
     if not yaml_path.exists():
-        return JSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
+        return SafeJSONResponse({"error": f"persona {name!r} not found"}, status_code=404)
 
     payload, err = await _read_json_body(request)
     if err is not None:
@@ -243,12 +243,12 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
 
     yaml_text = payload.get("yaml", "")
     if not isinstance(yaml_text, str):
-        return JSONResponse({"error": "'yaml' must be a string"}, status_code=400)
+        return SafeJSONResponse({"error": "'yaml' must be a string"}, status_code=400)
 
     try:
         parsed = _yaml.safe_load(yaml_text)
     except _yaml.YAMLError as e:
-        return JSONResponse({"error": f"invalid YAML: {e}"}, status_code=400)
+        return SafeJSONResponse({"error": f"invalid YAML: {e}"}, status_code=400)
 
     # Validate the document against the Persona schema BEFORE writing. When
     # OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1, any HTTP client can hit this
@@ -259,11 +259,11 @@ async def persona_update_endpoint(request: Request) -> JSONResponse:
     try:
         _validate_persona_yaml_doc(parsed)
     except ValueError as e:
-        return JSONResponse({"error": f"invalid persona YAML: {e}"}, status_code=400)
+        return SafeJSONResponse({"error": f"invalid persona YAML: {e}"}, status_code=400)
 
     atomic_write_text(yaml_path, yaml_text, encoding="utf-8")
     await publish_dashboard_invalidation("personas")
-    return JSONResponse({"ok": True, "name": name})
+    return SafeJSONResponse({"ok": True, "name": name})
 
 
 def routes() -> list[Route]:

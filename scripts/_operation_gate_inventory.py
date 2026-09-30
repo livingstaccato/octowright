@@ -37,9 +37,23 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "hangs, and it holds no BrowserSession to take a lease from -- the navigation it is deciding "
         "on is itself running under that session's gate",
     ),
-    "ssrf_guard.py:_validate_chain": (
+    "ssrf_guard.py:_serve_navigation": (
         "event-critical",
-        "runs inside the same route callback to resolve redirect hops before the request is released",
+        "runs inside the same route callback: fetches the navigation once and fulfills or aborts it "
+        "before the request is released",
+    ),
+    "ssrf_guard.py:_end_chain": (
+        "event-critical",
+        "runs inside the same route callback: reads the request's URL to log a dropped stale ending",
+    ),
+    "ssrf_guard.py:_watch_page": (
+        "event-critical",
+        "Playwright context page listener: registers note_frame_navigated on a new page before it "
+        "commits anything, so it cannot wait for a lease",
+    ),
+    "ssrf_guard.py:_handle_subresource": (
+        "event-critical",
+        "runs inside the same route callback: aborts or releases a subresource request",
     ),
     "browser_pool/launch_helpers.py:_is_blank": (
         "launch-time-before-session-publication",
@@ -224,6 +238,34 @@ BYPASSES: dict[str, tuple[str, str]] = {
     "session/core_network_mixin.py:SessionNetworkMixin._handle_request_failed": (
         "event-critical",
         "copies browser failure metadata into the bounded network cache",
+    ),
+    "session/core_network_mixin.py:SessionNetworkMixin.enable_inflight_tracking": (
+        "cached-property-only",
+        "iterates Octowright's own cached session.pages list to hand each page to "
+        "_track_page_requests; no Playwright I/O of its own",
+    ),
+    "session/core_network_mixin.py:SessionNetworkMixin._track_page_requests": (
+        "event-critical",
+        "attaches passive request/requestfinished/framenavigated/framedetached listeners; runs "
+        "from the popup wiring event and from operations already holding the session's lease. "
+        "The handlers are request_failures.NetworkLedger's, which read only the event payloads "
+        "they are handed (request fields, the navigated page's cached main_frame)",
+    ),
+    "request_failures.py:NetworkLedger.response": (
+        "event-critical",
+        "reads a browser-emitted response's status and resource type to count an HTTP error",
+    ),
+    "request_failures.py:NetworkLedger.request_failed": (
+        "event-critical",
+        "reads a browser-emitted request's failure text to count a failed request",
+    ),
+    "request_failures.py:NetworkLedger.request_started": (
+        "event-critical",
+        "reads a browser-emitted request's resource type and navigation flag to track it as in flight",
+    ),
+    "request_failures.py:NetworkLedger.frame_navigated": (
+        "event-critical",
+        "reads the navigated page's cached main_frame to forget a replaced document's in-flight requests",
     ),
     "browser_pool/crash_recovery.py:_safe_url": (
         "event-critical",

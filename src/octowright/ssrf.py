@@ -18,23 +18,58 @@ This module adds an opt-in host policy, gated like the other network opt-outs:
 * ``off`` (DEFAULT) — no host check.
 * ``block-private`` — refuse `http(s)` to a *literal* IP in any non-public range
   (loopback, link-local incl. the metadata range, RFC1918, multicast, reserved,
-  unspecified) and to `localhost` / `*.localhost` / well-known metadata
-  hostnames.
+  unspecified), to `localhost` / `*.localhost` / well-known metadata
+  hostnames, and -- in the resolving checks below -- to a name that resolves
+  to a non-public address or does not resolve at all.
 
 `OCTOWRIGHT_SSRF_ALLOW` is a comma-separated host allowlist that overrides the
 block for legitimate internal targets. An operator who sets the policy to an
 *unrecognized* token gets the protective mode (their intent was clearly to turn
 something on), not a silent disable.
 
-Scope note: this guards literal-IP and known-name targets synchronously (no DNS).
-A public hostname that *resolves* to a private address (DNS-rebinding SSRF) is not
-covered here — that needs a resolving variant and is tracked separately.
+Three entry points, deliberately split:
+
+* :func:`check_navigation_url` is synchronous and classifies the host *as
+  spelled* -- literal IPs in every WHATWG encoding, and the known names above.
+  It never touches DNS, so it is safe from any caller.
+* :func:`check_navigation_url_resolved` is the async entry point every
+  navigation path awaits (tool pre-flight, and in ``ssrf_guard`` every
+  navigation request's own URL plus each redirect ``Location`` it follows). After the literal check it resolves a
+  non-allowlisted hostname with ``getaddrinfo`` in a worker thread and refuses
+  the URL if **any** answer is non-public -- a browser may connect to whichever
+  address it likes from a multi-answer set. A name that does not resolve is
+  refused (fail closed): an unresolvable name is exactly what a rebinding
+  attacker's short-TTL record looks like between answers, and "could not
+  check" must not read as "checked and public".
+* :func:`check_request_url_cached` is the same check for subresources (every
+  image, script, fetch/XHR and WebSocket ``ssrf_guard`` sees -- the first URL
+  only: a subresource's redirect hops never reach it, see ``ssrf_guard``), with
+  a short per-host verdict cache so a page's hundredth request to a CDN does not pay
+  its own ``getaddrinfo``.
+
+What this still cannot close -- the DNS-rebinding window
+--------------------------------------------------------
+Validation and connection are two separate lookups. octowright resolves the
+name, finds it public, and hands the URL to the browser, which performs its
+**own** lookup when it connects. An attacker whose record answers a public
+address to the first query and ``169.254.169.254`` to the second (TTL 0) still
+wins that race. Closing it needs the validated address pinned into the
+browser's connection, and Playwright exposes no such control -- there is no
+per-request resolver override, and Chromium's ``--host-resolver-rules`` is a
+launch-time, whole-browser static map, not a per-navigation pin. So this layer
+raises the bar from "name any private host" to "run a rebinding DNS server and
+win a timing race"; it is not a guarantee. Deployments that need one must
+enforce egress at the network layer (a firewall or an egress proxy that
+resolves once and connects to what it resolved).
 """
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
+import socket
+import time
 import unicodedata
 from urllib.parse import unquote, urlsplit
 
@@ -74,13 +109,30 @@ def _allowlist() -> set[str]:
     return {h.strip().lower() for h in raw.split(",") if h.strip()}
 
 
-def _ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+def ip_is_non_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True for any address an SSRF should not be able to reach. IPv4-mapped
     IPv6 (``::ffff:127.0.0.1``) is unwrapped first so a mapped loopback/private
-    address can't slip through the v6 classification."""
+    address can't slip through the v6 classification.
+
+    ``not is_global`` is the base test, not ``is_private``: the shared address
+    space 100.64.0.0/10 (RFC 6598) is neither private nor global, and it holds
+    Alibaba Cloud's metadata service (100.100.100.200) and every Tailscale
+    node. The explicit flags stay because ``is_global`` alone is not a superset
+    of them -- on 3.11 it calls multicast 224.0.0.0/4 global. Shared by the
+    opt-in navigation policy here and the always-on web discovery check
+    (``server.web``), so the two cannot disagree about what "public" means.
+    """
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
         ip = ip.ipv4_mapped
-    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    return (
+        not ip.is_global
+        or ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+    )
 
 
 _HEX_DIGITS = "0123456789abcdefABCDEF"  # pragma: allowlist secret
@@ -173,24 +225,21 @@ def _parse_whatwg_ipv4(host: str) -> ipaddress.IPv4Address | None:
         return None
 
 
-def _host_is_blocked(host: str) -> bool:
-    """True if ``host`` is a non-public literal IP, or a blocked hostname
-    (``localhost`` / ``*.localhost`` / a well-known metadata name).
+def _literal_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """``host`` as an IP address in any spelling a browser accepts, else ``None``.
 
     Checks the strict dotted-quad/IPv6 form first, then falls back to the
     WHATWG (browser) IPv4 parser: every engine octowright drives resolves
     decimal/hex/octal/shorthand IPv4 forms (e.g. ``2130706433`` ==
     ``127.0.0.1``) before connecting, so those forms must be classified the
     same as their dotted-quad equivalent rather than mistaken for a hostname.
+    The one parse serves both layers, so the literal check and the DNS check
+    cannot disagree about whether a host is an address.
     """
     try:
-        ip = ipaddress.ip_address(host)
+        return ipaddress.ip_address(host)
     except ValueError:
-        whatwg_ip = _parse_whatwg_ipv4(host)
-        if whatwg_ip is not None:
-            return _ip_is_non_public(whatwg_ip)
-        return host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")
-    return _ip_is_non_public(ip)
+        return _parse_whatwg_ipv4(host)
 
 
 #: Non-ASCII code points UTS46 maps to ``.`` before a browser parses the host.
@@ -228,22 +277,154 @@ def normalize_host_for_policy(host: str) -> str:
     return mapped.lower()
 
 
+def _policy_host(url: str) -> str | None:
+    """The normalized host of ``url`` the active policy has to classify, if any.
+
+    ``None`` when the policy is off, ``url`` does not parse (the downstream
+    navigate will fail anyway; don't mask that with an SSRF error), the scheme
+    is not IP-routable, there is no host, or the host is allowlisted.
+    """
+    if _policy() == "off":
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in _CHECKED_SCHEMES:
+        return None
+    host = normalize_host_for_policy(parts.hostname or "")
+    if not host or host in _allowlist():
+        return None
+    return host
+
+
+def _refuse_as_spelled(host: str) -> bool:
+    """Refuse ``host`` if it is a non-public literal IP or a blocked hostname
+    (``localhost`` / ``*.localhost`` / a well-known metadata name).
+
+    Returns whether ``host`` is a literal IP -- one that passed here has been
+    fully classified, so there is nothing left for DNS to answer.
+    """
+    ip = _literal_ip(host)
+    blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else ip_is_non_public(ip)
+    if blocked:
+        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+    return ip is not None
+
+
 def check_navigation_url(url: str) -> None:
     """Raise ``ValueError`` if the active SSRF policy refuses ``url``.
 
     A no-op when the policy is ``off`` (default) or the URL is not http(s).
     Allowlisted hosts always pass.
     """
-    if _policy() == "off":
-        return
+    host = _policy_host(url)
+    if host is not None:
+        _refuse_as_spelled(host)
+
+
+#: The resolver, held at module level so tests can substitute answers without
+#: patching the process-wide ``socket`` module.
+_getaddrinfo = socket.getaddrinfo
+
+
+def _resolved_non_public(host: str) -> list[str]:
+    """Resolve ``host`` and return every answer that is not public.
+
+    Raises ``OSError`` (``socket.gaierror`` included) or ``UnicodeError`` when
+    the name cannot be resolved; the caller turns that into a refusal. Blocking:
+    run it off the event loop.
+    """
+    infos = _getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    flagged: list[str] = []
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]  # drop an IPv6 zone id
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError:
+            flagged.append(address)  # an answer we cannot classify is not public
+            continue
+        if ip_is_non_public(ip):
+            flagged.append(address)
+    return flagged
+
+
+async def _resolution_refusal(host: str) -> str | None:
+    """Why ``host`` is refused once resolved, or ``None`` when every answer is public.
+
+    The lookup runs in a worker thread: ``getaddrinfo`` blocks, and every
+    caller is on the daemon's event loop.
+    """
     try:
-        parts = urlsplit(url)
-    except ValueError:
-        # Unparsable here means the downstream navigate will fail anyway; don't
-        # mask that with an SSRF error.
+        flagged = await asyncio.to_thread(_resolved_non_public, host)
+    except (OSError, UnicodeError) as exc:
+        return (
+            f"SSRF policy block-private refuses {host!r}: the host could not be resolved "
+            f"({exc}); an unresolvable name is refused rather than assumed public"
+        )
+    if flagged:
+        return (
+            f"SSRF policy block-private refuses {host!r}: it resolves to non-public address(es) {sorted(set(flagged))}"
+        )
+    return None
+
+
+async def check_navigation_url_resolved(url: str) -> None:
+    """:func:`check_navigation_url`, then refuse a host that RESOLVES non-public.
+
+    See the module docstring for the rebinding window this cannot close.
+    """
+    host = _policy_host(url)
+    if host is None or _refuse_as_spelled(host):
         return
-    if parts.scheme.lower() not in _CHECKED_SCHEMES:
+    refusal = await _resolution_refusal(host)
+    if refusal is not None:
+        raise InvalidRequestError(refusal)
+
+
+#: How long a subresource host's verdict is reused. A page issues dozens of
+#: requests to the same few hosts; resolving each one would put a thread-pool
+#: ``getaddrinfo`` in front of every image. Short, because a cached "public"
+#: is exactly what a rebinding record wants to outlive -- though the browser's
+#: own lookup already leaves that window open (module docstring).
+SUBRESOURCE_VERDICT_TTL_SECONDS = 30.0
+#: Bound on distinct cached hosts, so a page that requests a fresh random
+#: subdomain per request cannot grow the cache without limit.
+SUBRESOURCE_VERDICT_MAX_HOSTS = 1024
+
+_subresource_verdicts: dict[str, tuple[float, str | None]] = {}
+_subresource_lookups: dict[str, asyncio.Task[str | None]] = {}
+
+
+async def check_request_url_cached(url: str) -> None:
+    """:func:`check_navigation_url_resolved` for a subresource, with a per-host TTL cache.
+
+    Concurrent requests to a host whose verdict is not cached share one
+    lookup rather than each starting their own.
+    """
+    host = _policy_host(url)
+    if host is None or _refuse_as_spelled(host):
         return
-    host = normalize_host_for_policy(parts.hostname or "")
-    if host and host not in _allowlist() and _host_is_blocked(host):
-        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+    now = time.monotonic()
+    cached = _subresource_verdicts.get(host)
+    if cached is None or cached[0] <= now:
+        refusal = await _shared_lookup(host)
+        if len(_subresource_verdicts) >= SUBRESOURCE_VERDICT_MAX_HOSTS:
+            _subresource_verdicts.pop(next(iter(_subresource_verdicts)))
+        _subresource_verdicts[host] = (now + SUBRESOURCE_VERDICT_TTL_SECONDS, refusal)
+    else:
+        refusal = cached[1]
+    if refusal is not None:
+        raise InvalidRequestError(refusal)
+
+
+async def _shared_lookup(host: str) -> str | None:
+    task = _subresource_lookups.get(host)
+    # A task left by another event loop (a test's) cannot be awaited here.
+    if task is None or task.get_loop() is not asyncio.get_running_loop():
+        task = asyncio.ensure_future(_resolution_refusal(host))
+        _subresource_lookups[host] = task
+        task.add_done_callback(
+            lambda done: _subresource_lookups.pop(host, None) if _subresource_lookups.get(host) is done else None
+        )
+    return await asyncio.shield(task)

@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
-from octowright import ssrf
+from octowright import ssrf, ssrf_guard
 from octowright._tracing import histogram, span
 from octowright.defaults import (
     DEFAULT_ACTION_TIMEOUT_MS,
@@ -29,10 +29,18 @@ from octowright.session.aria_redaction import (
 from octowright.session.aria_redaction import (
     aria_snapshot as redacted_aria_snapshot,
 )
+from octowright.session.fill_origin import pending_fill_origin_check
+from octowright.session.input_redaction import (
+    CREDENTIAL_FIELD_JS,
+    attached_probe_timeout_ms,
+    classify_credential_field,
+    probe_timeout_ms,
+    recorded_input_value,
+)
 from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
-from octowright.session.timeouts import bounded
+from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 log = get_logger(__name__)
 
@@ -126,6 +134,37 @@ def _sanitize_url_for_span(url: str) -> str:
         return url
 
 
+#: How long a Shift release may take. It runs in a ``finally``, often after a
+#: credential step's budget cancelled a wedged press: that budget cancels
+#: once, so without a bound of its own a target that answers neither holds
+#: the session gate forever.
+_SHIFT_RELEASE_TIMEOUT_SECONDS = 2.0
+
+
+async def _release_shift(keyboard: Any) -> None:
+    """``keyboard.up("Shift")`` under its own short bound; a release that fails is logged, not raised.
+
+    Not raised because it is cleanup: the press's own outcome (its error, or
+    the budget's cancellation propagating through this ``finally``) is what
+    the caller must see -- whether the release did not answer or raised (a
+    page closed under it raises ``TargetClosedError``).
+
+    ``bounded()``, as for every other Playwright call with no timeout of its
+    own, and caught here, inside the caller's gated operation: a
+    ``SessionCallTimeoutError`` escaping that operation would fire the gate's
+    ``on_call_timeout`` hook and report the session unresponsive for a
+    cleanup step.
+    """
+    try:
+        await bounded(
+            keyboard.up("Shift"), operation="browser_type_shift_release", timeout=_SHIFT_RELEASE_TIMEOUT_SECONDS
+        )
+    except SessionCallTimeoutError:
+        log.warning("core_page_mixin.shift_release_timed_out", timeout_s=_SHIFT_RELEASE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        log.warning("core_page_mixin.shift_release_failed", error=repr(exc))
+
+
 #: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
 #: (they are not encoded, not rejected — deleted), so they can be used to hide
 #: the second slash of an authority from a naive string test.
@@ -164,17 +203,17 @@ def _canonicalize_for_guard(url: str) -> str:
     return url.strip(_C0_OR_SPACE).translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
 
 
-def _reject_unsafe_url(url: str) -> None:
-    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
-    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. Every
-    navigation entry point (navigate / open_url / launch) and macro replay
-    routes through here, so one call covers them all.
+def _check_url_shape(url: str) -> str | None:
+    """The scheme half of :func:`_reject_unsafe_url`, without the host check.
 
-    The type is load-bearing, not decoration: ``BrowserPool.launch``
-    classifies by ``isinstance``, so a sibling check added here as a plain
-    ``raise ValueError(...)`` would be filed as an engine fault and recreate
-    issue #214. ``tests/test_launch_guard_classification.py`` scans this
-    function by name for that."""
+    Returns the canonical spelling the host policy must then classify, or
+    ``None`` for a host-relative path, which has no host of its own. Split out
+    so the async entry point can hand that one spelling to the resolving check
+    instead of running the synchronous host check and then the resolving one,
+    which repeats it.
+
+    Raises ``InvalidRequestError``, never a bare ``ValueError`` -- see
+    :func:`_reject_unsafe_url`."""
     if not isinstance(url, str) or not url:
         raise InvalidRequestError("navigate url must be a non-empty string")
     stripped = _canonicalize_for_guard(url)
@@ -189,7 +228,7 @@ def _reject_unsafe_url(url: str) -> None:
     # spelling of an authority, and `_canonicalize_for_guard` folds them all into
     # the `//` form before we get here (see its docstring).
     if stripped.startswith("/") and not stripped.startswith("//"):
-        return
+        return None
     scheme, sep, _rest = stripped.partition(":")
     if not sep:
         raise InvalidRequestError(f"navigate url missing scheme: {url!r}")
@@ -197,7 +236,38 @@ def _reject_unsafe_url(url: str) -> None:
         raise InvalidRequestError(
             f"navigate url scheme {scheme!r} is not allowed (blocked: {sorted(_NAV_DENIED_SCHEMES)})"
         )
-    ssrf.check_navigation_url(stripped)
+    return stripped
+
+
+def _reject_unsafe_url(url: str) -> None:
+    """Raise ``InvalidRequestError`` if ``url`` is on the deny-list of unsafe
+    schemes, or the active ``OCTOWRIGHT_SSRF_POLICY`` refuses its host. This
+    is the synchronous, DNS-free form; the navigation entry points (navigate /
+    open_url / launch, and so macro replay) run the resolving
+    :func:`reject_unsafe_url_resolved` instead, which covers this check too.
+
+    The type is load-bearing, not decoration: ``BrowserPool.launch``
+    classifies by ``isinstance``, so a sibling check added here as a plain
+    ``raise ValueError(...)`` would be filed as an engine fault and recreate
+    issue #214. ``tests/test_launch_guard_classification.py`` scans this
+    function and :func:`_check_url_shape` by name for that."""
+    canonical = _check_url_shape(url)
+    if canonical is not None:
+        ssrf.check_navigation_url(canonical)
+
+
+async def reject_unsafe_url_resolved(url: str) -> None:
+    """:func:`_reject_unsafe_url`, plus the policy's DNS check on the host.
+
+    Split out because resolving blocks and every entry point is async: the
+    synchronous guard stays DNS-free for the callers that cannot await
+    (``launch_helpers.base_url_kwargs``), and those are still covered at
+    navigation time, since the per-hop ``ssrf_guard`` resolves every hop.
+    The resolving check includes the synchronous one, so it runs alone here.
+    """
+    canonical = _check_url_shape(url)
+    if canonical is not None:
+        await ssrf.check_navigation_url_resolved(canonical)
 
 
 async def _body_contains_text(session: SessionLike, body: Any, text: str) -> bool:
@@ -303,7 +373,7 @@ class SessionPageMixin(SessionLike):
 
     @gated_operation("browser_navigate")
     async def navigate(self, url: str) -> dict[str, Any]:
-        _reject_unsafe_url(url)
+        await reject_unsafe_url_resolved(url)
         instance_id = getattr(self, "instance_id", None)
         kind = getattr(self, "kind", None)
         t0 = time.perf_counter()
@@ -318,7 +388,9 @@ class SessionPageMixin(SessionLike):
             prior_mcp_navigation = getattr(self, "_last_mcp_navigation", None)
             self._last_mcp_navigation = url
             try:
-                await self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                await ssrf_guard.guarded_navigation(
+                    self.page.main_frame, self.page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                )
             except BaseException:
                 # Reset the dedupe tag on failure: if the user then navigates to
                 # the same URL manually, that's a genuine user_navigation event
@@ -383,8 +455,14 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("click", **recorded_kwargs)
 
     @gated_operation("session_input_redaction")
-    async def _is_password_input(self, selector: str) -> bool:
+    async def _is_password_input(self, selector: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS) -> bool | None:
         """Best-effort check: does *selector* resolve to a credential input?
+
+        ``None`` when the field cannot be classified -- a Playwright/JS error,
+        or a probe result of the wrong shape -- which the redaction decision
+        (``input_redaction.recorded_input_value``) treats as a credential, so a
+        selector that disappears around a typing/fill action cannot write
+        cleartext credentials into the JSONL recording.
 
         Treats both ``type=password`` AND ``autocomplete in {current-password,
         new-password, one-time-code}`` as credential-bearing so SPAs that
@@ -392,59 +470,30 @@ class SessionPageMixin(SessionLike):
         appropriate autocomplete hint still get scrubbed.
 
         Uses ``locator.first.evaluate(...)`` so multi-match selectors don't
-        raise. Any Playwright/JS error fails closed to ``True`` so a selector
-        that disappears around a typing/fill action cannot write cleartext
-        credentials into the JSONL recording.
+        raise, bounded by *timeout_ms* (see ``input_redaction.probe_timeout_ms``).
         """
         try:
             loc = self._target().locator(selector).first
-            # Read both el.autocomplete (the IDL property — only present on
-            # form-control elements) and el.getAttribute('autocomplete') (the
-            # raw attribute — present on any element that declares it). Custom
-            # elements / <div contenteditable> declare autocomplete via the
-            # attribute, not the property, so the property-only read would
-            # silently leak.
-            info = await loc.evaluate(
-                "el => el ? {"
-                "  type: el.type ? String(el.type).toLowerCase() : '',"
-                "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
-                "    || (el.getAttribute && el.getAttribute('autocomplete')"
-                "         ? String(el.getAttribute('autocomplete')).toLowerCase() : '')"
-                "} : {type: '', ac: ''}"
-            )
+            info = await loc.evaluate(CREDENTIAL_FIELD_JS, timeout=timeout_ms)
         except Exception as exc:
             log.debug("core_page_mixin.password_lookup_failed", selector=selector, error=str(exc))
-            return True
-        # The probe returns {type, ac}. Anything else means the read did not
-        # produce a shape we can classify, and an unclassifiable field is
-        # treated as a credential -- the safe direction to be wrong in.
-        if not isinstance(info, dict):
-            return True
-        if info.get("type") == "password":
-            return True
-        return info.get("ac") in ("current-password", "new-password", "one-time-code")
+            return None
+        return classify_credential_field(info)
 
     @gated_operation("session_input_redaction")
-    async def _redacted_or_original(self, selector: str, value: str) -> str:
-        """Return ``REDACTED_INPUT_PLACEHOLDER`` if the current redaction
-        policy says to scrub this value, else *value* unchanged. The page
-        action itself always receives the original value — only the JSONL
-        record sees the result of this call."""
-        mode = _current_redaction_mode()
-        if mode == "off":
-            return value
-        if mode == "all":
-            return REDACTED_INPUT_PLACEHOLDER
-        # mode == "passwords"
-        if await self._is_password_input(selector):
-            return REDACTED_INPUT_PLACEHOLDER
-        return value
+    async def _redacted_or_original(
+        self, selector: str, value: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS
+    ) -> str:
+        """What the JSONL row records for *value* typed into *selector*."""
+        return await recorded_input_value(self, value, lambda: self._is_password_input(selector, timeout_ms=timeout_ms))
 
     # Re-enters the SAME "browser_type" lease its only caller (type_text)
     # already holds -- the gate grants re-entry by owning-task identity, and
     # this runs inline in that task rather than in one it spawned.
     @gated_operation("browser_type")
-    async def _type_as_keystrokes(self, selector: str, text: str, delay_ms: int | None) -> None:
+    async def _type_as_keystrokes(
+        self, selector: str, text: str, delay_ms: int | None, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS
+    ) -> None:
         """Type *text* by pressing physical keys, holding Shift for real.
 
         Playwright's ``type()`` never holds the modifier down, so a target that
@@ -459,33 +508,48 @@ class SessionPageMixin(SessionLike):
         ``self._target()`` so a frame-scoped selector still resolves in its own
         frame. ``a11y_dragdrop`` splits the two the same way for the same
         reason.
+        """
+        await self._target().focus(selector, timeout=timeout_ms)
+        for char in text:
+            await self._keystroke(self.page.keyboard, char)
+            if delay_ms:
+                await asyncio.sleep(delay_ms / 1000)
+
+    @gated_operation("browser_type")
+    async def _keystroke(self, sink: Any, char: str, timeout_ms: float | None = None) -> None:
+        """One physical key for *char*, pressed through *sink*.
+
+        *sink* is the page keyboard, or, for a credential, the focused
+        element's handle (``octowright.credential_input``). Both have
+        ``press`` and ``type``, and an element press is the page keyboard's
+        press after focus, so the Shift held here still applies to it.
 
         A character the layout has no physical key for (accented, emoji, any
         non-ASCII) falls back to Playwright's own text insertion: it has no
         scancode to send, so a guessed key would be worse than the payload.
+
+        ``timeout_ms`` bounds an element sink's ``press``/``type``, which is
+        what a credential step passes; the page keyboard takes none.
         """
-        await self._target().focus(selector, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        bound = {} if timeout_ms is None else {"timeout": timeout_ms}
+        stroke = keystroke_for(char)
+        if stroke is None:
+            log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
+            await sink.type(char, **bound)
+            return
+        code, shift_held = stroke
+        if not shift_held:
+            await sink.press(code, **bound)
+            return
         keyboard = self.page.keyboard
-        for char in text:
-            stroke = keystroke_for(char)
-            if stroke is None:
-                log.debug("core_page_mixin.keystroke_unmapped", char_ord=ord(char))
-                await keyboard.type(char)
-            else:
-                code, shift_held = stroke
-                if shift_held:
-                    await keyboard.down("Shift")
-                    try:
-                        await keyboard.press(code)
-                    finally:
-                        # Release even if the press raises, or the modifier
-                        # stays latched and every later keystroke on this page
-                        # -- including another tool's -- arrives shifted.
-                        await keyboard.up("Shift")
-                else:
-                    await keyboard.press(code)
-            if delay_ms:
-                await asyncio.sleep(delay_ms / 1000)
+        await keyboard.down("Shift")
+        try:
+            await sink.press(code, **bound)
+        finally:
+            # Release even if the press raises, or the modifier stays latched
+            # and every later keystroke on this page -- including another
+            # tool's -- arrives shifted.
+            await _release_shift(keyboard)
 
     @gated_operation("browser_type")
     async def type_text(self, selector: str, text: str, delay_ms: int | None, *, key_mode: str | None = None) -> None:
@@ -497,14 +561,24 @@ class SessionPageMixin(SessionLike):
         Playwright's ``type()``, which is correct for every DOM input and
         carries no keyboard-layout assumption.
         """
-        meta = await self._resolve_semantic_metadata(selector, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS)
-        recorded_text = await self._redacted_or_original(selector, text)
-        if key_mode == "keys":
-            await self._type_as_keystrokes(selector, text, delay_ms)
-        elif key_mode in (None, "text"):
-            await self._target().type(selector, text, delay=delay_ms or 0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        else:
+        if key_mode not in (None, "text", "keys"):
             raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
+        # One budget for the whole step; see input_redaction.probe_timeout_ms.
+        deadline = time.monotonic() + DEFAULT_ACTION_TIMEOUT_MS / 1000
+        element = self._target().locator(selector).first
+        await element.wait_for(state="attached", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
+        recorded_text = await self._redacted_or_original(selector, text, timeout_ms=attached_probe_timeout_ms(deadline))
+        check = pending_fill_origin_check()
+        left_ms = probe_timeout_ms(deadline)
+        if check is not None:  # one key at a time, each into a checked document; see credential_input
+            await self._checked_type(
+                element, text, check, delay_ms=delay_ms, keys=key_mode == "keys", timeout_ms=left_ms
+            )
+        elif key_mode == "keys":
+            await self._type_as_keystrokes(selector, text, delay_ms, timeout_ms=left_ms)
+        else:
+            await self._target().type(selector, text, delay=delay_ms or 0, timeout=left_ms)
         # Only stamped when it was actually asked for, so an ordinary type row
         # stays byte-identical to what every pre-existing recording holds.
         extra = {"key_mode": key_mode} if key_mode else {}
@@ -515,10 +589,30 @@ class SessionPageMixin(SessionLike):
         """Fill a CSS selector, waiting at most ``timeout_ms``. See ``click``
         for why ``None`` resolves to the default instead of being forwarded."""
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
-        meta = await self._resolve_semantic_metadata(selector, timeout_ms=budget)
-        recorded_value = await self._redacted_or_original(selector, value)
-        await self._target().fill(selector, value, timeout=budget)
+        # One budget for the whole step; see input_redaction.probe_timeout_ms.
+        deadline = time.monotonic() + budget / 1000
+        element = self._target().locator(selector).first
+        await element.wait_for(state="attached", timeout=budget)
+        meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
+        recorded_value = await self._redacted_or_original(
+            selector, value, timeout_ms=attached_probe_timeout_ms(deadline)
+        )
+        check = pending_fill_origin_check()
+        if check is None:
+            await self._target().fill(selector, value, timeout=probe_timeout_ms(deadline))
+        else:  # into a checked document only; see octowright.credential_input
+            await self._checked_fill(element, value, check, probe_timeout_ms(deadline))
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
+
+    @gated_operation("macro_credential_fill_origin")
+    async def target_url(self) -> str:
+        """The URL of the document a fill or type would land in: the active frame's, else the page's.
+
+        Read under the gate, immediately before a macro types a credential, so
+        the origin check sees the page as it is now rather than ``self.url``,
+        which only an octowright navigate writes.
+        """
+        return str(getattr(self._target(), "url", "") or "")
 
     @gated_operation("browser_press_key")
     async def press_key(self, key: str) -> None:
@@ -528,6 +622,21 @@ class SessionPageMixin(SessionLike):
     @gated_operation("browser_screenshot")
     async def screenshot(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # A session that admitted a value to its privacy ledger -- a typed
+        # password, a macro credential -- may be rendering it; raw pixels are a
+        # copy no text scrub reaches. Local import: macros imports the session.
+        # OCTOWRIGHT_LEDGER_SCREENSHOTS=allow opts back into raw pixels.
+        from octowright.macros import safe_screenshot
+        from octowright.macros.privacy import SESSION_PRIVACY_LEDGER_ATTR, SessionPrivacyLedger
+
+        ledger = getattr(self, SESSION_PRIVACY_LEDGER_ATTR, None)
+        if (
+            isinstance(ledger, SessionPrivacyLedger)
+            and ledger.values
+            and safe_screenshot.guards_ledger_screenshot(self)
+        ):
+            await safe_screenshot.ledger_screenshot(self, path, ledger.values)
+            return path
 
         # Atomic write via the shared helper — defeats the symlink-swap
         # window between the caller's containment check and Playwright's

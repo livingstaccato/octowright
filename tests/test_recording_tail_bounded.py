@@ -5,8 +5,8 @@
 
 """``tail_log`` must not size its memory use to the recording on disk.
 
-The read was ``fh.read()`` with no bound. A recording has no ceiling by default
-(``OCTOWRIGHT_RECORDING_MAX_BYTES`` is off), and a long session -- or a page
+The read was ``fh.read()`` with no bound. A recording's ceiling is 512 MiB by default
+(``OCTOWRIGHT_RECORDING_MAX_BYTES``) or off, and a long session -- or a page
 spewing console output -- grows the JSONL for as long as the browser lives. One
 ``GET /api/sessions/{id}/events?since=0`` then pulls the whole file into the
 leader, splits it into lines and ``json.loads`` every one: several GB of file

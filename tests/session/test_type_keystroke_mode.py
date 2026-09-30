@@ -14,6 +14,8 @@ keys with Shift genuinely down, and that the default path is untouched.
 
 from __future__ import annotations
 
+import asyncio
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -22,7 +24,7 @@ import pytest
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session.core_page_mixin import SessionPageMixin
-from tests._aria_stubs import stub_credential_scan
+from tests._aria_stubs import LeftOfBudget, stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -138,7 +140,7 @@ class TestKeystrokeMode:
         target = _make_target()
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#console", "a", None, key_mode="keys")
-        target.focus.assert_awaited_once_with("#console", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.focus.assert_awaited_once_with("#console", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         target.type.assert_not_awaited()
 
     @pytest.mark.anyio
@@ -151,6 +153,52 @@ class TestKeystrokeMode:
         with pytest.raises(RuntimeError, match="boom"):
             await subj.type_text("#console", "A", None, key_mode="keys")
         assert ("up", "Shift") in _keyboard_sequence(subj)
+
+    @pytest.mark.anyio
+    async def test_a_release_that_raises_does_not_replace_the_press_error(self, tmp_path: Path) -> None:
+        """The release is cleanup: a TargetClosedError from it must not hide why the press failed."""
+        subj = _make_subject(tmp_path)
+        subj._target = lambda: _make_target()  # type: ignore[attr-defined]
+        subj.page.keyboard.press = AsyncMock(side_effect=RuntimeError("boom"))
+        subj.page.keyboard.up = AsyncMock(side_effect=RuntimeError("Target page, context or browser has been closed"))
+        with pytest.raises(RuntimeError, match="boom"):
+            await subj.type_text("#console", "A", None, key_mode="keys")
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
+
+    @pytest.mark.anyio
+    async def test_a_release_that_raises_after_a_good_press_is_logged_not_raised(self, tmp_path: Path) -> None:
+        subj = _make_subject(tmp_path)
+        subj.page.keyboard.up = AsyncMock(side_effect=RuntimeError("Target page, context or browser has been closed"))
+        sink = MagicMock()
+        sink.press = AsyncMock()
+        await subj._keystroke(sink, "A", 100)
+        sink.press.assert_awaited_once()
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
+
+    @pytest.mark.anyio
+    async def test_a_wedged_press_and_a_wedged_release_do_not_hang_the_step(self, tmp_path: Path) -> None:
+        """The step's budget cancels a wedged press once; the Shift release after it needs a bound of its own.
+
+        A credential step runs under one ``asyncio.timeout``, which cancels
+        exactly once. The release in the ``finally`` then ran with nothing
+        bounding it, so a target that answered neither held the session gate
+        forever.
+        """
+        subj = _make_subject(tmp_path)
+
+        async def wedged(*_args: Any, **_kwargs: Any) -> None:
+            await asyncio.Event().wait()
+
+        sink = MagicMock()
+        sink.press = AsyncMock(side_effect=wedged)
+        subj.page.keyboard.up = AsyncMock(side_effect=wedged)
+        started = time.monotonic()
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(5):  # the test's own backstop: the bug is a hang
+                async with asyncio.timeout(0.1):  # the credential step's budget
+                    await subj._keystroke(sink, "A", 100)
+        assert time.monotonic() - started < 4
+        subj.page.keyboard.up.assert_awaited_once_with("Shift")
 
     @pytest.mark.anyio
     async def test_unmappable_character_falls_back_to_text_insertion(self, tmp_path: Path) -> None:
@@ -172,7 +220,7 @@ class TestDefaultModeUnchanged:
         target = _make_target()
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#name", "Ab*", 0, key_mode=key_mode)
-        target.type.assert_awaited_once_with("#name", "Ab*", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with("#name", "Ab*", delay=0, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         assert _keyboard_sequence(subj) == []
 
     @pytest.mark.anyio

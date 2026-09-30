@@ -34,13 +34,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route
 
 from octowright.browser_pool.session_event_bus import session_event_bus
 from octowright.defaults import DASHBOARD_DISCONNECT_POLL_SECONDS, DASHBOARD_HEARTBEAT_SECONDS
 from octowright.http.bridge_auth import header_token_ok, require_token_enabled
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.server.mcp_notifications import notification_payload
 
 
@@ -120,7 +121,7 @@ def _require_token(
     @functools.wraps(handler)
     async def guarded(request: Request) -> Response:
         if require_token_enabled() and not header_token_ok(request.headers.get("x-octowright-token"), expected_token):
-            return JSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
+            return SafeJSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
         return await handler(request)
 
     return guarded
@@ -130,10 +131,14 @@ def routes(*, mcp_token: str = "") -> list[Route]:
     # Host/origin guard OUTSIDE (reject non-loopback first), token check INSIDE —
     # matching the /mcp guard ordering.
     #
-    # pairing_exempt: this follower-only channel already demands the capability
-    # token, which is strictly stronger than a dashboard bearer (it requires
-    # reading the 0600 lockfile). Layering the pairing gate in front would only
-    # change the refusal a follower sees from 403 to 401 without adding any
-    # authorization, and the browser dashboard never calls this route.
-    endpoint = guard_sensitive_http(_require_token(mcp_events_endpoint, mcp_token), pairing_exempt=True)
+    # pairing_exempt only when there IS a token: this follower-only channel then
+    # already demands the capability token, which is strictly stronger than a
+    # dashboard bearer (it requires reading the 0600 lockfile), and layering
+    # the pairing gate in front would only change the refusal a follower sees
+    # from 403 to 401 without adding any authorization. An inline
+    # (--no-singleton) leader has no token, so ``_require_token`` is a no-op
+    # and exempting the route left the stream open to any local user; there
+    # the pairing gate is the only credential, exactly as for every other
+    # inline route (it also accepts the in-memory anchor as a token).
+    endpoint = guard_sensitive_http(_require_token(mcp_events_endpoint, mcp_token), pairing_exempt=bool(mcp_token))
     return [Route("/api/mcp-events", endpoint, methods=["GET"])]

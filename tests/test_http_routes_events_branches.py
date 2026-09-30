@@ -486,7 +486,7 @@ class TestTailNegativeSince:
 
 
 class _FakeWebSocket:
-    """Records every send_json + close call for assertion."""
+    """Records every sent frame + close call for assertion."""
 
     def __init__(self) -> None:
         self.sent: list[dict[str, Any]] = []
@@ -496,6 +496,10 @@ class _FakeWebSocket:
 
     async def send_json(self, payload: dict[str, Any]) -> None:
         self.sent.append(payload)
+
+    async def send_text(self, text: str) -> None:
+        # The tail sends a surrogate-safe dump as text, not via send_json.
+        self.sent.append(json.loads(text))
 
     async def close(self, code: int | None = None, reason: str | None = None) -> None:
         self.closed = True

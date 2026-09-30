@@ -72,10 +72,12 @@ class TestToPoolKwargs:
             disable_gpu=True,
             disable_automation_controlled=True,
             base_url="https://dev.test",
+            trusted_launch_url="https://origin.test/",
         )
         assert opts.to_pool_kwargs() == {
             "kind": "chromium",
             "base_url": "https://dev.test",
+            "trusted_launch_url": "https://origin.test/",
             "url": "https://x.test",
             "headed": False,
             "label": "lab",

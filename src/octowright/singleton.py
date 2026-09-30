@@ -32,6 +32,7 @@ import contextlib
 import json
 import os
 import sys
+import tempfile
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import asdict, dataclass
@@ -39,8 +40,11 @@ from pathlib import Path
 from typing import Any, cast
 
 import anyio
+from provide.telemetry import get_logger
 
 from octowright import defaults
+
+log = get_logger(__name__)
 
 # LOCK_PATH lives in defaults.py — single source of truth for env-driven
 # config. Re-exported here so tests that reload(singleton) (or that
@@ -87,9 +91,9 @@ def write_lock(info: LeaderInfo, path: Path = LOCK_PATH) -> None:
 
     The lockfile records the leader's PID and HTTP-MCP endpoint URL —
     sensitive enough that other local users (shared host, multi-tenant
-    workstation) shouldn't be able to read or tamper with it. Force
-    ``0o600`` on the file and ``0o700`` on the parent dir so the default
-    umask can't widen the bits.
+    workstation) shouldn't be able to read or tamper with it, and the bridge
+    capability token. The file is created ``0o600`` (never widened by the
+    umask, even briefly) and the parent dir forced to ``0o700``.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # chmod is a no-op on Windows for mode bits beyond read-only; the
@@ -101,15 +105,27 @@ def write_lock(info: LeaderInfo, path: Path = LOCK_PATH) -> None:
     if os.name != "nt":
         try:
             path.parent.chmod(0o700)
-        except OSError:
-            # Best-effort: a pre-existing parent dir we don't own can't be
-            # tightened, but the file-level chmod below still applies.
-            pass
-    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
-    tmp.write_text(info.to_json(), encoding="utf-8")
-    if os.name != "nt":
-        os.chmod(tmp, 0o600)
-    tmp.replace(path)
+        except OSError as exc:
+            # A pre-existing parent we don't own (OCTOWRIGHT_LOCK_PATH pointed
+            # into a shared dir) can't be tightened. The file is still created
+            # private below, but a directory other users can write lets them
+            # replace or unlink the lockfile, so say so rather than swallow it.
+            log.warning("singleton.lock_parent_chmod_failed", path=str(path.parent), error=str(exc))
+    # The token is in this file, so it has to be private from the first byte:
+    # mkstemp creates it 0600 with O_EXCL, whatever the umask, under a random
+    # name. The old ``<pid>.tmp`` was written under the umask (usually 0644)
+    # and chmodded afterwards -- readable in between -- and its predictable
+    # name let another user pre-plant a symlink for the write to follow.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.", suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(info.to_json())
+        tmp.replace(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
 
 
 def remove_lock(path: Path = LOCK_PATH) -> None:

@@ -105,6 +105,17 @@ class SessionRecoveredEvent:
     the browser process likely died — relaunch), or ``exhausted`` (the page keeps
     crashing past the recovery cap — relaunch / the page is unstable).
 
+    ``recovered_elsewhere`` is True when a ``recovered`` session's fresh page
+    is NOT at the dead page's URL, judged by where the page actually is
+    whether or not the navigation raised (refused by the SSRF policy, its
+    navigation failed, a redirect took it elsewhere, or it is still on the
+    guard's client-redirect document). The browser is usable, but the client
+    must navigate again before it carries on. ``navigation_error`` says why
+    the navigation failed (``None`` for a redirect elsewhere) -- also with
+    ``recovered_elsewhere`` False, when the page reached its URL but its load
+    timed out after commit. ``exhausted`` also covers a recovery whose every
+    replacement, up to the same cap, crashed loading the last URL.
+
     ``scope`` says which crash it follows up. ``renderer`` (the default) is the
     page-replacement recovery above. ``process`` is published only as
     ``outcome="failed"``: reopening a crashed browser PROCESS under
@@ -118,6 +129,8 @@ class SessionRecoveredEvent:
     outcome: RecoveryOutcome
     attempts: int
     log_path: str
+    navigation_error: str | None = None
+    recovered_elsewhere: bool = False
     scope: CrashScope = "renderer"
 
 

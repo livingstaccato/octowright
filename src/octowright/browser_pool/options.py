@@ -208,6 +208,16 @@ class LaunchOptions:
     #: This changes the browser-exposed ``navigator.webdriver`` signal only; it is
     #: not a promise that the browser is undetectable as automated.
     disable_automation_controlled: bool = False
+    #: The URL the session trusts as its own site (``session.launch_url``,
+    #: read by the macro credential guards), when it is not ``url``. Handoff and
+    #: fluid relaunch open the replacement where the page IS, which a macro may
+    #: have chosen, while the operator launched the original elsewhere. The
+    #: session is published inside ``launch``, so the value has to be right when
+    #: it is BUILT; correcting it after ``launch`` returned left a window in which
+    #: a listed session trusted the macro's URL. NEVER read from a JSONL
+    #: recording (see ``from_launch_record``): a poisoned one must not choose
+    #: what the guard trusts.
+    trusted_launch_url: str | None = None
 
     @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
@@ -324,6 +334,11 @@ class LaunchOptions:
         self._validate_browser_selection()
         self._validate_engine_specific_options()
         self._validate_headers()
+        self._validate_trusted_launch_url()
+
+    def _validate_trusted_launch_url(self) -> None:
+        if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
+            raise InvalidRequestError("trusted_launch_url must be a string")
 
     def _validate_engine_specific_options(self) -> None:
         if not isinstance(self.disable_automation_controlled, bool):

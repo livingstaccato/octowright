@@ -315,6 +315,25 @@ def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
     yield
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[None]:
+    """Fail, rather than skip, a live test whose required engine would not run.
+
+    Off unless ``OCTOWRIGHT_REQUIRE_LIVE_ENGINES`` is set; ``tests/_live_engines``
+    decides which skips count and why.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if not report.skipped or call.excinfo is None:
+        return
+    from tests._live_engines import ENV_VAR, engine_skip_failure, required_engines
+
+    message = engine_skip_failure(item, call.excinfo.value, required_engines(os.environ.get(ENV_VAR)))
+    if message is not None:
+        report.outcome = "failed"
+        report.longrepr = message
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Remove the breadcrumb on any run that reaches the end under its own power.
 
@@ -474,6 +493,20 @@ def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(_starlette_testclient.TestClient, "__init__", _init)
     monkeypatch.setattr(_starlette_testclient.TestClient, "websocket_connect", _websocket_connect)
+
+
+@pytest.fixture(autouse=True)
+def _dashboard_pairing_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route tests exercise route behaviour, not the dashboard credential gate.
+
+    Pairing ships ON and, since an inline (tokenless) app got a random anchor,
+    is enforced on every app ``build_app`` makes -- before that, the hundreds
+    of route tests that build a tokenless app passed only because the gate
+    fell open for them, which was the bug. Tests that pin the gate itself
+    ``delenv`` or set this explicitly (``test_dashboard_pairing_default.py``
+    and friends), so a real default-ON regression still fails there.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "off")
 
 
 @pytest.fixture(autouse=True)

@@ -14,7 +14,10 @@ so the validator runs for both code paths that can drive an upload:
 
 Keeping a single validator in the session layer means a recorded macro
 cannot be replayed to exfiltrate arbitrary files just because its action
-JSON was hand-edited.
+JSON was hand-edited. The exported macro CLI is a third path: it embeds
+:func:`upload_roots` and :func:`check_upload_path` verbatim
+(``artifacts.script_export``), so a standalone script enforces the same
+allowlist.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from pathlib import Path
 from octowright import defaults
 
 
-def _allowed_upload_roots() -> list[Path]:
+def upload_roots(staging_dir: Path, extra_raw: str) -> list[Path]:
     """Resolve every directory an LLM-driven upload may read from.
 
     Defaults to only the configured staging dir. Extra roots come from
@@ -36,9 +39,11 @@ def _allowed_upload_roots() -> list[Path]:
     keys, credentials) that happen to live under the project tree. Each root
     is .resolve()'d so symlink games at the root level don't bypass the
     allowlist comparison below.
+
+    Pure, and standard-library only: the exported macro CLI renders this and
+    `check_upload_path` verbatim, so a script enforces the allowlist replay does.
     """
-    roots: list[Path] = [defaults.UPLOAD_STAGING_DIR.expanduser().resolve()]
-    extra_raw = defaults.UPLOAD_EXTRA_ROOTS_RAW
+    roots: list[Path] = [staging_dir.expanduser().resolve()]
     if extra_raw:
         for chunk in extra_raw.split(os.pathsep):
             chunk = chunk.strip()
@@ -60,8 +65,8 @@ def _allowed_upload_roots() -> list[Path]:
     return unique
 
 
-def validate_upload_path(path: str) -> Path:
-    """Resolve and allowlist-check a single LLM-supplied upload path.
+def check_upload_path(path: str, roots: list[Path]) -> Path:
+    """Resolve *path* and require it under one of *roots*.
 
     ``.resolve()`` collapses symlinks so a symlink under an allowed root that
     points at e.g. /etc/passwd resolves to /etc/passwd and is rejected. Raises
@@ -76,7 +81,6 @@ def validate_upload_path(path: str) -> Path:
         raise ValueError(f"upload path {path!r} could not be resolved: {exc}") from exc
     if not resolved.exists():
         raise ValueError(f"upload path {str(resolved)!r} does not exist")
-    roots = _allowed_upload_roots()
     for root in roots:
         try:
             resolved.relative_to(root)
@@ -89,3 +93,12 @@ def validate_upload_path(path: str) -> Path:
         f"move the file under one of: {allowed} "
         f"(or extend OCTOWRIGHT_UPLOAD_ROOTS for additional roots)"
     )
+
+
+def _allowed_upload_roots() -> list[Path]:
+    return upload_roots(defaults.UPLOAD_STAGING_DIR, defaults.UPLOAD_EXTRA_ROOTS_RAW)
+
+
+def validate_upload_path(path: str) -> Path:
+    """Resolve and allowlist-check a single LLM-supplied upload path (`check_upload_path`)."""
+    return check_upload_path(path, _allowed_upload_roots())

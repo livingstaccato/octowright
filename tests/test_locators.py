@@ -14,6 +14,7 @@ import pytest
 
 from octowright.session import BrowserSession
 from octowright.session.operation.gate import SessionOperationGate
+from tests._aria_stubs import LeftOfBudget
 
 # ---------------------------------------------------------------------------
 # Fake Locator
@@ -41,13 +42,13 @@ class FakeLocator:
     async def fill(self, value: str, timeout: int = 5000) -> None:
         self._fills.append({"value": value, "timeout": timeout})
 
-    async def wait_for(self, timeout: int = 5000) -> None:
-        self._waits.append({"timeout": timeout})
+    async def wait_for(self, timeout: int = 5000, state: str | None = None) -> None:
+        self._waits.append({"timeout": timeout} if state is None else {"timeout": timeout, "state": state})
 
     async def inner_text(self) -> str:
         return self._inner_text_value
 
-    async def evaluate(self, _script: str) -> Any:
+    async def evaluate(self, _script: str, timeout: float | None = None) -> Any:
         if self._evaluate_raises:
             raise RuntimeError("evaluate failed")
         return self._evaluate_value
@@ -260,7 +261,8 @@ async def test_fill_by_calls_locator_fill(tmp_path: Path) -> None:
     result = await session.fill_by("me@octowright.test", label="Email", timeout_ms=2000)
     assert result == {"ok": True}
     assert len(page._locator._fills) == 1
-    assert page._locator._fills[0] == {"value": "me@octowright.test", "timeout": 2000}
+    assert page._locator._fills[0] == {"value": "me@octowright.test", "timeout": LeftOfBudget(2000)}
+    assert page._locator._waits[0] == {"timeout": 2000, "state": "attached"}
     assert session.recorder.recorded[-1][0] == "fill_by"  # type: ignore[union-attr]
 
 

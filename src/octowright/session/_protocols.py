@@ -8,18 +8,25 @@ from __future__ import annotations
 from collections import deque
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, LiteralString, Protocol
+from typing import TYPE_CHECKING, Any, LiteralString, Protocol
+from weakref import WeakKeyDictionary
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 
 from octowright.recorder import Recorder
+from octowright.request_failures import NetworkLedger
 from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
+
+if TYPE_CHECKING:
+    from octowright.macros.privacy import DurableTextScrubber
 
 
 class SessionLike(Protocol):
     instance_id: str
     kind: str
     url: str
+    launch_url: str | None
+    base_url: str | None
     page: Page
     pages: list[Page]
     recorder: Recorder
@@ -46,6 +53,11 @@ class SessionLike(Protocol):
     extra_http_headers_urls: list[str] | None
     _network_requests: deque[dict[str, Any]]
     _network_requests_dropped: int
+    page_errors: deque[dict[str, Any]]
+    _network: NetworkLedger
+    _inflight_tracking: bool
+    _tracked_pages: WeakKeyDictionary[Any, list[tuple[str, Any]]]
+    durable_text_scrubber: DurableTextScrubber | None
     trace: bool
     trace_path: Path | None
     har_path: Path | None
@@ -102,6 +114,14 @@ class SessionLike(Protocol):
     ) -> None: ...
 
     async def fill(self, selector: str, value: str, *, timeout_ms: int | None = None) -> None: ...
+    async def target_url(self) -> str: ...
+    # Implemented on SessionLocatorMixin; SessionPageMixin's fill and type use them.
+    async def _checked_fill(self, locator: Any, value: str, check: Any, timeout_ms: int) -> None: ...
+    async def _checked_type(
+        self, locator: Any, text: str, check: Any, *, delay_ms: int | None, keys: bool, timeout_ms: int = ...
+    ) -> None: ...
+    # Implemented on SessionPageMixin; SessionLocatorMixin's _checked_type uses it.
+    async def _keystroke(self, sink: Any, char: str, timeout_ms: float | None = None) -> None: ...
 
     async def list_pages(self) -> list[dict[str, Any]]: ...
 
@@ -121,6 +141,18 @@ class SessionLike(Protocol):
     async def snapshot(self) -> dict[str, Any]: ...
 
     async def evaluate(self, expression: str) -> Any: ...
+
+    def network_failures_since(self, since: str = "run") -> tuple[int, int, int]: ...
+
+    def pending_requests(self) -> int: ...
+
+    def enable_inflight_tracking(self) -> None: ...
+
+    def disable_inflight_tracking(self) -> bool: ...
+
+    def _forget_page_requests(self, page: Any) -> None: ...
+
+    def mark_network_clean_window(self) -> None: ...
 
     def get_network_requests(
         self,

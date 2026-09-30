@@ -13,13 +13,21 @@ the loopback/Host/cross-origin guard like every sensitive route.
 from __future__ import annotations
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, Response
 from starlette.routing import Route
 
 from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.pairing import PAIR_CODE_TTL_SECONDS, dashboard_pairing_state
 from octowright.http.routes._common import _read_json_body
+
+#: Redemption is reached with no credential at all -- it is the bootstrap -- and
+#: reads its body before it can tell a real code from a bad one. A code is a few
+#: dozen bytes, so this fixed ceiling costs nothing and cannot be switched off,
+#: unlike ``OCTOWRIGHT_MAX_REQUEST_BODY_BYTES`` (off by default). Without it any
+#: process that can reach loopback made the leader buffer an unbounded body.
+PAIR_REDEEM_MAX_BODY_BYTES = 4096
 
 
 async def pair_mint(request: Request) -> Response:
@@ -27,17 +35,21 @@ async def pair_mint(request: Request) -> Response:
     same credential the follower presents on /mcp — so only a process that can
     read the 0600 lockfile (the `octowright dashboard` CLI) can mint."""
     pairing = dashboard_pairing_state(request)
-    if pairing is None or not pairing.token_configured:
-        # Inline (--no-singleton) leader: no lockfile, no token — there is no
-        # authenticated minter, so refuse rather than fail open.
-        return JSONResponse(
-            {"error": "pairing unavailable: this leader has no capability token (inline/--no-singleton mode)"},
+    if pairing is None or not pairing.token_configured or not pairing.http_mint:
+        # Inline (--no-singleton) leader: no lockfile, so no token anyone
+        # outside the process could present here. It mints in-process instead.
+        return SafeJSONResponse(
+            {
+                "error": "pairing unavailable over HTTP: this leader has no published capability token "
+                "(inline/--no-singleton mode); use the pairing URL it printed at startup or the "
+                "octowright_dashboard_url MCP tool"
+            },
             status_code=503,
         )
     if not pairing.capability_token_ok(request.headers.get("x-octowright-token")):
-        return JSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
+        return SafeJSONResponse({"error": "missing or invalid X-Octowright-Token"}, status_code=403)
     code = pairing.mint_code()
-    return JSONResponse(
+    return SafeJSONResponse(
         {"code": code, "expires_in": int(PAIR_CODE_TTL_SECONDS)},
         headers={"Cache-Control": "no-store"},
     )
@@ -45,19 +57,19 @@ async def pair_mint(request: Request) -> Response:
 
 async def pair_redeem(request: Request) -> Response:
     """Consume a code and return an origin-scoped browser bearer once."""
-    body, error = await _read_json_body(request)
+    body, error = await _read_json_body(request, max_bytes=PAIR_REDEEM_MAX_BODY_BYTES)
     if error is not None:
         return error
     code = body.get("code") if isinstance(body, dict) else None
     pairing = dashboard_pairing_state(request)
     grant = pairing.redeem_code(code) if pairing is not None and isinstance(code, str) else None
     if grant is None:
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": "invalid or expired pairing code"},
             status_code=403,
             headers={"Cache-Control": "no-store"},
         )
-    return JSONResponse(
+    return SafeJSONResponse(
         {"bearer": grant.bearer, "expires_at": grant.expires_at},
         headers={"Cache-Control": "no-store"},
     )

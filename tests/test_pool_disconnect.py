@@ -459,6 +459,38 @@ async def test_page_crash_marks_session_and_notifies(
 @pytest.mark.live_browser
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_crash_of_a_replacement_in_flight_is_left_to_its_recovery(
+    monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
+) -> None:
+    """The replacement a recovery is loading crashed: that recovery fails, and no second one is scheduled."""
+    from octowright.browser_pool import crash_recovery
+    from octowright.browser_pool.events import SessionCrashedEvent
+
+    _install_playwright_stub(monkeypatch)
+    events = _capture_session_events(monkeypatch)
+    scheduled: list[Any] = []
+    monkeypatch.setattr(crash_recovery, "schedule_recovery", lambda *args: scheduled.append(args))
+    pool = BrowserPool()
+    result = await pool.launch(
+        kind="chromium", url="https://octowright.com", headed=False, label="crash", viewport_w=None, viewport_h=None
+    )
+    session = pool._sessions[result["instance_id"]]
+    replacement = session.page
+    crash_recovery._REPLACEMENTS[replacement] = False
+    try:
+        for cb in _page_crash_handlers(replacement):
+            cb(replacement)
+        assert scheduled == []
+        assert not [e for e in events if isinstance(e, SessionCrashedEvent)]
+        assert crash_recovery._REPLACEMENTS[replacement] is True
+        assert any("replacement_crashed" in m for m in listeners_log.messages()), listeners_log.messages()
+    finally:
+        crash_recovery._REPLACEMENTS.pop(replacement, None)
+
+
+@pytest.mark.live_browser
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 async def test_eviction_after_crash_reports_reason_crashed(
     monkeypatch: pytest.MonkeyPatch, listeners_log: _LogCapture
 ) -> None:

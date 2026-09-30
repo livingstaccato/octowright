@@ -318,6 +318,12 @@ async def test_run_macro_calls_session_in_order(monkeypatch: pytest.MonkeyPatch,
         instance_id = "fake-instance"
         kind = "chromium"
         page = None  # `_push_status` reads `.page`; None short-circuits.
+        # The password is typed on the site the operator launched at; typing it
+        # anywhere else is refused (credential_sinks.offsite_credential_origin).
+        launch_url = "https://discord.com/login"
+
+        async def target_url(self) -> str:
+            return "https://discord.com/login"
 
         async def diagnostic_bundle(self) -> dict[str, Any]:
             return {}

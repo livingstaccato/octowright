@@ -25,11 +25,12 @@ import mimetypes
 from pathlib import Path
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, Response
 from starlette.routing import Route
 
 from octowright._paths import reject_unsafe_path
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 
 # Pin the JavaScript module types rather than trusting the host's mimetype
 # database. Python's `mimetypes` seeds itself from the Windows registry, where
@@ -71,17 +72,17 @@ async def plugin_asset(request: Request) -> Response:
 
     asset_dir = _asset_dir_for(name)
     if asset_dir is None:
-        return JSONResponse({"error": "no such plugin frontend"}, status_code=404)
+        return SafeJSONResponse({"error": "no such plugin frontend"}, status_code=404)
 
     candidate = asset_dir / rel
     if candidate.suffix not in _ASSET_SUFFIXES:
-        return JSONResponse({"error": f"asset type {candidate.suffix!r} is not served"}, status_code=404)
+        return SafeJSONResponse({"error": f"asset type {candidate.suffix!r} is not served"}, status_code=404)
     try:
         resolved = reject_unsafe_path(candidate, asset_dir, label="plugin asset")
     except ValueError:
-        return JSONResponse({"error": "asset path escapes the plugin's asset dir"}, status_code=404)
+        return SafeJSONResponse({"error": "asset path escapes the plugin's asset dir"}, status_code=404)
     if not resolved.is_file():
-        return JSONResponse({"error": "no such asset"}, status_code=404)
+        return SafeJSONResponse({"error": "no such asset"}, status_code=404)
     # No `filename=`: that makes FileResponse send `Content-Disposition:
     # attachment`, which downloads the file when opened directly instead of
     # displaying it -- meaningless for something only ever consumed via

@@ -33,6 +33,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.macros import execution as _execution
+from octowright.macros import failure_context
 from octowright.macros.execution import run_macro
 from tests._operation_gate_fakes import OperationAwareFake
 
@@ -59,14 +60,14 @@ def session() -> _FakeSession:
 def failing_step(monkeypatch: pytest.MonkeyPatch) -> None:
     """A one-action macro whose only action raises."""
     monkeypatch.setattr(_execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#a"}]})
-    monkeypatch.setattr(_execution, "substitute", lambda actions, _args: actions)
+    monkeypatch.setattr(_execution, "substitute", lambda actions, _args, **_kw: actions)
 
     async def _boom(*_a: Any, **_kw: Any) -> tuple[int, int]:
         raise RuntimeError("step failed")
 
     monkeypatch.setattr(_execution, "_dispatch_one", _boom)
     monkeypatch.setattr(_execution, "_suggest_fix", AsyncMock(return_value="try harder"))
-    monkeypatch.setattr(_execution, "_failed_requests_tail", lambda _s: [{"status": 409}])
+    monkeypatch.setattr(failure_context, "failed_requests_tail", lambda _s: [{"status": 409}])
 
 
 async def _payload(session: _FakeSession) -> dict[str, Any]:
@@ -119,7 +120,7 @@ async def test_a_failing_network_tail_is_reported_and_degrades_to_an_empty_list(
     def _boom(_s: Any) -> list[dict[str, Any]]:
         raise RuntimeError(BOOM)
 
-    monkeypatch.setattr(_execution, "_failed_requests_tail", _boom)
+    monkeypatch.setattr(failure_context, "failed_requests_tail", _boom)
 
     payload = await _payload(session)
 
@@ -154,7 +155,7 @@ async def test_the_run_outcome_log_and_metric_carry_the_run_on_both_paths(
 ) -> None:
     """Status, counts and slowmo must reach the operator-visible sinks."""
     monkeypatch.setattr(_execution, "load_macro", lambda _n: {"actions": [{"action": "click", "selector": "#a"}]})
-    monkeypatch.setattr(_execution, "substitute", lambda actions, _args: actions)
+    monkeypatch.setattr(_execution, "substitute", lambda actions, _args, **_kw: actions)
 
     logged: list[tuple[str, dict[str, Any]]] = []
 
@@ -190,7 +191,7 @@ async def test_the_run_outcome_log_and_metric_carry_the_run_on_both_paths(
 
     monkeypatch.setattr(_execution, "_dispatch_one", _boom)
     monkeypatch.setattr(_execution, "_suggest_fix", AsyncMock(return_value=None))
-    monkeypatch.setattr(_execution, "_failed_requests_tail", lambda _s: [])
+    monkeypatch.setattr(failure_context, "failed_requests_tail", lambda _s: [])
     with pytest.raises(RuntimeError):
         await run_macro(session, "sad", {})
 

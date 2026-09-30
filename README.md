@@ -415,7 +415,7 @@ without going through an MCP client:
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
 | `octowright restart [--keep-browsers] [--kill-followers]` | Stop the running daemon, sweep orphans, start a fresh one. `--kill-followers` also severs connected MCP client transports for a full reset. |
-| `octowright dashboard [--open]` | Mint a single-use dashboard pairing code and print the `/pair` URL. Needed by default — pairing is **on** unless `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is set to a falsey token. |
+| `octowright dashboard [--open]` | Mint a single-use dashboard pairing code and print the `/pair` URL. Needed by default — pairing is **on** unless `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is set to a falsey token. Needs a daemon leader (it reads the lockfile); an inline `--no-singleton` leader prints its own pairing URL at startup, and the `octowright_dashboard_url` MCP tool works for both. |
 | `octowright skill install\|status\|doctor` | Install/inspect the packaged skill and plugin manifests. |
 
 ## Capability profiles

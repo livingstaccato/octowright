@@ -183,7 +183,7 @@ def patched_runners(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
             raise raise_on[action["action"]]
         return (1, 0)
 
-    async def fake_suggest(session: Any, action: dict[str, Any]) -> str | None:
+    async def fake_suggest(session: Any, action: dict[str, Any], **_kwargs: Any) -> str | None:
         return None
 
     monkeypatch.setattr(_execution, "load_macro", fake_load)
@@ -560,13 +560,14 @@ def _telemetry_fake_source(
     user_data_dir: Any = None,
 ) -> Any:
     """Duck-typed handoff/relaunch source carrying a REAL SessionOperationGate
-    -- Task 8's close_original=True path drives ``_operation_gate`` directly
+    -- the close_original=True path drives ``_operation_gate`` directly
     via ``close_with_preparation``, so a bare SimpleNamespace can no longer
     stand in (mirrors ``tests/test_handoff.py::_fake_source``)."""
     from octowright.session.operation.gate import SessionOperationGate
 
     gate = SessionOperationGate(instance_id, kind)
     source = SimpleNamespace(
+        launch_url=None,
         instance_id=instance_id,
         kind=kind,
         profile=profile,
@@ -630,6 +631,7 @@ class TestHandoffSpan:
         exporter = _setup_span_exporter(monkeypatch)
         pool = BrowserPool()
         pool._sessions["old02"] = SimpleNamespace(
+            launch_url=None,
             instance_id="old02",
             kind="chromium",
             profile=None,

@@ -21,9 +21,11 @@ import pytest
 from octowright import defaults
 from octowright.artifacts.script_export import render_macro_cli
 from octowright.macros import execution
+from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
+    MacroArgPrivacy,
     MacroBlindScrubRejected,
     PrivacyLedger,
     is_sensitive_arg_key,
@@ -76,6 +78,15 @@ def _session() -> MagicMock:
     return session
 
 
+async def _healer_echoing_its_inputs(_session: Any, action: dict[str, Any], *, scrub_page: Any) -> str:
+    """A healer that repeats both of its inputs: the step, and page text naming the value.
+
+    The step is the macro as written, so it holds the placeholder, never the
+    value; the page's text reaches the suggestion only through *scrub_page*.
+    """
+    return f"replace {action} after seeing {scrub_page(f'page says {PASSWORD}')}"
+
+
 @pytest.mark.asyncio
 async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exception_chain(
     monkeypatch: pytest.MonkeyPatch,
@@ -94,11 +105,7 @@ async def test_failure_scrubs_sensitive_arg_values_from_every_diagnostic_and_exc
             return_value={"actions": [{"action": "fill", "selector": "#password", "value": "{{password}}"}]},
         ),
         patch.object(execution, "_push_status", AsyncMock()),
-        patch.object(
-            execution,
-            "_suggest_fix",
-            AsyncMock(return_value=f"replace selector after seeing {PASSWORD}"),
-        ),
+        patch.object(execution, "_suggest_fix", _healer_echoing_its_inputs),
         pytest.raises(RuntimeError) as caught,
     ):
         await execution.run_macro(
@@ -270,6 +277,7 @@ def test_nested_reject_fails_before_installing_or_extending_a_ledger(
             session,
             {"action": "macro_call", "name": "child", "args": {"email": EMAIL}},
             run_ledger,
+            RunMacros(execution.load_macro),
         )
 
     assert session.recorder is underlying
@@ -400,7 +408,9 @@ def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary()
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")
     assert not is_sensitive_arg_key("peerage")
-    assert execution._redact_args_for_response(SOCIAL_ARGS) == {key: "<redacted>" for key in SOCIAL_ARGS}
+    assert execution._redact_args_for_response(SOCIAL_ARGS, MacroArgPrivacy()) == {
+        key: "<redacted>" for key in SOCIAL_ARGS
+    }
 
 
 @pytest.mark.parametrize(
@@ -443,7 +453,7 @@ def test_sensitive_value_aliases_are_removed_from_success_args_and_export_defaul
         "payload": {"label": f"account={raw}", "ordinary": "public"},
     }
 
-    redacted = execution._redact_args_for_response(args)
+    redacted = execution._redact_args_for_response(args, MacroArgPrivacy())
     source = render_macro_cli(
         name="private-alias-export",
         macro={"parameters": list(args), "actions": []},

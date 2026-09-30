@@ -171,3 +171,39 @@ fails inside anyio's shielded `CancelScope` with "must be called from async
 context" — two `tests/test_roster.py` trio cases went red and were green again
 the moment the fixture stopped being autouse. A sync fixture that signals a pid
 needs no loop and cannot care which backend ran the test.
+
+### Requiring live engines: `OCTOWRIGHT_REQUIRE_LIVE_ENGINES`
+
+Every live fixture catches a launch exception and calls `pytest.skip` -- right
+on a laptop with one engine missing, wrong on a runner that just ran
+`playwright install`: an engine regression there (a launch arg WebKit starts
+rejecting, a dependency lost in a runner image update) skips every test that
+measures that engine, and a skip is green. The abort-string table in
+`request_failures.py`, the closed-shadow snapshot and the SSRF redirect checks
+all rest on those measurements.
+
+Set `OCTOWRIGHT_REQUIRE_LIVE_ENGINES` on such a runner and those skips fail
+instead: `1`/`all` for chromium, firefox and webkit, or a comma-separated list
+(`chromium,webkit`) for a runner that installs only some. An unknown engine
+name is a usage error rather than a silent no-op. Off (unset, `0`, `off`) is the
+default, so a local run is unchanged.
+
+The judgement lives in `tests/_live_engines.py`, applied from a
+`pytest_runtest_makereport` hook in `tests/conftest.py`, not in each fixture --
+19 modules carry their own catch-and-skip and a new one would not know to
+participate. A skip of a `live_browser` test counts when it was **raised while
+handling an exception** (`Skipped.__context__` is set, which is exactly the
+`except Exception: pytest.skip(...)` launch pattern, `_maybe_skip_live_engine`
+and `pytest.importorskip("playwright")`), or when its reason says `no usable
+browser engine` (the daemon-driven tests read the failure from a tool result, so
+there is no exception). A deliberate skip raised from nowhere -- "closed shadow
+roots are only reachable through Chromium", "CDP Page.crash did not deliver" --
+stays a skip. The engine is the test's parametrization, else Chromium, the
+pool's default. Measured: with `PLAYWRIGHT_BROWSERS_PATH` pointed at an empty
+directory and `=webkit`, `test_macro_network_clean_no_text_live`'s webkit case
+errors and its chromium/firefox cases still skip.
+
+Known edge: the system-Chrome-channel test in
+`test_browser_launch_engine_selection_live.py` skips from an `except` when no
+system Chrome is installed, and counts as Chromium. Deselect it on a runner
+that requires Chromium without installing system Chrome.

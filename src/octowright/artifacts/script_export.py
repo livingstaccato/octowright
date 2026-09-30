@@ -5,15 +5,19 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import keyword
 import re
 from pathlib import Path
 from typing import Any
 
+from octowright import credential_input, credential_sinks, drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.config_paths import upload_staging_dir, user_config_dir
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from octowright.macros.calls import actions_assert_network_clean
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -23,13 +27,27 @@ from octowright.macros.privacy import (
     DEPLURALIZE_MIN_LENGTH,
     FIELD_NAME_PATTERN,
     IDENTITY_TOKEN_TOKENS,
+    PLACEHOLDER_PATTERN,
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
-    blind_scrub_arg_values,
+    MacroArgPrivacy,
+    _serialized_variants,
     is_sensitive_arg_key,
     scrub_sensitive_values,
 )
+from octowright.session.upload_paths import check_upload_path, upload_roots
+
+
+def _module_source(module: Any) -> str:
+    """A standard-library-only module as script source: everything after its ``__future__`` import.
+
+    The script opens with that import itself, and it may only appear first.
+    """
+    _header, marker, body = inspect.getsource(module).partition("from __future__ import annotations\n")
+    if not marker:
+        raise RuntimeError(f"{module.__name__} must import annotations from __future__ to be rendered")
+    return body.strip()
 
 
 def render_macro_cli(
@@ -43,15 +61,42 @@ def render_macro_cli(
     fn_name = _function_name(name)
     signature = _signature(parameters, include_evidence)
     action_json = json.dumps(macro.get("actions", []), indent=2)
-    parser_lines = _parser_lines(parameters, args, include_evidence)
+    # The macro's positional privacy -- the same view live replay builds -- so
+    # ``args_used`` and the script's own log agree about one macro.
+    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    hard_redacted_args = sorted(privacy.assertion_args)
+    # Decided at render time by the predicate replay uses; a text search of
+    # ACTIONS_JSON also matched the string inside a selector or a typed value.
+    watch_network = actions_assert_network_clean(macro.get("actions", []))
+    parser_lines = _parser_lines(parameters, args, include_evidence, privacy)
     call_args = _call_args(parameters, include_evidence)
     doc = f"Import-safe CLI wrapper for Octowright macro {name}."
-    placeholder_re = r"\{\{([^}]+)\}\}"
     evidence_helpers, evidence_setup, _evidence_close = _evidence_render_parts(include_evidence)
     state_helpers = STATE_HELPERS
     # 20 spaces: inside `for ... in enumerate(ACTIONS)` inside the raw-action
     # handler and cleanup `try`, then `async with`, then the function body.
     dispatch_chain = render_dispatch_chain(" " * 20)
+    # Rendered from the live scrubber's own source rather than hand-mirrored:
+    # the copy had already lost the HTML-escaped spellings.
+    serialized_variants = inspect.getsource(_serialized_variants).rstrip()
+    # Same reason, whole module: expect_no_text's collector, comparison, limit,
+    # frame rules and messages are the ones replay runs (see drawn_text).
+    drawn_text_source = _module_source(drawn_text)
+    # And the credential-sink guard: the sink set, alias rules, own-origin
+    # exemption and credential-fill origin check that macro_run enforces. The
+    # script substituted with a bare re.sub before, so it ran what replay refused.
+    credential_sinks_source = _module_source(credential_sinks)
+    # And how a credential step types: one key at a time into a checked
+    # document, the fill into a checked element -- the session's own helpers.
+    credential_input_source = _module_source(credential_input)
+    # The live upload allowlist, so an exported set_input_files cannot read a
+    # file macro_run would refuse (~/.ssh/id_rsa).
+    # The default staging dir is rendered as its resolver, not its value: the
+    # value is the exporting user's absolute path, which names their home and
+    # does not exist on CI or for anyone else.
+    upload_source = "\n\n\n".join(
+        inspect.getsource(fn).rstrip() for fn in (user_config_dir, upload_staging_dir, upload_roots, check_upload_path)
+    )
 
     return f"""\
 {doc!r}
@@ -60,11 +105,16 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import json
 import os
+import platform
 import re
 import sys
 import time
+import unicodedata
+from collections import OrderedDict
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -73,6 +123,9 @@ from urllib.parse import quote, quote_plus
 from playwright.async_api import async_playwright
 
 ACTIONS_JSON = {action_json!r}
+# Arguments substituted into an expect_no_text's text: they ARE the forbidden
+# text, so they are redacted whatever they are named (as live replay does).
+_HARD_REDACTED_ARGS = frozenset({hard_redacted_args!r})
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
 _SUBSTRING_TOKENS = {tuple(sorted(SUBSTRING_TOKENS))!r}
@@ -87,8 +140,12 @@ _BLIND_SCRUB_POLICY_ENV = {BLIND_SCRUB_POLICY_ENV!r}
 _TIER_RANK = {{"contextual": 1, "identity": 2, "credential": 3}}
 _MAX_ENCODING_DEPTH = 3
 _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
+# What an exported fill/type waits when the step names no timeout: it passes
+# none, so Playwright's own default applies, and a credential step, which has
+# to pass one, passes the same. The script sets no default timeout of its own.
+_PLAYWRIGHT_DEFAULT_TIMEOUT_MS = 30000
 _LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
-_PLACEHOLDER_RE = {placeholder_re!r}
+_PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
 
@@ -161,7 +218,7 @@ def _redact_nested_args(value: Any) -> Any:
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     redacted = {{
         str(key): "<redacted>"
-        if _is_sensitive_arg_key(key)
+        if _is_sensitive_arg_key(key) or key in _HARD_REDACTED_ARGS
         else _redact_nested_args(value)
         for key, value in args.items()
     }}
@@ -264,21 +321,30 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
     return sorted({{item[0] for item in selected}}, key=lambda value: (-len(value), value))
 
 
-def _serialized_variants(value: str) -> list[str]:
-    variants: set[str] = {{
-        value,
-        json.dumps(value, ensure_ascii=True)[1:-1],
-        json.dumps(value, ensure_ascii=False)[1:-1],
-    }}
-    frontier = set(variants)
-    for _ in range(_MAX_ENCODING_DEPTH):
-        frontier = {{
-            encoded
-            for item in frontier
-            for encoded in (quote(item, safe=""), quote_plus(item, safe=""))
-        }}
-        variants.update(frontier)
-    return sorted((item for item in variants if item), key=len, reverse=True)
+{serialized_variants}
+
+
+{drawn_text_source}
+
+
+{credential_sinks_source}
+
+
+{credential_input_source}
+
+
+{upload_source}
+
+
+def _is_credential_arg(key: str) -> bool:
+    return _privacy_tier(key) == "credential"
+
+
+def _upload_paths(paths: Any) -> list[str]:
+    # Resolved here, where the script runs, by the rule replay uses: the
+    # running user's config dir unless OCTOWRIGHT_UPLOAD_STAGING_DIR says otherwise.
+    roots = upload_roots(upload_staging_dir(), os.environ.get("OCTOWRIGHT_UPLOAD_ROOTS", ""))
+    return [str(check_upload_path(path, roots)) for path in paths or []]
 
 
 def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
@@ -315,27 +381,11 @@ def _redact_action(
     sensitive_values: list[str],
 ) -> dict[str, Any]:
     redacted = {{key: _redact_value(value, sensitive_values) for key, value in action.items()}}
-    if redacted.get("action") in {{"fill", "type", "fill_by"}}:
+    if redacted.get("action") in _REDACT_VALUE_ACTIONS:
         for key in ("value", "text"):
             if key in redacted:
                 redacted[key] = "<redacted>"
     return redacted
-
-
-def _resolve(value: Any, args: dict[str, str]) -> Any:
-    if isinstance(value, str):
-        def repl(match: re.Match[str]) -> str:
-            key = match.group(1)
-            if key not in args:
-                raise KeyError(f"placeholder {{{{key}}}} has no matching CLI argument")
-            return str(args[key])
-
-        return re.sub(_PLACEHOLDER_RE, repl, value)
-    if isinstance(value, dict):
-        return {{key: _resolve(item, args) for key, item in value.items()}}
-    if isinstance(value, list):
-        return [_resolve(item, args) for item in value]
-    return value
 
 
 # Resolve a semantic (ARIA) locator, mirroring session/locators.build_locator.
@@ -359,11 +409,79 @@ def _locator(page: Any, action: dict[str, Any]) -> Any:
     raise RuntimeError(f"action has no ARIA locator: {{action!r}}")
 
 {state_helpers}
+
+def _check_credential_fill(
+    state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any, url: Any = None
+) -> None:
+    # The live rule (offsite_credential_origin): read off the active frame
+    # immediately before the step, then again off the frame that owns the
+    # document the value is typed into (_credential_check). Warn mode prints
+    # each origin once per step.
+    if url is None:
+        url = getattr(_target(state), "url", "")
+    shown = offsite_credential_origin(action, url, trusted)
+    if shown is None:
+        return
+    if credential_fill_mode() != "warn":
+        raise credential_fill_refusal(action, shown)
+    if (index, shown) in state.setdefault("offsite_reported", set()):
+        return
+    state["offsite_reported"].add((index, shown))
+    record = {{"event": "credential_fill_offsite", "index": index, "action": action.get("action"), "origin": shown}}
+    print(json.dumps(record, sort_keys=True), file=sys.stderr)
+
+
+class _ScriptSession:
+    # What credential_input needs of a session. A script has one active page
+    # and nothing else driving it, so there is no gate for an operation to take.
+    def __init__(self, state: dict[str, Any]) -> None:
+        self.page = _page(state)
+
+    def operation(self, _name: str) -> Any:
+        return self
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        return None
+
+
+def _credential_check(state: dict[str, Any], index: int, action: dict[str, Any], trusted: Any) -> Any:
+    # A credential step checks the document that receives the value, as it
+    # receives it (checked_fill / checked_type): Playwright's wait survives a
+    # navigation, a selector can enter a child frame, and keys follow focus.
+    # None for any other step, which dispatches as it always did.
+    if not action.get(CREDENTIAL_FILL_MARKER):
+        return None
+    return lambda url: _check_credential_fill(state, index, action, trusted, url=url)
+
+
+async def _credential_input(action: dict[str, Any], typing: Any) -> None:
+    # A credential step the page stopped names the step, as replay does.
+    try:
+        await typing
+    except CredentialInputStopped as exc:
+        raise credential_input_stopped(action, str(exc), started=exc.started) from exc
+
+
 {evidence_helpers}
 async def {fn_name}({signature}) -> dict[str, int]:
     args = {_args_dict(parameters)}
     sensitive_values = _blind_scrub_arg_values(args)
+    sensitive_values = sorted(
+        set(sensitive_values) | {{str(v) for k, v in args.items() if k in _HARD_REDACTED_ARGS and v}},
+        key=lambda value: (-len(value), value),
+    )
 {evidence_setup}    print(json.dumps({{"event": "args", "args": _redact_args(args)}}, sort_keys=True))
+    # --trusted-origin plays the part a live session's launch URL does: the one
+    # origin a credential header may go to and a credential may be typed on.
+    trusted = parse_allowed_origins(list(trusted_origins))
+    # Expanded whole before the browser opens, as macro_run does, so a refused
+    # sink leaves nothing half done.
+    actions = expand_actions(
+        ACTIONS, args, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE, trusted_origins=trusted
+    )
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:
@@ -385,7 +503,13 @@ async def {fn_name}({signature}) -> dict[str, int]:
             "dialog_policy": "manual",
             "dialog_prompt_text": None,
             "dialog_pages": [],
+            "network": NetworkLedger(),
+            # An assertion nested in try/if_selector counts too.
+            "watch_network": {watch_network!r},
         }}
+        state["sensitive_values"] = sensitive_values
+        _watch_network(state, page)
+        _watch_context(state, page)
         executed = 0
         skipped = 0
         failure = None
@@ -393,8 +517,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
         result = None
         try:
             try:
-                for index, raw_action in enumerate(ACTIONS):
-                    action = _resolve(raw_action, args)
+                for index, action in enumerate(actions):
                     kind = action.get("action")
                     log_record = {{
                         "event": "action",
@@ -404,6 +527,7 @@ async def {fn_name}({signature}) -> dict[str, int]:
                     print(json.dumps(log_record, sort_keys=True))
                     if evidence is not None:
                         evidence.record(log_record)
+                    _check_credential_fill(state, index, action, trusted)
                     if kind in _LIFECYCLE_SKIP:
                         skipped += 1
 {dispatch_chain}
@@ -514,10 +638,10 @@ def _identifier(value: str) -> str:
     return cleaned
 
 
-def _parser_line(parameter: tuple[str, str], args: dict[str, Any] | None) -> str:
+def _parser_line(parameter: tuple[str, str], args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
     original, ident = parameter
     flag = re.sub(r"[^A-Za-z0-9-]+", "-", original.strip()).strip("-") or ident.replace("_", "-")
-    default = _safe_default(original, args)
+    default = _safe_default(original, args, privacy)
     return f"    parser.add_argument('--{flag}', dest='{ident}', default={default!r})"
 
 
@@ -525,23 +649,35 @@ def _signature(parameters: list[tuple[str, str]], include_evidence: bool) -> str
     fn_params = [f"{ident}: str = ''" for _original, ident in parameters]
     if include_evidence:
         fn_params.append("evidence_dir: str = ''")
+    fn_params.append("trusted_origins: tuple[str, ...] = ()")
     return ", ".join(fn_params)
 
 
-def _parser_lines(parameters: list[tuple[str, str]], args: dict[str, Any] | None, include_evidence: bool) -> str:
-    parser_lines = "\n".join(_parser_line(param, args) for param in parameters)
+def _parser_lines(
+    parameters: list[tuple[str, str]],
+    args: dict[str, Any] | None,
+    include_evidence: bool,
+    privacy: MacroArgPrivacy,
+) -> str:
+    parser_lines = "\n".join(_parser_line(param, args, privacy) for param in parameters)
     if include_evidence:
         parser_lines = _append_parser_line(
             parser_lines,
             "    parser.add_argument('--evidence-dir', default='', help='Optional directory for result/evidence logs')",
         )
-    return parser_lines or "    pass"
+    return _append_parser_line(
+        parser_lines,
+        "    parser.add_argument('--trusted-origin', action='append', default=[], "
+        "help='Origin (scheme://host[:port]) the macro may send a credential header to and type a "
+        "credential on; repeatable')",
+    )
 
 
 def _call_args(parameters: list[tuple[str, str]], include_evidence: bool) -> list[str]:
     call_args = [f"{ident}=ns.{ident}" for _original, ident in parameters]
     if include_evidence:
         call_args.append("evidence_dir=ns.evidence_dir")
+    call_args.append("trusted_origins=tuple(ns.trusted_origin)")
     return call_args
 
 
@@ -555,12 +691,17 @@ def _append_parser_line(existing: str, line: str) -> str:
     return f"{existing}\n{line}" if existing else line
 
 
-def _safe_default(param: str, args: dict[str, Any] | None) -> str:
-    if is_sensitive_arg_key(param):
+def _safe_default(param: str, args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
+    """A default the script may carry in its source: never a classified value.
+
+    Classified the way live replay classifies it (``privacy``), so an argument
+    the macro feeds to ``expect_no_text`` is never baked in, whatever its name.
+    """
+    if is_sensitive_arg_key(param) or param in privacy.assertion_args:
         return ""
     value = (args or {}).get(param, "")
     rendered = str(value) if value is not None else ""
-    scrubbed = scrub_sensitive_values(rendered, blind_scrub_arg_values(args or {}))
+    scrubbed = scrub_sensitive_values(rendered, privacy.blind_scrub(args or {}))
     return rendered if scrubbed == rendered else ""
 
 

@@ -450,3 +450,33 @@ def test_relaunch_logs_teardown_failure_without_unhandled_exception(monkeypatch:
     # The replacement still launched despite the teardown failure.
     assert len(pool.launched) == 1
     assert "new1" in pool._sessions
+
+
+def test_reopen_trusts_the_launch_url_not_the_page_it_navigated_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A session launched at A that a macro moved to B reopens at B but still trusts A.
+
+    ``launch_url`` is what ``own_site_origins`` trusts (the credential fill
+    origin check, the inject_headers own-site exemption). Launched with only
+    ``url=session.url``, the replacement's launch_url became whatever origin
+    the dead page had been navigated to.
+    """
+    _set_mode(monkeypatch, "new-id")
+    session = _session(
+        "a",
+        url="https://elsewhere.example/b",
+        launch_url="https://app.example/a",
+        base_url="https://app.example/",
+    )
+    pool = _FakePool([session])
+
+    async def _run() -> None:
+        task = driver_relaunch.on_driver_reset(pool, reason="driver died")
+        assert task is not None
+        await task
+
+    asyncio.run(_run())
+
+    kw = pool.launched[0]
+    assert kw["url"] == "https://elsewhere.example/b"
+    assert kw["trusted_launch_url"] == "https://app.example/a"
+    assert kw["base_url"] == "https://app.example/"

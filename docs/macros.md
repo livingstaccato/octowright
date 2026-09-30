@@ -197,6 +197,113 @@ and lets shared setup/dismissal snippets stay reusable:
 Octowright detects direct and mutual recursion (`a -> b -> a`) and enforces a
 depth cap so a bad macro graph fails with a clear error instead of looping.
 
+## Network and absence assertions
+
+Three actions check what a journey left behind rather than what it shows. They
+exist only as macro steps; there is no `browser_*` tool for them.
+
+### `expect_network_clean`
+
+Fails when, inside its window, a request got no response (Playwright's
+`requestfailed`) or the page threw an uncaught exception. A cancelled request is
+not a failure: navigating away and an app's own `AbortController` both cancel
+requests, reported as `net::ERR_ABORTED`, `NS_BINDING_ABORTED` or
+`Load request cancelled` (`request_failures.ABORTED_REQUEST_FAILURES`).
+
+```json
+{"action": "expect_network_clean", "http_errors": true, "settle_timeout_ms": 5000}
+```
+
+- `since` -- `"run"` (default) judges the current macro run: each member of a
+  `macro_run_sequence` is its own run, and a `macro_call` is part of its
+  caller's. `"mark"` judges everything since the session's last
+  `mark_network_clean` step, across runs, so a separate verify macro can judge
+  the journey before it; without a mark it raises.
+- `http_errors: true` also counts a 4xx/5xx page load, `fetch` or XHR. Images,
+  fonts and favicons are left out, and the option is off by default because a
+  4xx is sometimes the answer a journey expects.
+- `settle_timeout_ms` -- how long to wait first for requests still in flight to
+  end (default 5000; `0` judges at once). Event streams, websockets and media
+  are not waited for. A request still pending when the wait ends is reported as
+  `in_flight`, not failed, and one dropped from the bounded tracking (1000
+  requests) as `in_flight_untracked`.
+- `require_settled: true` fails the check in both of those cases instead of
+  passing with a warning. It must be a real boolean; `"false"` is refused.
+
+Requests are tracked in flight only while something will judge them: from the
+start of a run that contains an `expect_network_clean` at any depth (through
+conditionals and `macro_call`), or from a `mark_network_clean` step. The run
+turns tracking off when it ends, unless a mark is open. The error carries counts
+only, because a failed URL or an exception message can carry a credential; the
+failure payload's `failed_requests` and `page_errors` name them, scrubbed.
+
+### `mark_network_clean`
+
+Starts the window `expect_network_clean(since="mark")` judges. A mark is never
+closed, so after one the session keeps tracking requests in flight.
+
+### `expect_no_text`
+
+Fails when `text` is drawn anywhere under `selector` (default `body`, which
+means every frame of the page when no frame is active). Drawn means text a
+reader can see: rendered text, open shadow roots, visible form values and
+placeholders, a broken image's alt text, a select's option labels and CSS
+generated content. Password fields, attribute text such as a resource address,
+`visibility: hidden` text and anything not rendered do not count, and neither
+do octowright's own overlays. Case, whitespace and invisible characters are
+ignored. On Chromium a whole-page check also reads the DOM snapshot, which
+reaches closed shadow roots; other engines and exported scripts cannot. Canvas,
+video and other pixel-only content cannot be text-checked.
+
+```json
+{"action": "expect_no_text", "text": "{{password}}", "selector": "#profile"}
+```
+
+- A selector that matches nothing passes, since nothing is drawn, but the
+  result carries a warning. `require_match: true` fails it instead, `body`
+  included. It must be a real boolean.
+- `element_limit` (default 20000, or `OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT`) caps
+  the elements read per frame. A scan that reaches it without finding the text
+  **fails**: a security check does not pass on a page it only partly read.
+  Narrow the selector or raise the limit.
+- `timeout_ms` bounds each read (default: the action timeout).
+- The text is treated as a secret. The error gives its length, never the text,
+  and an empty `text` is refused because an empty string is in every page.
+
+The recorder writes `<redacted:forbidden-text>` in place of the text, beside a
+keyed digest of it. `macro_save` binds that marker to the one declared
+parameter whose value has the same digest, credential-named or not. The key
+lives only in the daemon's memory, so this works only for a recording made by
+the daemon doing the save. Otherwise the marker stays, `macro_lint` reports it
+(`redacted_assertion_text`), and replay refuses the step until its `text` is set.
+
+### What a passing check saw
+
+A check can pass on less than it was asked to judge: requests still pending, a
+selector that matched nothing. `macro_run` therefore returns `assertions`, one
+entry per `expect_network_clean` / `expect_no_text` step at any depth, and the
+failure payload of a failed run carries the same list:
+
+```json
+{"assertions": [
+  {"step": 3, "action": "expect_network_clean", "failed_requests": 0, "page_errors": 0,
+   "in_flight": 1, "warning": "1 request(s) still in flight when the settle wait ended were not judged"},
+  {"step": 5, "action": "expect_no_text", "selector": "#profile", "matched": 1,
+   "frames_scanned": 1, "frames_skipped": 0, "truncated": false, "snapshot": "skipped"}
+]}
+```
+
+`step` is the top-level step that was running. `snapshot` is `checked`,
+`skipped` (the check was scoped to a selector or a frame) or `unsupported` (not
+Chromium). The list is scrubbed of the run's sensitive values like the rest of
+the result.
+
+`macro_export_cli` runs all three steps, printing one JSON `assertion` line per
+passing check and a `warning` line for a caveat; it watches popups and new tabs
+as replay does, and has no DOM snapshot. `browser_export_script` (Python and
+TypeScript) cannot run them, since a linear script keeps none of the state they
+need, and emits a step that raises rather than dropping the check.
+
 ## YAML DSL
 
 JSON remains the runtime/storage format, but `macro_compile` can compile a
@@ -355,16 +462,51 @@ Automatic artifact screenshots follow the same rule, with one exception: they ar
 never taken on a session whose application installed its own handler. A mistyped
 policy value suppresses them rather than failing the artifact run. When one is not
 taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for a run
-with policy-admitted values; the payload records `diagnostic_suppressed`
-instead.
+producer, which saves raw page HTML and a screenshot, is not called for a failed run
+when the run or the session ledger (below) holds any value; the payload records
+`diagnostic_suppressed` instead.
+
+**Screenshots outside a protected run.** Once the session ledger holds a value, every
+other screenshot of that session -- `browser_screenshot`, `browser_each`,
+`browser_capture_and_close`, and a macro `screenshot` step of a run that holds no
+values itself -- goes through the same boundary (`safe_screenshot.ledger_screenshot`):
+an installed handler decides, otherwise a Chromium page is redacted and proved as
+above, and Firefox and WebKit refuse and write no file. This is
+`OCTOWRIGHT_LEDGER_SCREENSHOTS=refuse`, the default, and it does not consult
+`OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS`. `allow` takes raw screenshots again,
+unless the application installed a handler; it is the way back to screenshots
+after a login on Firefox or WebKit that keeps the recordings redacted.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified
 where the call executes, at every depth. Values admitted by the selected policy
-join the run ledger and the session ledger. The session ledger lasts for the
-session's lifetime and scrubs every later recording write, including the next
-step of a `macro_run_sequence`, because a credential typed once can keep
-rendering in later page output.
+join the run ledger and the session ledger. So does a value typed by any fill or
+type, `browser_fill` and `browser_type` included, into a field classified as a
+password (`type=password`, or `autocomplete` `current-password`, `new-password` or
+`one-time-code`), unless `OCTOWRIGHT_REDACT_INPUTS=off`. The session ledger lasts for the session's lifetime,
+including the next step of a `macro_run_sequence`, because a credential typed
+once can keep rendering in later page output. It scrubs every later recording
+row, the live console, network and page-error buffers the inspection tools
+read, the websocket frame sidecar (a binary frame holding a value is not stored,
+and says `payload_redacted`), the markdown page cache and `capture_create`
+captures. A macro's own values are scrubbed wherever they appear (one shorter
+than four characters only on a word boundary); a typed password is scrubbed only
+where it stands as a whole identifier, because it is
+often an ordinary word (`admin`) and replacing it inside `#admin-menu` broke the
+selectors of a macro saved from the recording.
+
+A failure payload goes back to the MCP client, and its fields follow two rules.
+The text the page produced -- `original` (the exception), the console tail,
+`failed_requests`, `page_errors`, the `assertions` block, the A11y
+tree inside `healing_suggestion`, and the error of any producer that failed --
+is scrubbed of the run's and the session's values by the first rule, a typed
+password included, so an echo glued to other characters (`hunter2-reset`) does
+not reach it. The fields that echo the macro itself -- `failed_action`,
+`executed_actions`, and the step `healing_suggestion` names -- show each step as
+the macro wrote it, before substitution, and are not scrubbed of those values:
+a placeholder stays `{{order}}` rather than showing what it expanded to, and a
+typed `admin` does not rewrite the macro's own `#admin-menu`. Two structural
+redactions still apply there: a `fill`, `type` or `expect_no_text` value is
+`<redacted>`, and a `macro_call`'s arguments are redacted as `args_used` is.
 
 **Blind-scrub policy.** `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY` selects one of
 three strict modes:
@@ -388,10 +530,111 @@ posture. This setting also governs diagnostics, automatic and explicit
 screenshots, artifact reports and generated scripts. It does not change the
 classifier vocabulary or the credential sink guard.
 
-**Credential-named arguments in URLs and code.** A credential-named argument
-expanded into `url`, `expression`, `verify_js` or `grabbed_predicate_js` is
-refused by default; see `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+**Credential-named arguments in URLs, code and outbound fields.** A
+credential-named argument expanded into `url`, `expression`, `verify_js`,
+`grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
+`paths` entry is refused by default. The one exemption is a header sent to the
+session's own origin: `inject_headers` whose `pattern` spells out the scheme,
+host and port of the launch URL or persona `base_url` may carry
+`Bearer {{token}}` (`https://app.example.test/**` for a launch at
+`https://app.example.test`, but not `http://localhost:45678/**` for a launch at
+`http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
+
+**Credentials are typed only onto the session's own origin.** A `fill`,
+`fill_by` or `type` whose value comes from a credential-named argument checks,
+immediately before it runs, the origin of the page (or active frame) it would
+type into. On the launch URL's or persona `base_url`'s origin it runs; anywhere
+else it is refused, naming the origin -- a shared macro that navigates to
+`https://evil.example/login` and then fills `{{password}}` would otherwise hand
+the password to that page's JavaScript. A sign-in hop to an identity provider
+lists that origin on the step itself, literally:
+
+```json
+{"action": "fill", "selector": "#password", "value": "{{password}}",
+ "allowed_origins": ["https://login.idp.example"]}
+```
+
+Entries are exact origins (`scheme://host[:port]`): no wildcard, path or
+`{{placeholder}}`, which `macro_lint` reports and replay refuses. Identity and
+contextual arguments (`{{email}}`, `{{username}}`) are not checked.
+`OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn` logs and runs the step instead,
+recording `credential_fill_offsite: [{step, action, origin}]` in the run result,
+and in the failure payload when a later step fails;
+`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` turns this and every other credential
+check off.
+
+The origin checked is that of the document that receives the value, at the
+moment it receives it. A `fill` / `fill_by` picks its element as it would
+without a credential (a `fill` selector's first match; a `fill_by` locator
+strictly, so a label that also matches "Confirm password" is Playwright's
+strict-mode error), checks the frame that owns it and fills that element; if
+the element is replaced (a re-render, or a navigation during the fill's wait)
+it resolves the selector again and re-checks, so a hydrated form is still
+filled and a page that moved to another origin is refused. A `type` goes one
+key at a time and, before each key, checks the document that has focus. Keys
+follow focus within one document like a keyboard's (an auto-advancing
+one-time-code form works), and the rest of the value is stopped, failing the step with an
+error that names the step and never the value, when:
+
+- the document with focus is not the one that received the previous key --
+  any navigation, same-origin included (a sign-in that lands on a dashboard
+  whose search box takes focus), or focus moving into another frame. A
+  foreign document is refused naming its origin;
+- focus moved to `<body>` or nothing after an element took the first key,
+  which is where it falls when the field is re-rendered away, so a truncated
+  value is never reported as typed. The first key itself may go to `<body>`
+  of the checked document: a target that cannot take focus (a canvas console,
+  a `div` with no `tabindex`) leaves focus there and reads keys from the
+  document, and the same step without a credential types there too. Later
+  keys then need focus to stay on `<body>` of that document;
+- focus moved to an element that takes no text (a button, a link) other than
+  the one the first key went to.
+
+A selector that enters a frame (`iframe >> internal:control=enter-frame >> #pw`)
+is checked on that frame. What is left: the single driver round trip inside
+one Playwright fill or keypress, between focusing the element and dispatching
+the input; and focus the page moves to another text field of the *same*
+document, which is followed by design, so a single-page app that swaps its
+view in place (`history.pushState`) and focuses a search box receives the rest
+of the value; and a document the back/forward cache restores during the step,
+which is the same document as before. The whole step -- retries and every key --
+is bounded by one budget: a `fill`/`fill_by` step's `timeout_ms`, else the
+action timeout (`OCTOWRIGHT_ACTION_TIMEOUT_MS`, default 15000). A `type` gets
+the action timeout **plus** `len(text) * delay_ms`, in both key modes: the
+pauses the step asked for are not the page being slow, so they are not counted
+against it. That is deliberately more than a `type` without a credential in
+the default text mode gets: Playwright's `page.type(delay=, timeout=)` counts
+the pauses, and fails partway once the typing outlasts the timeout (measured
+on all three engines: ten keys 100ms apart under a 300ms timeout stop after 2-3
+keys; twenty under 1500ms after 13-15). A `key_mode: keys` type without a
+credential has no whole-step bound at all. Each Playwright call is given what
+is left of the budget, and the step's own backstop fires one second after it,
+so a selector that never matches fails with Playwright's own "waiting for
+locator(...)" error rather than as a step that stopped. Before any of that, every
+`fill`/`fill_by`/`type` step -- with a credential or without -- waits once for
+its element to be attached, under the whole budget, then reads the element's
+role and redaction class against the attached element and gives the action
+what is left. So a target that never appears fails in about its budget (measured
+within a few milliseconds of it on all three engines) with Playwright's
+`Locator.wait_for: Timeout <budget>ms exceeded ... waiting for locator(...)`,
+rather than spending the budget on the metadata read and a second one on the
+action. A step the backstop
+does stop says whether anything was typed: "did not start typing ... Nothing
+was typed" when the page never answered before the first key, "stopped typing
+... The rest of the value was not typed" otherwise. An exported script's
+credential step waits what its step without a credential does when the step
+names no `timeout_ms`: Playwright's own 30s default.
+
+A credential passed to a called macro under another name
+(`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
+
+**Exported scripts enforce the live guards.** A script from `macro_export_cli`
+refuses a credential in a URL, code or outbound field, types a credential only
+on an origin passed as `--trusted-origin` (or listed in the step's
+`allowed_origins`), and uploads only from the upload staging directory or
+`OCTOWRIGHT_UPLOAD_ROOTS` -- the same rules `macro_run` applies, rendered from
+the same source.
 
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy
@@ -399,12 +642,12 @@ when they run. A script exported by an older octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
 default.
 
-**Not covered.** Writers outside the recording are not scrubbed. They include:
+**Not covered.** These writers are not scrubbed:
 
 - the page HTML and screenshot the generic diagnostic producer saves when a run
-  with no policy-admitted values fails, which can still show a credential an earlier
-  run left on the page;
-- the websocket frame sidecar, which stores frame payloads as received;
+  fails while neither it nor the session ledger holds a value -- which can still
+  show a secret the ledger never learned, such as one typed with
+  `OCTOWRIGHT_REDACT_INPUTS=off` or into a field not classified as a password;
 - a HAR file, when HAR recording is enabled at launch;
 - a Playwright trace, when `browser_launch` is called with `trace=true`, saved
   beside the recording as `.trace.zip` with each action's arguments, including
@@ -427,6 +670,10 @@ The linter catches:
 - **Unparameterized credential-shaped strings** (looks like a password or token
   but isn't a `{{parameter}}`) — the most common security mistake.
 - Empty conditional branches that would silently no-op.
+- An `allowed_origins` entry replay would refuse (`bad_allowed_origins`): a
+  wildcard, path or `{{placeholder}}` instead of an exact origin.
+- An `expect_no_text` whose text is still the recording's redaction marker
+  (`redacted_assertion_text`), which replay refuses.
 
 ## Test suite mode
 

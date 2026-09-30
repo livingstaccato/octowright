@@ -105,6 +105,11 @@ def _descriptor(session: Any) -> dict[str, Any]:
         "profile": session.profile,
         "url": session.url,
         "user_data_dir": str(udd) if udd else None,
+        # What the replacement trusts, as relaunch.py's snapshot does: the page
+        # reopens at its CURRENT url, but own_site_origins must keep trusting
+        # the origin the operator launched it at, not one a macro navigated to.
+        "launch_url": getattr(session, "launch_url", None),
+        "base_url": getattr(session, "base_url", None),
     }
 
 
@@ -313,6 +318,8 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
         ephemeral=stateless,
         session=session_scoped,
         badge=True,
+        trusted_launch_url=desc.get("launch_url"),
+        **({"base_url": desc["base_url"]} if desc.get("base_url") else {}),
     )
     new_id = result["instance_id"]
     old_id = desc["instance_id"]

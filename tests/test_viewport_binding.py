@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.browser_pool.pool import BrowserPool
+from octowright.browser_pool.visuals import viewport_action_token_for
 
 TOKEN = "test-viewport-token"
 
@@ -160,15 +161,17 @@ async def test_correct_token_still_performs_each_action(monkeypatch: pytest.Monk
     await pool._expose_viewport_binding(context, session)
     _name, function = context.expose_binding.await_args.args
 
-    sync_result = await function(None, {"action": "sync", "token": TOKEN})
+    sync_result = await function(None, {"action": "sync", "token": viewport_action_token_for(TOKEN, "sync")})
     assert sync_result == {"width": 640, "height": 480}
     session.viewport_sync.assert_awaited_once()
 
-    relaunch_result = await function(None, {"action": "relaunch-fluid", "token": TOKEN})
+    relaunch_result = await function(
+        None, {"action": "relaunch-fluid", "token": viewport_action_token_for(TOKEN, "relaunch-fluid")}
+    )
     assert relaunch_result == {"new_instance_id": "def456"}
     relaunch_mock.assert_awaited_once_with("abc123")
 
-    state_result = await function(None, {"action": "state", "token": TOKEN})
+    state_result = await function(None, {"action": "state"})
     assert state_result == {
         "mode": "fixed",
         "width": 1200,
@@ -176,6 +179,34 @@ async def test_correct_token_still_performs_each_action(monkeypatch: pytest.Monk
         "inset_w": 24,
         "inset_h": 112,
     }
+
+
+@pytest.mark.anyio
+async def test_one_actions_token_does_not_authorise_another(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whatever the pill sends is readable by page script (Playwright serialises
+    each binding call with the page's own ``JSON.stringify``), so the sync token
+    a real Sync click exposes must not also relaunch the browser."""
+    session = _session(instance_id="abc123")
+    context = MagicMock()
+    context.expose_binding = AsyncMock()
+    pool = BrowserPool()
+    relaunch_mock = AsyncMock()
+    monkeypatch.setattr(pool, "relaunch_fluid", relaunch_mock)
+    await pool._expose_viewport_binding(context, session)
+    _name, function = context.expose_binding.await_args.args
+
+    for token in (TOKEN, viewport_action_token_for(TOKEN, "sync")):
+        with pytest.raises(ValueError, match="invalid viewport action token"):
+            await function(None, {"action": "relaunch-fluid", "token": token})
+    relaunch_mock.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_state_needs_no_token_because_the_pill_sends_it_unprompted() -> None:
+    """``state`` is read-only; a token on it would leak on every resize."""
+    session = _session(viewport_mode="fluid", viewport_width=None, viewport_height=None)
+    state = await (await _binding(session))(None, {"action": "state"})
+    assert state["mode"] == "fluid"
 
 
 @pytest.fixture

@@ -17,6 +17,7 @@ density inside the repr) updates both consumers atomically.
 
 from __future__ import annotations
 
+import ast
 from typing import Any
 
 
@@ -52,3 +53,19 @@ def looks_like_binary_text(payload: Any) -> bool:
     if not isinstance(payload, str):
         return False
     return (payload.startswith('b"') and payload.endswith('"')) or (payload.startswith("b'") and payload.endswith("'"))
+
+
+def decode_binary_text(payload: Any, *, max_chars: int) -> bytes | None:
+    """The bytes a ``b'...'`` text frame spells, or ``None`` (not one, unparsable, or too long).
+
+    ``ast.literal_eval`` of page-controlled text is CPU spent wherever this is
+    called -- the event loop, for the websocket handler -- so anything over
+    *max_chars* is not parsed at all.
+    """
+    if not looks_like_binary_text(payload) or len(payload) > max_chars:
+        return None
+    try:
+        parsed = ast.literal_eval(payload)
+    except Exception:
+        return None
+    return bytes(parsed) if isinstance(parsed, bytes | bytearray) else None

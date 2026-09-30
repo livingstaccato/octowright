@@ -110,7 +110,7 @@ def _make_dispatch(events: list[Any]) -> Any:
     return dispatch
 
 
-def _identity_substitute(actions: list[dict[str, Any]], _args: dict[str, Any]) -> list[dict[str, Any]]:
+def _identity_substitute(actions: list[dict[str, Any]], _args: dict[str, Any], **_kwargs: Any) -> list[dict[str, Any]]:
     return actions
 
 
@@ -152,7 +152,7 @@ class TestDispatchMacroCallHappy:
         """substitute receives the loaded macro's `actions` and the call args."""
         captured: list[Any] = []
 
-        def my_substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict[str, Any]]:
+        def my_substitute(actions: list[dict[str, Any]], args: dict[str, Any], **_kwargs: Any) -> list[dict[str, Any]]:
             captured.append((actions, args))
             return actions
 

@@ -75,6 +75,7 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
         protected_reason=getattr(session, "protected_reason", "explicit"),
         disable_automation_controlled=getattr(session, "disable_automation_controlled", False),
         target_url=getattr(session.page, "url", None) or session.url,
+        launch_url=session.launch_url,
     )
 
 
@@ -102,7 +103,7 @@ async def _launch_from_snapshot(
 ) -> dict[str, Any]:
     # Don't overwrite the prior HAR — a handoff/relaunch gets a fresh sibling path.
     next_har = rotate_har_path(snapshot.har_path)
-    return await pool.launch(
+    result = await pool.launch(
         kind=snapshot.kind,
         url=snapshot.target_url,
         headed=headed,
@@ -117,7 +118,12 @@ async def _launch_from_snapshot(
         session=snapshot.profile is None and snapshot.user_data_dir is not None,
         protected=snapshot.protected,
         disable_automation_controlled=snapshot.disable_automation_controlled,
+        # The replacement opens at the page's current URL but trusts the
+        # original's (RelaunchSnapshot.launch_url). Passed in, not assigned
+        # afterwards: pool.launch publishes the session before it returns.
+        trusted_launch_url=snapshot.launch_url,
     )
+    return result
 
 
 async def _close_with_fallback_snapshot(

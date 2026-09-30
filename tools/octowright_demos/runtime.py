@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urlparse, urlunparse
 
+from octowright._json_text import dumps_utf8_safe
 from octowright.browser_pool import BrowserPool
 from octowright.recorder import tail_log
 from octowright.runner import _write_junit
@@ -332,7 +333,7 @@ def _write_merged_replay(live: LiveScenario | None, replay_path: Path) -> int:
     merged.sort(key=lambda item: item.get("ts", ""))
     with replay_path.open("w", encoding="utf-8") as handle:
         for event in merged:
-            handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+            handle.write(dumps_utf8_safe(event) + "\n")
     return len(merged)
 
 

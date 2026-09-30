@@ -22,6 +22,17 @@ def user_config_dir(app_name: str = "octowright") -> Path:
     return Path.home() / ".config" / app_name
 
 
+def upload_staging_dir() -> Path:
+    """Where uploads are staged by default: ``OCTOWRIGHT_UPLOAD_STAGING_DIR``, else ``<config>/uploads``.
+
+    Standard-library only, like ``user_config_dir``: the exported macro CLI
+    renders both, so a script resolves the default on the machine and for
+    the user that RUNS it, by the rule replay uses, instead of carrying the
+    exporting user's absolute path.
+    """
+    return Path(os.environ.get("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(user_config_dir() / "uploads")))
+
+
 def user_state_dir(app_name: str = "octowright") -> Path:
     """Return this platform's per-user state directory for Octowright."""
     if platform.system() == "Windows":

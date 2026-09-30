@@ -10,12 +10,12 @@ from __future__ import annotations
 from typing import Any, cast
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from octowright.dashboard_events import publish_dashboard_invalidation
 from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.routes._common import _read_json_body
 from octowright.scenarios_pool import ScenarioRoleNotFoundError
 
@@ -26,9 +26,9 @@ def _is_scenario_role_not_found_error(exc: BaseException) -> bool:
 
 def _scenario_run_macro_request(
     payload: object,
-) -> tuple[str | None, str | None, dict[str, Any] | None, JSONResponse | None]:
+) -> tuple[str | None, str | None, dict[str, Any] | None, SafeJSONResponse | None]:
     if not isinstance(payload, dict):
-        return None, None, None, JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        return None, None, None, SafeJSONResponse({"error": "body must be a JSON object"}, status_code=400)
     body = cast(dict[str, Any], payload)
 
     macro = body.get("macro")
@@ -37,7 +37,7 @@ def _scenario_run_macro_request(
             None,
             None,
             None,
-            JSONResponse({"error": "macro is required and must be a non-empty string"}, status_code=400),
+            SafeJSONResponse({"error": "macro is required and must be a non-empty string"}, status_code=400),
         )
 
     role = body.get("role")
@@ -46,16 +46,16 @@ def _scenario_run_macro_request(
             None,
             None,
             None,
-            JSONResponse({"error": "role must be a non-empty string when provided"}, status_code=400),
+            SafeJSONResponse({"error": "role must be a non-empty string when provided"}, status_code=400),
         )
 
     args = body.get("args") or {}
     if not isinstance(args, dict):
-        return None, None, None, JSONResponse({"error": "args must be a JSON object"}, status_code=400)
+        return None, None, None, SafeJSONResponse({"error": "args must be a JSON object"}, status_code=400)
     return macro, role, args, None
 
 
-async def list_scenarios(_request: Request) -> JSONResponse:
+async def list_scenarios(_request: Request) -> SafeJSONResponse:
     """GET /api/scenarios — return ``{live, saved}``.
 
     ``saved`` is the catalogue of YAML / Python scenario files on disk so the
@@ -65,10 +65,10 @@ async def list_scenarios(_request: Request) -> JSONResponse:
     from octowright.scenarios import list_scenarios as _list_disk
 
     spool = state.scenario_pool
-    return JSONResponse({"live": spool.list_live(), "saved": _list_disk()})
+    return SafeJSONResponse({"live": spool.list_live(), "saved": _list_disk()})
 
 
-async def scenario_start_endpoint(request: Request) -> JSONResponse:
+async def scenario_start_endpoint(request: Request) -> SafeJSONResponse:
     """POST /api/scenarios/{name}/start — launch a scenario by name.
 
     Mirrors the ``scenario_start`` MCP tool: returns
@@ -82,16 +82,16 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
     try:
         live = await spool.start(name=name, browser_pool=pool)
     except FileNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=404)
+        return SafeJSONResponse({"error": str(e)}, status_code=404)
     except (ValueError, TypeError) as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except RuntimeError as e:
         # spawn_roster reports per-participant errors as "scenario X: N
         # participant(s) failed to launch: [...]" — surface that as 500.
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return SafeJSONResponse({"error": str(e)}, status_code=500)
     except Exception as e:
         state.log.exception("octowright.http.scenario_start_failed", name=name)
-        return JSONResponse({"error": f"scenario start failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"scenario start failed: {e}"}, status_code=500)
 
     body = {
         "scenario_id": live.scenario_id,
@@ -106,16 +106,16 @@ async def scenario_start_endpoint(request: Request) -> JSONResponse:
     )
     await publish_dashboard_invalidation("scenarios")
     await publish_dashboard_invalidation("sessions")
-    return JSONResponse(body, status_code=201)
+    return SafeJSONResponse(body, status_code=201)
 
 
-async def scenario_stop_endpoint(request: Request) -> JSONResponse:
+async def scenario_stop_endpoint(request: Request) -> SafeJSONResponse:
     """DELETE /api/scenarios/{id} — stop a live scenario."""
     sid = request.path_params["id"]
     spool = state.scenario_pool
     pool = state.pool
     if not spool.has_live(sid):
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
         )
@@ -123,14 +123,14 @@ async def scenario_stop_endpoint(request: Request) -> JSONResponse:
         result = await spool.stop(scenario_id=sid, browser_pool=pool)
     except Exception as e:
         state.log.exception("octowright.http.scenario_stop_failed", scenario_id=sid)
-        return JSONResponse({"error": f"scenario stop failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"scenario stop failed: {e}"}, status_code=500)
     state.log.info("octowright.http.scenario_stopped", scenario_id=sid)
     await publish_dashboard_invalidation("scenarios")
     await publish_dashboard_invalidation("sessions")
-    return JSONResponse(result)
+    return SafeJSONResponse(result)
 
 
-async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
+async def scenario_run_macro_endpoint(request: Request) -> SafeJSONResponse:
     """POST /api/scenarios/{id}/run_macro — broadcast a macro to a scenario."""
     sid = request.path_params["id"]
     payload, err = await _read_json_body(request)
@@ -143,7 +143,7 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
     spool = state.scenario_pool
     pool = state.pool
     if not spool.has_live(sid):
-        return JSONResponse(
+        return SafeJSONResponse(
             {"error": f"no live scenario with id {sid!r}"},
             status_code=404,
         )
@@ -156,16 +156,16 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
             args=args or {},
         )
     except ScenarioRoleNotFoundError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
+        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         if _is_scenario_role_not_found_error(e):
-            return JSONResponse({"error": str(e)}, status_code=400)
+            return SafeJSONResponse({"error": str(e)}, status_code=400)
         state.log.exception(
             "octowright.http.scenario_run_macro_failed",
             scenario_id=sid,
             macro=macro,
         )
-        return JSONResponse({"error": f"run_macro failed: {e}"}, status_code=500)
+        return SafeJSONResponse({"error": f"run_macro failed: {e}"}, status_code=500)
     state.log.info(
         "octowright.http.scenario_macro_dispatched",
         scenario_id=sid,
@@ -173,7 +173,7 @@ async def scenario_run_macro_endpoint(request: Request) -> JSONResponse:
         role=role,
     )
     await publish_dashboard_invalidation("scenarios")
-    return JSONResponse(result)
+    return SafeJSONResponse(result)
 
 
 def routes() -> list[Route]:

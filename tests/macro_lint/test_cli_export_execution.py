@@ -24,6 +24,7 @@ import asyncio
 import re
 import sys
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -50,9 +51,41 @@ class _Recorder:
         return next(a for n, a, _kw in self.calls if n == name)
 
 
+class _FakeElement:
+    """What ``element_handle`` resolves: a credential step types into this, not the selector."""
+
+    def __init__(self, rec: _Recorder, frame: Any) -> None:
+        self._rec, self._frame = rec, frame
+
+    async def owner_frame(self) -> Any:
+        return self._frame
+
+    async def fill(self, value: str, **kw: Any) -> None:
+        self._rec.record("handle.fill", value, **kw)
+
+    async def type(self, text: str, **kw: Any) -> None:
+        self._rec.record("handle.type", text, **kw)
+
+    async def dispose(self) -> None:
+        self._rec.record("handle.dispose")
+
+
 class _FakeLocator:
-    def __init__(self, rec: _Recorder, label: str, owner: str | None = None) -> None:
-        self._rec, self._label, self._owner = rec, label, owner
+    def __init__(self, rec: _Recorder, label: str, owner: str | None = None, frame: Any = None) -> None:
+        self._rec, self._label, self._owner, self._frame = rec, label, owner, frame
+
+    @property
+    def first(self) -> _FakeLocator:
+        """A credential ``fill``/``type`` step takes the first match, as the same step without one does.
+
+        A credential ``fill_by`` never calls this: it resolves strictly, as ``Locator.fill`` does.
+        """
+        self._rec.record(f"locator.first:{self._label}")
+        return self
+
+    async def element_handle(self, **kw: Any) -> _FakeElement:
+        self._rec.record(f"locator.element_handle:{self._label}", **kw)
+        return _FakeElement(self._rec, self._frame)
 
     async def click(self, **kw: Any) -> None:
         self._rec.record(f"locator.click:{self._label}", **kw)
@@ -144,12 +177,22 @@ class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.pages: list[_FakePage] = []
+        self.handlers: dict[str, list[Any]] = {}
+
+    def on(self, event: str, handler: Any) -> None:
+        self.handlers.setdefault(event, []).append(handler)
+
+    def open(self, tag: str) -> _FakePage:
+        """A page the context opened itself (a popup): the ``page`` event fires, as Playwright's does."""
+        page = _FakePage(self._rec, tag=tag, context=self)
+        self.pages.append(page)
+        for handler in self.handlers.get("page", []):
+            handler(page)
+        return page
 
     async def new_page(self) -> _FakePage:
         self._rec.record("context.new_page")
-        page = _FakePage(self._rec, tag=f"tab-{len(self.pages)}", context=self)
-        self.pages.append(page)
-        return page
+        return self.open(f"tab-{len(self.pages)}")
 
     async def route(self, pattern: str, handler: Any) -> None:
         """`inject_headers` routes on the CONTEXT, matching the live session --
@@ -168,6 +211,14 @@ class _FakePage:
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
         self.context = context or _FakeContext(rec)
+        self.handlers: dict[str, list[Any]] = {}
+        self.rendered_text = "hello world"
+        self.matched = 1  # how many elements the rendered-text scan says the selector matched
+        # A real page lists its main frame first; this fake stands in for both.
+        self.frames = [self]
+
+    def is_detached(self) -> bool:
+        return False
 
     def _log(self, name: str, *args: Any, **kw: Any) -> None:
         self._rec.record(name, *args, **kw)
@@ -216,6 +267,8 @@ class _FakePage:
         """a11y_dragdrop's verify_js/verify_text_contains land here too --
         same ``"() => false"`` sentinel as ``_FakeLocator.evaluate``."""
         self._log("evaluate", expression)
+        if expression.startswith("({ selector, ownPrefix"):
+            return {"pieces": [self.rendered_text], "overlay": "", "matched": self.matched}
         return expression != "() => false"
 
     async def wait_for_selector(self, selector: str, **kw: Any) -> _FakeHandle:
@@ -240,6 +293,14 @@ class _FakePage:
 
     def on(self, event: str, handler: Any) -> None:
         self._log("on", event)
+        self.handlers.setdefault(event, []).append(handler)
+
+    def is_closed(self) -> bool:
+        return False
+
+    async def inner_text(self, selector: str, **kw: Any) -> str:
+        self._log("inner_text", selector)
+        return self.rendered_text
 
     def frame(self, **kw: Any) -> Any:
         self._log("frame", **kw)
@@ -251,21 +312,21 @@ class _FakePage:
             self.context.pages.remove(self)
 
     def get_by_role(self, role: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "role")
+        return _FakeLocator(self._rec, "role", frame=self)
 
     def get_by_label(self, label: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "label")
+        return _FakeLocator(self._rec, "label", frame=self)
 
     def get_by_text(self, text: str, **kw: Any) -> _FakeLocator:
-        return _FakeLocator(self._rec, "text")
+        return _FakeLocator(self._rec, "text", frame=self)
 
     def get_by_test_id(self, test_id: str) -> _FakeLocator:
-        return _FakeLocator(self._rec, "test_id")
+        return _FakeLocator(self._rec, "test_id", frame=self)
 
     def locator(self, selector: str) -> _FakeLocator:
         """a11y_dragdrop's source/verify_selector_* locators (CSS, not ARIA)."""
         self._log(f"locator.resolve:{self.tag}", selector)
-        return _FakeLocator(self._rec, "css", self.tag)
+        return _FakeLocator(self._rec, "css", self.tag, frame=self)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, rec: _Recorder) -> None:
@@ -314,6 +375,9 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "expect_selector", "selector": "#ok"},
     {"action": "expect_text", "selector": "#msg", "text": "hello", "mode": "contains"},
     {"action": "expect_js", "expression": "1 === 1"},
+    {"action": "mark_network_clean"},
+    {"action": "expect_network_clean", "since": "mark", "settle_timeout_ms": 0},
+    {"action": "expect_no_text", "text": "s3cret", "selector": "#profile"},
     {"action": "click_by", "role": "button", "role_name": "Save"},
     {"action": "fill_by", "label": "Email", "value": "a@b.c"},
     {"action": "get_text_by", "test_id": "total"},
@@ -348,7 +412,27 @@ _EVERY_ACTION: list[dict[str, Any]] = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _upload_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uploads obey the live allowlist, so the fixture's files live in the staging dir.
+
+    The actions name them relatively, and the script resolves them from the
+    working directory, as live replay does.
+    """
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OCTOWRIGHT_UPLOAD_STAGING_DIR", str(tmp_path))
+    monkeypatch.delenv("OCTOWRIGHT_UPLOAD_ROOTS", raising=False)
+
+
+def _staged(*names: str) -> list[str]:
+    """What the script hands Playwright for *names*: the resolved staged path."""
+    return [str(Path(name).resolve()) for name in names]
+
+
 def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]]) -> tuple[dict[str, int], _Recorder]:
+    for action in actions:
+        for name in action.get("paths") or action.get("files") or []:
+            Path(name).write_text("staged", encoding="utf-8")
     rec = _Recorder()
     _install(monkeypatch, rec)
     source = render_macro_cli(name="everything", macro={"actions": actions}, include_evidence=False)
@@ -406,8 +490,8 @@ def test_recorded_field_spellings_reach_the_right_parameters(monkeypatch: pytest
     _result, rec = _run(monkeypatch, _EVERY_ACTION)
     assert rec.args_for("drag_and_drop") == ("#a", "#b")
     assert rec.args_for("route") == ("**/api/*",)
-    assert rec.args_for("set_input_files") == ("#file", ["a.txt"])
-    assert rec.args_for("file_chooser.set_files") == (["b.txt"],)
+    assert rec.args_for("set_input_files") == ("#file", _staged("a.txt"))
+    assert rec.args_for("file_chooser.set_files") == (_staged("b.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 321}
     assert rec.kwargs_for("select_option") == {"value": "NL"}
     assert rec.args_for("set_viewport_size") == ({"width": 1280, "height": 800},)
@@ -441,7 +525,7 @@ def test_upload_files_arms_clicks_awaits_and_sets_in_order(
     assert relevant == ["file_chooser.arm", expected_click, "file_chooser.await", "file_chooser.set_files"]
     assert rec.kwargs_for("file_chooser.arm") == {"timeout": 246}
     assert rec.kwargs_for(expected_click) == {"timeout": 246}
-    assert rec.args_for("file_chooser.set_files") == (["first.txt", "second.txt"],)
+    assert rec.args_for("file_chooser.set_files") == (_staged("first.txt", "second.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 246}
 
 
@@ -483,7 +567,7 @@ def test_upload_files_in_frame_arms_page_listener_and_clicks_frame_trigger(
     assert "locator.resolve:main" not in names
     assert names.count("locator.click:css:frame") == 1
     assert "locator.click:css:main" not in names
-    assert rec.args_for("file_chooser.set_files") == (["inside-frame.txt"],)
+    assert rec.args_for("file_chooser.set_files") == (_staged("inside-frame.txt"),)
     assert rec.kwargs_for("file_chooser.set_files") == {"timeout": 357}
 
 
@@ -677,7 +761,7 @@ def test_a11y_dragdrop_defaults_match_the_engine(monkeypatch: pytest.MonkeyPatch
 def test_a11y_dragdrop_releases_on_failed_verify(monkeypatch: pytest.MonkeyPatch) -> None:
     """The trap: a verify that never passes must still press release_key.
 
-    Task 1's fix round removed exactly this bug from the engine -- a grabbed
+    The engine had exactly this bug once -- a grabbed
     widget left stuck is indistinguishable from a grab that never registered.
     """
     action = {

@@ -221,7 +221,7 @@ def patched_runners(monkeypatch: pytest.MonkeyPatch) -> dict[str, MagicMock]:
             raise raise_on[action["action"]]
         return (1, 0)
 
-    async def fake_suggest(session: Any, action: dict[str, Any]) -> str | None:
+    async def fake_suggest(session: Any, action: dict[str, Any], **_kwargs: Any) -> str | None:
         suggest_calls.append(action)
         return "use #other instead"
 
@@ -500,7 +500,7 @@ class TestRunMacroFailurePath:
     ) -> None:
         """Falsy suggest_fix → key absent."""
 
-        async def no_suggestion(session: Any, action: dict[str, Any]) -> str | None:
+        async def no_suggestion(session: Any, action: dict[str, Any], **_kwargs: Any) -> str | None:
             return None
 
         monkeypatch.setattr(_execution, "_suggest_fix", no_suggestion)

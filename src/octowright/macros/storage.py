@@ -15,8 +15,10 @@ from typing import Any
 from provide.telemetry import get_logger
 
 from octowright import defaults
+from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text, reject_unsafe_path
-from octowright.macros.privacy import is_credential_key
+from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
+from octowright.macros.privacy import assertion_digest_matches, is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -103,6 +105,7 @@ def _bind_redacted_inputs(
     the recording; every other case is ambiguous and refused, the way replay
     already refuses a redacted header rather than failing confusingly later.
     """
+    actions = _bind_redacted_assertions(actions, param_map)
     redacted = _redacted_fields(actions)
     if not redacted:
         return actions
@@ -113,6 +116,42 @@ def _bind_redacted_inputs(
         return actions
     fields = ", ".join(_field_label(actions[i], i) for i, _key in redacted)
     raise ValueError(_redaction_refusal(fields, len(redacted), candidates))
+
+
+def _bind_redacted_assertions(actions: list[dict[str, Any]], param_map: dict[str, str]) -> list[dict[str, Any]]:
+    """Bind a recorded expect_no_text to the declared parameter whose value it checked.
+
+    Its text is recorded as ``REDACTED_ASSERTION_TEXT``, never the text, because
+    that is usually the password the check keeps off screen -- but not always:
+    ``expect_no_text('Traceback')`` records the same marker. So the recorder
+    writes a keyed digest beside it (``privacy.assertion_text_digest``) and a
+    marker is bound only to a parameter, credential-named or not, whose value
+    digests the same. Binding every marker to the lone credential parameter
+    silently turned that ``Traceback`` check into a password check.
+
+    The key lives only in the running daemon's memory, so this binds recordings
+    made by the daemon doing the save. After a restart nothing matches, the
+    marker stays, and ``macro_lint`` tells the author to set the text; the same
+    happens when no parameter, or more than one, matches. Never refused: the
+    assertion does not stop the rest of the recording from replaying. The digest
+    and the recorded scan summary (``drawn_text.NO_TEXT_OBSERVATION_KEYS``) are
+    dropped from every saved action -- they mean nothing to replay, and
+    ``expect_no_text`` takes no such arguments.
+    """
+    return [
+        _bind_assertion(action, param_map) if action.get("action") == "expect_no_text" else action for action in actions
+    ]
+
+
+def _bind_assertion(action: dict[str, Any], param_map: dict[str, str]) -> dict[str, Any]:
+    digest = action.get("text_digest")
+    # The digest and what the check observed are the recording's, not the macro's inputs.
+    bound = {key: value for key, value in action.items() if key not in NO_TEXT_OBSERVATION_KEYS}
+    if bound.get("text") == defaults.REDACTED_ASSERTION_TEXT:
+        matches = [name for name, value in param_map.items() if assertion_digest_matches(value, digest)]
+        if len(matches) == 1:
+            bound["text"] = "{{" + matches[0] + "}}"
+    return bound
 
 
 def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:
@@ -183,7 +222,7 @@ def save_macro(
 
     MACROS_DIR.mkdir(parents=True, exist_ok=True)
     secure_artifact_tree(MACROS_DIR, MACROS_DIR)
-    atomic_write_text(dest, json.dumps(macro, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(dest, dumps_utf8_safe(macro, indent=2), encoding="utf-8")
     log.info("octowright.macro.saved", name=name, path=str(dest), action_count=len(actions))
     return dest
 
@@ -249,7 +288,7 @@ def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
                 )
     dest.parent.mkdir(parents=True, exist_ok=True)
     secure_artifact_tree(dest.parent, MACROS_DIR)
-    atomic_write_text(dest, json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8")
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
     return dest
 

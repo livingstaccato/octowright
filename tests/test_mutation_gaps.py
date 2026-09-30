@@ -84,8 +84,9 @@ def test_hyphenated_credential_arg_names_are_redacted(key: str) -> None:
     """
     from octowright.macros._redact import _REDACTED_MACRO_VALUE
     from octowright.macros.execution import _redact_args_for_response
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    out = _redact_args_for_response({key: "s3kr3t-value"})
+    out = _redact_args_for_response({key: "s3kr3t-value"}, MacroArgPrivacy())
 
     assert out[key] == _REDACTED_MACRO_VALUE
     assert "s3kr3t-value" not in json.dumps(out)
@@ -98,8 +99,9 @@ def test_non_credential_arg_names_are_left_readable() -> None:
     above. Diagnostic args are the reason ``args_used`` is echoed at all.
     """
     from octowright.macros.execution import _redact_args_for_response
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    out = _redact_args_for_response({"order-id": "A-1234", "order_id": "A-1234"})
+    out = _redact_args_for_response({"order-id": "A-1234", "order_id": "A-1234"}, MacroArgPrivacy())
 
     assert out == {"order-id": "A-1234", "order_id": "A-1234"}
 
@@ -183,7 +185,7 @@ def test_a_console_message_exactly_at_the_cap_is_returned_unchanged() -> None:
     complete, on the macro-failure path where that text is the diagnostic an
     agent reads to explain why a run died.
     """
-    from octowright.macros.execution import MACRO_FAILURE_CONSOLE_TEXT_CHARS, _truncate_console_message
+    from octowright.macros.failure_context import MACRO_FAILURE_CONSOLE_TEXT_CHARS, _truncate_console_message
 
     exactly = {"level": "error", "text": "x" * MACRO_FAILURE_CONSOLE_TEXT_CHARS}
     assert _truncate_console_message(exactly) is exactly
@@ -233,8 +235,9 @@ def test_a_cli_flag_is_derived_from_the_parameter_name_not_the_identifier() -> N
     CLI away from what the macro author wrote.
     """
     from octowright.artifacts.script_export import _parser_line
+    from octowright.macros.privacy import MacroArgPrivacy
 
-    line = _parser_line(("2fa code", "arg_2fa_code"), None)
+    line = _parser_line(("2fa code", "arg_2fa_code"), None, MacroArgPrivacy())
 
     assert "'--2fa-code'" in line
     assert "dest='arg_2fa_code'" in line
