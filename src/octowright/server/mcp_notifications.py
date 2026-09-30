@@ -101,6 +101,33 @@ log = get_logger(__name__)
 _active_session_write: Any | None = None
 
 
+def _recovered_payload(event: SessionRecoveredEvent) -> dict[str, Any]:
+    """The ``browser_recovered`` notification for *event*."""
+    if event.scope == "process":
+        recovery_hint = (
+            "reopening the crashed browser failed — relaunch it with browser_launch "
+            "(octowright_status().pool.lost_sessions has its last URL and the error)"
+        )
+    else:
+        recovery_hint = _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved")
+    return {
+        "method": "notifications/octowright/browser_recovered",
+        "params": {
+            "instance_id": event.instance_id,
+            "kind": event.kind,
+            "label": event.label,
+            "profile": event.profile,
+            "outcome": event.outcome,
+            "attempts": event.attempts,
+            "log_path": event.log_path,
+            "navigation_error": event.navigation_error,
+            "recovered_elsewhere": event.recovered_elsewhere,
+            "scope": event.scope,
+            "hint": _RECOVERED_ELSEWHERE_HINT if event.recovered_elsewhere else recovery_hint,
+        },
+    }
+
+
 def notification_payload(event: SessionEvent) -> dict[str, Any]:
     """The JSON-RPC ``{method, params}`` for a pool event.
 
@@ -132,29 +159,7 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
             },
         }
     if isinstance(event, SessionRecoveredEvent):
-        if event.scope == "process":
-            recovery_hint = (
-                "reopening the crashed browser failed — relaunch it with browser_launch "
-                "(octowright_status().pool.lost_sessions has its last URL and the error)"
-            )
-        else:
-            recovery_hint = _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved")
-        return {
-            "method": "notifications/octowright/browser_recovered",
-            "params": {
-                "instance_id": event.instance_id,
-                "kind": event.kind,
-                "label": event.label,
-                "profile": event.profile,
-                "outcome": event.outcome,
-                "attempts": event.attempts,
-                "log_path": event.log_path,
-                "navigation_error": event.navigation_error,
-                "recovered_elsewhere": event.recovered_elsewhere,
-                "scope": event.scope,
-                "hint": _RECOVERED_ELSEWHERE_HINT if event.recovered_elsewhere else recovery_hint,
-            },
-        }
+        return _recovered_payload(event)
     if isinstance(event, SessionCrashedEvent):
         # Accurate to the auto-recovery behavior: when recovery is scheduled the
         # client should WAIT for the browser_recovered outcome, not relaunch a
