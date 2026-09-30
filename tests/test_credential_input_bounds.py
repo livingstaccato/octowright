@@ -332,7 +332,7 @@ async def test_a_focus_stop_at_the_first_key_says_nothing_was_typed() -> None:
     assert raised.value.started is False
 
 
-class TimeoutError(Exception):  # noqa: A001 - named as Playwright's own, which is not the builtin
+class TimeoutError(Exception):
     """Playwright's ``TimeoutError``: its own class, not a subclass of the builtin."""
 
 

@@ -409,8 +409,8 @@ def _same_url(page_url: Any, last_url: str) -> bool:
         return page_url.partition("#")[0] == last_url.partition("#")[0]
     if origin != url_origin(last_url):
         return False
-    page, last = urlsplit(page_url), urlsplit(last_url.strip())
-    return (page.path or "/", page.query) == (last.path or "/", last.query)
+    current, last = urlsplit(page_url), urlsplit(last_url.strip())
+    return (current.path or "/", current.query) == (last.path or "/", last.query)
 
 
 async def _settle_crash_signal(session: SessionLike, page: Any) -> None:
@@ -494,8 +494,7 @@ async def _replace_crashed_page(
     redirects to), or any other navigation failure (DNS, reset, timeout) --
     else ``None``; and whether the page is somewhere other than ``last_url``,
     judged by where it actually is whether or not the navigation raised
-    (:func:`_elsewhere`), or because the guard ended its chain
-    (:func:`_guard_ended_chain`). A load that timed out after its
+    or because the guard ended its chain. A load that timed out after its
     navigation committed leaves the page AT ``last_url``, so that is not
     elsewhere; a redirect to ``/login`` is. A failed navigation does not fail the recovery: the new page is
     already in the context and wired, so raising would orphan it and leave the
@@ -541,8 +540,34 @@ async def _replace_crashed_page(
         # not the event ran first: new_page ends up present exactly once, dead_page
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
-        navigation_error: str | None = None
-        chain_ended = False
+        navigation_error, chain_ended = await _load_replacement(session, dead_page, new_page, timeout_ms, last_url)
+        # Decided by where the page is, whether or not the navigation raised: a
+        # load that timed out after commit is AT its last URL, a goto that
+        # succeeded through a redirect to /login is not -- nor is a page still on
+        # the guard's client-redirect document.
+        elsewhere = (
+            chain_ended
+            or ssrf_guard.served_client_redirect_last(new_page.main_frame)
+            or not _same_url(new_page.url, last_url)
+        )
+        await _swap_in(session, dead_page, new_page, last_url)
+        return navigation_error, elsewhere
+
+
+async def _load_replacement(
+    session: SessionLike, dead_page: Any, new_page: Any, timeout_ms: float, last_url: str
+) -> tuple[str | None, bool]:
+    """Navigate *new_page* to *last_url*: ``(navigation_error, chain_ended)``, or raise if it cannot be used.
+
+    ``chain_ended`` is whether the SSRF guard refused or failed a hop of this
+    navigation (its own record, begun by ``guarded_navigation``). A refused
+    LATER hop leaves the page on the guard's client-redirect document, which
+    sits AT the last URL, so where the page is cannot say it was not reached.
+    Re-enters the caller's ``crash_recovery`` lease, as the other helpers here do.
+    """
+    navigation_error: str | None = None
+    chain_ended = False
+    async with session.operation("crash_recovery", wait_timeout_seconds=None):
         try:
             await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(last_url, timeout=timeout_ms))
         except Exception as exc:
@@ -557,7 +582,7 @@ async def _replace_crashed_page(
                     ) from exc
                 raise
             navigation_error = str(exc)
-            chain_ended = _guard_ended_chain(new_page)
+            chain_ended = ssrf.policy_enabled() and ssrf_guard.frame_chain(new_page.main_frame).refused.is_set()
             await _settle_crash_signal(session, new_page)
         if _REPLACEMENTS.get(new_page):
             # Left in _REPLACEMENTS, so a crash event still in flight stays this recovery's.
@@ -567,16 +592,24 @@ async def _replace_crashed_page(
                 + (f": {navigation_error}" if navigation_error else ""),
                 dead_page=dead_page,
             )
-        elsewhere = chain_ended or _elsewhere(new_page, last_url)
+    return navigation_error, chain_ended
+
+
+async def _swap_in(session: SessionLike, dead_page: Any, new_page: Any, last_url: str) -> None:
+    """Put *new_page* in *dead_page*'s slot and close the dead page; raise if the replacement crashed meanwhile.
+
+    Only once this returns is it the session's page: until the swap and the
+    dead page's close have finished, a crash of it is still this recovery's
+    (:func:`claim_replacement_crash`), not a fresh one that a second recovery
+    would then race this one to report. Re-enters the caller's
+    ``crash_recovery`` lease, as the other helpers here do.
+    """
+    async with session.operation("crash_recovery", wait_timeout_seconds=None):
         await _take_dead_page_slot(session, dead_page, new_page)
         try:
             await dead_page.close()
         except Exception as exc:
             log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))
-        # Only now is it the session's page: until the swap and the dead page's
-        # close have finished, a crash of it is still this recovery's
-        # (claim_replacement_crash), not a fresh one that a second recovery
-        # would then race this one to report.
         if _REPLACEMENTS.get(new_page):
             # It holds the slot, so the next attempt replaces it. Left in
             # _REPLACEMENTS, so a crash event still in flight stays this recovery's.
@@ -584,28 +617,3 @@ async def _replace_crashed_page(
                 f"the replacement page crashed after loading {last_url!r}", dead_page=new_page
             )
         _REPLACEMENTS.pop(new_page, None)
-        return navigation_error, elsewhere
-
-
-def _guard_ended_chain(page: Any) -> bool:
-    """Whether the SSRF guard refused or failed a hop of *page*'s navigation (``False`` with the policy off).
-
-    The navigation's own record, begun by ``guarded_navigation``. A refused
-    LATER hop leaves the page on the guard's client-redirect document, which
-    sits AT the last URL, so where the page is cannot say it was not reached.
-    """
-    if not ssrf.policy_enabled():
-        return False
-    return ssrf_guard.frame_chain(page.main_frame).refused.is_set()
-
-
-def _elsewhere(page: Any, last_url: str) -> bool:
-    """Whether *page* is somewhere other than *last_url*: by where it is, and not on the guard's redirect document.
-
-    Decided the same way whether or not the navigation raised: a load that
-    timed out after commit is AT its last URL, and a ``goto`` that succeeded
-    through a redirect to ``/login`` is not.
-    """
-    if ssrf_guard.served_client_redirect_last(page.main_frame):
-        return True
-    return not _same_url(page.url, last_url)

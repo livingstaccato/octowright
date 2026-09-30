@@ -323,7 +323,9 @@ async def checked_type(
                     # Stopped here rather than by the next key's 1ms Playwright
                     # timeout, whose message would not say the rest was not typed.
                     raise _stopped(budget_ms, progress)
-                await _checked_key(session, char, check, send, (budget_ms, deadline), token, not index, handles, progress)
+                await _checked_key(
+                    session, char, check, send, (budget_ms, deadline), token, not index, handles, progress
+                )
 
     try:
         await _within(budget_ms, progress, type_all())
@@ -376,19 +378,32 @@ async def _checked_key(
                 # Spent during the lookup: stop in the step's words rather than
                 # send the key with a 1ms timeout and surface Playwright's.
                 raise _stopped(budget_ms, progress)
-            try:
-                progress.started = True
-                await send(element, char, _ms_left(deadline))
+            if await _send_key(send, element, char, budget, progress):
                 return
-            except Exception as exc:
-                if _is_playwright_timeout(exc):
-                    # The key was given what was left of the budget, so its
-                    # timeout is the step's.
-                    raise _stopped(budget_ms, progress) from exc
-                # Replaced between the lookup and the key: ask again, which stops
-                # unless focus is still somewhere this step may type.
-                if not credential_input_detached(exc) or time.monotonic() >= deadline:
-                    raise
+
+
+async def _send_key(
+    send: Callable[[Any, str, float], Awaitable[None]],
+    element: Any,
+    char: str,
+    budget: tuple[float, float],
+    progress: _Progress,
+) -> bool:
+    """Send *char* through *element*: ``True`` once sent, ``False`` when it was replaced and focus must be asked again."""
+    budget_ms, deadline = budget
+    try:
+        progress.started = True
+        await send(element, char, _ms_left(deadline))
+        return True
+    except Exception as exc:
+        if _is_playwright_timeout(exc):
+            # The key was given what was left of the budget, so its timeout is the step's.
+            raise _stopped(budget_ms, progress) from exc
+        # Replaced between the lookup and the key: ask again, which stops
+        # unless focus is still somewhere this step may type.
+        if not credential_input_detached(exc) or time.monotonic() >= deadline:
+            raise
+        return False
 
 
 def _is_playwright_timeout(exc: BaseException) -> bool:
