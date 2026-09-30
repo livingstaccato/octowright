@@ -169,8 +169,9 @@ async def test_each_key_is_given_what_is_left_of_the_budget() -> None:
     await credential_input.checked_type(session, _Locator(calls), "abc", _accept, delay_ms=20, timeout_ms=5000)
     timeouts = [timeout for _char, timeout in element.typed]
     assert [char for char, _timeout in element.typed] == list("abc")
-    # The budget is the action timeout plus the step's own pauses, 3 * 20ms.
-    assert all(timeout is not None and 0 < timeout <= 5060 for timeout in timeouts), timeouts
+    # The budget is the action timeout plus the step's own pauses, 3 * 20ms. A coarse
+    # clock (Windows, ~15ms) can show the first key no time spent: the whole budget, up to float error.
+    assert all(timeout is not None and 0 < timeout <= 5060 + 1e-6 for timeout in timeouts), timeouts
     assert timeouts == sorted(timeouts, reverse=True)
 
 
