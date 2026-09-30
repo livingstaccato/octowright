@@ -110,3 +110,60 @@ def test_the_last_served_document_is_per_frame_and_in_order() -> None:
     assert ssrf_guard.served_client_redirect_last(mine) is False
     assert ssrf_guard.served_client_redirect_last(other) is True
     assert ssrf_guard.served_client_redirect_last(_Frame()) is False
+
+
+def test_heavy_navigation_elsewhere_does_not_evict_a_popups_stub() -> None:
+    """One process-wide 256-entry FIFO answered a per-frame question: other frames' traffic evicted this one's."""
+    popup = _Frame()
+    ssrf_guard._note_served(_Request(popup), client_redirect=True)
+    others = [_Frame() for _ in range(300)]
+    for frame in others:
+        ssrf_guard._note_served(_Request(frame), client_redirect=False)
+    assert ssrf_guard.served_client_redirect_last(popup) is True
+
+
+class _NavigatingFrame:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def test_a_commit_the_guard_never_served_clears_the_stub() -> None:
+    """A service-worker response never reaches the route, so the stub stayed "last" after the frame moved on."""
+    frame = _NavigatingFrame("https://public.test/r")
+    ssrf_guard._note_served(_Request(frame), client_redirect=True)  # type: ignore[arg-type]
+    ssrf_guard.note_frame_navigated(frame)  # the stub itself commits, at its own URL
+    assert ssrf_guard.served_client_redirect_last(frame) is True
+    frame.url = "https://public.test/from-the-service-worker"
+    ssrf_guard.note_frame_navigated(frame)
+    assert ssrf_guard.served_client_redirect_last(frame) is False
+
+
+class _PopupRequest:
+    """A popup's first request: no frame until the popup page exists."""
+
+    def __init__(self) -> None:
+        self.url = "https://public.test/r"
+        self.page_frame: Any = None
+
+    @property
+    def frame(self) -> Any:
+        if self.page_frame is None:
+            raise RuntimeError("Frame for this navigation request is not available")
+        return self.page_frame
+
+
+def test_a_popups_first_stub_is_parked_until_its_frame_exists() -> None:
+    request = _PopupRequest()
+    ssrf_guard._note_served(request, client_redirect=True)
+    frame = _Frame()
+    request.page_frame = frame
+    assert ssrf_guard.served_client_redirect_last(frame) is True
+
+
+def test_a_parked_stub_does_not_override_a_later_real_document() -> None:
+    request = _PopupRequest()
+    ssrf_guard._note_served(request, client_redirect=True)
+    frame = _Frame()
+    ssrf_guard._note_served(_Request(frame), client_redirect=False)  # the destination, served after it
+    request.page_frame = frame
+    assert ssrf_guard.served_client_redirect_last(frame) is False

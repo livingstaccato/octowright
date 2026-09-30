@@ -139,6 +139,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
+import itertools
 import json
 import re
 import weakref
@@ -231,44 +232,111 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
         return None
 
 
-#: Every navigation document the guard served, keyed by its request, in the
-#: order served, with whether it was a client-redirect document. Read by
-#: :func:`served_client_redirect_last`. Keyed by request, not frame: a popup's
-#: first request has no frame while it is served (see ``_UNFRAMED``) and
-#: resolves to it later. Bounded like ``_UNFRAMED``; only the newest entries
-#: can be the one a frame is showing.
-_SERVED: weakref.WeakKeyDictionary[Any, bool] = weakref.WeakKeyDictionary()
-_MAX_SERVED = 256
+#: What the guard last served each frame's navigation: ``(seq, stub_url)``,
+#: where ``stub_url`` is the URL its client-redirect document was served for,
+#: or ``None`` for a real document. Per frame, so heavy navigation elsewhere
+#: cannot evict a popup's entry; ``seq`` orders it against entries that were
+#: parked while their request had no frame (``_SERVED_UNFRAMED``). Read by
+#: :func:`served_client_redirect_last`.
+_SERVED_LAST: weakref.WeakKeyDictionary[Any, tuple[int, str | None]] = weakref.WeakKeyDictionary()
+
+#: The same for a navigation whose request had no frame when it was served --
+#: a popup's first request (see ``_UNFRAMED``) -- until the frame appears.
+#: Bounded like ``_UNFRAMED``.
+_SERVED_UNFRAMED: weakref.WeakKeyDictionary[Any, tuple[int, str | None]] = weakref.WeakKeyDictionary()
+_MAX_SERVED_UNFRAMED = 64
+
+_served_seq = itertools.count(1)
+
+
+def _without_fragment(url: Any) -> str:
+    return str(url or "").partition("#")[0]
+
+
+def _record_served(frame: Any, entry: tuple[int, str | None]) -> None:
+    """Record *entry* for *frame* unless a later one is already there."""
+    current = _SERVED_LAST.get(frame)
+    if current is None or current[0] < entry[0]:
+        _SERVED_LAST[frame] = entry
+
+
+def _adopt_served_unframed() -> None:
+    """Hand every parked served entry whose request now has a frame to that frame."""
+    for request in list(_SERVED_UNFRAMED):
+        try:
+            frame = request.frame
+        except Exception as exc:  # still no page for it: keep it parked for the next look
+            log.debug("octowright.ssrf.served_document_still_unframed", error=repr(exc))
+            continue
+        entry = _SERVED_UNFRAMED.pop(request, None)
+        if entry is not None:
+            _record_served(frame, entry)
 
 
 def _note_served(request: Any, *, client_redirect: bool) -> None:
-    while len(_SERVED) >= _MAX_SERVED:
-        _SERVED.pop(next(iter(_SERVED)), None)
+    entry = (next(_served_seq), _without_fragment(request.url) if client_redirect else None)
     try:
-        # Re-inserted, so the dict's order stays the order served.
-        _SERVED.pop(request, None)
-        _SERVED[request] = client_redirect
-    except TypeError:  # a request double that cannot be weakly referenced
+        frame = request.frame
+    except Exception:  # a popup's first request: no frame until its page exists
+        frame = None
+    try:
+        if frame is not None:
+            _record_served(frame, entry)
+            return
+        while len(_SERVED_UNFRAMED) >= _MAX_SERVED_UNFRAMED:
+            _SERVED_UNFRAMED.pop(next(iter(_SERVED_UNFRAMED)), None)
+        _SERVED_UNFRAMED[request] = entry
+    except TypeError:  # a frame or request double that cannot be weakly referenced
         log.debug("octowright.ssrf.served_document_untracked")
 
 
+def note_frame_navigated(frame: Any) -> None:
+    """A document committed in *frame*: unless it is the client-redirect document, the stub is gone.
+
+    Every commit, including the ones the guard never served -- a
+    service-worker response, a same-document ``history`` move to another
+    URL -- replaces what the frame shows, so a stub recorded for another URL
+    is no longer the frame's document. Registered for every page of a
+    guarded context (:func:`install_navigation_guard`).
+    """
+    if _SERVED_UNFRAMED:
+        _adopt_served_unframed()
+    try:
+        entry = _SERVED_LAST.get(frame)
+        if entry is None or entry[1] is None:
+            return
+        if _without_fragment(getattr(frame, "url", None)) != entry[1]:
+            _SERVED_LAST[frame] = (entry[0], None)
+    except TypeError:  # a frame double that cannot be weakly referenced
+        log.debug("octowright.ssrf.frame_navigation_untracked")
+
+
+def _watch_page(page: Any) -> None:
+    try:
+        page.on("framenavigated", note_frame_navigated)
+    except Exception as exc:
+        log.debug("octowright.ssrf.frame_navigation_unwatched", error=repr(exc))
+
+
 def served_client_redirect_last(frame: Any) -> bool:
-    """Whether the last navigation document the guard served *frame* was its client-redirect document.
+    """Whether *frame* is showing the guard's client-redirect document, as far as the guard knows.
 
     What a caller that only saw load states cannot tell after the fact: a
     ``domcontentloaded`` it awaited may have been the redirect document's, and
     a page that has since closed can no longer be asked. Readable after the
-    page closed (measured on all three engines).
+    page closed (measured on all three engines). True once the guard served
+    the frame a client-redirect document, until it serves the frame a real
+    one or the frame commits a document at another URL
+    (:func:`note_frame_navigated`). A document the guard never saw that
+    commits at the stub's own URL is not told apart.
     """
-    last = False
-    for request, client_redirect in list(_SERVED.items()):
-        try:
-            served_frame = request.frame
-        except Exception:  # still no page for it (or never will be): not this frame's
-            continue
-        if served_frame is frame:
-            last = client_redirect
-    return last
+    if _SERVED_UNFRAMED:
+        _adopt_served_unframed()
+    try:
+        entry = _SERVED_LAST.get(frame)
+    except TypeError:  # a frame double that cannot be weakly referenced
+        return False
+    return entry is not None and entry[1] is not None
 
 
 class FrameChain:
@@ -602,6 +670,14 @@ async def install_navigation_guard(context: Any) -> None:
         context.route("**/*", _handle_route),
         operation="browser_install_navigation_guard",
     )
+    # Every commit clears a stale stub record (note_frame_navigated),
+    # including the popups this context opens later.
+    try:
+        context.on("page", _watch_page)
+        for page in list(getattr(context, "pages", None) or ()):
+            _watch_page(page)
+    except Exception as exc:
+        log.debug("octowright.ssrf.frame_navigation_unwatched", error=repr(exc))
     route_web_socket = getattr(context, "route_web_socket", None)
     if route_web_socket is not None:
         # A glob does not match ws:// URLs (measured); a pattern that matches
