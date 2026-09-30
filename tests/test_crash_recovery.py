@@ -809,3 +809,18 @@ async def test_a_recovered_page_that_crashes_later_is_recovered_again() -> None:
     assert await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com") is True
     assert crash_recovery.claim_replacement_crash(fresh) is False
     assert crash_recovery.claim_replacement_crash(None) is False
+
+
+async def test_a_replacement_closed_by_its_own_crash_is_replaced_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Firefox reports a crashed replacement closed by the time goto raises: it failed the recovery outright."""
+    import time
+
+    s = _session()
+    s._last_crash_monotonic = time.monotonic()
+    dead = s.page
+    crashed = _crashing_page(s, "crashed")
+    crashed.is_closed = MagicMock(return_value=True)
+    good = s.context.new_page.return_value
+    s.context.new_page = AsyncMock(side_effect=[crashed, good])
+    assert await crash_recovery._recover(s, dead, reload_timeout_ms=15000.0, url="https://example.com") is True
+    assert s.page is good and s.pages == [good] and s._crash_recoveries == 2

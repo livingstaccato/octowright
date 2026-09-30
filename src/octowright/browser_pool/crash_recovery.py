@@ -514,6 +514,8 @@ async def _replace_crashed_page(
       when only the page is closed its ``goto`` raises ``net::ERR_ABORTED`` a
       beat before ``is_closed()`` turns true, so that page is swapped in and
       its own close event follows, as for a tab closed right after a recovery.
+      A closed replacement whose crash was reported first (firefox, measured)
+      is a replacement crash instead, below.
     * a replacement that crashed while loading (a last URL that crashes the
       renderer). It is not closed -- measured: chromium's ``goto`` raises
       ``net::ERR_ABORTED`` and firefox's ``Page crashed``, with the page open --
@@ -546,6 +548,13 @@ async def _replace_crashed_page(
         except Exception as exc:
             if new_page.is_closed():
                 await _discard_replacement(session, new_page)
+                if _REPLACEMENTS.get(new_page):
+                    # Crashed, then closed (measured: firefox reports the page
+                    # closed by the time goto raises "Page crashed"): a
+                    # replacement crash, which the next attempt replaces.
+                    raise ReplacementCrashedError(
+                        f"the replacement page crashed loading {last_url!r}: {exc}", dead_page=dead_page
+                    ) from exc
                 raise
             navigation_error = str(exc)
             chain_ended = _guard_ended_chain(new_page)
