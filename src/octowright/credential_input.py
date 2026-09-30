@@ -81,7 +81,9 @@ error, which names what it waited for, is what a selector that never matches
 reports. The whole step runs under one ``asyncio.timeout`` a second longer
 (``asyncio.timeout`` rather than ``wait_for``, which would run it in another
 task and lose the gate's re-entry): a backstop for the calls that take no
-timeout. A step it stops, or that reaches its deadline between keys, raises
+timeout. A step it stops, that reaches its deadline between keys or during a
+key's focus lookup, or whose key send runs out of the budget it was given
+(Playwright's ``TimeoutError`` there is the step's own deadline), raises
 :class:`CredentialInputStopped`, saying whether anything was typed.
 """
 
@@ -321,7 +323,7 @@ async def checked_type(
                     # Stopped here rather than by the next key's 1ms Playwright
                     # timeout, whose message would not say the rest was not typed.
                     raise _stopped(budget_ms, progress)
-                await _checked_key(session, char, check, send, deadline, token, not index, handles, progress)
+                await _checked_key(session, char, check, send, (budget_ms, deadline), token, not index, handles, progress)
 
     try:
         await _within(budget_ms, progress, type_all())
@@ -344,12 +346,18 @@ async def _checked_key(
     char: str,
     check: Callable[[str], None],
     send: Callable[[Any, str, float], Awaitable[None]],
-    deadline: float,
+    budget: tuple[float, float],
     token: str,
     first: bool,
     handles: list[Any],
     progress: _Progress,
 ) -> None:
+    """Send *char* to the focused element, if this step may type there.
+
+    *budget* is ``(budget_ms, deadline)``: the step's budget, for its wording,
+    and when it ends.
+    """
+    budget_ms, deadline = budget
     async with session.operation("macro_credential_fill_origin"):
         while True:
             try:
@@ -363,13 +371,29 @@ async def _checked_key(
             # The origin first: a foreign document is refused by name, whatever else is wrong.
             check(str(getattr(frame, "url", "") or ""))
             if stop is not None:
-                raise CredentialInputStopped(_STOPPED_BECAUSE.get(stop, stop))
+                raise CredentialInputStopped(_STOPPED_BECAUSE.get(stop, stop), started=progress.started)
+            if time.monotonic() >= deadline:
+                # Spent during the lookup: stop in the step's words rather than
+                # send the key with a 1ms timeout and surface Playwright's.
+                raise _stopped(budget_ms, progress)
             try:
                 progress.started = True
                 await send(element, char, _ms_left(deadline))
                 return
             except Exception as exc:
+                if _is_playwright_timeout(exc):
+                    # The key was given what was left of the budget, so its
+                    # timeout is the step's.
+                    raise _stopped(budget_ms, progress) from exc
                 # Replaced between the lookup and the key: ask again, which stops
                 # unless focus is still somewhere this step may type.
                 if not credential_input_detached(exc) or time.monotonic() >= deadline:
                     raise
+
+
+def _is_playwright_timeout(exc: BaseException) -> bool:
+    """Whether *exc* is Playwright's ``TimeoutError``, named rather than imported: this module is stdlib-only.
+
+    Playwright's is its own class, not a subclass of the builtin one.
+    """
+    return isinstance(exc, TimeoutError) or type(exc).__name__ == "TimeoutError"

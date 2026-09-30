@@ -319,3 +319,61 @@ async def test_a_fill_uses_the_locator_it_is_given() -> None:
 
     await credential_input.checked_fill(session, _Strict(calls, element), "v", _accept, 5000)
     assert "fill" in calls
+
+
+async def test_a_focus_stop_at_the_first_key_says_nothing_was_typed() -> None:
+    """Stopped before any key went to the page, the step must not claim it stopped partway."""
+    calls: list[str] = []
+    stop = _Handle(calls, element=False)
+    answer = _Handle(calls, element=False, props={"stop": stop})
+    session = _Session(_Frame(calls, lambda: answer))
+    with pytest.raises(CredentialInputStopped) as raised:
+        await credential_input.checked_type(session, _Locator(calls), "abc", _accept, delay_ms=None, timeout_ms=5000)
+    assert raised.value.started is False
+
+
+class TimeoutError(Exception):  # noqa: A001 - named as Playwright's own, which is not the builtin
+    """Playwright's ``TimeoutError``: its own class, not a subclass of the builtin."""
+
+
+async def test_a_deadline_spent_during_the_focus_lookup_stops_the_step() -> None:
+    """The lookup outlasts the budget: the key is not sent with a 1ms timeout, the step stops in its own words."""
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    sent: list[float] = []
+
+    async def slow_lookup() -> Any:
+        await asyncio.sleep(0.15)
+        return element
+
+    async def send(_handle: Any, _char: str, timeout_ms: float) -> None:
+        sent.append(timeout_ms)
+        raise TimeoutError(f"Timeout {timeout_ms:g}ms exceeded.")
+
+    session = _Session(_Frame(calls, slow_lookup))
+    with pytest.raises(CredentialInputStopped, match="did not start within 100ms") as raised:
+        await credential_input.checked_type(
+            session, _Locator(calls), "abc", _accept, delay_ms=None, timeout_ms=100, send=send
+        )
+    assert raised.value.started is False
+    assert sent == []
+
+
+async def test_a_playwright_timeout_on_a_key_becomes_the_steps_own_stop() -> None:
+    """Each key is given what is left of the budget, so its timeout is the step's: say so, not Playwright's 1ms."""
+    calls: list[str] = []
+    element = _Handle(calls, element=True)
+    keys = iter([None])
+
+    async def send(handle: Any, char: str, timeout_ms: float) -> None:
+        if next(keys, "timeout") is None:
+            await handle.type(char, timeout=timeout_ms)
+            return
+        raise TimeoutError(f"Timeout {timeout_ms:g}ms exceeded.")
+
+    session = _Session(_Frame(calls, lambda: element))
+    with pytest.raises(CredentialInputStopped, match="did not finish within 5000ms") as raised:
+        await credential_input.checked_type(
+            session, _Locator(calls), "abc", _accept, delay_ms=None, timeout_ms=5000, send=send
+        )
+    assert raised.value.started is True
