@@ -13,6 +13,7 @@ place for exactly the run it was meant to protect.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -131,11 +132,13 @@ async def test_a_session_tmpdir_is_pruned_before_launch(tmp_path: Path) -> None:
     assert browser_type.rows_at_launch == 0
 
 
+# Chromium's SingletonLock is a symlink, and the stale-lock prune, only on
+# POSIX; on Windows the download prune runs without it (singleton_locks).
+@pytest.mark.skipif(os.name == "nt", reason="SingletonLock symlinks are POSIX-only")
 async def test_a_session_tmpdir_left_locked_by_a_crash_is_still_pruned(tmp_path: Path) -> None:
     """A crashed Chromium leaves its SingletonLock behind, and the prune refuses
     a locked dir. The stale-lock prune must run first, as it does for a profile,
     or the relaunch after the crash is the one launch that is not protected."""
-    import os
     import socket
 
     session_dir = tmp_path / "octowright-session-dl-chromium-y"
