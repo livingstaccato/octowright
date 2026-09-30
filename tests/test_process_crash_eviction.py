@@ -57,14 +57,22 @@ def _fake_proc(root: Path, *, alive: bool) -> Path:
     return proc
 
 
-async def _launch(monkeypatch: pytest.MonkeyPatch, root: Path, *, alive: bool) -> tuple[BrowserPool, Any, list[Any]]:
+async def _launch(
+    monkeypatch: pytest.MonkeyPatch, root: Path, *, alive: bool, lock_left: bool = False
+) -> tuple[BrowserPool, Any, list[Any]]:
+    """``lock_left``: a headed Chromium that died on a signal, lock still there
+    -- the ``singleton_lock`` evidence; otherwise the verdict is liveness only."""
     _install_playwright_stub(monkeypatch)
     events = _capture_session_events(monkeypatch)
     monkeypatch.setattr(process_crash, "PROC_ROOT", _fake_proc(root, alive=alive))
     pool = BrowserPool(recordings_dir=root / "rec")
     result = await pool.launch(kind="chromium", url="https://octowright.com", headed=False, label="pc")
     session = pool._sessions[result["instance_id"]]
-    session._browser_process = BrowserProcess(pid=_PID, user_data_dir=root / "udd", singleton_lock=False)
+    udd = root / "udd"
+    if lock_left:
+        udd.mkdir(exist_ok=True)
+        (udd / "SingletonLock").symlink_to(f"host-{_PID}")
+    session._browser_process = BrowserProcess(pid=_PID, user_data_dir=udd, singleton_lock=lock_left)
     return pool, session, events
 
 
@@ -167,7 +175,7 @@ async def test_a_process_crash_is_surfaced_as_a_lost_session(monkeypatch: pytest
 async def test_relaunch_mode_reopens_the_crashed_session(monkeypatch: pytest.MonkeyPatch, isolated: Path) -> None:
     """Same opt-in, same machinery as a dead driver: OCTOWRIGHT_DRIVER_RELAUNCH."""
     monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "new-id")
-    pool, session, events = await _launch(monkeypatch, isolated, alive=False)
+    pool, session, events = await _launch(monkeypatch, isolated, alive=False, lock_left=True)
     old = session.instance_id
 
     for cb in _close_handlers(session):
@@ -181,6 +189,125 @@ async def test_relaunch_mode_reopens_the_crashed_session(monkeypatch: pytest.Mon
     assert pool.maybe_get(new)._auto_relaunched is True
     (crash,) = [e for e in events if isinstance(e, SessionCrashedEvent)]
     assert crash.recovering is True
+    await pool.shutdown()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_relaunch_mode_never_reopens_a_liveness_only_crash(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path
+) -> None:
+    """Liveness alone can read a late orderly close as a crash: label it, never reopen it."""
+    monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "new-id")
+    pool, session, events = await _launch(monkeypatch, isolated, alive=False, lock_left=False)
+
+    for cb in _close_handlers(session):
+        cb()
+
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
+    (crash,) = [e for e in events if isinstance(e, SessionCrashedEvent)]
+    assert crash.recovering is False
+    (lost,) = driver_relaunch.recent_lost()
+    assert lost["relaunched_to"] is None
+    assert driver_relaunch._TASKS == set()
+    assert list(pool.iter_sessions()) == []
+    await pool.shutdown()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_crash_during_an_explicit_close_is_never_reopened(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path
+) -> None:
+    """browser_close is draining the gate when the process dies: the user asked
+    for it gone (and a handoff would be replacing it itself), so no relaunch."""
+    import asyncio
+
+    monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "new-id")
+    pool, session, events = await _launch(monkeypatch, isolated, alive=False, lock_left=True)
+    iid = session.instance_id
+    held = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _hold_the_gate() -> None:
+        async with session._operation_gate.operation("probe_hold"):
+            held.set()
+            await release.wait()
+
+    holder = asyncio.create_task(_hold_the_gate())
+    await held.wait()
+    closer = asyncio.create_task(pool.close(iid, force=True))
+    await _wait_until(lambda: session._operation_gate.close_reserved)
+    assert iid in pool._sessions, "the close must still be draining for this to test the window"
+
+    for cb in _close_handlers(session):
+        cb()
+    release.set()
+    await asyncio.gather(holder, closer, return_exceptions=True)
+
+    (crash,) = [e for e in events if isinstance(e, SessionCrashedEvent)]
+    assert crash.recovering is False
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["outcome"] == "lost"
+    assert driver_relaunch._TASKS == set()
+    assert list(pool.iter_sessions()) == []
+    await pool.shutdown()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_classifier_failure_still_evicts(monkeypatch: pytest.MonkeyPatch, isolated: Path) -> None:
+    """Judging how the browser went is diagnostics; evicting it is correctness."""
+    pool, session, events = await _launch(monkeypatch, isolated, alive=False)
+    iid = session.instance_id
+
+    def _boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("classifier exploded")
+
+    monkeypatch.setattr(process_crash, "exit_verdict", _boom)
+
+    for cb in _close_handlers(session):
+        cb()
+
+    assert iid not in pool._sessions
+    await _wait_until(lambda: any(isinstance(e, SessionClosedEvent) for e in events))
+    assert [e.reason for e in events if isinstance(e, SessionClosedEvent)] == ["user_close"]
+    assert session._exit_verdict_event.is_set()
+    await pool.shutdown()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("anyio_backend", ["asyncio"])
+async def test_a_failed_crash_relaunch_is_reported_not_left_relaunching(
+    monkeypatch: pytest.MonkeyPatch, isolated: Path
+) -> None:
+    """The client was told recovering=True; a relaunch that fails must correct it."""
+    from octowright.browser_pool.events import SessionRecoveredEvent
+
+    monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "new-id")
+    pool, session, events = await _launch(monkeypatch, isolated, alive=False, lock_left=True)
+    iid = session.instance_id
+
+    async def _refuse(*_: Any, **__: Any) -> dict[str, Any]:
+        raise RuntimeError("the profile is still locked")
+
+    monkeypatch.setattr(pool, "launch", _refuse)
+
+    for cb in _close_handlers(session):
+        cb()
+
+    await _wait_until(lambda: any(isinstance(e, SessionRecoveredEvent) for e in events))
+    (recovered,) = [e for e in events if isinstance(e, SessionRecoveredEvent)]
+    assert recovered.instance_id == iid
+    assert recovered.outcome == "failed"
+    assert recovered.scope == "process"
+    assert recovered.log_path == str(session.log_path)
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["outcome"] == "failed"
+    assert "the profile is still locked" in inc["error"]
+    (lost,) = driver_relaunch.recent_lost()
+    assert lost["relaunched_to"] is None
+    assert "the profile is still locked" in lost["relaunch_error"]
     await pool.shutdown()
 
 

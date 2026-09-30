@@ -96,6 +96,19 @@ class _CloseGateMixin:
         waiter = _Waiter(None, name, self._clock(), ready_future)
         return CloseReservation(operation_name=name, waiter=waiter, outcome=outcome, teardown_only=teardown_only)
 
+    @property
+    def close_reserved(self) -> bool:
+        """Whether a close already owns this session's teardown.
+
+        True from the moment ``reserve_close`` (an explicit ``browser_close``,
+        a handoff, a fluid relaunch) or ``reserve_external_teardown`` has run --
+        including the window in which an explicit close is still draining the
+        gate and the session is still registry-visible. A caller deciding
+        whether to act on a session's death on its own (the process-crash
+        relaunch) reads this so it never second-guesses a close someone asked for.
+        """
+        return self._close_reservation is not None
+
     async def reserve_close(
         self,
         operation_name: LiteralString,

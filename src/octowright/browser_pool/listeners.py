@@ -123,10 +123,31 @@ def _accept_external_close(pool: BrowserPool, session: BrowserSession) -> None:
         stale: SessionCloseReason = "crashed" if getattr(session, "_crashed", False) else "user_close"
         pool._accept_external_close_nowait(instance_id, expected_session=session, reason=stale)
         return
-    reason = process_crash.classify_external_close(session)
+    # Read BEFORE the acceptance seam, which installs a reservation of its own:
+    # a close that already owns this session (a draining browser_close, a
+    # handoff, a fluid relaunch) must never be answered by a crash relaunch.
+    close_owned = _close_already_owned(pool, session)
+    try:
+        reason = process_crash.classify_external_close(session, relaunch_allowed=not close_owned)
+    except Exception as exc:
+        # Judging HOW it went is diagnostics; evicting it is correctness. A
+        # failure in the first must never skip the second.
+        log.warning("octowright.browser.exit_classification_failed", instance_id=instance_id, error=repr(exc))
+        reason = "crashed" if getattr(session, "_crashed", False) else "user_close"
     entry = pool._accept_external_close_nowait(instance_id, expected_session=session, reason=reason)
     if getattr(session, "_process_crash_incident", None) is not None:
-        driver_relaunch.on_browser_process_crash(pool, session, entry)
+        try:
+            driver_relaunch.on_browser_process_crash(pool, session, entry)
+        except Exception as exc:
+            log.warning("octowright.browser.process_crash_surface_failed", instance_id=instance_id, error=repr(exc))
+
+
+def _close_already_owned(pool: BrowserPool, session: BrowserSession) -> bool:
+    """Whether a close already owns this session's teardown."""
+    closing = pool._closing_sessions.get(session.instance_id)
+    if closing is not None and closing.session is session:
+        return True
+    return bool(getattr(getattr(session, "_operation_gate", None), "close_reserved", False))
 
 
 def _wire_close_evictor(pool: BrowserPool, session: BrowserSession) -> None:

@@ -22,7 +22,9 @@ Notification methods:
     executing), and an actionable ``hint`` instead of a close ``reason``.
   * ``notifications/octowright/browser_recovered`` — a renderer-crash recovery
     resolved; ``outcome`` is recovered|failed|exhausted (the accurate follow-up
-    to a ``browser_crashed`` with ``recovering=true``).
+    to a ``browser_crashed`` with ``recovering=true``). ``scope="process"``
+    with ``outcome="failed"``: reopening a crashed browser process failed, so
+    the client must relaunch it (the correction to ``recovering=true`` there).
   * ``notifications/octowright/driver_died`` — the shared driver died and these
     sessions were lost (``lost_instance_ids``); ``relaunch_mode`` says whether
     they're being auto-reopened.
@@ -119,6 +121,13 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
             },
         }
     if isinstance(event, SessionRecoveredEvent):
+        if event.scope == "process":
+            recovery_hint = (
+                "reopening the crashed browser failed — relaunch it with browser_launch "
+                "(octowright_status().pool.lost_sessions has its last URL and the error)"
+            )
+        else:
+            recovery_hint = _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved")
         return {
             "method": "notifications/octowright/browser_recovered",
             "params": {
@@ -129,7 +138,8 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 "outcome": event.outcome,
                 "attempts": event.attempts,
                 "log_path": event.log_path,
-                "hint": _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
+                "scope": event.scope,
+                "hint": recovery_hint,
             },
         }
     if isinstance(event, SessionCrashedEvent):
@@ -152,7 +162,7 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
             hint = (
                 "the browser process itself crashed (not a window the user closed) and the session is gone; "
                 "Octowright is reopening it on its last URL — see octowright_status().pool.lost_sessions for "
-                "the old→new instance_id"
+                "the old→new instance_id; a browser_recovered with outcome=failed follows if the reopen fails"
                 if event.recovering
                 else "the browser process itself crashed (not a window the user closed) and the session is "
                 "gone — relaunch it with browser_launch (octowright_status().pool.lost_sessions has its last URL)"

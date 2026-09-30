@@ -125,6 +125,45 @@ def test_two_unrelated_roots_are_ambiguous_and_resolve_to_nothing(tmp_path: Path
     assert process_crash.find_browser_process("chromium", udd, proc_root=proc) is None
 
 
+def test_stat_is_read_only_for_a_process_naming_the_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scan visits every process on the host; only a match costs a second read."""
+    udd = tmp_path / "profile"
+    proc = tmp_path / "proc"
+    _proc(proc, 200, 1, ["chrome", f"--user-data-dir={udd}"])
+    for pid in range(300, 310):
+        _proc(proc, pid, 1, ["bash", "-c", "sleep 1"])
+    stat_reads: list[str] = []
+    real = process_crash._stat_fields
+
+    def _counting(pid_dir: Path) -> list[str] | None:
+        stat_reads.append(pid_dir.name)
+        return real(pid_dir)
+
+    monkeypatch.setattr(process_crash, "_stat_fields", _counting)
+
+    found = process_crash.find_browser_process("chromium", udd, proc_root=proc)
+
+    assert found is not None and found.pid == 200
+    assert stat_reads == ["200"]
+
+
+async def test_resolving_at_launch_scans_off_the_event_loop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import threading
+
+    loop_thread = threading.get_ident()
+    seen: list[int] = []
+    sentinel = BrowserProcess(pid=1, user_data_dir=tmp_path, singleton_lock=False)
+
+    def _find(kind: str, user_data_dir: Path | str, **_: Any) -> BrowserProcess:
+        seen.append(threading.get_ident())
+        return sentinel
+
+    monkeypatch.setattr(process_crash, "find_browser_process", _find)
+
+    assert await process_crash.resolve_browser_process("chromium", tmp_path) is sentinel
+    assert seen and seen[0] != loop_thread
+
+
 def test_no_proc_filesystem_resolves_to_nothing(tmp_path: Path) -> None:
     assert process_crash.find_browser_process("chromium", tmp_path, proc_root=tmp_path / "absent") is None
 
@@ -282,7 +321,8 @@ def test_a_process_crash_is_classified_crashed_and_published(
     assert len(recs) == 1
     assert recs[0]["instance_id"] == "abc123"
     assert recs[0]["url"] == "https://example.test/page"
-    assert ("browser_crash", {"scope": "process", "evidence": "process_gone_before_close"}) in session.recorder.rows
+    assert recs[0]["evidence"] == "liveness"
+    assert ("browser_crash", {"scope": "process", "evidence": "liveness"}) in session.recorder.rows
 
 
 def test_classification_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]) -> None:
@@ -328,19 +368,119 @@ def test_a_renderer_crash_already_on_record_stays_a_crash(tmp_path: Path, publis
     assert published == []  # the renderer path already published its own event
 
 
-def test_relaunching_mode_marks_the_crash_as_recovering(
+def _locked_dead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BrowserProcess:
+    """A dead headed Chromium whose SingletonLock is still there: lock evidence."""
+    if os.name == "nt":
+        pytest.skip("no singleton lock on Windows")
+    _dead(tmp_path, monkeypatch)
+    (tmp_path / "udd").mkdir(exist_ok=True)
+    (tmp_path / "udd" / "SingletonLock").symlink_to("host-1000")
+    return _bp(tmp_path, lock=True)
+
+
+def test_relaunching_mode_marks_a_lock_evidenced_crash_as_recovering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
 ) -> None:
+    from octowright.browser_pool import driver_relaunch
+
+    monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "keep-id")
+    session = _Session(tmp_path, _locked_dead(tmp_path, monkeypatch))
+
+    process_crash.classify_external_close(session)
+
+    (event,) = [e for e in published if isinstance(e, SessionCrashedEvent)]
+    assert event.recovering is True
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["evidence"] == "singleton_lock"
+    assert inc["outcome"] == "relaunching"
+    assert ("browser_crash", {"scope": "process", "evidence": "singleton_lock"}) in session.recorder.rows
+
+
+def test_a_liveness_only_crash_is_never_reopened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    """Liveness cannot tell a crash from an orderly close the loop saw late, so
+    it may label the session crashed but must never bring the window back."""
     from octowright.browser_pool import driver_relaunch
 
     _dead(tmp_path, monkeypatch)
     monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "keep-id")
     session = _Session(tmp_path, _bp(tmp_path, lock=False))
 
-    process_crash.classify_external_close(session)
+    assert process_crash.classify_external_close(session) == "crashed"
 
     (event,) = [e for e in published if isinstance(e, SessionCrashedEvent)]
-    assert event.recovering is True
+    assert event.recovering is False
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["evidence"] == "liveness"
+    assert inc["outcome"] == "lost"
+
+
+def test_a_crash_whose_close_is_already_owned_is_never_reopened(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    from octowright.browser_pool import driver_relaunch
+
+    monkeypatch.setattr(driver_relaunch, "DRIVER_RELAUNCH_MODE", "keep-id")
+    session = _Session(tmp_path, _locked_dead(tmp_path, monkeypatch))
+
+    assert process_crash.classify_external_close(session, relaunch_allowed=False) == "crashed"
+
+    (event,) = [e for e in published if isinstance(e, SessionCrashedEvent)]
+    assert event.recovering is False
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["outcome"] == "lost"
+
+
+def test_a_classifier_failure_still_publishes_a_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    """A waiting download save must not sit out its timeout on a classifier bug."""
+
+    def _boom(*_: Any, **__: Any) -> None:
+        raise RuntimeError("proc read exploded")
+
+    monkeypatch.setattr(process_crash, "exit_verdict", _boom)
+    session = _Session(tmp_path, _bp(tmp_path, lock=False))
+
+    with pytest.raises(RuntimeError, match="proc read exploded"):
+        process_crash.classify_external_close(session)
+
+    assert session._exit_verdict == "closed"
+    assert session._exit_verdict_event.is_set()
+
+
+def test_a_failing_recorder_or_bus_is_logged_not_swallowed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    from octowright.browser_pool.session_event_bus import session_event_bus
+
+    _dead(tmp_path, monkeypatch)
+    logged: list[str] = []
+
+    class _Log:
+        def debug(self, event: str, **_: Any) -> None:
+            logged.append(event)
+
+        def warning(self, event: str, **_: Any) -> None:
+            logged.append(event)
+
+    class _BrokenRecorder:
+        def record(self, *_: Any, **__: Any) -> None:
+            raise OSError("disk full")
+
+    def _broken_publish(_: object) -> None:
+        raise RuntimeError("bus closed")
+
+    monkeypatch.setattr(process_crash, "log", _Log())
+    monkeypatch.setattr(session_event_bus, "publish_nowait", _broken_publish)
+    session = _Session(tmp_path, _bp(tmp_path, lock=False))
+    session.recorder = _BrokenRecorder()  # type: ignore[assignment]
+
+    assert process_crash.classify_external_close(session) == "crashed"
+
+    assert "octowright.browser.process_crash_record_failed" in logged
+    assert "octowright.browser.process_crash_publish_failed" in logged
 
 
 # ─── waiting for the verdict (the download path) ─────────────────────────────

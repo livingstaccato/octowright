@@ -157,16 +157,87 @@ async def test_closing_every_page_of_a_live_browser_is_a_user_close(
         await pool.shutdown()
 
 
-@pytest.mark.skipif(not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"), reason="needs a display")
-async def test_headed_chromium_crash_is_judged_by_its_singleton_lock(tmp_path: Path, events: list[Any]) -> None:
-    """Headed Chromium writes the lock, so the verdict is timing-independent."""
+_HEADED = pytest.mark.skipif(
+    not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"), reason="needs a display"
+)
+
+# Long enough that the browser has certainly exited -- and been seen dead --
+# before octowright's loop gets to its first close signal. An orderly headed
+# Chromium exits 55-142 ms after its last page close (measured).
+_LOOP_STALL_SECONDS = 3.0
+
+
+async def _exit_behind_a_stalled_loop(kind: str, how: str, tmp_path: Path, events: list[Any]) -> Any:
+    """Make the browser exit while octowright's event loop is blocked.
+
+    The first close signal is then judged after the process is already gone --
+    the case liveness cannot read (an orderly close delivered late looks like a
+    crash) and the only one where the ``SingletonLock`` changes the verdict.
+    ``how``: ``orderly`` asks Chromium to shut down (CDP ``Browser.close``,
+    which removes the lock on the way out -- measured 3/3 with the loop stalled
+    3 s, lock gone, process dead); ``segv`` kills it (lock left, 3/3).
+    """
+    import time
+
     from octowright.browser_pool import BrowserPool
 
     pool = BrowserPool(recordings_dir=tmp_path / "rec")
     try:
-        session = await _launch(pool, "chromium", headed=True)
-        assert session._browser_process.singleton_lock is True
+        session = await _launch(pool, kind, headed=True)
+        proc = session._browser_process
+        assert proc is not None and proc.singleton_lock is True, "headed Chromium must have written its lock"
+        if how == "orderly":
+            cdp = await session.context.new_cdp_session(session.page)
+            pending = asyncio.ensure_future(cdp.send("Browser.close"))
+            # Let the command reach the driver before the loop stops turning.
+            for _ in range(5):
+                await asyncio.sleep(0)
+        else:
+            pending = None
+            os.kill(proc.pid, signal.SIGSEGV)
+        time.sleep(_LOOP_STALL_SECONDS)  # the stall: nothing on the loop runs
+        await _until(lambda: _closed_reasons(events))
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending
+        await _until(lambda: _close_reason(session) is not None)
+        return session
     finally:
         await pool.shutdown()
-    events.clear()
-    await _signal_death("chromium", signal.SIGSEGV, tmp_path, events, headed=True)
+
+
+@_HEADED
+async def test_headed_chromium_orderly_exit_seen_late_is_a_close_by_its_lock(
+    tmp_path: Path, events: list[Any]
+) -> None:
+    """The lock path for real: dead at the first signal, lock removed -> a close.
+
+    Liveness alone reads this as a crash (the process is gone), so this test
+    fails if ``exit_verdict`` stops consulting the lock or inverts it.
+    """
+    from octowright.browser_pool import incidents
+
+    session = await _exit_behind_a_stalled_loop("chromium", "orderly", tmp_path, events)
+
+    assert not (session.user_data_dir / "SingletonLock").is_symlink(), "an orderly exit removes the lock"
+    assert _closed_reasons(events) == ["user_close"]
+    assert _crash_scopes(events) == []
+    assert _close_reason(session) == "external"
+    assert incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH) == []
+
+
+@_HEADED
+async def test_headed_chromium_signal_death_seen_late_is_a_crash_by_its_lock(
+    tmp_path: Path, events: list[Any]
+) -> None:
+    """Same stall, a signal instead: the lock stays, so the verdict is a crash on
+    ``singleton_lock`` evidence -- the only evidence allowed to reopen a window."""
+    from octowright.browser_pool import incidents
+
+    session = await _exit_behind_a_stalled_loop("chromium", "segv", tmp_path, events)
+
+    assert _closed_reasons(events) == ["crashed"]
+    assert _crash_scopes(events) == ["process"]
+    assert _close_reason(session) == "crashed"
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["evidence"] == "singleton_lock"

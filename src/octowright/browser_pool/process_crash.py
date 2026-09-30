@@ -43,9 +43,20 @@ the lock's presence is final (orderly exit removes it, a signal death cannot),
 so it decides both ways regardless of timing. The headless shell writes no lock,
 and Firefox's ``lock`` measured inverted (kept on a clean close, removed by its
 own SIGSEGV handler), so those fall back to liveness, whose margin is ~500 ms on
-Firefox and ~20 ms on WebKit. Misreading is biased the safe way: an unknown pid,
-an unreadable ``/proc``, or a reused pid all read as a close, which is what
-octowright reported before this existed.
+Firefox and ~20 ms on WebKit.
+
+**How each verdict can be wrong, exactly.** Toward *close*: an unknown pid, an
+unreadable ``/proc``, or a pid the OS reused all read as a close, which is what
+octowright reported before this existed. Toward *crash*: on an engine judged by
+liveness alone (WebKit, Firefox, the headless Chromium shell), an orderly close
+whose first signal reaches octowright after the loop stalled for longer than
+that engine's margin reads as a crash. The lock removes that second case for a
+headed Chromium only. So the evidence is recorded (``evidence`` on the incident
+and the ``browser_crash`` row: ``singleton_lock`` or ``liveness``), and the two
+are not trusted equally: either one labels the session crashed, but only a
+``singleton_lock`` verdict may reopen it under ``OCTOWRIGHT_DRIVER_RELAUNCH``.
+A liveness misread therefore costs a wrong label, never a window brought back
+that the user closed.
 
 **Scope.** Linux (``/proc``), persistent contexts (a ``profile`` or ``session``
 user-data-dir, which is what identifies the process). An ephemeral context and a
@@ -73,6 +84,10 @@ PROC_ROOT: Path = Path("/proc")
 
 ExitVerdict = Literal["crashed", "closed"]
 ProcessState = Literal["alive", "dead", "unknown"]
+# What decided a crash verdict: the lock a signal death leaves behind (headed
+# Chromium; timing-independent), or only that the process was already gone
+# (every other engine; a late orderly close can read the same).
+CrashEvidence = Literal["singleton_lock", "liveness"]
 
 _PROCESS_CRASHED = counter(
     "octowright_browser_process_crashed_total",
@@ -139,10 +154,16 @@ def _owned_by(entry: Path, uid: int | None) -> bool:
 
 
 def _ppid_if_named(entry: Path, spellings: frozenset[str]) -> int | None:
-    """``entry``'s parent pid when its argv names the profile, else ``None``."""
+    """``entry``'s parent pid when its argv names the profile, else ``None``.
+
+    ``stat`` is read only for a process whose argv already matched: every
+    other process on the host costs one read, not two.
+    """
     argv = _argv(entry)
+    if not argv or not _names_profile(argv, spellings):
+        return None
     fields = _stat_fields(entry)
-    if not argv or not fields or len(fields) < 2 or not _names_profile(argv, spellings):
+    if not fields or len(fields) < 2:
         return None
     return int(fields[1])
 
@@ -189,6 +210,16 @@ def find_browser_process(
     return BrowserProcess(pid=roots[0], user_data_dir=udd, singleton_lock=lock)
 
 
+async def resolve_browser_process(kind: str, user_data_dir: Path | str) -> BrowserProcess | None:
+    """:func:`find_browser_process` off the event loop.
+
+    The scan walks all of ``/proc`` (a read per process on the host), which is
+    too much synchronous I/O for the loop every other session's callbacks run
+    on, at every persistent launch.
+    """
+    return await asyncio.to_thread(find_browser_process, kind, user_data_dir)
+
+
 def process_state(pid: int, *, proc_root: Path | None = None) -> ProcessState:
     """``alive``, ``dead`` (zombie or reaped), or ``unknown`` (no ``/proc``)."""
     root = proc_root if proc_root is not None else PROC_ROOT
@@ -218,24 +249,33 @@ def exit_verdict(proc: BrowserProcess | None, *, proc_root: Path | None = None) 
     return "crashed"
 
 
-def _evidence(proc: BrowserProcess) -> str:
-    return "singleton_lock_left_behind" if proc.singleton_lock else "process_gone_before_close"
+def _evidence(proc: BrowserProcess) -> CrashEvidence:
+    return "singleton_lock" if proc.singleton_lock else "liveness"
 
 
-def _relaunch_scheduled(session: Any) -> bool:
+def _relaunch_scheduled(session: Any, evidence: CrashEvidence, *, relaunch_allowed: bool) -> bool:
+    """Whether this crash is reopened: mode on, lock evidence, nobody closing it.
+
+    A ``liveness`` verdict never reopens -- see the module docstring for the
+    late orderly close it cannot tell from a crash -- and neither does a
+    session whose teardown a close already owns (``relaunch_allowed=False``):
+    the user asked for it gone, or a handoff is replacing it itself.
+    """
+    if not relaunch_allowed or evidence != "singleton_lock":
+        return False
     from octowright.browser_pool import driver_relaunch
 
     return driver_relaunch.relaunch_planned(session)
 
 
-def _record_process_crash(session: Any, proc: BrowserProcess) -> None:
+def _record_process_crash(session: Any, proc: BrowserProcess, *, relaunch_allowed: bool) -> None:
     """Route a dead browser process through the crash path, once."""
     from octowright.browser_pool.events import SessionCrashedEvent
     from octowright.browser_pool.session_event_bus import session_event_bus
 
     session._crashed = True
     evidence = _evidence(proc)
-    recovering = _relaunch_scheduled(session)
+    recovering = _relaunch_scheduled(session, evidence, relaunch_allowed=relaunch_allowed)
     _PROCESS_CRASHED.add(1, attributes={"kind": session.kind})
     log.warning(
         "octowright.browser.process_crashed",
@@ -256,9 +296,11 @@ def _record_process_crash(session: Any, proc: BrowserProcess) -> None:
         outcome="relaunching" if recovering else "lost",
         lost_downloads=0,
     )
-    with contextlib.suppress(Exception):
+    try:
         session.recorder.record("browser_crash", scope="process", evidence=evidence)
-    with contextlib.suppress(Exception):
+    except Exception as exc:
+        log.debug("octowright.browser.process_crash_record_failed", instance_id=session.instance_id, error=repr(exc))
+    try:
         session_event_bus.publish_nowait(
             SessionCrashedEvent(
                 instance_id=session.instance_id,
@@ -270,27 +312,39 @@ def _record_process_crash(session: Any, proc: BrowserProcess) -> None:
                 recovering=recovering,
             )
         )
+    except Exception as exc:
+        log.debug("octowright.browser.process_crash_publish_failed", instance_id=session.instance_id, error=repr(exc))
 
 
-def classify_external_close(session: Any) -> SessionCloseReason:
+def classify_external_close(session: Any, *, relaunch_allowed: bool = True) -> SessionCloseReason:
     """The close reason for an external close signal on a still-live session.
 
     Call it only for the session's current identity (the listener checks), at
     the FIRST evicting signal -- that timing is what the liveness rule measures.
-    Publishes the verdict for :func:`wait_for_exit_verdict`.
+    Publishes the verdict for :func:`wait_for_exit_verdict` even when judging
+    raises (the verdict then is whatever was established, ``closed`` if
+    nothing), so a waiting download save never sits out its full timeout on a
+    classifier bug; the exception still propagates for the caller to log.
+    ``relaunch_allowed=False`` when a close already owns the session's
+    teardown: a crash is still recorded, but never reopened.
     """
-    if getattr(session, "_exit_verdict", None) == "crashed" or getattr(session, "_crashed", False):
-        verdict: ExitVerdict = "crashed"
-    else:
-        proc = getattr(session, "_browser_process", None)
-        measured = exit_verdict(proc)
-        if measured == "crashed" and proc is not None:
-            _record_process_crash(session, proc)
-        verdict = measured or "closed"
-    session._exit_verdict = verdict
-    event = getattr(session, "_exit_verdict_event", None)
-    if event is not None:
-        event.set()
+    verdict: ExitVerdict = "closed"
+    try:
+        if getattr(session, "_exit_verdict", None) == "crashed" or getattr(session, "_crashed", False):
+            verdict = "crashed"
+        else:
+            proc = getattr(session, "_browser_process", None)
+            measured = exit_verdict(proc)
+            if measured == "crashed" and proc is not None:
+                verdict = "crashed"
+                _record_process_crash(session, proc, relaunch_allowed=relaunch_allowed)
+            elif measured is not None:
+                verdict = measured
+    finally:
+        session._exit_verdict = verdict
+        event = getattr(session, "_exit_verdict_event", None)
+        if event is not None:
+            event.set()
     return "crashed" if verdict == "crashed" else "user_close"
 
 
@@ -311,10 +365,12 @@ async def wait_for_exit_verdict(session: Any, *, timeout: float) -> ExitVerdict 
 
 __all__ = [
     "BrowserProcess",
+    "CrashEvidence",
     "ExitVerdict",
     "classify_external_close",
     "exit_verdict",
     "find_browser_process",
     "process_state",
+    "resolve_browser_process",
     "wait_for_exit_verdict",
 ]

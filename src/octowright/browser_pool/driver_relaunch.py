@@ -172,20 +172,34 @@ def on_browser_process_crash(pool: Any, session: Any, closing: Any) -> asyncio.T
     """One browser PROCESS died (``process_crash``): a dead driver's policy, for one session.
 
     Surfaced in ``pool.lost_sessions`` like a driver loss, and reopened onto
-    its last URL/profile only under the same ``OCTOWRIGHT_DRIVER_RELAUNCH``
-    opt-in -- a misjudged window close must never bring a window back unasked.
-    Loop-guarded the same way: a relaunched session that crashes again is
-    surfaced, not reopened. The relaunch awaits ``closing`` first, so the dead
-    context's profile lock is released before the replacement takes it.
+    its last URL/profile only when ``process_crash`` already decided to (the
+    incident says ``outcome="relaunching"``, which is also what the client was
+    told as ``recovering``): the ``OCTOWRIGHT_DRIVER_RELAUNCH`` opt-in, a
+    ``singleton_lock`` verdict (a liveness-only one may be a late orderly
+    close, and a misjudged close must never bring a window back), and no close
+    already owning the session. Loop-guarded like a driver loss: a relaunched
+    session that crashes again is surfaced, not reopened. The relaunch awaits
+    ``closing`` first, so the dead context's profile lock is released before
+    the replacement takes it.
     """
     desc = _descriptor(session)
     incident = session._process_crash_incident
     record = {"ts": incident["ts"], "reason": "browser_process_crashed", **desc, "relaunched_to": None}
     _LOST.append(record)
-    if not relaunch_planned(session):
+    if incident.get("outcome") != "relaunching":
         return None
     return _schedule_relaunch(
-        pool, [{**desc, "lost_record": record, "closing": closing, "crash_incident": incident}], _mode()
+        pool,
+        [
+            {
+                **desc,
+                "lost_record": record,
+                "closing": closing,
+                "crash_incident": incident,
+                "log_path": str(session.log_path),
+            }
+        ],
+        _mode(),
     )
 
 
@@ -226,6 +240,47 @@ async def _relaunch_all(pool: Any, descriptors: list[dict[str, Any]], mode: str)
                 instance_id=desc["instance_id"],
                 error=repr(exc),
             )
+            _record_relaunch_failure(desc, exc)
+
+
+def _record_relaunch_failure(desc: dict[str, Any], exc: Exception) -> None:
+    """Correct what was promised: the lost record, the crash incident, the client.
+
+    ``pool.lost_sessions`` carries ``relaunch_error`` for any failed reopen. A
+    process crash additionally told the client ``recovering=True`` and left
+    its incident at ``outcome="relaunching"``; both would otherwise stay that
+    way forever. The incident moves to ``failed`` and a ``browser_recovered``
+    notification (``outcome="failed"``, ``scope="process"``) tells the client
+    to relaunch it itself.
+    """
+    error = repr(exc)
+    desc["lost_record"]["relaunch_error"] = error
+    crash_incident = desc.get("crash_incident")
+    if crash_incident is None:
+        return
+    crash_incident.update(outcome="failed", error=error)
+    from octowright.browser_pool.events import SessionRecoveredEvent
+    from octowright.browser_pool.session_event_bus import session_event_bus
+
+    try:
+        session_event_bus.publish_nowait(
+            SessionRecoveredEvent(
+                instance_id=desc["instance_id"],
+                kind=desc["kind"],
+                label=desc["label"],
+                profile=desc["profile"],
+                outcome="failed",
+                attempts=1,
+                log_path=desc.get("log_path") or "",
+                scope="process",
+            )
+        )
+    except Exception as publish_exc:
+        log.debug(
+            "octowright.driver_relaunch.failure_publish_failed",
+            instance_id=desc["instance_id"],
+            error=repr(publish_exc),
+        )
 
 
 async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
