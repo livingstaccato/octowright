@@ -33,7 +33,7 @@ import pytest
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
-from tests._aria_stubs import stub_credential_scan
+from tests._aria_stubs import LeftOfBudget, stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 REDACT_INPUTS_ENV = "OCTOWRIGHT_REDACT_INPUTS"
@@ -66,6 +66,7 @@ def _locator_with_input_info(evaluate_return: Any, *, raises: bool = False) -> M
         first.evaluate = AsyncMock(side_effect=RuntimeError("locator detached"))
     else:
         first.evaluate = AsyncMock(return_value=evaluate_return)
+    first.wait_for = AsyncMock()  # a fill/type waits for its element to be attached first
     locator.first = first
     return locator
 
@@ -119,7 +120,7 @@ class TestAutocompleteRedaction:
         await subj.fill("#cred", "hunter2")
         target = subj._target()
         # Page still receives the literal — typing must work.
-        target.fill.assert_awaited_once_with("#cred", "hunter2", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#cred", "hunter2", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         call = _record_mock(subj).call_args
         assert call.args == ("fill",)
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
@@ -132,7 +133,7 @@ class TestAutocompleteRedaction:
         subj = _make_redaction_subject({"type": "text", "ac": "new-password"})
         await subj.fill("#new-pw", "fresh-secret")
         target = subj._target()
-        target.fill.assert_awaited_once_with("#new-pw", "fresh-secret", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#new-pw", "fresh-secret", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
@@ -143,7 +144,7 @@ class TestAutocompleteRedaction:
         subj = _make_redaction_subject({"type": "text", "ac": "one-time-code"})
         await subj.fill("#otp", "123456")
         target = subj._target()
-        target.fill.assert_awaited_once_with("#otp", "123456", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#otp", "123456", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
@@ -173,7 +174,9 @@ class TestAutocompleteRedaction:
         subj = _make_redaction_subject({"type": "", "ac": "current-password"})
         await subj.fill("custom-password", "ce-secret")
         target = subj._target()
-        target.fill.assert_awaited_once_with("custom-password", "ce-secret", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with(
+            "custom-password", "ce-secret", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
         call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
@@ -257,7 +260,7 @@ class TestRedactionModes:
         await subj.fill("#name", "alice")
         target = subj._target()
         # Page still receives the literal.
-        target.fill.assert_awaited_once_with("#name", "alice", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#name", "alice", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         # Recorder sees the placeholder.
         call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
@@ -276,7 +279,9 @@ class TestTypeTextHonorsPolicy:
         await subj.type_text("#cred", "hunter2", None)
         target = subj._target()
         # Page receives the literal at the real keystroke rate.
-        target.type.assert_awaited_once_with("#cred", "hunter2", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with(
+            "#cred", "hunter2", delay=0, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
         # Recorder gets the placeholder under text=.
         call = _record_mock(subj).call_args
         assert call.args == ("type",)

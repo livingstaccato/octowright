@@ -33,7 +33,7 @@ import pytest
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_page_mixin import SessionPageMixin
-from tests._aria_stubs import credential_aware_evaluate, stub_credential_scan
+from tests._aria_stubs import LeftOfBudget, credential_aware_evaluate, stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -243,7 +243,9 @@ class TestActions:
         target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#input", "hello", None)
-        target.type.assert_awaited_once_with("#input", "hello", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with(
+            "#input", "hello", delay=0, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
 
     @pytest.mark.anyio
     async def test_type_text_explicit_delay_preserved(self, tmp_path: Path) -> None:
@@ -254,7 +256,9 @@ class TestActions:
         target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#input", "hello", 50)
-        target.type.assert_awaited_once_with("#input", "hello", delay=50, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with(
+            "#input", "hello", delay=50, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
 
     @pytest.mark.anyio
     async def test_type_text_records_delay_ms(self, tmp_path: Path) -> None:
@@ -276,7 +280,7 @@ class TestActions:
         target.locator = MagicMock(return_value=_make_action_locator())
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.fill("#email", "x@y.z")
-        target.fill.assert_awaited_once_with("#email", "x@y.z", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#email", "x@y.z", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
 
     @pytest.mark.anyio
     async def test_fill_records_value(self, tmp_path: Path) -> None:
@@ -330,6 +334,7 @@ def _make_input_target(input_type: str | None) -> MagicMock:
         # The production probe returns {type, ac}; the stub must too, or it
         # is asserting against a shape the browser never produces.
         first_mock.evaluate = AsyncMock(return_value={"type": input_type, "ac": ""})
+    first_mock.wait_for = AsyncMock()  # a fill/type waits for its element to be attached first
     locator_mock.first = first_mock
     target.locator = MagicMock(return_value=locator_mock)
     return target
@@ -343,6 +348,7 @@ def _make_action_locator(snapshot: str = "", input_type: str = "text") -> MagicM
     # (returns the {type, ac} shape the production JS produces) and the aria
     # credential scan (returns a list).
     locator.first.evaluate = credential_aware_evaluate(other={"type": input_type, "ac": ""})
+    locator.first.wait_for = AsyncMock()  # a fill/type waits for its element to be attached first
     return locator
 
 
@@ -388,7 +394,9 @@ class TestInputRedaction:
         await subj.type_text("#pw", "hunter2-secret!", None)
         target = subj._target()
         # Page got the real value:
-        target.type.assert_awaited_once_with("#pw", "hunter2-secret!", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with(
+            "#pw", "hunter2-secret!", delay=0, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
         # Recorder got the redacted placeholder:
         call = _record_mock(subj).call_args
         assert call.args == ("type",)
@@ -406,7 +414,7 @@ class TestInputRedaction:
         subj = _make_redaction_subject(tmp_path, "password")
         await subj.fill("#pw", "hunter2-secret!")
         target = subj._target()
-        target.fill.assert_awaited_once_with("#pw", "hunter2-secret!", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#pw", "hunter2-secret!", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         call = _record_mock(subj).call_args
         assert call.args == ("fill",)
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
@@ -429,7 +437,7 @@ class TestInputRedaction:
         subj = _make_redaction_subject(tmp_path, "text")
         await subj.fill("#name", "alice")
         target = subj._target()
-        target.fill.assert_awaited_once_with("#name", "alice", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with("#name", "alice", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         call = _record_mock(subj).call_args
         assert call.kwargs["value"] == REDACTED_INPUT_PLACEHOLDER
 
@@ -452,7 +460,9 @@ class TestInputRedaction:
         subj = _make_redaction_subject(tmp_path, "password")
         await subj.fill("#pw", "real-secret-value")
         target = subj._target()
-        target.fill.assert_awaited_once_with("#pw", "real-secret-value", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.fill.assert_awaited_once_with(
+            "#pw", "real-secret-value", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS)
+        )
 
     @pytest.mark.anyio
     async def test_locator_evaluate_failure_does_not_break_type(

@@ -40,8 +40,29 @@ def credential_aware_evaluate(credentials: list[str] | None = None, other: Any =
 
 def stub_credential_scan(locator: Any, values: list[str] | None = None) -> Any:
     """Teach *locator* to answer the credential-value scan with *values*."""
-    locator.first = SimpleNamespace(evaluate=credential_aware_evaluate(values))
+    # wait_for: a fill/type waits for its element to be attached first.
+    locator.first = SimpleNamespace(evaluate=credential_aware_evaluate(values), wait_for=AsyncMock())
     return locator
+
+
+class LeftOfBudget:
+    """Equals a timeout that is what is left of *budget*: a fill/type step shares one deadline.
+
+    Its element's attached-wait gets the whole budget and the action what is
+    left, so the action's timeout is a hair under the budget, never above it.
+    """
+
+    def __init__(self, budget: float, slack_ms: float = 100) -> None:
+        self.budget = budget
+        self.slack_ms = slack_ms
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, (int, float)) and self.budget - self.slack_ms < other <= self.budget
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __repr__(self) -> str:
+        return f"<left of {self.budget}ms>"
 
 
 class FakeAriaLocator:
@@ -49,7 +70,7 @@ class FakeAriaLocator:
 
     def __init__(self, aria: str, credentials: list[str] | None = None) -> None:
         self._aria = aria
-        self.first = SimpleNamespace(evaluate=credential_aware_evaluate(credentials))
+        self.first = SimpleNamespace(evaluate=credential_aware_evaluate(credentials), wait_for=AsyncMock())
 
     async def aria_snapshot(self) -> str:
         return self._aria

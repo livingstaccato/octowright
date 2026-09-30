@@ -40,7 +40,7 @@ from octowright.session.core import BrowserSession
 
 def _locator() -> MagicMock:
     locator = MagicMock()
-    for name in ("click", "fill", "inner_text", "aria_snapshot", "count"):
+    for name in ("click", "fill", "inner_text", "aria_snapshot", "count", "wait_for"):
         setattr(locator, name, AsyncMock(return_value=""))
     # The password probe's shape for an ordinary text box, so values are recorded.
     locator.evaluate = AsyncMock(return_value={"type": "text", "ac": ""})

@@ -27,6 +27,7 @@ from octowright.session._protocols import SessionLike
 from octowright.session.fill_origin import FillOriginCheck, pending_fill_origin_check
 from octowright.session.input_redaction import (
     CREDENTIAL_FIELD_JS,
+    attached_probe_timeout_ms,
     classify_credential_field,
     probe_timeout_ms,
     recorded_input_value,
@@ -73,19 +74,26 @@ class SessionLocatorMixin(SessionLike):
 
     @gated_operation("macro_credential_fill_origin")
     async def _checked_type(
-        self, locator: Any, text: str, check: FillOriginCheck, *, delay_ms: int | None, keys: bool
+        self,
+        locator: Any,
+        text: str,
+        check: FillOriginCheck,
+        *,
+        delay_ms: int | None,
+        keys: bool,
+        timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS,
     ) -> None:
         """Type *text* one key at a time, each into a focused document *check* accepts.
 
         ``keys`` presses physical keys (``key_mode="keys"``) through the same
         per-key check; see ``octowright.credential_input``. The step may take
-        the action timeout plus ``len(text) * delay_ms``
+        *timeout_ms* (what is left of the action timeout) plus ``len(text) * delay_ms``
         (``credential_input.typing_budget_ms``): the pauses the step asked for
         are not counted against the page.
         """
         send = self._keystroke if keys else credential_input.type_character
         await credential_input.checked_type(
-            self, locator, text, check, delay_ms=delay_ms, timeout_ms=DEFAULT_ACTION_TIMEOUT_MS, send=send
+            self, locator, text, check, delay_ms=delay_ms, timeout_ms=timeout_ms, send=send
         )
 
     @gated_operation("session_locator_resolve")
@@ -123,18 +131,20 @@ class SessionLocatorMixin(SessionLike):
     async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
-        # The probe spends the step's time, not Playwright's 30s default; the
-        # fill keeps the full budget so its error names the timeout asked for.
+        # One budget for the whole step: the element's attached-wait gets all
+        # of it, so a target that never appears fails naming the timeout asked
+        # for; see input_redaction.probe_timeout_ms.
         deadline = time.monotonic() + budget / 1000
         locator = await self._locator(**finders)
+        await locator.wait_for(state="attached", timeout=budget)
         recorded_value = await self._redacted_or_original_for_locator(
-            locator, value, timeout_ms=probe_timeout_ms(deadline)
+            locator, value, timeout_ms=attached_probe_timeout_ms(deadline)
         )
         check = pending_fill_origin_check()
         if check is None:
-            await locator.fill(value, timeout=budget)
+            await locator.fill(value, timeout=probe_timeout_ms(deadline))
         else:
-            await self._checked_fill(locator, value, check, budget)
+            await self._checked_fill(locator, value, check, probe_timeout_ms(deadline))
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 

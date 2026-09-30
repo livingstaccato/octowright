@@ -50,17 +50,34 @@ def classify_credential_field(info: Any) -> bool | None:
 
 
 def probe_timeout_ms(deadline: float) -> int:
-    """What is left of a step's *deadline* (``time.monotonic()``) for the redaction probe, at least 1ms.
+    """What is left of a step's *deadline* (``time.monotonic()``), at least 1ms.
 
-    The probe classifies an element the step then fills or types, so it gets
-    the step's remaining time, never Playwright's own 30s default: without a
-    timeout, a selector that never matches waited that default before the
-    step's own ``timeout_ms`` even started. At least 1ms because Playwright
-    reads ``timeout=0`` as "no timeout". A probe that runs out answers
-    ``None``, which redacts -- the safe direction -- and the step's own action
-    then fails with Playwright's error naming what it waited for.
+    A fill/fill_by/type step shares one deadline: it waits for its element to
+    be attached under the whole budget (so a target that never appears fails
+    with Playwright's ``Locator.wait_for: Timeout <budget>ms exceeded ...
+    waiting for locator(...)``), then reads metadata and runs the redaction
+    probe against the attached element (:func:`attached_probe_timeout_ms`),
+    and the action gets what is left. Before, the metadata read spent the
+    whole budget on a missing element and the action then got a fresh one, so
+    a step took about twice its timeout; and earlier still the probe passed
+    no timeout and waited Playwright's 30s default. At least 1ms because
+    Playwright reads ``timeout=0`` as "no timeout". A probe that runs out
+    answers ``None``, which redacts -- the safe direction.
     """
     return max(1, int((deadline - time.monotonic()) * 1000))
+
+
+#: What the metadata read and the redaction probe may take once the step's
+#: element is attached. They answer in well under 100ms against an element that
+#: is there (measured: attached-wait + aria snapshot + evaluate took 47-63ms on
+#: chromium, firefox and webkit), so this only bounds an element that detached
+#: in between; the step's own action gets what is left of its budget.
+ATTACHED_PROBE_CAP_MS = 2000
+
+
+def attached_probe_timeout_ms(deadline: float) -> int:
+    """:func:`probe_timeout_ms`, capped at :data:`ATTACHED_PROBE_CAP_MS`: for a probe of an element already attached."""
+    return min(ATTACHED_PROBE_CAP_MS, probe_timeout_ms(deadline))
 
 
 async def recorded_input_value(session: Any, value: str, probe: Callable[[], Awaitable[bool | None]]) -> str:

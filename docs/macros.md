@@ -611,7 +611,15 @@ keys; twenty under 1500ms after 13-15). A `key_mode: keys` type without a
 credential has no whole-step bound at all. Each Playwright call is given what
 is left of the budget, and the step's own backstop fires one second after it,
 so a selector that never matches fails with Playwright's own "waiting for
-locator(...)" error rather than as a step that stopped. A step the backstop
+locator(...)" error rather than as a step that stopped. Before any of that, every
+`fill`/`fill_by`/`type` step -- with a credential or without -- waits once for
+its element to be attached, under the whole budget, then reads the element's
+role and redaction class against the attached element and gives the action
+what is left. So a target that never appears fails in about its budget (measured
+within a few milliseconds of it on all three engines) with Playwright's
+`Locator.wait_for: Timeout <budget>ms exceeded ... waiting for locator(...)`,
+rather than spending the budget on the metadata read and a second one on the
+action. A step the backstop
 does stop says whether anything was typed: "did not start typing ... Nothing
 was typed" when the page never answered before the first key, "stopped typing
 ... The rest of the value was not typed" otherwise. An exported script's

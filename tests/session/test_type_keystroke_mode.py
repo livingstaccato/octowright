@@ -24,7 +24,7 @@ import pytest
 
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session.core_page_mixin import SessionPageMixin
-from tests._aria_stubs import stub_credential_scan
+from tests._aria_stubs import LeftOfBudget, stub_credential_scan
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -140,7 +140,7 @@ class TestKeystrokeMode:
         target = _make_target()
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#console", "a", None, key_mode="keys")
-        target.focus.assert_awaited_once_with("#console", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.focus.assert_awaited_once_with("#console", timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         target.type.assert_not_awaited()
 
     @pytest.mark.anyio
@@ -220,7 +220,7 @@ class TestDefaultModeUnchanged:
         target = _make_target()
         subj._target = lambda: target  # type: ignore[attr-defined]
         await subj.type_text("#name", "Ab*", 0, key_mode=key_mode)
-        target.type.assert_awaited_once_with("#name", "Ab*", delay=0, timeout=DEFAULT_ACTION_TIMEOUT_MS)
+        target.type.assert_awaited_once_with("#name", "Ab*", delay=0, timeout=LeftOfBudget(DEFAULT_ACTION_TIMEOUT_MS))
         assert _keyboard_sequence(subj) == []
 
     @pytest.mark.anyio

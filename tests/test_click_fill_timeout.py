@@ -52,6 +52,24 @@ class _RecordingTarget:
     async def fill(self, selector: str, value: str, **kwargs: Any) -> None:
         self.calls.append(("fill", kwargs))
 
+    def locator(self, selector: str) -> Any:
+        """A fill waits for its element to be attached, under the whole budget, before anything else."""
+        calls = self.calls
+
+        class _First:
+            async def wait_for(self, *, state: str, timeout: float) -> None:
+                assert state == "attached"
+                calls.append(("wait_for", {"timeout": timeout}))
+
+        return type("_Locator", (), {"first": _First()})()
+
+
+def _assert_fill_budget(calls: list[tuple[str, dict[str, Any]]], budget: int) -> None:
+    """The attached-wait gets the whole budget; the fill gets what is left of it."""
+    assert calls[0] == ("wait_for", {"timeout": budget})
+    assert calls[1][0] == "fill" and budget - 100 < calls[1][1]["timeout"] <= budget
+    assert len(calls) == 2
+
 
 class _Session:
     """Minimal session exposing the real click/fill bodies over a fake target."""
@@ -132,7 +150,7 @@ class TestSessionHonoursTimeout:
 
         await session.fill("#name", "Ada", timeout_ms=2500)
 
-        assert session.target.calls == [("fill", {"timeout": 2500})]
+        _assert_fill_budget(session.target.calls, 2500)
 
     @pytest.mark.parametrize("method,args", [("click", ("#x",)), ("fill", ("#x", "v"))])
     async def test_omitting_it_keeps_the_default(self, method: str, args: tuple[Any, ...]) -> None:
@@ -180,7 +198,7 @@ class TestMacroDispatchKeepsTimeout:
             SEMANTIC_LOCATOR_KEYS,
         )
 
-        assert session.target.calls == [("fill", {"timeout": 2500})]
+        _assert_fill_budget(session.target.calls, 2500)
 
     async def test_a_selector_click_keeps_no_wait_after(self) -> None:
         session = _Session()
@@ -305,9 +323,15 @@ class TestMetadataReadHonoursTheSameBudget:
 
     @pytest.mark.anyio
     async def test_fill_passes_its_budget_down(self) -> None:
+        """A fill waits for its element under the whole budget first, so the read runs against an attached
+        element: bounded by what is left, capped at ATTACHED_PROBE_CAP_MS."""
+        from octowright.session.input_redaction import ATTACHED_PROBE_CAP_MS
+
         session = _Session()
         await SessionPageMixin.fill(session, "#x", "v", timeout_ms=2500)  # type: ignore[arg-type]
-        assert session.metadata_timeouts == [2500]
+        assert session.target.calls[0] == ("wait_for", {"timeout": 2500})
+        (read,) = session.metadata_timeouts
+        assert read is not None and 0 < read <= min(2500, ATTACHED_PROBE_CAP_MS)
 
     @pytest.mark.anyio
     async def test_an_unset_budget_still_bounds_the_read(self) -> None:
