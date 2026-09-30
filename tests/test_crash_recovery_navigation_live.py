@@ -20,7 +20,8 @@ Two more ways the report was wrong. A load that timed out AFTER the navigation
 committed was reported as "NOT at its last URL" while the page was at it. And a
 replacement that itself crashed loading its last URL was swapped in as a
 usable recovery elsewhere, while its own crash listener scheduled a second
-recovery behind this one.
+recovery behind this one. It is now replaced again within the crash-loop
+bound, and the recovery ends ``exhausted`` once that is spent.
 """
 
 from __future__ import annotations
@@ -28,12 +29,14 @@ from __future__ import annotations
 import asyncio
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
 
+from octowright import defaults
 from octowright.browser_pool import crash_recovery, incidents
 from octowright.browser_pool import session_event_bus as _bus
 from octowright.browser_pool.pool import BrowserPool
@@ -149,7 +152,7 @@ async def test_a_load_that_times_out_at_the_last_url_is_a_recovery_at_it(
 _CRASHING_URL = {"chromium": "chrome://crash", "firefox": "about:crashcontent"}
 
 
-async def test_a_replacement_that_crashes_loading_fails_the_recovery_once(
+async def test_a_replacement_that_keeps_crashing_is_exhausted_within_the_bound(
     kind: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     if kind not in _CRASHING_URL:
@@ -167,14 +170,16 @@ async def test_a_replacement_that_crashes_loading_fails_the_recovery_once(
         incidents.reset()
         dead = session.page
         session._crashed = True
+        session._last_crash_monotonic = time.monotonic()  # as schedule_recovery stamps it
         assert await crash_recovery._recover(session, dead, 15_000, _CRASHING_URL[kind]) is False
+        assert session._crash_recoveries == defaults.CRASH_RECOVERY_MAX
         assert session.page is dead and session.pages == [dead]
         assert session._crashed is True
         # Nothing else is left to run: the replacement's own crash scheduled no second recovery.
         await asyncio.sleep(1)
         assert not [t for t in session._bg_tasks if not t.done()]
-        assert [e.outcome for e in events if type(e).__name__ == "SessionRecoveredEvent"] == ["failed"]
-        assert [i["outcome"] for i in incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)] == ["failed"]
+        assert [e.outcome for e in events if type(e).__name__ == "SessionRecoveredEvent"] == ["exhausted"]
+        assert [i["outcome"] for i in incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)] == ["exhausted"]
         assert all(page.is_closed() for page in session.context.pages if page is not dead)
     finally:
         await pool.shutdown()

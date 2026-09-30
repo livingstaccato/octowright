@@ -18,10 +18,15 @@ or any network error -- does not fail the recovery: the fresh page is already
 wired, so the session recovers onto it and says why, as the incident's
 ``navigation_error`` and the ``browser_recovered`` event's
 ``navigation_error``. Whether it is elsewhere (``recovered_elsewhere``) is
-decided by where the page actually is, not by the error: a load that timed out
-after its navigation committed has recovered AT its last URL. A fresh page
-that itself crashes while loading does fail the recovery, and its crash is not
-recovered a second time.
+decided by where the page actually is, whether or not the navigation raised: a
+load that timed out after its navigation committed has recovered AT its last
+URL, and one that loaded through a redirect to ``/login`` has not. The one
+exception is the guard's own client-redirect document, which sits AT the last
+URL: a chain the guard refused or failed, or a page still showing that
+document, is elsewhere. A fresh page that itself crashes -- while loading, or
+before the recovery has finished swapping it in -- is not recovered by its own
+crash listener; the recovery loading it opens another, within the same
+crash-loop bound, and ends ``exhausted`` once that is spent.
 
 Bounding (so a page that crashes on every reload doesn't loop forever): a
 per-session attempt counter capped at ``CRASH_RECOVERY_MAX``, with a crash-loop
@@ -44,10 +49,11 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
-from octowright import ssrf_guard
+from octowright import ssrf, ssrf_guard
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
+from octowright.credential_sinks import url_origin
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
@@ -204,23 +210,24 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     failure leave ``_crashed`` set so the session still reports as crashed. Either
     way an incident record is appended so the outcome is visible in status.
 
+    A replacement that itself crashes is replaced again within the crash-loop
+    bound (:func:`_replace_until_it_holds`), and ``exhausted`` once it is spent.
+
     Runs entirely inside ``_recover``'s ``crash_recovery`` lease; only this
-    function publishes the recovered/failed outcome, so a recovery invalidated
+    function publishes the recovered/failed/exhausted outcome, so a recovery invalidated
     before admission (session closing/closed) never claims to have repaired a
     browser it never touched."""
     session._crash_recoveries += 1
     iid = session.instance_id
     try:
-        navigation_error, elsewhere = await _replace_crashed_page(session, page, reload_timeout_ms, url)
+        navigation_error, elsewhere = await _replace_until_it_holds(session, page, reload_timeout_ms, url)
+    except _RecoveryExhaustedError as exc:
+        _count_failure(session, exc.__cause__ or exc)
+        _record_incident(session, url, "exhausted")
+        _publish_recovered(session, "exhausted")
+        return False
     except Exception as exc:
-        _STATS["recovery_failures"] += 1
-        _RECOVERY_FAILED.add(1, attributes={"kind": session.kind})
-        log.warning(
-            "octowright.crash.recovery_failed",
-            instance_id=iid,
-            attempt=session._crash_recoveries,
-            error=repr(exc),
-        )
+        _count_failure(session, exc)
         _record_incident(session, url, "failed")
         _publish_recovered(session, "failed")
         return False
@@ -229,9 +236,10 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     _RECOVERED.add(1, attributes={"kind": session.kind})
     log.info("octowright.crash.recovered", instance_id=iid, attempt=session._crash_recoveries)
     incident = _record_incident(session, url, "recovered")
-    if navigation_error is not None:
+    if navigation_error is not None or elsewhere:
         if elsewhere:
-            # Recovered onto a usable page that is NOT the last URL; say why.
+            # Recovered onto a usable page that is NOT the last URL; say why
+            # (no navigation_error: it loaded, and a redirect took it elsewhere).
             log.warning("octowright.crash.recovered_url_failed", instance_id=iid, url=url, error=navigation_error)
         else:
             # At the last URL, but its load did not finish (a timeout after commit).
@@ -251,6 +259,63 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     except Exception as exc:
         log.debug("octowright.crash.recovery_recorder_failed", instance_id=iid, error=repr(exc))
     return True
+
+
+def _count_failure(session: Any, exc: BaseException) -> None:
+    _STATS["recovery_failures"] += 1
+    _RECOVERY_FAILED.add(1, attributes={"kind": session.kind})
+    log.warning(
+        "octowright.crash.recovery_failed",
+        instance_id=session.instance_id,
+        attempt=session._crash_recoveries,
+        error=repr(exc),
+    )
+
+
+class _RecoveryExhaustedError(RuntimeError):
+    """Every replacement the crash-loop bound allows crashed; ``__cause__`` is the last one's."""
+
+
+async def _replace_until_it_holds(
+    session: Any, dead_page: Any, reload_timeout_ms: float, url: str
+) -> tuple[str | None, bool]:
+    """:func:`_replace_crashed_page`, again for a replacement that crashed, within the crash-loop bound.
+
+    A replacement's crash is not recovered by its own listener
+    (:func:`claim_replacement_crash`), so the bound a crash loop spends --
+    ``CRASH_RECOVERY_MAX`` attempts, reset after ``CRASH_RECOVERY_RESET_SECONDS``
+    quiet (:func:`_eligible`) -- is spent here, one attempt per replacement,
+    under the same lease: a transient crash while loading recovers on the next
+    page, a URL that crashes every renderer ends ``exhausted``. Nothing is
+    scheduled twice.
+    """
+    from octowright.defaults import CRASH_RECOVERY_MAX, CRASH_RECOVERY_RESET_SECONDS
+
+    while True:
+        try:
+            return await _replace_crashed_page(session, dead_page, reload_timeout_ms, url)
+        except ReplacementCrashedError as exc:
+            if not _eligible(
+                session,
+                max_recoveries=CRASH_RECOVERY_MAX,
+                reset_seconds=CRASH_RECOVERY_RESET_SECONDS,
+                now=time.monotonic(),
+            ):
+                log.warning(
+                    "octowright.crash.recovery_exhausted",
+                    instance_id=session.instance_id,
+                    attempts=session._crash_recoveries,
+                    max=CRASH_RECOVERY_MAX,
+                )
+                raise _RecoveryExhaustedError(str(exc)) from exc
+            session._crash_recoveries += 1
+            log.info(
+                "octowright.crash.replacement_retry",
+                instance_id=session.instance_id,
+                attempt=session._crash_recoveries,
+                error=str(exc),
+            )
+            dead_page = exc.dead_page
 
 
 async def _capture_recovery_screenshot(session: SessionLike) -> str | None:
@@ -298,7 +363,16 @@ _CRASH_SETTLE_SECONDS = 2.0
 
 
 class ReplacementCrashedError(RuntimeError):
-    """The fresh page a recovery opened crashed while loading the last URL."""
+    """The fresh page a recovery opened crashed while loading the last URL.
+
+    ``dead_page`` is the page the next attempt replaces: still the original
+    one when the replacement crashed before it was swapped in, the replacement
+    itself when it crashed after (it holds the slot by then).
+    """
+
+    def __init__(self, message: str, *, dead_page: Any) -> None:
+        super().__init__(message)
+        self.dead_page = dead_page
 
 
 def claim_replacement_crash(page: Any) -> bool:
@@ -324,33 +398,35 @@ def _same_url(page_url: Any, last_url: str) -> bool:
 
     The browser normalises what it was asked for (``http://h`` comes back as
     ``http://h/``, a host lowercased, a default port dropped), and a fragment
-    does not change the document.
+    does not change the document. The origin is compared as the credential
+    origin check compares it (``credential_sinks.url_origin``), then the path
+    and query.
     """
     if not isinstance(page_url, str):
         return False
-
-    def key(url: str) -> tuple[str, str, int | None, str, str]:
-        parts = urlsplit(url)
-        try:
-            port = parts.port
-        except ValueError:
-            port = None
-        if (parts.scheme, port) in {("http", 80), ("https", 443)}:
-            port = None
-        return parts.scheme.lower(), (parts.hostname or "").lower(), port, parts.path or "/", parts.query
-
-    return key(page_url) == key(last_url)
+    origin = url_origin(page_url)
+    if origin is None:  # not http(s) with a host (about:blank, data:): as spelled
+        return page_url.partition("#")[0] == last_url.partition("#")[0]
+    if origin != url_origin(last_url):
+        return False
+    page, last = urlsplit(page_url), urlsplit(last_url.strip())
+    return (page.path or "/", page.query) == (last.path or "/", last.query)
 
 
 async def _settle_crash_signal(session: SessionLike, page: Any) -> None:
     """One bounded round trip to *page*, so a crash chromium reports late has arrived.
 
-    Re-enters the caller's ``crash_recovery`` lease, as the other helpers here do."""
-    try:
-        async with session.operation("crash_recovery", wait_timeout_seconds=None):
+    Re-enters the caller's ``crash_recovery`` lease, as the other helpers here do.
+    Its failure is caught INSIDE that lease: a ``SessionCallTimeoutError``
+    escaping a gated operation fires the gate's ``on_call_timeout`` hook,
+    which reports the session unresponsive (a ``browser_crashed`` with
+    ``scope=unresponsive`` and an incident) for a probe that is expected to
+    fail against a crashed page."""
+    async with session.operation("crash_recovery", wait_timeout_seconds=None):
+        try:
             await bounded(page.evaluate("1"), operation="crash_recovery_probe", timeout=_CRASH_SETTLE_SECONDS)
-    except Exception as exc:
-        log.debug("octowright.crash.replacement_probe_failed", error=repr(exc))
+        except Exception as exc:
+            log.debug("octowright.crash.replacement_probe_failed", error=repr(exc))
 
 
 async def _discard_replacement(session: SessionLike, new_page: Any) -> None:
@@ -417,15 +493,17 @@ async def _replace_crashed_page(
     ``last_url`` failed -- the SSRF policy's refusal of it (or of a hop it
     redirects to), or any other navigation failure (DNS, reset, timeout) --
     else ``None``; and whether the page is somewhere other than ``last_url``,
-    judged by where it actually is. A load that timed out after its
+    judged by where it actually is whether or not the navigation raised
+    (:func:`_elsewhere`), or because the guard ended its chain
+    (:func:`_guard_ended_chain`). A load that timed out after its
     navigation committed leaves the page AT ``last_url``, so that is not
-    elsewhere. A failed navigation does not fail the recovery: the new page is
+    elsewhere; a redirect to ``/login`` is. A failed navigation does not fail the recovery: the new page is
     already in the context and wired, so raising would orphan it and leave the
     dead page as ``session.page``. The session recovers onto the new page --
     blank, partly loaded or the browser's error page, and usable -- and the
     caller reports the failure instead of hiding it.
 
-    Two exceptions fail the recovery, and take the replacement out of
+    Two exceptions end this attempt, and take the replacement out of
     ``session.pages`` (the context ``page`` event may already have put it
     there) rather than orphan it there:
 
@@ -442,7 +520,14 @@ async def _replace_crashed_page(
       so it looked usable, and its own crash listener scheduled another
       recovery behind this one. The listener leaves the crash of a
       replacement to the recovery loading it (:func:`claim_replacement_crash`),
-      which closes it and fails."""
+      which closes it and raises :class:`ReplacementCrashedError`, so the
+      caller (:func:`_replace_until_it_holds`) opens another within the
+      crash-loop bound.
+
+    A replacement that crashes after it loaded but before the swap and the
+    dead page's close have finished is still this recovery's too: it stays
+    in ``_REPLACEMENTS`` until then, and raises the same error with itself as
+    the page the next attempt replaces."""
     from octowright.browser_pool.listeners import _wire_listeners
 
     async with session.operation("crash_recovery", wait_timeout_seconds=None):
@@ -455,6 +540,7 @@ async def _replace_crashed_page(
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
         navigation_error: str | None = None
+        chain_ended = False
         try:
             await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(last_url, timeout=timeout_ms))
         except Exception as exc:
@@ -462,19 +548,55 @@ async def _replace_crashed_page(
                 await _discard_replacement(session, new_page)
                 raise
             navigation_error = str(exc)
+            chain_ended = _guard_ended_chain(new_page)
             await _settle_crash_signal(session, new_page)
         if _REPLACEMENTS.get(new_page):
             # Left in _REPLACEMENTS, so a crash event still in flight stays this recovery's.
             await _discard_replacement(session, new_page)
             raise ReplacementCrashedError(
                 f"the replacement page crashed loading {last_url!r}"
-                + (f": {navigation_error}" if navigation_error else "")
+                + (f": {navigation_error}" if navigation_error else ""),
+                dead_page=dead_page,
             )
-        _REPLACEMENTS.pop(new_page, None)
-        elsewhere = navigation_error is not None and not _same_url(new_page.url, last_url)
+        elsewhere = chain_ended or _elsewhere(new_page, last_url)
         await _take_dead_page_slot(session, dead_page, new_page)
         try:
             await dead_page.close()
         except Exception as exc:
             log.debug("octowright.crash.dead_page_close_failed", instance_id=session.instance_id, error=repr(exc))
+        # Only now is it the session's page: until the swap and the dead page's
+        # close have finished, a crash of it is still this recovery's
+        # (claim_replacement_crash), not a fresh one that a second recovery
+        # would then race this one to report.
+        if _REPLACEMENTS.get(new_page):
+            # It holds the slot, so the next attempt replaces it. Left in
+            # _REPLACEMENTS, so a crash event still in flight stays this recovery's.
+            raise ReplacementCrashedError(
+                f"the replacement page crashed after loading {last_url!r}", dead_page=new_page
+            )
+        _REPLACEMENTS.pop(new_page, None)
         return navigation_error, elsewhere
+
+
+def _guard_ended_chain(page: Any) -> bool:
+    """Whether the SSRF guard refused or failed a hop of *page*'s navigation (``False`` with the policy off).
+
+    The navigation's own record, begun by ``guarded_navigation``. A refused
+    LATER hop leaves the page on the guard's client-redirect document, which
+    sits AT the last URL, so where the page is cannot say it was not reached.
+    """
+    if not ssrf.policy_enabled():
+        return False
+    return ssrf_guard.frame_chain(page.main_frame).refused.is_set()
+
+
+def _elsewhere(page: Any, last_url: str) -> bool:
+    """Whether *page* is somewhere other than *last_url*: by where it is, and not on the guard's redirect document.
+
+    Decided the same way whether or not the navigation raised: a load that
+    timed out after commit is AT its last URL, and a ``goto`` that succeeded
+    through a redirect to ``/login`` is not.
+    """
+    if ssrf_guard.served_client_redirect_last(page.main_frame):
+        return True
+    return not _same_url(page.url, last_url)

@@ -107,11 +107,14 @@ class SessionRecoveredEvent:
 
     ``recovered_elsewhere`` is True when a ``recovered`` session's fresh page
     is NOT at the dead page's URL, judged by where the page actually is
-    (refused by the SSRF policy, or its navigation failed). The browser is
-    usable, but the client must navigate again before it carries on.
-    ``navigation_error`` says why the navigation failed -- also with
+    whether or not the navigation raised (refused by the SSRF policy, its
+    navigation failed, a redirect took it elsewhere, or it is still on the
+    guard's client-redirect document). The browser is usable, but the client
+    must navigate again before it carries on. ``navigation_error`` says why
+    the navigation failed (``None`` for a redirect elsewhere) -- also with
     ``recovered_elsewhere`` False, when the page reached its URL but its load
-    timed out after commit."""
+    timed out after commit. ``exhausted`` also covers a recovery whose every
+    replacement, up to the same cap, crashed loading the last URL."""
 
     instance_id: str
     kind: str

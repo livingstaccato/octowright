@@ -86,7 +86,7 @@ _RECOVERY_HINTS = {
 }
 _RECOVERED_ELSEWHERE_HINT = (
     "the crashed page was replaced by a fresh page in the same browser, but it is NOT at its last URL "
-    "(navigation_error says why) — the browser is usable; navigate again before continuing"
+    "(navigation_error says why, when its navigation failed) — the browser is usable; navigate again before continuing"
 )
 
 log = get_logger(__name__)
