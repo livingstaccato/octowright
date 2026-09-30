@@ -101,3 +101,89 @@ async def test_other_engines_are_not_pruned(monkeypatch: pytest.MonkeyPatch, tmp
 
     assert calls == []
     assert _rows(db) == 1
+
+
+async def _open_session(browser_type: Any, kind: str, session_dir: Path) -> None:
+    await launch_helpers._open_browser_context(
+        browser_type=browser_type,
+        kind=kind,
+        profile=None,
+        session_user_data_dir=str(session_dir),
+        headless=False,
+        viewport_kwargs={},
+        ctx_video_kwargs={},
+        ctx_har_kwargs={},
+        launch_kwargs={},
+    )
+
+
+async def test_a_session_tmpdir_is_pruned_before_launch(tmp_path: Path) -> None:
+    """``session=True`` reuses one tmpdir per label for the daemon's lifetime, so
+    its second launch opens a History holding the first launch's rows -- the
+    same crash as a profile, and the process-crash relaunch of a named session
+    lands exactly there."""
+    session_dir = tmp_path / "octowright-session-dl-chromium-x"
+    db = _seed(session_dir)
+    browser_type = _RecordingBrowserType(db)
+
+    await _open_session(browser_type, "chromium", session_dir)
+
+    assert browser_type.rows_at_launch == 0
+
+
+async def test_a_session_tmpdir_left_locked_by_a_crash_is_still_pruned(tmp_path: Path) -> None:
+    """A crashed Chromium leaves its SingletonLock behind, and the prune refuses
+    a locked dir. The stale-lock prune must run first, as it does for a profile,
+    or the relaunch after the crash is the one launch that is not protected."""
+    import os
+    import socket
+
+    session_dir = tmp_path / "octowright-session-dl-chromium-y"
+    db = _seed(session_dir)
+    # A lock naming a pid on this host that cannot be running.
+    os.symlink(f"{socket.gethostname()}-{2**22 + 12345}", session_dir / "SingletonLock")
+    browser_type = _RecordingBrowserType(db)
+
+    await _open_session(browser_type, "chromium", session_dir)
+
+    assert browser_type.rows_at_launch == 0
+    assert not (session_dir / "SingletonLock").is_symlink()
+
+
+@pytest.mark.parametrize("kind", ["firefox", "webkit"])
+async def test_other_engines_session_dirs_are_not_touched(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
+) -> None:
+    calls: list[Path] = []
+    monkeypatch.setattr(launch_helpers, "prune_download_history", calls.append)
+    session_dir = tmp_path / f"octowright-session-dl-{kind}-z"
+    db = _seed(session_dir)
+
+    await _open_session(_RecordingBrowserType(db), kind, session_dir)
+
+    assert calls == []
+
+
+async def test_the_prune_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Blocking SQLite (2 s busy wait, DELETE, fsync) must not stall every other
+    session's callbacks during a launch; it runs in a worker thread and is still
+    finished before the browser starts."""
+    import threading
+
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    db = _seed(personas.engine_profile_dir(persona="dl-persona", kind="chromium"))
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+    real = launch_helpers.prune_download_history
+
+    def _spy(user_data_dir: Path) -> None:
+        threads.append(threading.get_ident())
+        real(user_data_dir)
+
+    monkeypatch.setattr(launch_helpers, "prune_download_history", _spy)
+    browser_type = _RecordingBrowserType(db)
+
+    await _open(browser_type, "chromium")
+
+    assert threads and threads[0] != loop_thread
+    assert browser_type.rows_at_launch == 0

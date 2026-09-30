@@ -23,11 +23,15 @@ Notification methods:
   * ``notifications/octowright/browser_recovered`` — a renderer-crash recovery
     resolved; ``outcome`` is recovered|failed|exhausted (the accurate follow-up
     to a ``browser_crashed`` with ``recovering=true``). ``recovered_elsewhere``
-    is true when a recovered page is not at its last URL (refused by the
-    SSRF policy, or its navigation failed), with ``navigation_error`` saying
-    why: the browser is usable, but the client must navigate again.
+    is true when a recovered page is not at its last URL, judged by where the
+    page is (refused by the SSRF policy, its navigation failed, a redirect took
+    it elsewhere, or it is still on the guard's client-redirect document), with
+    ``navigation_error`` saying why when the navigation raised: the browser is
+    usable, but the client must navigate again.
     ``navigation_error`` alone (``recovered_elsewhere`` false) is a page at
-    its last URL whose load timed out after commit.
+    its last URL whose load timed out after commit. ``scope="process"``
+    with ``outcome="failed"``: reopening a crashed browser process failed, so
+    the client must relaunch it (the correction to ``recovering=true`` there).
   * ``notifications/octowright/driver_died`` — the shared driver died and these
     sessions were lost (``lost_instance_ids``); ``relaunch_mode`` says whether
     they're being auto-reopened.
@@ -128,6 +132,13 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
             },
         }
     if isinstance(event, SessionRecoveredEvent):
+        if event.scope == "process":
+            recovery_hint = (
+                "reopening the crashed browser failed — relaunch it with browser_launch "
+                "(octowright_status().pool.lost_sessions has its last URL and the error)"
+            )
+        else:
+            recovery_hint = _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved")
         return {
             "method": "notifications/octowright/browser_recovered",
             "params": {
@@ -140,9 +151,8 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 "log_path": event.log_path,
                 "navigation_error": event.navigation_error,
                 "recovered_elsewhere": event.recovered_elsewhere,
-                "hint": _RECOVERED_ELSEWHERE_HINT
-                if event.recovered_elsewhere
-                else _RECOVERY_HINTS.get(event.outcome, "renderer-crash recovery resolved"),
+                "scope": event.scope,
+                "hint": _RECOVERED_ELSEWHERE_HINT if event.recovered_elsewhere else recovery_hint,
             },
         }
     if isinstance(event, SessionCrashedEvent):
@@ -165,7 +175,7 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
             hint = (
                 "the browser process itself crashed (not a window the user closed) and the session is gone; "
                 "Octowright is reopening it on its last URL — see octowright_status().pool.lost_sessions for "
-                "the old→new instance_id"
+                "the old→new instance_id; a browser_recovered with outcome=failed follows if the reopen fails"
                 if event.recovering
                 else "the browser process itself crashed (not a window the user closed) and the session is "
                 "gone — relaunch it with browser_launch (octowright_status().pool.lost_sessions has its last URL)"

@@ -114,7 +114,13 @@ class SessionRecoveredEvent:
     the navigation failed (``None`` for a redirect elsewhere) -- also with
     ``recovered_elsewhere`` False, when the page reached its URL but its load
     timed out after commit. ``exhausted`` also covers a recovery whose every
-    replacement, up to the same cap, crashed loading the last URL."""
+    replacement, up to the same cap, crashed loading the last URL.
+
+    ``scope`` says which crash it follows up. ``renderer`` (the default) is the
+    page-replacement recovery above. ``process`` is published only as
+    ``outcome="failed"``: reopening a crashed browser PROCESS under
+    ``OCTOWRIGHT_DRIVER_RELAUNCH`` failed (``driver_relaunch``), so the client
+    that was told ``recovering=True`` must relaunch it itself."""
 
     instance_id: str
     kind: str
@@ -125,6 +131,7 @@ class SessionRecoveredEvent:
     log_path: str
     navigation_error: str | None = None
     recovered_elsewhere: bool = False
+    scope: CrashScope = "renderer"
 
 
 @dataclass(slots=True, frozen=True)

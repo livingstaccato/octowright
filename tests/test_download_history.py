@@ -175,3 +175,48 @@ def test_a_history_without_download_tables_does_not_raise(tmp_path: Path) -> Non
     con.close()
 
     prune_download_history(tmp_path)  # must not raise
+
+
+# ─── the path reaches SQLite intact ──────────────────────────────────────────
+
+
+def _plain_count(db: Path) -> int:
+    """Read by filename, not URI, so the reader cannot share the bug under test."""
+    con = sqlite3.connect(str(db))
+    try:
+        return int(con.execute("SELECT count(*) FROM downloads").fetchone()[0])
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("dirname", ["hash#dir", "pct%20dir", "q?mark", "all #?%20 of them"])
+def test_a_profile_path_with_uri_metacharacters_is_still_pruned(tmp_path: Path, dirname: str) -> None:
+    """``file:{path}?mode=rw`` read ``#`` as a fragment, ``?`` as a query and
+    ``%20`` as a space, so the prune opened the wrong file (or none) and was
+    silently skipped. The URI must name the real file."""
+    udd = tmp_path / dirname
+    db = _history(udd, rows=2)
+
+    prune_download_history(udd)
+
+    assert _plain_count(db) == 0
+
+
+def test_the_history_uri_is_percent_encoded_and_read_write(tmp_path: Path) -> None:
+    from octowright.browser_pool.download_history import history_uri
+
+    uri = history_uri(tmp_path / "a#b%20c" / "History")
+
+    assert uri.startswith("file:")
+    assert uri.endswith("?mode=rw")
+    body = uri.removesuffix("?mode=rw")
+    assert "#" not in body and "?" not in body
+    assert "/a%23b%2520c/History" in body
+
+
+def test_a_relative_path_becomes_an_absolute_uri(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.browser_pool.download_history import history_uri
+
+    monkeypatch.chdir(tmp_path)
+
+    assert history_uri(Path("Default") / "History") == f"{(tmp_path / 'Default' / 'History').as_uri()}?mode=rw"

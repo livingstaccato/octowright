@@ -46,7 +46,8 @@ dependencies = [
     # -- it subclasses AsyncHTTPTransport for DNS pinning and reads the private
     # _config -- and httpx2/httpcore2 expose both with identical shapes.
     "httpx2>=2.5.0",
-    "mcp>=2.0.0",
+    # 2.1 introduced UnexpectedToolError, which server/_state.py imports.
+    "mcp>=2.1.0",
     "playwright>=1.63.0",
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",

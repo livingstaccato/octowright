@@ -11,12 +11,12 @@ Chromium on ``chromium-1243`` (Chrome for Testing 153.0.8010.12, Playwright
 first download of a fresh browser process. This test builds exactly that --
 seed one download, then relaunch the same profile and download first thing,
 several times -- and requires every download to land and no crash to be seen.
+It runs twice: on a ``profile`` and on a ``session=True`` tmpdir, which the pool
+reuses per label and so carries its History into every relaunch the same way.
 
-On the ``chromium-1234`` this repo's lock pins, the crash does not reproduce, so
-there the test proves the prune runs and downloads survive; the crash-rate
-proof is the same test run against Playwright 1.63
-(``uv run --with playwright==1.63.0 pytest ...``), where the unpatched rate
-measured 27/27 and the patched rate 0/30 (90/90 downloads).
+The lock pins Playwright 1.63, i.e. ``chromium-1243``, where the unpatched rate
+measured 27/27 crashed relaunches and the patched rate 0/30 (90/90 downloads)
+on a profile.
 """
 
 from __future__ import annotations
@@ -83,8 +83,10 @@ def _download_rows(user_data_dir: Path) -> int:
         con.close()
 
 
-async def _download_once(pool: Any, url: str) -> tuple[Any, bool]:
-    result = await pool.launch(kind="chromium", url=url, headed=True, label="dlhist-live", protected=False)
+async def _download_once(pool: Any, url: str, **launch_kwargs: Any) -> tuple[Any, bool]:
+    result = await pool.launch(
+        kind="chromium", url=url, headed=True, label="dlhist-live", protected=False, **launch_kwargs
+    )
     session = pool.get(result["instance_id"])
     waiter = asyncio.ensure_future(session.wait_for_download(timeout_ms=15000))
     await session.page.evaluate(_TRIGGER)
@@ -96,8 +98,11 @@ async def _download_once(pool: Any, url: str) -> tuple[Any, bool]:
     return session, saved
 
 
+# ``session``: a ``session=True`` tmpdir, reused per label for the pool's
+# lifetime -- the same History carried into every relaunch, like a profile.
+@pytest.mark.parametrize("launch_kwargs", [{}, {"session": True}], ids=["profile", "session"])
 async def test_first_download_after_relaunch_survives(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_http_server: Any
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, local_http_server: Any, launch_kwargs: dict[str, Any]
 ) -> None:
     from octowright import session_manifest
     from octowright.browser_pool import BrowserPool, incidents
@@ -112,7 +117,7 @@ async def test_first_download_after_relaunch_survives(
     pool = BrowserPool(recordings_dir=rec)
     try:
         # Seed: one download leaves one row in the profile's History.
-        session, saved = await _download_once(pool, local_http_server)
+        session, saved = await _download_once(pool, local_http_server, **launch_kwargs)
         assert saved
         udd = session.user_data_dir
         await pool.close(session.instance_id, force=True)
@@ -120,7 +125,8 @@ async def test_first_download_after_relaunch_survives(
 
         outcomes = []
         for _ in range(_RELAUNCHES):
-            session, saved = await _download_once(pool, local_http_server)
+            session, saved = await _download_once(pool, local_http_server, **launch_kwargs)
+            assert session.user_data_dir == udd, "every relaunch must reopen the same user-data-dir"
             outcomes.append(saved)
             if pool.maybe_get(session.instance_id) is not None:
                 await pool.close(session.instance_id, force=True)

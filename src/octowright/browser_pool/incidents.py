@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 from collections import deque
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 
@@ -70,10 +71,14 @@ def record(category: str, **fields: Any) -> dict[str, Any]:
     return rec
 
 
-def recent(*, category: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
-    """Recent incidents oldest→newest, optionally filtered by category and capped
-    to the newest ``limit``."""
-    items = [r for r in _RING if category is None or r.get("category") == category]
+def recent(*, category: str | Collection[str] | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """Recent incidents oldest→newest, optionally filtered by category -- one
+    name, or a set of them -- and capped to the newest ``limit``."""
+    if category is None:
+        items = list(_RING)
+    else:
+        wanted = frozenset({category}) if isinstance(category, str) else frozenset(category)
+        items = [r for r in _RING if r.get("category") in wanted]
     return items[-limit:] if limit is not None else items
 
 

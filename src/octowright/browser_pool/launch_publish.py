@@ -220,10 +220,6 @@ def _build_session_object(
         _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
         operation_queue_timeout_seconds=operation_queue_timeout_seconds,
     )
-    if user_data_dir is not None:
-        # Playwright never says whether its browser died on a signal or closed
-        # its windows; the OS does. See process_crash.
-        new_session._browser_process = process_crash.find_browser_process(kind, user_data_dir)
     # Wire up video tracking — page.video is only non-None when record_video_dir was set.
     if launch_options.record_video and page.video is not None:
         new_session._video = page.video
@@ -325,6 +321,11 @@ async def _prepare_session_before_publication(
         viewport_info=viewport_info,
         operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
     )
+    if user_data_dir is not None:
+        # Playwright never says whether its browser died on a signal or closed
+        # its windows; the OS does. See process_crash. Resolved before the
+        # close evictor is wired below, so its first signal can be judged.
+        new_session._browser_process = await process_crash.resolve_browser_process(kind, user_data_dir)
     new_session.attach_console()
     await new_session.measure_frame_inset(page)
     await pool._expose_viewport_binding(context, new_session)

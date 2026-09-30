@@ -3,16 +3,11 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Where a browser-process crash is visible: push, pull, and crash-report correlation."""
+"""Where a browser-process crash is visible: push and pull."""
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-import pytest
-
-from octowright.browser_pool import crash_reports, incidents
+from octowright.browser_pool import incidents
 from octowright.browser_pool.events import SessionCrashedEvent
 from octowright.server.mcp_notifications import notification_payload
 
@@ -53,22 +48,35 @@ def test_status_lists_process_crashes_under_crash_recent() -> None:
     incidents.reset()
 
 
-def test_a_process_crash_is_correlated_with_its_macos_crash_report(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A real crash writes a ``.ips`` like a renderer crash does."""
-    from datetime import datetime
+def test_incidents_can_be_read_for_a_set_of_categories() -> None:
+    incidents.reset()
+    incidents.record(incidents.CATEGORY_RENDERER_CRASH, instance_id="r1")
+    incidents.record(incidents.CATEGORY_UNRESPONSIVE_TARGET, instance_id="u1")
+    incidents.record(incidents.CATEGORY_BROWSER_PROCESS_CRASH, instance_id="p1")
+    incidents.record(incidents.CATEGORY_RENDERER_CRASH, instance_id="r2")
 
-    monkeypatch.setattr(crash_reports, "_is_macos", lambda: True)
-    ts = "2026-06-26T19:00:00.000Z"
-    report = tmp_path / "Chromium-2026-06-26-190001.ips"
-    report.write_text('{"bug_type":"309"}\n{"exception":{"signal":"SIGSEGV","type":"EXC_BAD_ACCESS"}}\n')
-    when = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp() + 1.0
-    os.utime(report, (when, when))
+    both = {incidents.CATEGORY_RENDERER_CRASH, incidents.CATEGORY_BROWSER_PROCESS_CRASH}
 
-    out = crash_reports.enrich([{"category": incidents.CATEGORY_BROWSER_PROCESS_CRASH, "ts": ts}], reports_dir=tmp_path)
+    assert [r["instance_id"] for r in incidents.recent(category=both)] == ["r1", "p1", "r2"]
+    assert [r["instance_id"] for r in incidents.recent(category=both, limit=2)] == ["p1", "r2"]
+    assert [r["instance_id"] for r in incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)] == ["r1", "r2"]
+    incidents.reset()
 
-    assert out[0]["crash_report"]["signal"] == "SIGSEGV"
+
+def test_a_process_crash_process_recovery_failure_says_relaunch() -> None:
+    """The correction to recovering=True when reopening the crashed browser failed."""
+    from octowright.browser_pool.events import SessionRecoveredEvent
+
+    event = SessionRecoveredEvent("p1", "chromium", "lbl", None, "failed", 1, "/tmp/p1.jsonl", scope="process")
+    params = notification_payload(event)["params"]
+
+    assert params["scope"] == "process"
+    assert params["outcome"] == "failed"
+    assert "browser_launch" in params["hint"]
+    assert "lost_sessions" in params["hint"]
+    renderer = notification_payload(SessionRecoveredEvent("p1", "chromium", "lbl", None, "failed", 1, "/tmp/p1.jsonl"))
+    assert renderer["params"]["scope"] == "renderer"
+    assert renderer["params"]["hint"] != params["hint"]
 
 
 def test_a_process_crash_degrades_health() -> None:

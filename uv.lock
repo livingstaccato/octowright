@@ -1940,7 +1940,7 @@ requires-dist = [
     { name = "cryptography", marker = "(platform_machine == 'ARM64' and sys_platform == 'win32') or (platform_machine == 'aarch64' and sys_platform == 'win32') or (platform_machine == 'arm64' and sys_platform == 'win32')", specifier = ">=46.0.3,<46.0.4" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "httpx2", specifier = ">=2.5.0" },
-    { name = "mcp", specifier = ">=2.0.0" },
+    { name = "mcp", specifier = ">=2.1.0" },
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "playwright", specifier = ">=1.63.0" },
     { name = "provide-telemetry", extras = ["otel"], specifier = ">=0.4.8" },

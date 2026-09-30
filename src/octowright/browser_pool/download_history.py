@@ -59,13 +59,22 @@ keeps is under the recordings root, recorded in the session JSONL. And because
 Chromium re-inserts the rows from its own store, ``chrome://downloads`` keeps
 its list anyway. Browsing history (``urls``/``visits``) is not touched.
 
-**Scope.** Chromium persistent profiles only (a ``session`` tmpdir and an
-ephemeral context start empty). Firefox and WebKit profiles hold no ``History``
-database. Same shape and the same guards as
+**Scope.** Every persistent Chromium user-data-dir octowright launches: a
+``profile`` AND a ``session`` tmpdir. A session tmpdir is reused for the daemon's
+lifetime by every launch sharing its label (``BrowserPool._resolve_session_dir``),
+so its second launch -- including a relaunch after this very crash -- opens a
+``History`` that already holds a row, exactly like a profile. An ephemeral
+context has no user-data-dir to carry a row over. Firefox and WebKit profiles
+hold no ``History`` database. Same shape and the same guards as
 :mod:`octowright.browser_pool.restore_prompt`: it refuses to write a profile
 whose singleton lock is still present after the stale-lock prune, and it is
 best-effort -- a History file that cannot be opened or written is logged and
 left alone, because a cleanup must never be the reason a launch fails.
+
+The write is blocking SQLite (a busy wait of up to 2 s, a ``DELETE``, a commit
+that fsyncs), so the launch path runs it off the event loop with
+``asyncio.to_thread`` -- still awaited, so it still finishes before the browser
+starts.
 """
 
 from __future__ import annotations
@@ -78,14 +87,11 @@ from typing import Final
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.singleton_locks import profile_lock_present
+from octowright.private_paths import PRIVATE_OFF
 
 log = get_logger(__name__)
 
 PRUNE_DOWNLOAD_HISTORY_ENV: Final = "OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY"
-
-# Same spelling as restore_prompt / private_paths: only an explicit token opts
-# out, so an empty value still means on.
-_OFF: Final[frozenset[str]] = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
 
 _HISTORY: Final = "History"
 
@@ -107,12 +113,26 @@ def prune_download_history_enabled() -> bool:
     falsey token -- an escape hatch should a future Chromium schema make the
     write unsafe, or to reproduce the crash on purpose.
     """
-    return os.environ.get(PRUNE_DOWNLOAD_HISTORY_ENV, "on").strip().lower() not in _OFF
+    # Same spelling as private_paths: only an explicit token opts out, so an
+    # empty value still means on.
+    return os.environ.get(PRUNE_DOWNLOAD_HISTORY_ENV, "on").strip().lower() not in PRIVATE_OFF
+
+
+def history_uri(history: Path) -> str:
+    """The read-write SQLite URI for *history*.
+
+    Built by ``Path.as_uri`` rather than by pasting the path into ``file:``: a
+    URI reads ``?`` as the start of the query, ``#`` as a fragment and ``%`` as
+    an escape, so a profile path holding any of them named a different file (or
+    none) and the prune was silently skipped. ``as_uri`` percent-encodes them,
+    and on Windows produces the ``file:///C:/...`` form SQLite expects.
+    """
+    return f"{history.absolute().as_uri()}?mode=rw"
 
 
 def _prune_one(history: Path) -> None:
     try:
-        con = sqlite3.connect(f"file:{history}?mode=rw", uri=True, timeout=_SQLITE_TIMEOUT_SECONDS)
+        con = sqlite3.connect(history_uri(history), uri=True, timeout=_SQLITE_TIMEOUT_SECONDS)
     except sqlite3.Error as exc:
         log.debug("browser.download_history_unopenable", path=str(history), error=str(exc))
         return
@@ -145,7 +165,8 @@ def prune_download_history(user_data_dir: Path) -> None:
     ``prune_stale_singleton_locks``, exactly where ``clear_crash_restore_prompt``
     runs and for the same reason: the browser this call is about to start is not
     running yet, and a lock that survived the stale-lock prune means some other
-    process is, so the database is left alone.
+    process is, so the database is left alone. Blocking: an async caller runs
+    it with ``asyncio.to_thread``.
     """
     if not prune_download_history_enabled():
         return
@@ -162,4 +183,9 @@ def prune_download_history(user_data_dir: Path) -> None:
             _prune_one(history)
 
 
-__all__ = ["PRUNE_DOWNLOAD_HISTORY_ENV", "prune_download_history", "prune_download_history_enabled"]
+__all__ = [
+    "PRUNE_DOWNLOAD_HISTORY_ENV",
+    "history_uri",
+    "prune_download_history",
+    "prune_download_history_enabled",
+]

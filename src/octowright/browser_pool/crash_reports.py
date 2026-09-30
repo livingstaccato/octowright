@@ -24,11 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from octowright.browser_pool.incidents import CATEGORY_BROWSER_PROCESS_CRASH, CATEGORY_RENDERER_CRASH
-
-# Both are real crashes the OS may have written a report for; a browser-process
-# crash (process_crash) is the one whose report names the browser binary itself.
-_CRASH_CATEGORIES = frozenset({CATEGORY_RENDERER_CRASH, CATEGORY_BROWSER_PROCESS_CRASH})
+from octowright.browser_pool.incidents import CATEGORY_RENDERER_CRASH
 
 # Default macOS crash-report directory. Per-user; overridable for tests.
 # Public because the diagnostic scripts under scripts/ read the same
@@ -123,14 +119,14 @@ def find_crash_report(crash_ts: str, *, reports_dir: Path | None = None) -> dict
 
 
 def enrich(incidents: list[dict[str, Any]], *, reports_dir: Path | None = None) -> list[dict[str, Any]]:
-    """Return ``incidents`` with a ``crash_report`` attached to each renderer- or
-    browser-process-crash record that correlates to a ``.ips`` file. Non-macOS is a pass-through (the same
+    """Return ``incidents`` with a ``crash_report`` attached to each renderer-crash
+    record that correlates to a ``.ips`` file. Non-macOS is a pass-through (the same
     list object); matched records are copied (originals are not mutated)."""
     if not _is_macos():
         return incidents
     out: list[dict[str, Any]] = []
     for inc in incidents:
-        if inc.get("category") in _CRASH_CATEGORIES and "crash_report" not in inc and inc.get("ts"):
+        if inc.get("category") == CATEGORY_RENDERER_CRASH and "crash_report" not in inc and inc.get("ts"):
             report = find_crash_report(inc["ts"], reports_dir=reports_dir)
             if report is not None:
                 inc = {**inc, "crash_report": report}
