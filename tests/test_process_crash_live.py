@@ -207,9 +207,7 @@ async def _exit_behind_a_stalled_loop(kind: str, how: str, tmp_path: Path, event
 
 
 @_HEADED
-async def test_headed_chromium_orderly_exit_seen_late_is_a_close_by_its_lock(
-    tmp_path: Path, events: list[Any]
-) -> None:
+async def test_headed_chromium_orderly_exit_seen_late_is_a_close_by_its_lock(tmp_path: Path, events: list[Any]) -> None:
     """The lock path for real: dead at the first signal, lock removed -> a close.
 
     Liveness alone reads this as a crash (the process is gone), so this test
@@ -227,9 +225,7 @@ async def test_headed_chromium_orderly_exit_seen_late_is_a_close_by_its_lock(
 
 
 @_HEADED
-async def test_headed_chromium_signal_death_seen_late_is_a_crash_by_its_lock(
-    tmp_path: Path, events: list[Any]
-) -> None:
+async def test_headed_chromium_signal_death_seen_late_is_a_crash_by_its_lock(tmp_path: Path, events: list[Any]) -> None:
     """Same stall, a signal instead: the lock stays, so the verdict is a crash on
     ``singleton_lock`` evidence -- the only evidence allowed to reopen a window."""
     from octowright.browser_pool import incidents

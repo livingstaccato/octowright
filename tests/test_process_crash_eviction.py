@@ -209,7 +209,7 @@ async def test_relaunch_mode_never_reopens_a_liveness_only_crash(
     assert crash.recovering is False
     (lost,) = driver_relaunch.recent_lost()
     assert lost["relaunched_to"] is None
-    assert driver_relaunch._TASKS == set()
+    assert not driver_relaunch._TASKS
     assert list(pool.iter_sessions()) == []
     await pool.shutdown()
 
@@ -249,7 +249,7 @@ async def test_a_crash_during_an_explicit_close_is_never_reopened(
     assert crash.recovering is False
     (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
     assert inc["outcome"] == "lost"
-    assert driver_relaunch._TASKS == set()
+    assert not driver_relaunch._TASKS
     assert list(pool.iter_sessions()) == []
     await pool.shutdown()
 
