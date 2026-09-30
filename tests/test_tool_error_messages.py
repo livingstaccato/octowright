@@ -3,9 +3,9 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""A failing tool tells the client why, as it did before mcp 2.2.
+"""A failing tool tells the client why, as it did before mcp 2.1.
 
-mcp 2.2 reduced every exception that is not a ``ToolError`` to ``Error
+mcp 2.1 reduced every exception that is not a ``ToolError`` to ``Error
 executing tool <name>``, keeping the cause for the server log only. Octowright's
 tools fail with ordinary exceptions whose text is written for the agent to act
 on -- the selector Playwright waited for, the SSRF refusal, the unknown launch
@@ -14,6 +14,8 @@ option -- so its server restores mcp 2.0's ``Error executing tool <name>:
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
@@ -59,3 +61,46 @@ async def test_a_deliberate_tool_error_is_left_as_mcp_reports_it() -> None:
 async def test_a_protocol_error_still_passes_through() -> None:
     with pytest.raises(MCPError, match="bad params"):
         await _server().call_tool("protocol", {})
+
+
+class _Log:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    def __getattr__(self, level: str) -> Any:
+        def _record(event: str, **fields: Any) -> None:
+            self.calls.append((level, event, fields))
+
+        return _record
+
+
+async def test_a_crashing_tool_is_logged_at_error_with_its_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Re-raised as ToolError, mcp itself logs the crash at INFO with no
+    traceback; octowright logs the original at ERROR so a bug stays visible."""
+    from octowright.server import _state
+
+    captured = _Log()
+    monkeypatch.setattr(_state, "log", captured)
+
+    with pytest.raises(ToolError):
+        await _server().call_tool("boom", {})
+
+    failed = [c for c in captured.calls if c[1] == "octowright.tool.failed"]
+    assert len(failed) == 1
+    level, _, fields = failed[0]
+    assert level in ("error", "exception")
+    assert fields["tool"] == "boom"
+    assert isinstance(fields["exc_info"], ValueError)
+    assert fields["exc_info"].__traceback__ is not None
+
+
+async def test_a_deliberate_tool_error_is_not_logged_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.server import _state
+
+    captured = _Log()
+    monkeypatch.setattr(_state, "log", captured)
+
+    with pytest.raises(ToolError):
+        await _server().call_tool("deliberate", {})
+
+    assert [c for c in captured.calls if c[1] == "octowright.tool.failed"] == []

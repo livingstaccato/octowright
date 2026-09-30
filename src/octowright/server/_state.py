@@ -169,14 +169,21 @@ class _ProfiledMCPServer(MCPServer):
     async def call_tool(self, name: str, arguments: dict[str, Any], context: Any = None) -> Any:
         """Call a tool, and tell the client why it failed.
 
-        mcp 2.2 reduces an exception that is not a ``ToolError`` to ``Error
-        executing tool <name>`` and keeps the cause for the server log. Every
-        octowright tool fails that way -- a ``ValueError``, an
-        ``InvalidRequestError``, Playwright's ``TimeoutError`` -- and that text
-        is what the agent acts on: the selector Playwright waited for, the SSRF
-        refusal, the unknown launch option. So the cause goes back to the
-        client in mcp 2.0's form, ``Error executing tool <name>: <cause>``.
-        Octowright scrubs credentials from its own errors before they get here.
+        mcp 2.1 (``UnexpectedToolError``, hence the ``mcp>=2.1`` floor) reduces
+        an exception that is not a ``ToolError`` to ``Error executing tool
+        <name>`` and keeps the cause for the server log. Every octowright tool
+        fails that way -- a ``ValueError``, an ``InvalidRequestError``,
+        Playwright's ``TimeoutError`` -- and that text is what the agent acts
+        on: the selector Playwright waited for, the SSRF refusal, the unknown
+        launch option. So the cause goes back to the client in mcp 2.0's form,
+        ``Error executing tool <name>: <cause>``. Octowright scrubs credentials
+        from its own errors before they get here.
+
+        Re-raising as ``ToolError`` has a cost: mcp logs a ``ToolError`` at INFO
+        with no traceback, so a genuine bug would vanish from the default log.
+        The original is therefore logged HERE, once, at ERROR with its
+        traceback. A deliberate ``ToolError`` from a tool never reaches this
+        branch (it is not an ``UnexpectedToolError``) and keeps mcp's own INFO line.
         """
         try:
             return await super().call_tool(name, arguments, context)
@@ -187,7 +194,7 @@ class _ProfiledMCPServer(MCPServer):
                 cause = cause.__cause__
             if cause is None:
                 raise
-            log.debug("octowright.tool.failed", tool=name, error_type=type(cause).__name__, exc_info=cause)
+            log.error("octowright.tool.failed", tool=name, error_type=type(cause).__name__, exc_info=cause)
             raise ToolError(f"Error executing tool {name}: {cause}") from cause
 
     def tool(
