@@ -164,8 +164,8 @@ async def _upload(s: BrowserSession, path: str) -> None:
 
 
 #: action kind -> (drive the session, values the exported source must carry).
-#: A value is a plain string with no quote or backslash, so it appears
-#: literally in both a Python ``repr`` and a JSON string.
+#: A value has no quote, so apart from a Windows path's backslashes (doubled
+#: in both) it appears literally in a Python ``repr`` and a JSON string.
 Case = tuple[Callable[[BrowserSession, str], Awaitable[Any]], list[str]]
 
 CASES: dict[str, Case] = {
@@ -257,7 +257,10 @@ async def test_the_exported_source_carries_what_the_recorder_wrote(staging: Path
         compile(source, "<exported>", "exec")
     rendered = source.split("sentinel-launch.test", 1)[1]
     for value in expected:
-        assert value in rendered, f"{kind} ({fmt}): {value!r} missing from\n{rendered}"
+        # A Windows upload path has backslashes, which both a Python repr and a
+        # JSON string spell doubled.
+        spelled = value.replace("\\", "\\\\")
+        assert spelled in rendered, f"{kind} ({fmt}): {value!r} missing from\n{rendered}"
 
 
 def _export_rows(tmp_path: Path, rows: list[dict[str, Any]], fmt: str) -> str:

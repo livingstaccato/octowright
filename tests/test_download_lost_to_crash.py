@@ -116,12 +116,22 @@ async def test_no_verdict_in_time_still_records_the_error(tmp_path: Path, monkey
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("anyio_backend", ["asyncio"])
-async def test_a_cancelled_wait_still_records_the_error(tmp_path: Path) -> None:
+async def test_a_cancelled_wait_still_records_the_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Teardown cancels background stragglers; the error row must survive that."""
-    session = _make_session(tmp_path)
+    from octowright.browser_pool import process_crash
 
+    session = _make_session(tmp_path)
+    waiting = asyncio.Event()
+    original = process_crash.wait_for_exit_verdict
+
+    async def entered(*args: Any, **kwargs: Any) -> Any:
+        waiting.set()
+        return await original(*args, **kwargs)
+
+    # Cancel inside the verdict wait, not after a fixed sleep a slow runner may not reach it in.
+    monkeypatch.setattr(process_crash, "wait_for_exit_verdict", entered)
     session._handle_download(_DyingDownload(_target_closed()))
-    await asyncio.sleep(0.02)
+    await asyncio.wait_for(waiting.wait(), timeout=5.0)
     for task in list(session._bg_tasks):
         task.cancel()
     await asyncio.gather(*list(session._bg_tasks), return_exceptions=True)

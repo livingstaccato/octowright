@@ -126,7 +126,9 @@ class Recorder:
         if private:
             with contextlib.suppress(OSError):
                 os.chmod(self.log_path.parent, 0o700)
-        self._fh = self.log_path.open("a", encoding="utf-8")
+        # newline="": text mode would write "\r\n" on Windows, one byte per row
+        # more than the ceiling below counts.
+        self._fh = self.log_path.open("a", encoding="utf-8", newline="")
         if private:
             with contextlib.suppress(OSError):
                 os.chmod(self.log_path, 0o600)

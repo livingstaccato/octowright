@@ -273,9 +273,9 @@ def test_no_module_writes_json_with_ensure_ascii_false_directly() -> None:
         "macros/scrub_engine.py",
     }
     offenders = [
-        str(path.relative_to(_SRC))
+        path.relative_to(_SRC).as_posix()
         for path in sorted(_SRC.rglob("*.py"))
-        if str(path.relative_to(_SRC)) not in allowed and _passes_ensure_ascii_false(path)
+        if path.relative_to(_SRC).as_posix() not in allowed and _passes_ensure_ascii_false(path)
     ]
     assert offenders == []
 
