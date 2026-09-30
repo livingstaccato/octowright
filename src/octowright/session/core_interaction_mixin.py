@@ -487,6 +487,8 @@ class SessionInteractionMixin(SessionLike):
         if not isinstance(paths, list):
             raise ValueError("paths must be a list of file paths")
         validated = [str(validate_upload_path(p)) for p in paths]
-        await self.page.set_input_files(selector, validated)
+        # The active frame when one is selected, like upload_files and every
+        # element action: the top document may have no such input, or its own.
+        await self._target().set_input_files(selector, validated)
         self.recorder.record("set_input_files", selector=selector, paths=validated)
         return {"ok": True, "selector": selector, "paths": validated}

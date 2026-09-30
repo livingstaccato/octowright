@@ -8,11 +8,11 @@
 The incident: ``page.title()`` / ``page.content()`` / ``page.evaluate()`` (and
 their ``Frame`` equivalents) take no ``timeout`` at all, so a target that
 stops answering hangs the calling coroutine forever -- a full ``make ci`` run
-wedged for 12.6 hours against a broken WebKit. Task 1 wrapped every known
-site in ``octowright.session.timeouts.bounded()``; F2 of its review found 17
-more that hand enumeration had missed. This is the AST-scan backstop the
-review demanded so a THIRD round is not required by hand: nothing here fails
-if a refactor quietly reverts a site to a bare ``await self.page.title()``,
+wedged for 12.6 hours against a broken WebKit. Every known site is wrapped
+in ``octowright.session.timeouts.bounded()``, and hand enumeration had already
+missed 17 of them once. This is the AST-scan backstop, so a new or reverted
+site is caught mechanically: without it nothing fails if a refactor quietly
+reverts a site to a bare ``await self.page.title()``,
 which is exactly the gap ``tests/aria_redaction/test_no_unscrubbed_sinks.py``
 closes for the credential-scrubbing sinks ("the leak was not one bug in one
 place"), and the pattern this file follows.
@@ -54,6 +54,15 @@ _UNBOUNDED_METHODS = frozenset(
         "expose_function",
         "route",
         "unroute",
+        # JSHandle / ElementHandle calls with no `timeout` either, added with
+        # the credential step's per-key lookup, which made one of each per
+        # character: a wedged renderer held the session gate forever.
+        "evaluate_handle",
+        "content_frame",
+        "owner_frame",
+        "get_properties",
+        "json_value",
+        "dispose",
     }
 )
 
@@ -74,17 +83,33 @@ ALLOWED: dict[str, frozenset[tuple[str, str]]] = {
     # PARAMETER, not an inline `.locator(...)` chain this scanner could
     # recognise structurally, so it needs an explicit entry.
     "session/aria_redaction.py": frozenset({("collect_credential_values", "locator.first")}),
-    # Same shape: `locator.first.evaluate(...)` on a Locator parameter.
+    # Same shape: `locator.first.evaluate(..., timeout=...)` on a Locator
+    # parameter, given what is left of the fill_by's budget.
     "session/core_locator_mixin.py": frozenset({("_is_password_locator", "locator.first")}),
     # `source = target.locator(source_selector)` a few statements above, then
     # `source.evaluate(...)` -- a genuine Locator.evaluate, already bounded by
     # Playwright's own action timeout.
     "session/a11y_dragdrop.py": frozenset({("run_a11y_dragdrop", "source")}),
+    # The credential step (stdlib-only, so it cannot import bounded(): the
+    # exported CLI renders it verbatim). Every one of these runs inside
+    # `_within`, one `asyncio.timeout` of the step's budget around the whole
+    # fill or type, and `_release` gives the disposes a bound of their own.
+    "credential_input.py": frozenset(
+        {
+            ("fill", "handle"),
+            ("_focused", "frame"),
+            ("_focused", "answer"),
+            ("_focused", "stop"),
+            ("_focused", "owner"),
+            ("_release", "handle"),
+        }
+    ),
     "session/core_page_mixin.py": frozenset(
         {
             # `loc = self._target().locator(selector).first` two statements
-            # above, then `loc.evaluate(...)` -- a genuine Locator.evaluate,
-            # just not inline where a syntactic check could see `.locator(`.
+            # above, then `loc.evaluate(..., timeout=...)` -- a Locator.evaluate
+            # given what is left of the step's budget, just not inline where a
+            # syntactic check could see `.locator(`.
             ("_is_password_input", "loc"),
             # `_evaluate_truthy`'s `target.evaluate(expression)` is the
             # predicate `_poll_until` calls on every iteration of a
@@ -184,7 +209,8 @@ def test_no_unbounded_title_content_or_evaluate_calls() -> None:
         if found:
             offenders[rel] = found
     assert not offenders, (
-        "a Playwright Page/Frame .title()/.content()/.evaluate() call is not "
+        "a Playwright call with no timeout of its own (Page/Frame .title()/.content()/.evaluate(), "
+        "a setup call, or a handle call) is not "
         "wrapped in octowright.session.timeouts.bounded() -- a wedged target "
         "hangs this call forever (the 2026-08-29 incident). Wrap it, or add a "
         "commented ALLOWED entry, keyed (enclosing function, receiver), if it "

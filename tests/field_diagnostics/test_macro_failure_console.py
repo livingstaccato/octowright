@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from octowright.macros.execution import (
+from octowright.macros.failure_context import (
     MACRO_FAILURE_CONSOLE_TEXT_CHARS,
     _truncate_bundle_console,
 )

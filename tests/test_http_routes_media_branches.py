@@ -365,8 +365,7 @@ async def test_live_screenshot_session_busy_timeout_error_maps_to_503(
     empty_pool: dict[str, Any],
 ) -> None:
     """A SessionBusyTimeoutError from the gate maps to 503, distinctly from
-    the generic screenshot-failure 503 branch -- locks in Task 10's Step 5
-    error-mapping contract."""
+    the generic screenshot-failure 503 branch."""
     from types import SimpleNamespace as _SimpleNamespace
 
     from octowright.http.routes import media as _media
@@ -394,8 +393,7 @@ async def test_live_screenshot_session_closing_error_maps_to_409(
     empty_pool: dict[str, Any],
 ) -> None:
     """A SessionClosingError from the gate maps to 409, not the generic
-    screenshot-failure 503 branch -- locks in Task 10's Step 5 error-mapping
-    contract."""
+    screenshot-failure 503 branch."""
     from types import SimpleNamespace as _SimpleNamespace
 
     from octowright.http.routes import media as _media

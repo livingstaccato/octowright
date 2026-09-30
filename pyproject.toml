@@ -46,8 +46,9 @@ dependencies = [
     # -- it subclasses AsyncHTTPTransport for DNS pinning and reads the private
     # _config -- and httpx2/httpcore2 expose both with identical shapes.
     "httpx2>=2.5.0",
-    "mcp>=2.0.0",
-    "playwright>=1.47.0",
+    # 2.1 introduced UnexpectedToolError, which server/_state.py imports.
+    "mcp>=2.1.0",
+    "playwright>=1.63.0",
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
     "click>=8.1",
@@ -398,6 +399,9 @@ source_paths = [
     "src/octowright/personas.py",
     "src/octowright/scenarios.py",
     "src/octowright/macros/",
+    # The credential-sink guard, moved out of macros/substitution.py so the
+    # exported CLI can render it; it stays mutated with the code it came from.
+    "src/octowright/credential_sinks.py",
     # The artifact store's shared layer. Added 2026-08-27 after a verification
     # idempotency bug lived here undetected: `macros/artifacts.py` was mutated
     # while the module it delegates every check evaluation to was not, so the
@@ -410,6 +414,30 @@ source_paths = [
 pytest_add_cli_args_test_selection = [
     "tests/test_macro_blind_scrub_policy.py",
     "tests/test_macro_listing.py",
+    "tests/test_macro_network_clean_no_text.py",
+    "tests/test_macro_no_text_scan.py",
+    "tests/test_network_clean_window.py",
+    "tests/test_macro_assertion_results.py",
+    "tests/test_macro_assertion_strict.py",
+    "tests/test_network_inflight_tracking.py",
+    "tests/test_macro_header_credentials_own_site.py",
+    "tests/test_macro_credential_alias_normalization.py",
+    "tests/test_macro_credential_fill_origin.py",
+    "tests/test_macro_call_credential_taint.py",
+    "tests/test_macro_screenshot_session_ledger.py",
+    "tests/test_privacy_ledger_scrub_cache.py",
+    "tests/test_macro_artifact_positional_privacy.py",
+    "tests/macro_lint/test_cli_export_credential_guard.py",
+    "tests/test_expect_js_equality.py",
+    "tests/test_lone_surrogate_sinks.py",
+    "tests/test_macro_nested_scan.py",
+    "tests/test_macro_no_text_element_limit.py",
+    "tests/test_macro_assertion_privacy.py",
+    "tests/test_durable_page_content_scrub.py",
+    "tests/test_markdown_cache_scrubs_macro_secrets.py",
+    "tests/test_macro_privacy_one_rule.py",
+    "tests/test_recorder_redaction_edge_cases.py",
+    "tests/test_session_page_mixin_branches.py",
     "tests/test_macro_privacy_vocabulary.py",
     "tests/test_macro_save_authoring.py",
     "tests/test_macro_privacy_value_variants.py",
@@ -425,6 +453,7 @@ pytest_add_cli_args_test_selection = [
     "tests/macro_lint/test_credential_thresholds.py",
     "tests/macro_lint/test_cli_export_coverage.py",
     "tests/macro_lint/test_cli_export_execution.py",
+    "tests/macro_lint/test_cli_export_negative_asserts.py",
     "tests/macro_lint/test_cli_export_semantic.py",
     "tests/macro_lint/test_derivation_matches_replay.py",
     "tests/macro_lint/test_fields_edges.py",
@@ -479,6 +508,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_dsl_branches.py",
     "tests/test_macro_execution_branches.py",
     "tests/test_macro_failure_network_context.py",
+    "tests/test_macro_failure_payload_macro_text.py",
     "tests/test_macro_failure_producer_isolation.py",
     "tests/test_macro_healing.py",
     "tests/test_macro_lint.py",
@@ -538,6 +568,11 @@ pytest_add_cli_args_test_selection = [
     "tests/test_telemetry_fixes.py",
     "tests/test_title_prefix.py",
     "tests/test_unresponsive_target_event.py",
+    "tests/test_conftest_config_isolation.py",
+    "tests/test_download_history_launch_wiring.py",
+    "tests/test_generic_screenshot_privacy.py",
+    "tests/test_live_buffers_scrub_ledger.py",
+    "tests/test_typed_password_ledger_bounds.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]

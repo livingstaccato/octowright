@@ -9,6 +9,8 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
+from octowright.session.timeouts import bounded
+
 if TYPE_CHECKING:
     from playwright.async_api import Frame
 
@@ -42,7 +44,7 @@ async def switch_frame_impl(
             handle = await owner.element_handle()
             if handle is None:
                 raise RuntimeError(f"no element matches iframe selector {selector!r}")
-            frame = await handle.content_frame()
+            frame = await bounded(handle.content_frame(), operation="switch_frame content_frame")
             if frame is None:
                 raise RuntimeError(f"no frame found for selector {selector!r}")
         elif name is not None:

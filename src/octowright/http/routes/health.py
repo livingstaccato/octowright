@@ -27,9 +27,9 @@ pick this up" signal the original comment was reaching for.
 from __future__ import annotations
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from octowright.http.json_response import SafeJSONResponse
 from octowright.version import VERSION
 
 
@@ -43,13 +43,13 @@ def _installed_version() -> str | None:
         return None
 
 
-async def health_endpoint(_request: Request) -> JSONResponse:
+async def health_endpoint(_request: Request) -> SafeJSONResponse:
     payload: dict[str, object] = {"ok": True, "version": VERSION}
     installed = _installed_version()
     if installed is not None and installed != VERSION:
         # Only when they disagree, so the ordinary response shape is unchanged.
         payload["installed_version"] = installed
-    return JSONResponse(payload)
+    return SafeJSONResponse(payload)
 
 
 def routes() -> list[Route]:

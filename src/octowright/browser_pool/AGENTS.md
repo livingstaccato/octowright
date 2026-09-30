@@ -7,7 +7,7 @@ directory. The root file remains the canonical index.
 
 `browser_launch(extra_http_headers={...})` sets Playwright's **context-level** `extra_http_headers`, so they ride every request that browser makes — every page, popup, new tab and subresource — for its whole life. Like `base_url`, it is **silent when there is nothing to say**: a launch that passes no headers passes no `extra_http_headers` argument at all, so every pre-existing launch is untouched.
 
-Context level was chosen over a route interceptor on measured grounds, not taste. Across chromium, firefox and webkit (Playwright 1.62, real local server, headers read off the wire): context headers reach the server; a page-level `set_extra_http_headers` overrides them; and — the load-bearing one — the SSRF guard's own `route.fetch()` validation hop carries them too, so the chain the guard checks and the chain the browser follows are not different requests. A route-level injector has no such guarantee for free, and a *fulfilling* route (`mock_route`) suppresses a context route handler entirely, so a route-based injector would silently skip any mocked pattern.
+Context level was chosen over a route interceptor on measured grounds, not taste. Across chromium, firefox and webkit (Playwright 1.62, real local server, headers read off the wire): context headers reach the server; a page-level `set_extra_http_headers` overrides them; and — the load-bearing one — the SSRF guard's own `route.fetch()` carries them too. Under a policy that fetch is the *only* fetch of a navigation (the browser is handed what the guard fetched and validated, see the root `AGENTS.md` "Per-hop redirect checking"), so headers it lacked would change what every guarded page is served. A route-level injector has no such guarantee for free, and a *fulfilling* route (`mock_route`) suppresses a context route handler entirely, so a route-based injector would silently skip any mocked pattern.
 
 Values are validated before they can forge a request rather than decorate one: header names must match RFC 7230's token production, values may not contain control characters (a CR/LF ends the header and starts another, so one value could append a second header the caller never wrote), and the map is bounded (`MAX_EXTRA_HTTP_HEADERS`, `MAX_EXTRA_HTTP_HEADER_VALUE_CHARS`) because it rides every request.
 
@@ -19,7 +19,7 @@ Values are validated before they can forge a request rather than decorate one: h
 
 **Route order is measured, and its failure is silent.** Two separate rules decide which handler wins, and only one of them is about order.
 
-*Within one level*, handlers run **last-registered-first** — on the page and on the context alike. The context case matters because `ssrf_guard.install_navigation_guard` is itself a context route installed at launch: an injector registered later therefore runs **before** it, so the guard's `route.fetch()` validation hop carries the injected headers and validates the same request the browser then makes. That is why `launch_helpers.install_context_routes` exists rather than two calls at the call site — it registers the guard first and the scoped launch-header routes second, so they run in the other order. Reversed (as it briefly was), the guard's unauthenticated validation fetch and the browser's authenticated request are two different requests, and a redirect the policy would refuse is never seen. Pinned by the `tests/test_route_order_live.py` canary, because the guarantee is Playwright's rather than ours and nothing here would otherwise notice it changing.
+*Within one level*, handlers run **last-registered-first** — on the page and on the context alike. The context case matters because `ssrf_guard.install_navigation_guard` is itself a context route installed at launch: an injector registered later therefore runs **before** it, so the guard's `route.fetch()` -- now the only fetch of a navigation -- carries the injected headers the browser's own request would have. That is why `launch_helpers.install_context_routes` exists rather than two calls at the call site — it registers the guard first and the scoped launch-header routes second, so they run in the other order. Reversed, the guard's fetch goes out without the injected headers, so the page is served (and the policy checks) a different response from the one the headers would have produced. Pinned by the `tests/test_route_order_live.py` canary, because the guarantee is Playwright's rather than ours and nothing here would otherwise notice it changing.
 
 *Across levels*, order does not enter into it: **page routes are evaluated ahead of context routes**, and a handler that *fulfills* ends the chain. `mock_route` is a page route and `inject_headers` is a context route, so a mock on an overlapping pattern suppresses the injector completely — in **either** registration order — and the injector's handler is not invoked at all (measured on chromium, firefox and webkit; same canary). This changed with the page→context move: while both were page routes, last-registered-first meant only the mock-then-inject order lost, which is the single direction `inject_headers` warned about. Both install sites now log `octowright.session.header_injection_shadowed_by_mock` on an exact-pattern collision; an overlapping-glob collision still cannot be detected and is documented only. Handlers live in `_header_routes`, deliberately separate from `mock_route`'s `_active_routes`, so a mock and an injector may share a pattern without one evicting the other's handler reference. The route callback is a registered gate bypass (`event-critical`), like `mock_route`'s: a route handler must unblock the network request the active operation is awaiting.
 
@@ -185,8 +185,10 @@ in a test is documentation, not enforcement.
 `tests/test_launch_guard_classification.py` AST-scans the eight modules whose
 `ValueError`-shaped raises are launch-reachable input checks (`_paths`, `ssrf`,
 `url_patterns`, `http_headers`, and `browser_pool/`'s `options`,
-`launch_helpers`, `launch_execution`, `launch_pipeline`) and fails on a bare
-`ValueError`. That is the whole of the enforcement: a guard added in some
+`launch_helpers`, `launch_execution`, `launch_pipeline`), plus the two URL
+guards in `session/core_page_mixin.py` by function (`_reject_unsafe_url`,
+`_check_url_shape` -- that mixin also raises ordinary `ValueError`s nowhere
+near a launch), and fails on a bare `ValueError`. That is the whole of the enforcement: a guard added in some
 *other* module is a maintenance requirement the scan cannot see.
 
 **Refusals get their own aggregate, because removing the false signal removed
@@ -226,6 +228,66 @@ where it is rendered are different modules and a call-site scan cannot see the
 forwarded case. `label` names the ARGUMENT (`"har_path"`); a label naming a
 *distinct* input (`macro name 'x'`, where the name is not the resolved path) is
 useful and unaffected.
+
+### The Chromium 153 first-download crash, and telling a crash from a close
+
+**The crash.** Chrome for Testing 153.0.8010.12 (`chromium-1243`, Playwright
+1.63 -- what a fresh install of the published wheel resolves to, while this
+which this repo's lock now pins too) kills its own **browser process**
+~0.3 s into the first download of a headed run whenever the profile's
+`History` holds a download row at startup and Playwright controls downloads.
+It is a use-after-free on the UI thread (`Received signal 11 SI_KERNEL ...
+General Protection Fault`, registers full of PartitionAlloc's `0xcd` freed
+byte), not a CHECK -- there is no message to quote; the field's earlier SIGTRAP
+attribution came from unrelated `chrome-headless-shell` renderers in a
+concurrent test run, and `/var/log/apport.log` shows the headed browser pids
+dying of signal 11 (one, on 09-23, of SIGTRAP -- its message was not captured). Nothing in octowright causes it:
+raw Playwright with no octowright code, no extension and no download listener
+crashed 7/7. `download_history.prune_download_history` deletes the rows before
+every Chromium persistent launch -- a `profile` AND a `session=True` tmpdir,
+which is reused per label and so carries rows into its next launch (full
+matrix in its docstring; run via `asyncio.to_thread`, awaited before launch;
+`OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY` in `docs/env-vars.md`). It is per launch
+because Chromium re-inserts the rows from `shared_proto_db` at startup.
+`tests/test_download_history_live.py` is the live proof (profile and session
+tmpdir) -- meaningful on `chromium-1243`, which the lock now pins; `chromium-1234`
+does not crash.
+
+**Detection.** `process_crash` resolves each persistent context's browser pid
+from `/proc` just after session construction
+(`launch_publish._prepare_session_before_publication`, through
+`process_crash.resolve_browser_process`, i.e. in a worker thread; `stat` is read
+only for a process whose argv already named the profile) and judges the exit at
+the first evicting close signal (`listeners._accept_external_close`). Four
+things are load-bearing:
+
+- **Judge only the live identity.** The close events Playwright fires for
+  octowright's OWN close arrive after the session left `_sessions`, when the
+  process is already gone -- judging them would report every agent close as a
+  crash. `_accept_external_close` skips the verdict for a non-current identity.
+- **Judge at the first evicting signal, not later.** Liveness is only
+  meaningful then: on a Firefox user close the context `close` (and the
+  `save_as` rejection) arrive after a clean exit. For the same reason the
+  download path waits for the verdict (`wait_for_exit_verdict`) instead of
+  sampling.
+- **Only lock evidence may reopen.** An unresolved pid, unreadable `/proc`, or
+  reused pid all read as a close. The other misread -- an orderly close seen
+  after a loop stall, on an engine judged by liveness alone -- reads as a
+  crash, so the incident records `evidence` (`singleton_lock` / `liveness`) and
+  a `liveness` crash is labelled but never reopened under
+  `OCTOWRIGHT_DRIVER_RELAUNCH`. Neither is a session whose teardown a close
+  already owns (`pool._closing_sessions`, or the gate's `close_reserved`, read
+  BEFORE the acceptance seam installs its own reservation): a draining
+  `browser_close`, a handoff, a fluid relaunch.
+- **Eviction never depends on classification.** `_accept_external_close`
+  catches a classifier failure, logs `octowright.browser.exit_classification_failed`,
+  and still evicts as an external close; `classify_external_close` sets the
+  verdict event in a `finally`, so a waiting download save is not left to time out.
+
+Chromium rewrites `/proc/<pid>/cmdline` into ONE space-joined string, so the
+matcher has a second path for that shape; WebKit's root is the `pw_run.sh`
+wrapper (killing only the wrapper leaves MiniBrowser and its pipe alive, and
+nothing fires -- crash tests must signal MiniBrowser).
 
 ### Type-checking the injected assets (`_assets/*.js`)
 

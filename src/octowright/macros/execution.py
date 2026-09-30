@@ -15,19 +15,24 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import safe_screenshot
+from octowright.macros import failure_context, safe_screenshot
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
-from octowright.macros.calls import MAX_MACRO_CALL_DEPTH, dispatch_macro_call, dispatch_plain_action
+from octowright.macros.assertion_results import begin_collecting, end_collecting
+from octowright.macros.calls import (
+    MAX_MACRO_CALL_DEPTH,
+    actions_assert_network_clean,
+    dispatch_macro_call,
+    dispatch_plain_action,
+)
+from octowright.macros.credential_fill import FillAudit, begin_fill_audit, credential_fill_guard, end_fill_audit
 from octowright.macros.descriptions import describe_action
+from octowright.macros.failure_context import _truncate_bundle_console
+from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
+    MacroArgPrivacy,
     PrivacyLedger,
     install_sensitive_recorder,
-)
-from octowright.macros.privacy import (
-    blind_scrub_arg_values as _sensitive_arg_values,
-)
-from octowright.macros.privacy import (
-    redact_args as _privacy_redact_args,
+    with_session_values,
 )
 from octowright.macros.privacy import (
     scrub_sensitive_values as _privacy_scrub_sensitive_values,
@@ -40,6 +45,7 @@ from octowright.macros.storage import load_macro, write_macro
 from octowright.macros.substitution import (
     SEMANTIC_LOCATOR_KEYS,
     action_kwargs,
+    own_site_origins,
     strip_non_aria_noise,
     substitute,
 )
@@ -63,11 +69,31 @@ log = get_logger(__name__)
 
 
 def _scrub_sensitive_values(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    """*value* scrubbed of every one of *sensitive_values*, wherever it appears.
+
+    A flat tuple on purpose: this scrubs what leaves the machine (failure
+    payloads, returned to the MCP client), and a tuple cannot carry the
+    recording's word bounds, so no caller can pass them here by mistake.
+    """
     return _privacy_scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
 
 
-def _redact_args_for_response(args: dict[str, Any]) -> dict[str, Any]:
-    return _privacy_redact_args(args, marker=_REDACTED_MACRO_VALUE)
+def _redact_args_for_response(args: dict[str, Any], privacy: MacroArgPrivacy) -> dict[str, Any]:
+    return privacy.redact(args, marker=_REDACTED_MACRO_VALUE)
+
+
+def _macro_privacy(macros: RunMacros, name: Any) -> MacroArgPrivacy:
+    """How macro *name* classifies its arguments, or by name alone if it cannot be read.
+
+    A macro that cannot be loaded never substituted anything, so nothing is
+    lost by it. Read through the run's *macros*, so the dispatch that follows
+    does not read the file again.
+    """
+    try:
+        return MacroArgPrivacy.for_macro(macros(str(name)).get("actions", []))
+    except Exception as exc:
+        log.debug("octowright.macro.assertion_args_unavailable", macro=str(name), error=repr(exc))
+        return MacroArgPrivacy()
 
 
 _MACRO_RUN = counter(
@@ -87,23 +113,11 @@ _MACRO_RUN_DURATION = histogram(
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
 
-# Console messages attached to a macro failure payload. Errors are claimed
-# first (see ``_select_console_tail``), so this bounds payload size rather
-# than being a window a chatty page can flush the useful line out of.
+# Console messages attached to a macro failure payload. Half the window is
+# kept for the plain tail and the rest goes to the newest diagnostic-level
+# messages (see ``_select_console_tail``), so a chatty page cannot flush the
+# useful line out of it.
 MACRO_FAILURE_CONSOLE_TAIL = 10
-# Per-message cap: the count above bounds the number of messages, not their
-# SIZE, and one console.log of a stringified response would otherwise push
-# megabytes over the MCP transport. Generous next to capture_summaries' 88-char
-# digest cap because this text is read as the cause, not skimmed as a summary.
-MACRO_FAILURE_CONSOLE_TEXT_CHARS = 2000
-# Failed / non-2xx requests attached to a macro failure payload. A timeout is
-# almost never the bug -- it is the symptom of something the page reported and
-# the macro could not see. In the case this was built for, the page logged a
-# 409 two seconds into a 45s wait and the macro then sat polling for a row the
-# server had already refused to create; both facts were in-process at the
-# moment of failure and neither reached the error. Bounded like the console
-# tail so a long-running step cannot produce an unreadable payload.
-MACRO_FAILURE_NETWORK_TAIL = 10
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
 # so an operator can see when dynamic macro names are filling the cap with
@@ -246,7 +260,9 @@ def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
     return run_ledger.values if run_ledger is not None else ()
 
 
-def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], run_ledger: PrivacyLedger) -> None:
+def _collect_nested_call_privacy(
+    session: SessionLike, action: dict[str, Any], run_ledger: PrivacyLedger, macros: RunMacros
+) -> None:
     """Classify a nested call's own arguments where it executes.
 
     Parent substitution has already run, so these are the values the child will
@@ -259,7 +275,7 @@ def _collect_nested_call_privacy(session: SessionLike, action: dict[str, Any], r
     call_args = action.get("args")
     if not isinstance(call_args, dict):
         return
-    nested = _sensitive_arg_values(call_args)
+    nested = _macro_privacy(macros, action.get("name")).blind_scrub(call_args)
     run_ledger.add(nested)
     install_sensitive_recorder(session, nested)
 
@@ -272,19 +288,20 @@ async def _dispatch_nested_call(
     max_depth: int,
     slowmo_ms: int,
     run_ledger: PrivacyLedger | None,
+    macros: RunMacros,
 ) -> tuple[int, int]:
     if invocation_stack is None:
         raise RuntimeError("macro_call can only execute in a macro context with an invocation stack")
     ledger = run_ledger if run_ledger is not None else PrivacyLedger()
-    _collect_nested_call_privacy(session, action, ledger)
+    _collect_nested_call_privacy(session, action, ledger, macros)
     return await dispatch_macro_call(
         session,
         action,
         invocation_stack=invocation_stack,
         max_depth=max_depth,
-        load_macro=load_macro,
+        load_macro=macros,
         substitute=substitute,
-        dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, **kw),
+        dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, macros=macros, **kw),
     )
 
 
@@ -296,8 +313,10 @@ async def _dispatch_one(
     max_depth: int | None = None,
     slowmo_ms: int = 0,
     run_ledger: PrivacyLedger | None = None,
+    macros: RunMacros | None = None,
 ) -> tuple[int, int]:
     resolved_max_depth = max_depth if max_depth is not None else MAX_MACRO_CALL_DEPTH
+    run_macros = macros if macros is not None else RunMacros(load_macro)
 
     if action.get("action") == "macro_call":
         return await _dispatch_nested_call(
@@ -307,6 +326,7 @@ async def _dispatch_one(
             max_depth=resolved_max_depth,
             slowmo_ms=slowmo_ms,
             run_ledger=run_ledger,
+            macros=run_macros,
         )
 
     # Push status before dispatch so the pill reflects the action that's
@@ -319,42 +339,50 @@ async def _dispatch_one(
     if slowmo_ms > 0:
         await asyncio.sleep(slowmo_ms / 1000)
 
-    # A composition root may install a synchronous, process-local authority
-    # check for browser actions. It runs after every awaited status/slowmo step
-    # and immediately before conditional/plain dispatch, so no scheduler turn
-    # can separate the check from the browser operation.
-    boundary = getattr(session, "_octowright_before_macro_action", None)
-    if boundary is not None:
-        boundary(
-            action=action,
-            invocation_stack=tuple(invocation_stack or ()),
-        )
-
-    run_values = _run_values(run_ledger)
-    if action.get("action") == "screenshot" and run_values:
-        return await _dispatch_classified_screenshot(session, action, run_values)
-
-    if action.get("action") in conditional.CONDITIONAL_ACTIONS:
-
-        async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
-            return await _dispatch_one(
-                recurse_session,
-                recurse_action,
-                invocation_stack=invocation_stack,
-                max_depth=resolved_max_depth,
-                slowmo_ms=slowmo_ms,
-                run_ledger=run_ledger,
+    # The credential-fill check stays bound for the whole dispatch: the
+    # session re-checks on the element the value is typed into.
+    async with credential_fill_guard(session, action):
+        # A composition root may install a synchronous, process-local authority
+        # check for browser actions. It runs after every awaited status/slowmo step
+        # and immediately before conditional/plain dispatch, so no scheduler turn
+        # can separate the check from the browser operation.
+        boundary = getattr(session, "_octowright_before_macro_action", None)
+        if boundary is not None:
+            boundary(
+                action=action,
+                invocation_stack=tuple(invocation_stack or ()),
             )
 
-        return await conditional.dispatch_conditional(session, action, _recurse)
+        run_values = _run_values(run_ledger)
+        if action.get("action") == "screenshot" and run_values:
+            # The pixels can show what the session admitted outside this run, too.
+            # Flattened on purpose: screenshot redaction matches every value
+            # anywhere (see safe_screenshot.redacted_screenshot).
+            screenshot_values = with_session_values(session, run_values)
+            return await _dispatch_classified_screenshot(session, action, screenshot_values)
 
-    return await dispatch_plain_action(
-        session,
-        action,
-        semantic_keys=SEMANTIC_LOCATOR_KEYS,
-        strip_non_aria_noise=strip_non_aria_noise,
-        action_kwargs=action_kwargs,
-    )
+        if action.get("action") in conditional.CONDITIONAL_ACTIONS:
+
+            async def _recurse(recurse_session: SessionLike, recurse_action: dict[str, Any]) -> tuple[int, int]:
+                return await _dispatch_one(
+                    recurse_session,
+                    recurse_action,
+                    invocation_stack=invocation_stack,
+                    max_depth=resolved_max_depth,
+                    slowmo_ms=slowmo_ms,
+                    run_ledger=run_ledger,
+                    macros=run_macros,
+                )
+
+            return await conditional.dispatch_conditional(session, action, _recurse)
+
+        return await dispatch_plain_action(
+            session,
+            action,
+            semantic_keys=SEMANTIC_LOCATOR_KEYS,
+            strip_non_aria_noise=strip_non_aria_noise,
+            action_kwargs=action_kwargs,
+        )
 
 
 async def _dispatch_simple(session: SessionLike, action: dict[str, Any]) -> tuple[int, int]:
@@ -396,52 +424,6 @@ async def _report_progress(ctx: Any | None, progress: float, total: float, messa
         await ctx.report_progress(progress, total=total, message=message)
 
 
-def _truncate_console_message(message: Any) -> Any:
-    """Return ``message`` with an over-long ``text`` capped, never mutated."""
-    if not isinstance(message, dict):
-        return message
-    text = message.get("text")
-    if not isinstance(text, str) or len(text) <= MACRO_FAILURE_CONSOLE_TEXT_CHARS:
-        return message
-    return {**message, "text": text[:MACRO_FAILURE_CONSOLE_TEXT_CHARS] + "…[truncated]"}
-
-
-def _failed_requests_tail(session: SessionLike) -> list[dict[str, Any]]:
-    """The newest failed / non-2xx requests, for a failure payload.
-
-    Reads the session's own bounded deque rather than taking a window from the
-    failing step: the deque has no per-step boundary, and a request the page
-    issued moments before the step began is exactly as likely to be the cause.
-    Newest-first bounding is what keeps it relevant.
-
-    Best-effort by construction -- a session that cannot answer must not turn
-    a macro failure into a different, more confusing failure, so anything
-    raised here yields no network block rather than replacing the real error.
-    """
-    try:
-        rows = session.get_network_requests(limit=None)["requests"]
-    except Exception:
-        return []
-    failed = [row for row in rows if row.get("failure") or (row.get("status") or 0) >= 400]
-    return failed[-MACRO_FAILURE_NETWORK_TAIL:]
-
-
-def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
-    """Cap each console message's text so a chatty page can't bloat the error.
-
-    Replaces the list rather than editing the messages, so this holds no
-    opinion about whether the producer handed back copies or the session's
-    live ring-buffer entries. It did copy them -- but an invariant maintained
-    across two modules by a comment is how the buffer got rewritten the first
-    time, and only this function needed to know.
-    """
-    messages = bundle.get("console_tail")
-    if not isinstance(messages, list):
-        return bundle
-    bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
-    return bundle
-
-
 async def run_macro(
     session: SessionLike,
     name: str,
@@ -449,7 +431,13 @@ async def run_macro(
     *,
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
+    _macros: RunMacros | None = None,
 ) -> MacroRunResult:
+    """Run macro *name* on *session*.
+
+    ``_macros`` is for `run_sequence`, whose members share one `RunMacros`;
+    any other caller leaves it out and the run gets its own.
+    """
     async with session.operation("macro_run"):
         with span(
             "octowright.macro.run",
@@ -457,7 +445,10 @@ async def run_macro(
             instance_id=session.instance_id,
             kind=session.kind,
         ):
-            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx)
+            # expect_network_clean judges this run, not the session's past.
+            session.mark_network_clean_window()
+            macros = _macros if _macros is not None else RunMacros(load_macro)
+            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros)
 
 
 async def _build_failure_payload(
@@ -465,8 +456,8 @@ async def _build_failure_payload(
     *,
     name: str,
     index: int,
-    action: dict[str, Any],
-    actions: list[dict[str, Any]],
+    written: list[dict[str, Any]],
+    macros: RunMacros,
     executed: int,
     safe_original: str,
     sensitive_values: tuple[str, ...],
@@ -475,11 +466,15 @@ async def _build_failure_payload(
 
     Each producer is tried separately so one failing does not cost the caller
     the other two: its own error is recorded IN the payload rather than raised
-    over the dispatch failure the payload exists to explain.
+    over the dispatch failure the payload exists to explain. *written* is the
+    macro's steps before substitution: the fields echoing them are not
+    scrubbed of *sensitive_values*, the page-derived ones are (see
+    `failure_context`).
     """
     if sensitive_values:
         # The generic diagnostic producer persists raw HTML and a raw
-        # screenshot. Classified macros may have rendered an argument into
+        # screenshot. The page may render a value this run or the session
+        # ledger holds (a classified argument, a password typed earlier) into
         # either, so do not invoke it. Composition roots can retain their own
         # explicitly safe evidence at the authorized screenshot boundary.
         bundle: dict[str, Any] = {"diagnostic_suppressed": "classified macro arguments"}
@@ -489,16 +484,19 @@ async def _build_failure_payload(
         except Exception as secondary:
             bundle = {"diagnostic_error": repr(secondary)}
 
-    redacted_action = _scrub_sensitive_values(_redact_action(action), sensitive_values)
+    shown = failure_context.written_actions(written[: index + 1], lambda called: _macro_privacy(macros, called))
     try:
-        fix_suggestion = _scrub_sensitive_values(await _suggest_fix(session, redacted_action), sensitive_values)
+        fix_suggestion = await _suggest_fix(
+            session, shown[index], scrub_page=lambda text: _scrub_sensitive_values(text, sensitive_values)
+        )
     except Exception as secondary:
         fix_suggestion = None
         bundle["healing_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
     try:
-        failed_requests = _scrub_sensitive_values(_failed_requests_tail(session), sensitive_values)
+        failed_requests = _scrub_sensitive_values(failure_context.failed_requests_tail(session), sensitive_values)
+        page_errors = _scrub_sensitive_values(failure_context.page_errors_tail(session), sensitive_values)
     except Exception as secondary:  # defensive around injected session implementations
-        failed_requests = []
+        failed_requests, page_errors = [], []
         bundle["network_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
 
     payload: dict[str, Any] = {
@@ -506,14 +504,12 @@ async def _build_failure_payload(
         "failed_at_step": index,
         # Partial-state signal: a multi-step macro that fails midway has
         # already applied steps 0..index-1 to the live browser. Surface both
-        # the count and the (credential-redacted) descriptors of what landed so
-        # the agent can reason about the half-applied state instead of seeing
-        # an opaque error.
+        # the count and the steps that landed, as the macro wrote them, so the
+        # agent can reason about the half-applied state instead of seeing an
+        # opaque error.
         "executed": executed,
-        "executed_actions": [
-            _scrub_sensitive_values(_redact_action(done), sensitive_values) for done in actions[:index]
-        ],
-        "failed_action": redacted_action,
+        "executed_actions": shown[:index],
+        "failed_action": shown[index],
         "original": safe_original,
         "bundle": bundle,
         # The console tail and final URL were already in `bundle`; the failing
@@ -528,6 +524,9 @@ async def _build_failure_payload(
         # it makes that claim false for every reader (a whole-record assertion
         # caught exactly this).
         "failed_requests": failed_requests,
+        # What an ``N page error(s)`` failure counted: uncaught exceptions are
+        # not console messages, so the console tail never shows them.
+        "page_errors": page_errors,
     }
     if fix_suggestion:
         payload["healing_suggestion"] = fix_suggestion
@@ -580,16 +579,22 @@ async def _run_macro_impl(
     *,
     slowmo_ms: int | None,
     ctx: Any | None = None,
+    macros: RunMacros | None = None,
 ) -> MacroRunResult:
-    macro = load_macro(name)
+    macros = macros if macros is not None else RunMacros(load_macro)
+    macro = macros(name)
     effective_args = args or {}
-    sensitive_values = _sensitive_arg_values(effective_args)
+    # An argument that IS the forbidden text is sensitive whatever it is named;
+    # the exported CLI reads the same set (privacy.assertion_text_args).
+    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    sensitive_values = privacy.blind_scrub(effective_args)
     install_sensitive_recorder(session, sensitive_values)
     # What THIS run has admitted for blind scrubbing: its own arguments plus every
     # nested call's, appended as they execute. Failure payloads and screenshot
     # privacy read it; the recorder reads the session ledger instead.
     run_ledger = PrivacyLedger(sensitive_values)
-    actions = substitute(macro.get("actions", []), effective_args)
+    actions = substitute(macro.get("actions", []), effective_args, trusted_origins=own_site_origins(session))
+    _start_request_tracking(session, actions, macros)
 
     executed = 0
     skipped = 0
@@ -602,11 +607,16 @@ async def _run_macro_impl(
 
     macro_started = time.monotonic()
     completed_ok = False
+    audit, audit_token = begin_fill_audit()
+    assertions, collecting = begin_collecting()
     try:
         for index, action in enumerate(actions):
+            audit.step = index
+            assertions.step = index
             failure: RuntimeError | None = None
             failure_cause: Exception | None = None
             safe_original: str | None = None
+            run_values: tuple[str, ...] = ()
             try:
                 executed_count, skipped_count = await _dispatch_one(
                     session,
@@ -614,9 +624,10 @@ async def _run_macro_impl(
                     invocation_stack=invocation_stack,
                     slowmo_ms=resolved_slowmo,
                     run_ledger=run_ledger,
+                    macros=macros,
                 )
             except Exception as exc:
-                run_values = run_ledger.values
+                run_values = failure_context.failure_scrub_values(session, run_ledger.values)
                 safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
                 if not run_values:
                     failure_cause = exc
@@ -629,12 +640,14 @@ async def _run_macro_impl(
                     session,
                     name=name,
                     index=index,
-                    action=action,
-                    actions=actions,
+                    written=macro.get("actions", []),
+                    macros=macros,
                     executed=executed,
                     safe_original=safe_original,
-                    sensitive_values=run_ledger.values,
+                    sensitive_values=run_values,
                 )
+                payload.update(assertions.fields(run_values))
+                payload.update(_offsite_fields(audit))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
@@ -649,6 +662,9 @@ async def _run_macro_impl(
             await _report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
+        end_collecting(collecting)
+        end_fill_audit(audit_token)
+        _end_request_tracking(session)
         elapsed_s = await _finish_macro_run(
             session,
             name=name,
@@ -659,14 +675,36 @@ async def _run_macro_impl(
             resolved_slowmo=resolved_slowmo,
         )
 
-    return {
+    result: MacroRunResult = {
         "macro": name,
         "executed": executed,
         "skipped": skipped,
-        "args_used": _redact_args_for_response(effective_args),
+        "args_used": _redact_args_for_response(effective_args, privacy),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
+        **assertions.fields(run_ledger.values),
     }
+    if audit.offsite:  # warn mode let a credential onto a foreign origin
+        result["credential_fill_offsite"] = audit.offsite
+    return result
+
+
+def _offsite_fields(audit: FillAudit) -> dict[str, Any]:
+    """What warn mode let through, for a failure payload: a failed run still typed it off-site."""
+    return {"credential_fill_offsite": list(audit.offsite)} if audit.offsite else {}
+
+
+def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:
+    """Before the first step, so the requests the journey starts are the ones
+    expect_network_clean waits for; a run that never asserts pays nothing."""
+    if actions_assert_network_clean(actions, macros):
+        session.enable_inflight_tracking()
+
+
+def _end_request_tracking(session: SessionLike) -> None:
+    """Pass or fail, the run that needed request tracking is over; an open
+    mark_network_clean window keeps it on for the verify macro after it."""
+    session.disable_inflight_tracking()
 
 
 async def run_sequence(
@@ -702,9 +740,14 @@ async def run_sequence(
 
             steps: list[MacroSequenceStep] = []
             all_ok = True
+            # One read of each macro for the whole sequence: a failed step's
+            # args_used below is classified from the copy its run loaded.
+            macros = RunMacros(load_macro)
             for name, step_args in zip(names, resolved_args, strict=True):
                 try:
-                    outcome = await run_macro(session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx)
+                    outcome = await run_macro(
+                        session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx, _macros=macros
+                    )
                     steps.append({**outcome, "ok": True})
                 except Exception as exc:
                     all_ok = False
@@ -713,7 +756,7 @@ async def run_sequence(
                             "macro": name,
                             "ok": False,
                             "error": str(exc),
-                            "args_used": _redact_args_for_response(step_args),
+                            "args_used": _redact_args_for_response(step_args, _macro_privacy(macros, name)),
                         }
                     )
                     if stop_on_failure:

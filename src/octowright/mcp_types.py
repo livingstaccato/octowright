@@ -12,7 +12,7 @@ are added without pushing the other one over the 500-LOC ceiling.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 # ─── server/macros.py MCP returns ────────────────────────────────────────────
 
@@ -59,6 +59,12 @@ class MacroListEntry(TypedDict):
     action_count: int
 
 
+class MacroAssertionFields(TypedDict, total=False):
+    # What each expect_network_clean / expect_no_text step saw, with a
+    # ``warning`` on a pass that judged less than asked; only when one ran.
+    assertions: list[dict[str, Any]]
+
+
 class MacroRunResult(TypedDict):
     macro: str
     executed: int
@@ -66,6 +72,10 @@ class MacroRunResult(TypedDict):
     args_used: dict[str, Any]
     slowmo_ms: int
     elapsed_s: float
+    # Present only when OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn let a
+    # credential be typed onto a foreign origin: step, action and origin, never the value.
+    credential_fill_offsite: NotRequired[list[dict[str, Any]]]
+    assertions: NotRequired[list[dict[str, Any]]]  # see MacroAssertionFields
 
 
 class MacroSequenceStep(TypedDict, total=False):
@@ -75,8 +85,10 @@ class MacroSequenceStep(TypedDict, total=False):
     args_used: dict[str, Any]
     slowmo_ms: int
     elapsed_s: float
+    credential_fill_offsite: list[dict[str, Any]]
     ok: bool
     error: str  # only set on failed steps
+    assertions: list[dict[str, Any]]
 
 
 class MacroSequenceResult(TypedDict):

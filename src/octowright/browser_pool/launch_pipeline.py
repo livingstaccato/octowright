@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright.browser_pool._metrics import LAUNCH_DURATION, LAUNCHED
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure, cleanup_unregistered_launch
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
@@ -210,6 +211,7 @@ async def post_context_setup(
     kind: str,
     label: str | None,
     target_url: str,
+    base_url: str | None,
     headless: bool,
     log_path: Path,
     viewport_info: Any,
@@ -256,6 +258,7 @@ async def post_context_setup(
             kind=kind,
             label=label,
             target_url=target_url,
+            base_url=base_url,
             headless=headless,
             log_path=log_path,
             viewport_info=viewport_info,
@@ -301,13 +304,15 @@ async def post_context_setup(
                 log_path=str(log_path),
             )
 
-            # target_url is validated before allocation in
-            # BrowserPool._launch_impl, so by here it is known-safe; a goto
-            # failure is a real navigation error (logged + returned as
-            # nav_warning), not a policy rejection.
+            # target_url itself is validated before allocation in
+            # BrowserPool._launch_impl. What fails here is logged and returned
+            # as nav_warning, and is either a real navigation error or, under
+            # an SSRF policy, the guard refusing (or failing to fetch) a LATER
+            # hop of target_url's redirect chain -- guarded_navigation raises
+            # that verdict rather than letting the launch read as a success.
             nav_error: str | None = None
             try:
-                await page.goto(target_url)
+                await ssrf_guard.guarded_navigation(page.main_frame, page.goto(target_url))
             except Exception as _nav_exc:
                 nav_error = str(_nav_exc)
                 log.warning(

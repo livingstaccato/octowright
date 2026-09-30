@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import hmac
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,28 @@ def _badge_script() -> str:
 @functools.cache
 def _macro_status_script() -> str:
     return _read_asset("macro_pill.js")
+
+
+#: The viewport-pill actions that change the browser and so need a token.
+#: ``state`` is read-only and deliberately absent: the pill sends it on its
+#: own, on every resize, and anything it sends is visible to page script (see
+#: ``viewport_action_token_for``), so a token on it would be a token handed out.
+VIEWPORT_TOKEN_ACTIONS = ("sync", "relaunch-fluid")
+
+
+def viewport_action_token_for(seed: str, action: str) -> str:
+    """The token the pill must present for ``action``, derived from the session's seed.
+
+    One token per action rather than one for all of them because none of them
+    stays secret once used. Playwright's binding controller serialises each
+    call with the page's own ``JSON.stringify`` at call time, so page script
+    that hooks it reads whatever the pill sends -- measured on all three
+    engines. The pill only sends a token from a trusted click, so the most a
+    page learns is the token for the action the user just chose: a Sync click
+    must not also hand over ``relaunch-fluid``, and a relaunch replaces the
+    session, seed and all.
+    """
+    return hmac.new(seed.encode(), action.encode(), hashlib.sha256).hexdigest()
 
 
 @functools.cache
@@ -340,11 +363,11 @@ async def wire_init_scripts(
             .replace("__INSTANCE_ID__", _json.dumps(instance_id))
             # The overlay's links carry no pairing code and cannot be given
             # one -- see the note at their construction in badge.js. This is
-            # the policy only; whether the gate is actually enforced also
-            # depends on the leader having a capability token to pair against
-            # (`pairing_anchor_available`), which is app state this process
-            # has no handle on here. Over-warning costs one grey line; not
-            # warning costs a link that looks broken.
+            # the policy only; every app build_app makes has an anchor to
+            # enforce it against (an inline leader's is random), but an
+            # embedder's app may not, and that is app state this process has
+            # no handle on here. Over-warning costs one grey line; not warning
+            # costs a link that looks broken.
             .replace("__PAIRING_REQUIRED__", _json.dumps(pairing_required()))
         )
         await bounded(
@@ -379,7 +402,12 @@ async def wire_init_scripts(
     viewport_script = (
         _viewport_pill_script()
         .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
-        .replace("__VIEWPORT_TOKEN__", _json.dumps(viewport_token))
+        .replace(
+            "__VIEWPORT_TOKENS__",
+            _json.dumps(
+                {action: viewport_action_token_for(viewport_token, action) for action in VIEWPORT_TOKEN_ACTIONS}
+            ),
+        )
     )
     await bounded(
         context.add_init_script(script=viewport_script),

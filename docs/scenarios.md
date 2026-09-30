@@ -105,12 +105,43 @@ scenario is running.
 | `scenario_run_as_test` | Run `verify` macros and emit JUnit-compatible pass/fail. |
 | `scenario_tail` | Stream participant events to a single combined log. |
 | `scenario_stop` | Run teardown, close windows, return a summary. |
+| `scenario_spawn_template` | Start a scenario from a template in `templates/`, substituting `args` (see [Templates](#templates)). |
 
 > **Paging note:** the cursor is an offset into a snapshot that is rebuilt and
 > re-sorted on every call, so a save or delete between two pages can shift rows
 > and silently skip or repeat one at the boundary. Re-page from zero when you
 > need an exact full enumeration.
 
+
+## Templates
+
+A template is a YAML scenario under `templates/` in the scenarios dir
+(`<scenarios dir>/templates/<name>.yaml`) with `{{key}}` placeholders, started
+with `scenario_spawn_template(name, args)`. See
+`examples/scenarios/templates/collaboration.yaml`:
+
+```yaml
+participants:
+  - persona: "{{persona_1}}"
+    kind: "chromium"
+```
+
+- **The template is parsed before anything is substituted**, and each value is
+  substituted into the already-parsed strings. An arg therefore cannot add keys
+  or change the document's structure, however it is quoted. An arg containing a
+  line break (including NEL, LS and PS) is refused.
+- **Placeholders must be quoted.** A bare `persona: {{persona_1}}` is YAML for a
+  nested mapping, so the template fails to parse; the error names the line and
+  says to quote it.
+- **Types.** A quoted scalar that is exactly one placeholder (`"{{headed}}"`)
+  becomes a bool or null only when the arg is the exact lowercase string
+  `true`, `false` or `null`. Every other string stays a string, numbers
+  included, so a persona `"007"` or a pin `"0123"` survives intact. For a numeric
+  field (`viewport_w`), pass a JSON number as the arg rather than `"1280"`; a JSON
+  bool, number or null arg keeps its type. A capitalised `True` or `NULL`
+  stays a string, so a bool field refuses it, with a message saying to use
+  lowercase or a JSON value. A
+  placeholder inside a longer string always stays a string.
 
 ## CLI
 

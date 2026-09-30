@@ -5,7 +5,8 @@
 
 """Origin-scoped dashboard pairing credentials and access decisions.
 
-Pairing is opt-in. A lockfile-authenticated CLI mints a one-time code, the
+Pairing is on by default. A lockfile-authenticated CLI (or, for an inline
+``--no-singleton`` leader, the process itself) mints a one-time code, the
 browser redeems it for a short-lived bearer, and the SPA keeps that bearer in
 origin-scoped ``sessionStorage``. Raw codes and bearer values are never stored
 server-side: one Starlette app owns one bounded, digest-only state machine.
@@ -83,8 +84,8 @@ def pairing_required() -> bool:
     (``0``/``off``/``false``/``no``/``never``/``none``/``disabled``) for a
     single-user host that wants the type-the-URL flow back.
 
-    Note this is the *policy*; enforcement additionally requires a capability
-    token to pair against -- see ``dashboard_access_ok``.
+    Note this is the *policy*; the anchor it pairs against is always present
+    on an app ``build_app`` made -- see ``pairing_anchor_available``.
     """
     return os.environ.get(PAIRING_REQUIRE_ENV, "on").strip().lower() not in _DISABLED_TOKENS
 
@@ -131,7 +132,11 @@ class DashboardPairingState:
         session_max_lifetime: float = DASHBOARD_SESSION_MAX_LIFETIME_SECONDS,
         max_codes: int = MAX_PAIR_CODES,
         max_sessions: int = MAX_DASHBOARD_SESSIONS,
+        http_mint: bool = True,
     ) -> None:
+        # False for an inline leader's random in-memory anchor: nothing outside
+        # the process knows it, so /api/pair/mint says so instead of a bare 403.
+        self.http_mint = http_mint
         self._monotonic_clock = monotonic_clock
         self._wall_clock = wall_clock
         self._code_ttl = code_ttl
@@ -341,44 +346,16 @@ def authorization_bearer(connection: HTTPConnection) -> str | None:
     return bearer
 
 
-def pairing_explicitly_enabled() -> bool:
-    """Whether an operator turned the gate on by hand (vs. the shipped default).
-
-    The distinction matters when there is no credential to pair against: an
-    explicit opt-in keeps its original fail-closed behaviour (you asked for a
-    locked door, you get one), while the default degrades to unenforced so an
-    inline ``--no-singleton`` leader -- which has no lockfile and therefore no
-    token -- does not ship with a permanently unusable dashboard.
-    """
-    raw = os.environ.get(PAIRING_REQUIRE_ENV)
-    return raw is not None and raw.strip().lower() not in _DISABLED_TOKENS
-
-
 def pairing_anchor_available(state: DashboardPairingState | None) -> bool:
     """Whether there is a credential to pair against on this app.
 
-    The pairing gate is bootstrapped by ``octowright dashboard``, which
-    authenticates with the leader's capability token from the 0600 lockfile.
-    With no state and no token there is no minter, so the gate is a lockout
-    rather than a control.
+    ``build_app`` always attaches one: the leader's capability token, or -- for
+    an inline ``--no-singleton`` leader, which has no lockfile to publish a
+    token in -- a random in-memory anchor. So this is False only for an
+    embedder mounting these routes on a Starlette app of its own, and the
+    access checks treat that as a refusal, not as "cannot enforce".
     """
     return state is not None and state.token_configured
-
-
-_pairing_unenforceable_warned = False
-
-
-def _warn_pairing_unenforceable() -> None:
-    """Say once that the gate is on but has nothing to gate against."""
-    global _pairing_unenforceable_warned
-    if _pairing_unenforceable_warned:
-        return
-    _pairing_unenforceable_warned = True
-    log.warning(
-        "octowright.dashboard.pairing_unenforceable",
-        reason="leader has no capability token (inline/--no-singleton mode)",
-        hint="run a normal daemon leader for a gated dashboard",
-    )
 
 
 def dashboard_access_ok(connection: HTTPConnection) -> bool:
@@ -388,23 +365,15 @@ def dashboard_access_ok(connection: HTTPConnection) -> bool:
         return True
     state = dashboard_pairing_state(connection)
     if not pairing_anchor_available(state):
-        if pairing_explicitly_enabled():
-            # Explicit opt-in stays fail-closed.
-            return False
-        # Nothing to pair against, so the gate cannot be bootstrapped: an
-        # inline (--no-singleton) leader has no lockfile and therefore no
-        # capability token, and an embedder mounting these routes on its own
-        # Starlette app has no pairing state at all. `octowright dashboard`
-        # could never mint a code in either case, so enforcing would lock the
-        # dashboard out permanently rather than protect anything.
-        #
-        # This is only safe because the anchor is not request-controlled:
-        # `build_app` attaches the state unconditionally at construction. A
-        # refactor that dropped it would silently disable the gate, which is
-        # what tests/test_dashboard_pairing_default.py exists to prevent.
-        _warn_pairing_unenforceable()
-        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
-        return True
+        # Fail closed. This used to wave the request through as "nothing to
+        # pair against", which made an inline --no-singleton leader (then
+        # tokenless) serve recordings and session control to any local user
+        # under the default policy. Inline now gets a random anchor and can
+        # mint codes in-process (octowright_dashboard_url, and the URL
+        # `serve` prints at startup), so a missing anchor is only an
+        # embedder that never attached state -- which must opt out
+        # explicitly rather than be authorized by omission.
+        return False
     assert state is not None  # narrowed by pairing_anchor_available  # nosec B101
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
@@ -456,12 +425,8 @@ def dashboard_websocket_auth(connection: HTTPConnection) -> tuple[bool, str | No
         return True, public_protocol
     state = dashboard_pairing_state(connection)
     if not pairing_anchor_available(state):
-        if pairing_explicitly_enabled():
-            return False, public_protocol
-        # No credential to pair against — same reasoning as dashboard_access_ok.
-        _warn_pairing_unenforceable()
-        _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())
-        return True, public_protocol
+        # Fail closed -- same reasoning as dashboard_access_ok.
+        return False, public_protocol
     assert state is not None  # narrowed by pairing_anchor_available  # nosec B101
     if state.capability_token_ok(connection.headers.get(CAPABILITY_TOKEN_HEADER)):
         _attach_dashboard_stream_lease(connection, DashboardStreamLease.bypass())

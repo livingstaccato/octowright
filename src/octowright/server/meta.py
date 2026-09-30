@@ -65,6 +65,7 @@ def _compute_health(health_mod: Any, incidents_mod: Any, crash_recovery_mod: Any
         driver_restarts=pool.driver_restart_count(),
         recovery_failures=crash_recovery_mod.recovery_stats()["recovery_failures"],
         recovery_exhausted=counts.get("exhausted", 0),
+        process_crashes=len(incidents_mod.recent(category=incidents_mod.CATEGORY_BROWSER_PROCESS_CRASH)),
     )
     if verdict["status"] != "ok":
         log.warning("octowright.health.degraded", status=verdict["status"], reasons=verdict["reasons"])
@@ -177,6 +178,31 @@ def _dashboard_pairing_required() -> bool:
     return bool(pairing_required() and pairing_anchor_available(_http_state.dashboard_pairing_store()))
 
 
+def _mint_dashboard_pairing_url(base_url: str) -> str | None:
+    """A single-use ``/pair#<code>`` URL on *base_url*, minted in-process.
+
+    The one minting path for both ``octowright_dashboard_url`` and the line an
+    inline ``serve`` prints at startup. Callers decide whether pairing is
+    required (:func:`_dashboard_pairing_required`) first. ``None`` means no
+    code: there is no store to mint from, or the mint failed (logged). The
+    code lives :data:`MCP_PAIR_CODE_TTL_SECONDS`, not the CLI's 60s -- both
+    readers are an agent or a server log, neither of which acts within a minute.
+    """
+    from octowright.http import state as _http_state
+    from octowright.http.pairing import MCP_PAIR_CODE_TTL_SECONDS
+
+    store = _http_state.dashboard_pairing_store()
+    if store is None:
+        return None
+    try:
+        code = store.mint_code(ttl=MCP_PAIR_CODE_TTL_SECONDS)
+    except Exception as exc:  # defensive; the store is in-process
+        log.warning("octowright.dashboard.mcp_pairing_mint_failed", error=repr(exc))
+        return None
+    # The fragment never leaves the browser during navigation.
+    return f"{base_url.rstrip('/')}/pair#{code}"
+
+
 def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
     """Turn the plain dashboard URL into one the user can actually open.
 
@@ -192,28 +218,22 @@ def _attach_pairing_url(result: dict[str, Any], base_url: str | None) -> None:
     dashboard. ``plain_url`` is kept so a caller that only wants the address
     (logging, deep links) does not have to parse the fragment back off.
     """
-    from octowright.http import state as _http_state
-    from octowright.http.pairing import (
-        MCP_PAIR_CODE_TTL_SECONDS,
-    )
+    from octowright.http.pairing import MCP_PAIR_CODE_TTL_SECONDS
 
     result["plain_url"] = base_url
-    store = _http_state.dashboard_pairing_store()
     result["pairing_required"] = _dashboard_pairing_required()
-    # `store is None` is already covered by pairing_anchor_available; repeating
-    # it keeps the narrowing visible to the type checker.
-    if not result["pairing_required"] or base_url is None or store is None:
+    if not result["pairing_required"] or base_url is None:
         return
-    try:
-        code = store.mint_code(ttl=MCP_PAIR_CODE_TTL_SECONDS)
-    except Exception as exc:  # pragma: no cover - defensive; store is in-process
-        log.warning("octowright.dashboard.mcp_pairing_mint_failed", error=repr(exc))
+    url = _mint_dashboard_pairing_url(base_url)
+    if url is None:
         result["pairing_hint"] = "run `octowright dashboard` to mint a pairing URL"
         return
-    # The fragment never leaves the browser during navigation.
-    result["url"] = f"{base_url.rstrip('/')}/pair#{code}"
+    result["url"] = url
     result["pairing_expires_in"] = int(MCP_PAIR_CODE_TTL_SECONDS)
-    result["pairing_hint"] = "single-use link; open it before it expires, or run `octowright dashboard` for a fresh one"
+    result["pairing_hint"] = (
+        "single-use link; open it before it expires, or call octowright_dashboard_url "
+        "(or run `octowright dashboard` against a daemon leader) for a fresh one"
+    )
 
 
 @mcp.tool(
@@ -454,7 +474,16 @@ def octowright_status() -> dict[str, Any]:
             # macOS each record is enriched at read time with the correlated
             # `.ips` SIGSEGV signature (the OS writes it a beat after the crash,
             # so it can't be attached when the incident is first recorded).
-            "recent": _crash_reports.enrich(_incidents.recent(category=_incidents.CATEGORY_RENDERER_CRASH, limit=10)),
+            # Renderer crashes AND browser-process crashes (a dead browser, not a
+            # closed window -- see browser_pool/process_crash), each tagged by
+            # its `category`. Only renderer crashes are .ips-enriched: process
+            # crashes are detected from /proc, i.e. on Linux only.
+            "recent": _crash_reports.enrich(
+                _incidents.recent(
+                    category=(_incidents.CATEGORY_RENDERER_CRASH, _incidents.CATEGORY_BROWSER_PROCESS_CRASH),
+                    limit=10,
+                )
+            ),
             # A DIFFERENT scope, kept as a SEPARATE key rather than folded into
             # "recent": a target that stopped answering within its call budget
             # (session/timeouts.py's SessionCallTimeoutError) has no macOS

@@ -6,16 +6,38 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from typing import Any
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from playwright.async_api import Error as PlaywrightError
+from provide.telemetry import get_logger
+
+from octowright.assertion_warnings import strict_option, strict_refusal
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_ASSERTION_TEXT
+from octowright.drawn_text import (
+    COLLECT_RENDERED_TEXT_JS,
+    ELEMENT_LIMIT,
+    check_forbidden_text,
+    collect_args,
+    contains,
+    fold_frame_result,
+    leak_message,
+    new_scan_summary,
+    resolve_element_limit,
+    skip_gone_frame,
+    truncation_message,
+)
+from octowright.request_failures import NETWORK_SETTLE_TIMEOUT_MS, settle_network
 from octowright.session._protocols import SessionLike
 from octowright.session.operation.gate import gated_operation
+from octowright.session.rendered_text import snapshot_drawn_text
 from octowright.session.timeouts import bounded
 
 _WAIT_FOR_POLL_SECONDS = 0.05
+
+log = get_logger(__name__)
 
 
 class SessionExpectMixin(SessionLike):
@@ -134,3 +156,195 @@ class SessionExpectMixin(SessionLike):
                 raise RuntimeError(f"JS assertion failed (not truthy): expression={expression!r}, got={result!r}")
         self.recorder.record("expect_js", expression=expression, equals=equals)
         return result
+
+    @gated_operation("browser_mark_network_clean")
+    async def mark_network_clean(self) -> None:
+        """Start the window ``expect_network_clean(since="mark")`` judges; it spans macro runs."""
+        # A mark means a check will follow, so the journey's requests are waited for.
+        self.enable_inflight_tracking()
+        self._network.mark()
+        self.recorder.record("mark_network_clean")
+
+    @gated_operation("browser_expect_network_clean")
+    async def expect_network_clean(
+        self,
+        http_errors: bool = False,
+        since: str = "run",
+        settle_timeout_ms: int | None = None,
+        require_settled: bool = False,
+    ) -> dict[str, int]:
+        """Assert no failed requests (aborts excepted) and no page errors in the window.
+
+        ``since="run"`` (default) judges the current macro run; ``since="mark"``
+        judges everything since the last ``mark_network_clean`` step, across
+        runs, so a separate verify macro can judge the journey before it.
+        "Failed" is Playwright's ``requestfailed``: the request got no response.
+        ``http_errors=True`` also fails on a 4xx/5xx page load or API call
+        (``request_failures.HTTP_ERROR_RESOURCE_TYPES``); off by default because
+        a 4xx is sometimes the answer a journey expects. Requests still in
+        flight are waited for, up to ``settle_timeout_ms`` (``0`` judges at
+        once); any still pending then are reported as ``in_flight``, not failed.
+        Tracking what is in flight starts at a ``mark_network_clean`` step or a
+        macro run containing this check; called outside both, this call starts
+        it and so waits only for requests started from now. Requests dropped
+        from that bounded tracking are reported as ``in_flight_untracked`` (only
+        when there are any): they may still be running after the wait returns.
+        ``require_settled=True`` fails the check in both of those cases instead.
+        The error carries counts only, because a failed URL or an exception
+        message can carry a credential.
+        """
+        # Before anything waits: a bad option, or a window that cannot be judged, fails at once.
+        strict_option("expect_network_clean", require_settled)
+        window = self._network.window(since)
+        self.enable_inflight_tracking()
+        settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
+        in_flight = await settle_network(self._network.pending, settle) if settle > 0 else self._network.pending()
+        counts = self._network.judge(window, http_errors)
+        result = {**counts, "in_flight": in_flight}
+        untracked = self._network.since(window)[3]
+        if untracked > 0:
+            result["in_flight_untracked"] = untracked
+        refusal = strict_refusal("expect_network_clean", result, required=require_settled)
+        if refusal is not None:
+            raise RuntimeError(refusal)
+        options = {
+            "http_errors": http_errors,
+            "since": since,
+            "settle_timeout_ms": settle_timeout_ms,
+            "require_settled": require_settled,
+        }
+        defaults_ = {"http_errors": False, "since": "run", "settle_timeout_ms": None, "require_settled": False}
+        self.recorder.record("expect_network_clean", **{k: v for k, v in options.items() if v != defaults_[k]})
+        return result
+
+    @gated_operation("browser_expect_no_text_scan")
+    async def _scan_drawn_text(
+        self, frames: list[Any], text: str, selector: str, timeout: float, limit: int = ELEMENT_LIMIT
+    ) -> dict[str, Any]:
+        """Raise if any frame draws *text*; return what the scan covered.
+
+        Frames are read concurrently (a page of ads is many frames) and judged
+        in order by ``drawn_text``'s rules, which the exported CLI shares: the
+        first frame that fails decides the error, as a sequential scan would.
+        """
+        results = await asyncio.gather(
+            *(
+                bounded(
+                    frame.evaluate(COLLECT_RENDERED_TEXT_JS, collect_args(selector, limit)),
+                    operation="browser_expect_no_text",
+                    timeout=timeout,
+                )
+                for frame in frames
+            ),
+            return_exceptions=True,
+        )
+        summary = new_scan_summary()
+        for position, (frame, found) in enumerate(zip(frames, results, strict=True)):
+            if isinstance(found, BaseException):
+                if not isinstance(found, PlaywrightError) or not skip_gone_frame(
+                    summary, position, frame.is_detached(), found
+                ):
+                    raise found
+                log.debug("expect_no_text.frame_skipped", reason="frame_gone")
+            elif not fold_frame_result(summary, position, found, text, selector):
+                log.debug("expect_no_text.frame_skipped", reason="no_result")
+        return summary
+
+    @gated_operation("browser_expect_no_text_snapshot")
+    async def _snapshot_leaks(self, text: str, timeout: float) -> bool:
+        """Chromium only: whether its DOM snapshot draws *text*, closed shadow roots included."""
+        # Local import: the macros package imports the session stack.
+        from octowright.macros.rendered_surface import SNAPSHOT_PARAMS
+
+        cdp = await bounded(
+            self.page.context.new_cdp_session(self.page), operation="browser_expect_no_text", timeout=timeout
+        )
+        try:
+            snapshot = await bounded(
+                cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS),
+                operation="browser_expect_no_text",
+                timeout=timeout,
+            )
+        finally:
+            await cdp.detach()
+        # Drawn text only, overlays left out (see snapshot_drawn_text): the
+        # screenshot scanner's findings err toward refusal, and a check that
+        # failed on Chromium alone for a URL nobody can read would mean a
+        # different thing on each engine.
+        return contains(snapshot_drawn_text(snapshot), text)
+
+    @gated_operation("browser_expect_no_text")
+    async def expect_no_text(
+        self,
+        text: str,
+        selector: str = "body",
+        timeout_ms: int | None = None,
+        element_limit: int | None = None,
+        require_match: bool = False,
+    ) -> dict[str, Any]:
+        """Assert *text* is not drawn in any element matching *selector*; return what was checked.
+
+        Drawn means text a reader can see (``octowright.drawn_text`` has the
+        full definition): rendered text of every match, open shadow roots,
+        visible form values and placeholders, a broken image's alt text, a
+        select's option labels and CSS generated content -- in every frame when
+        *selector* is ``body``. Password fields, attribute text such as a
+        resource address, and anything not rendered do not count. On Chromium
+        the page's DOM snapshot is also checked, which reaches closed shadow
+        roots; other engines cannot. Canvas, video and other pixel-only content
+        cannot be text-checked. Text compares ignoring case, whitespace and
+        invisible characters (``drawn_text.normalize``). octowright's
+        own overlays are not the page and are left out of both scans.
+
+        Returns ``{matched, frames_scanned, frames_skipped, truncated,
+        snapshot}``, ``snapshot`` being ``"checked"``, ``"skipped"`` (the check
+        is scoped to a selector or a frame) or ``"unsupported"`` (not Chromium).
+        ``matched == 0`` passes -- nothing matched, so nothing is drawn -- and
+        the result is how a caller tells that from a page checked and clean. A
+        page with more elements under the selector than the limit is refused
+        unless the text was found: a security check does not pass on a page it
+        only partly read. The limit is *element_limit*, else
+        ``OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT``, else ``ELEMENT_LIMIT``
+        (``drawn_text.resolve_element_limit``). ``require_match=True`` fails a
+        check whose selector matched nothing. *text* is treated as a secret, so
+        neither the error, the result nor the recording repeats it.
+        """
+        check_forbidden_text(text)
+        strict_option("expect_no_text", require_match)
+        limit = resolve_element_limit(element_limit, os.environ)
+        timeout = (timeout_ms if timeout_ms is not None else DEFAULT_ACTION_TIMEOUT_MS) / 1000
+        target = self._target()
+        whole_page = selector == "body" and target is self.page
+        # The whole page is every frame; a selector or an active frame is just the target.
+        frames = list(self.page.frames) if whole_page else [target]
+        result = await self._scan_drawn_text(frames, text, selector, timeout, limit)
+        result["snapshot"] = "unsupported" if self.kind != "chromium" else "checked" if whole_page else "skipped"
+        if result["snapshot"] == "checked" and await self._snapshot_leaks(text, timeout):
+            raise RuntimeError(leak_message(text, selector, "DOM snapshot"))
+        _refuse_a_partial_scan(result, selector, limit, require_match)
+        # The marker, never the text; the keyed digest is what lets save_macro
+        # bind the marker to the parameter it stood for (see
+        # macros.privacy.assertion_text_digest). Local import: macros imports
+        # the session stack.
+        from octowright.macros.privacy import assertion_text_digest
+
+        self.recorder.record(
+            "expect_no_text",
+            selector=selector,
+            text=REDACTED_ASSERTION_TEXT,
+            text_digest=assertion_text_digest(text),
+            # A step's own limit is an input, so replay keeps it; the default is not recorded.
+            **({"element_limit": element_limit} if element_limit is not None else {}),
+            **({"require_match": True} if require_match else {}),
+            **result,
+        )
+        return result
+
+
+def _refuse_a_partial_scan(result: dict[str, Any], selector: str, limit: int, require_match: bool) -> None:
+    """Fail a scan that read less than its step accepts: past the element limit, or, if asked, nothing matched."""
+    if result["truncated"]:
+        raise RuntimeError(truncation_message(selector, limit))
+    refusal = strict_refusal("expect_no_text", {**result, "selector": selector}, required=require_match)
+    if refusal is not None:
+        raise RuntimeError(refusal)

@@ -78,12 +78,34 @@ def pytest_configure(config: pytest.Config) -> None:
     that touches them isolates them itself. A temp config home is not the
     blanket hermeticity it can look like.
     """
-    global _TEST_CONFIG_HOME
     del config
+    _relocate_user_config()
+
+
+def _relocate_user_config() -> None:
+    """Install the throwaway config tree once; see ``pytest_configure``.
+
+    Also called at this module's import, BEFORE ``_install_pool_leak_tracking``
+    imports ``browser_pool.pool`` -- which imports ``defaults``, which resolves
+    ``PROFILES_DIR`` right then. pytest imports conftest before it calls
+    ``pytest_configure``, so doing this only in the hook left ``PROFILES_DIR``
+    on the developer's real tree and every labelled launch in the suite created
+    a profile there (``test_conftest_config_isolation.py``).
+    """
+    global _TEST_CONFIG_HOME
+    if _TEST_CONFIG_HOME is not None:
+        return
     os.environ.pop("OCTOWRIGHT_PLUGINS", None)
     _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="octowright-test-config-")
     os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
     os.environ["APPDATA"] = _TEST_CONFIG_HOME
+    # The state half the docstring above says is NOT covered, for the two paths
+    # an ordinary launch writes: a stub-pool test with no recordings_dir of its
+    # own otherwise leaves JSONL (and manifest rows) in the developer's real
+    # ~/.local/state/octowright/sessions. Spawned daemons still isolate
+    # XDG_STATE_HOME themselves.
+    os.environ["OCTOWRIGHT_RECORDINGS"] = os.path.join(_TEST_CONFIG_HOME, "sessions")
+    os.environ["OCTOWRIGHT_SESSION_MANIFEST"] = os.path.join(_TEST_CONFIG_HOME, "session-manifest.json")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
@@ -169,6 +191,7 @@ def _install_pool_leak_tracking() -> None:
     BrowserPool._ensure_pw = ensure_tracked  # type: ignore[method-assign]
 
 
+_relocate_user_config()
 _install_pool_leak_tracking()
 
 
@@ -290,6 +313,25 @@ def pytest_runtest_call(item: pytest.Item) -> Iterator[None]:
 def pytest_runtest_teardown(item: pytest.Item) -> Iterator[None]:
     _breadcrumb(item, "teardown")
     yield
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Iterator[None]:
+    """Fail, rather than skip, a live test whose required engine would not run.
+
+    Off unless ``OCTOWRIGHT_REQUIRE_LIVE_ENGINES`` is set; ``tests/_live_engines``
+    decides which skips count and why.
+    """
+    outcome = yield
+    report = outcome.get_result()
+    if not report.skipped or call.excinfo is None:
+        return
+    from tests._live_engines import ENV_VAR, engine_skip_failure, required_engines
+
+    message = engine_skip_failure(item, call.excinfo.value, required_engines(os.environ.get(ENV_VAR)))
+    if message is not None:
+        report.outcome = "failed"
+        report.longrepr = message
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -451,6 +493,20 @@ def _loopback_dashboard_testclient(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(_starlette_testclient.TestClient, "__init__", _init)
     monkeypatch.setattr(_starlette_testclient.TestClient, "websocket_connect", _websocket_connect)
+
+
+@pytest.fixture(autouse=True)
+def _dashboard_pairing_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route tests exercise route behaviour, not the dashboard credential gate.
+
+    Pairing ships ON and, since an inline (tokenless) app got a random anchor,
+    is enforced on every app ``build_app`` makes -- before that, the hundreds
+    of route tests that build a tokenless app passed only because the gate
+    fell open for them, which was the bug. Tests that pin the gate itself
+    ``delenv`` or set this explicitly (``test_dashboard_pairing_default.py``
+    and friends), so a real default-ON regression still fails there.
+    """
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "off")
 
 
 @pytest.fixture(autouse=True)

@@ -96,6 +96,36 @@ def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
     raise ValueError(f"{POLICY_ENV} must be 'refuse' or 'redact'")
 
 
+LEDGER_POLICY_ENV = "OCTOWRIGHT_LEDGER_SCREENSHOTS"
+
+
+def ledger_screenshot_policy() -> Literal["refuse", "allow"]:
+    """Whether a session holding privacy-ledger values screenshots through the boundary.
+
+    ``refuse`` (the default) sends it through :func:`ledger_screenshot`, which
+    redacts on Chromium and refuses on engines it cannot prove that on.
+    ``allow`` takes the raw screenshot: the operator's way back to screenshots
+    after a login on Firefox/WebKit that keeps recording redaction on, which
+    ``OCTOWRIGHT_REDACT_INPUTS=off`` does not. Anything but ``allow`` means
+    ``refuse`` -- a typo must not decide that a password may reach a PNG.
+    """
+    raw = os.environ.get(LEDGER_POLICY_ENV, "refuse").strip().lower()
+    if raw == "allow":
+        return "allow"
+    if raw not in ("refuse", ""):
+        log.warning("octowright.screenshot.ledger_policy_unknown", env=LEDGER_POLICY_ENV, value=raw)
+    return "refuse"
+
+
+def guards_ledger_screenshot(session: Any) -> bool:
+    """Whether a ledger-holding session's screenshot must take :func:`ledger_screenshot`.
+
+    An installed handler always does: it is the embedding application's own
+    privacy decision, which an operator's environment does not override.
+    """
+    return installed_handler(session) is not None or ledger_screenshot_policy() == "refuse"
+
+
 def enable_redacted_screenshots(session: Any, *, handler: ScreenshotHandler | None = None) -> None:
     """Authorize screenshots on a classified run for this session.
 
@@ -259,6 +289,13 @@ async def redacted_screenshot(
     Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
     page was restored. Refusals raise ``RuntimeError`` naming what was found, never the
     value.
+
+    Every value is matched anywhere, word-bounded ledger values included
+    (`PrivacyLedger.word_bounded`), and that is deliberate. The redaction also
+    catches a value that is reversed, split across nodes or spelled in digits,
+    and none of those forms has token boundaries to respect. Blanking
+    ``Administrator`` for a typed ``admin`` is the accepted cost of never
+    drawing the password.
     """
     path_value = action.get("path")
     if not path_value:
@@ -289,3 +326,29 @@ async def redacted_screenshot(
         if recorder is not None:
             recorder.record("screenshot", path=str(target))
     return 1, 0
+
+
+async def ledger_screenshot(session: Any, path: Path, sensitive_values: tuple[str, ...]) -> None:
+    """``BrowserSession.screenshot`` for a session whose privacy ledger holds values.
+
+    The generic ``browser_screenshot`` wrote raw pixels and never consulted the
+    ledger, so a password filled through a browser tool -- or a macro credential
+    -- that the page rendered back reached a PNG, while the macro path refused
+    the same screenshot. It now takes the macro path's boundary: a caller's
+    installed handler if there is one, otherwise :func:`redacted_screenshot`,
+    which redacts, proves nothing is rendered, and refuses on an engine it
+    cannot prove that on. It does not consult ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS``:
+    that ``refuse`` default governs a macro run, and applied here it would make
+    every screenshot after a login fail. The caller consults
+    ``OCTOWRIGHT_LEDGER_SCREENSHOTS`` (:func:`guards_ledger_screenshot`), whose
+    ``allow`` takes the raw screenshot instead unless a handler is installed.
+
+    *path* was already chosen and contained by the caller, so it is its own root.
+    """
+    action = {"action": "screenshot", "path": str(path)}
+    handler = installed_handler(session)
+    if handler is not None:
+        if await handler(action=action, sensitive_values=sensitive_values) is None:
+            raise RuntimeError("the session's screenshot privacy handler refused the screenshot")
+        return
+    await redacted_screenshot(session, action, sensitive_values, root=path.parent)

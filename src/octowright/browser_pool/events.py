@@ -15,6 +15,9 @@ SessionCloseReason = Literal["agent_close", "user_close", "external_disconnect",
 # Where a crash happened. ``renderer`` is a Playwright ``page.on("crash")``
 # (a tab/"Aw, Snap"); a renderer crash that also takes the browser process down
 # additionally evicts the session with ``SessionClosedEvent(reason="crashed")``.
+# ``process`` is the browser process itself dying while its session was live --
+# no Playwright event says so, it is read from the OS (browser_pool/
+# process_crash) -- and always evicts with ``reason="crashed"``.
 # "unresponsive" is neither -- the target is alive and simply stopped
 # answering, which no Playwright event reports, so it is raised by the call
 # budget in session/timeouts.py rather than observed.
@@ -32,20 +35,21 @@ class SessionClosedEvent:
       ``close_browser`` before any Playwright close events fire.
     * ``user_close`` — the human closed the window or dismissed all pages;
       the pool was notified by Playwright's page/context/browser events.
-      The ``disconnected`` event alone does not distinguish "user clicked X"
-      from "the process died", so ``user_close`` covers external closes where
-      no crash was observed.
+      Playwright's events alone do not distinguish "user clicked X" from "the
+      process died", so ``process_crash`` asks the OS; ``user_close`` covers
+      external closes where the browser was still running (or its process
+      could not be resolved).
     * ``crashed`` — a Playwright ``page.on("crash")`` fired on this session
-      before it was evicted (renderer crash that also brought the process down).
-      The crash signal is what lets us upgrade an otherwise-ambiguous external
-      disconnect to a definite crash; a proactive ``SessionCrashedEvent`` is
-      also published the moment the crash is observed (see below).
+      before it was evicted, OR the browser process was already dead at the
+      first evicting close signal (``process_crash``). A proactive
+      ``SessionCrashedEvent`` (``renderer`` / ``process``) is also published
+      the moment the crash is observed (see below).
     * ``external_disconnect`` — the browser process disappeared without emitting
       a clean close event (e.g. SIGKILL, OOM without an orderly Playwright
       teardown).  In practice Playwright delivers ``browser.disconnected`` even
       on hard kills on most platforms, so this reason is reserved for future
-      use when a more reliable signal is available.  For now listener.py maps
-      both "clean external close" and "hard disconnect" to ``user_close``.
+      use.  A dead browser process is reported as ``crashed`` instead (see
+      above); a dead shared DRIVER evicts its sessions with this reason.
     * ``shutdown`` — the pool is tearing down (``shutdown_pool`` / daemon exit).
       Emitted directly by ``shutdown_pool`` before ``close_all`` runs; the
       subsequent per-session ``close_browser`` calls will also emit
@@ -99,7 +103,24 @@ class SessionRecoveredEvent:
     ``outcome``: ``recovered`` (a fresh page replaced the dead one in the same
     browser — usable again, no relaunch needed), ``failed`` (replacement failed,
     the browser process likely died — relaunch), or ``exhausted`` (the page keeps
-    crashing past the recovery cap — relaunch / the page is unstable)."""
+    crashing past the recovery cap — relaunch / the page is unstable).
+
+    ``recovered_elsewhere`` is True when a ``recovered`` session's fresh page
+    is NOT at the dead page's URL, judged by where the page actually is
+    whether or not the navigation raised (refused by the SSRF policy, its
+    navigation failed, a redirect took it elsewhere, or it is still on the
+    guard's client-redirect document). The browser is usable, but the client
+    must navigate again before it carries on. ``navigation_error`` says why
+    the navigation failed (``None`` for a redirect elsewhere) -- also with
+    ``recovered_elsewhere`` False, when the page reached its URL but its load
+    timed out after commit. ``exhausted`` also covers a recovery whose every
+    replacement, up to the same cap, crashed loading the last URL.
+
+    ``scope`` says which crash it follows up. ``renderer`` (the default) is the
+    page-replacement recovery above. ``process`` is published only as
+    ``outcome="failed"``: reopening a crashed browser PROCESS under
+    ``OCTOWRIGHT_DRIVER_RELAUNCH`` failed (``driver_relaunch``), so the client
+    that was told ``recovering=True`` must relaunch it itself."""
 
     instance_id: str
     kind: str
@@ -108,6 +129,9 @@ class SessionRecoveredEvent:
     outcome: RecoveryOutcome
     attempts: int
     log_path: str
+    navigation_error: str | None = None
+    recovered_elsewhere: bool = False
+    scope: CrashScope = "renderer"
 
 
 @dataclass(slots=True, frozen=True)

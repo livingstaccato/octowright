@@ -16,13 +16,22 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
-import os
+import time
 from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, REDACTED_INPUT_PLACEHOLDER
+from octowright import credential_input
+from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.session._protocols import SessionLike
+from octowright.session.fill_origin import FillOriginCheck, pending_fill_origin_check
+from octowright.session.input_redaction import (
+    CREDENTIAL_FIELD_JS,
+    attached_probe_timeout_ms,
+    classify_credential_field,
+    probe_timeout_ms,
+    recorded_input_value,
+)
 from octowright.session.operation.gate import gated_operation
 
 log = get_logger(__name__)
@@ -30,40 +39,62 @@ log = get_logger(__name__)
 
 class SessionLocatorMixin(SessionLike):
     @gated_operation("session_locator_redaction")
-    async def _is_password_locator(self, locator: Any) -> bool:
-        """Best-effort credential check for semantic-locator actions."""
+    async def _is_password_locator(self, locator: Any, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS) -> bool | None:
+        """Best-effort credential check for semantic-locator actions.
+
+        Same contract as ``core_page_mixin._is_password_input``: ``None`` when
+        the field cannot be classified.
+        """
         try:
-            info = await locator.first.evaluate(
-                "el => el ? {"
-                "  type: el.type ? String(el.type).toLowerCase() : '',"
-                "  ac: el.autocomplete ? String(el.autocomplete).toLowerCase() : ''"
-                "    || (el.getAttribute && el.getAttribute('autocomplete')"
-                "         ? String(el.getAttribute('autocomplete')).toLowerCase() : '')"
-                "} : {type: '', ac: ''}"
-            )
+            info = await locator.first.evaluate(CREDENTIAL_FIELD_JS, timeout=timeout_ms)
         except Exception as exc:
             log.debug("core_locator_mixin.password_lookup_failed", error=str(exc))
-            return True
-        # Same contract as the selector probe: {type, ac}, and anything else
-        # is treated as a credential rather than guessed at.
-        if not isinstance(info, dict):
-            return True
-        if info.get("type") == "password":
-            return True
-        return info.get("ac") in ("current-password", "new-password", "one-time-code")
+            return None
+        return classify_credential_field(info)
 
     @gated_operation("session_locator_redaction")
-    async def _redacted_or_original_for_locator(self, locator: Any, value: str) -> str:
-        mode = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower()
-        if mode not in {"off", "all", "passwords"}:
-            mode = "passwords"
-        if mode == "off":
-            return value
-        if mode == "all":
-            return REDACTED_INPUT_PLACEHOLDER
-        if await self._is_password_locator(locator):
-            return REDACTED_INPUT_PLACEHOLDER
-        return value
+    async def _redacted_or_original_for_locator(
+        self, locator: Any, value: str, *, timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS
+    ) -> str:
+        return await recorded_input_value(
+            self, value, lambda: self._is_password_locator(locator, timeout_ms=timeout_ms)
+        )
+
+    # Re-enter the caller's own "browser_fill" / "browser_type" lease (same
+    # task), so the check and the input it guards are one gated operation.
+    @gated_operation("macro_credential_fill_origin")
+    async def _checked_fill(self, locator: Any, value: str, check: FillOriginCheck, timeout_ms: int) -> None:
+        """Fill *locator* only in a document *check* accepts; see ``octowright.credential_input``.
+
+        *locator* is the element the same step without a credential would
+        fill: ``locator.first`` for a selector fill, the strict locator itself
+        for a ``fill_by``, which raises on several.
+        """
+        await credential_input.checked_fill(self, locator, value, check, timeout_ms)
+
+    @gated_operation("macro_credential_fill_origin")
+    async def _checked_type(
+        self,
+        locator: Any,
+        text: str,
+        check: FillOriginCheck,
+        *,
+        delay_ms: int | None,
+        keys: bool,
+        timeout_ms: int = DEFAULT_ACTION_TIMEOUT_MS,
+    ) -> None:
+        """Type *text* one key at a time, each into a focused document *check* accepts.
+
+        ``keys`` presses physical keys (``key_mode="keys"``) through the same
+        per-key check; see ``octowright.credential_input``. The step may take
+        *timeout_ms* (what is left of the action timeout) plus ``len(text) * delay_ms``
+        (``credential_input.typing_budget_ms``): the pauses the step asked for
+        are not counted against the page.
+        """
+        send = self._keystroke if keys else credential_input.type_character
+        await credential_input.checked_type(
+            self, locator, text, check, delay_ms=delay_ms, timeout_ms=timeout_ms, send=send
+        )
 
     @gated_operation("session_locator_resolve")
     async def _locator(self, **finders: Any) -> Any:
@@ -99,9 +130,21 @@ class SessionLocatorMixin(SessionLike):
     @gated_operation("browser_fill")
     async def fill_by(self, value: str, *, timeout_ms: int | None = None, **finders: Any) -> dict[str, Any]:
         """Fill an input matched by role, label, or data-testid."""
+        budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
+        # One budget for the whole step: the element's attached-wait gets all
+        # of it, so a target that never appears fails naming the timeout asked
+        # for; see input_redaction.probe_timeout_ms.
+        deadline = time.monotonic() + budget / 1000
         locator = await self._locator(**finders)
-        recorded_value = await self._redacted_or_original_for_locator(locator, value)
-        await locator.fill(value, timeout=timeout_ms or DEFAULT_ACTION_TIMEOUT_MS)
+        await locator.wait_for(state="attached", timeout=budget)
+        recorded_value = await self._redacted_or_original_for_locator(
+            locator, value, timeout_ms=attached_probe_timeout_ms(deadline)
+        )
+        check = pending_fill_origin_check()
+        if check is None:
+            await locator.fill(value, timeout=probe_timeout_ms(deadline))
+        else:
+            await self._checked_fill(locator, value, check, probe_timeout_ms(deadline))
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 

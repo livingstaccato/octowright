@@ -15,11 +15,12 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar, cast
 
 from starlette.requests import HTTPConnection, Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
 from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
+from octowright.http.json_response import SafeJSONResponse
 from octowright.http.pairing import (
     dashboard_access_ok,
     dashboard_pairing_state,
@@ -220,13 +221,13 @@ def guard_sensitive_http(
     @functools.wraps(handler)
     async def guarded(request: Request) -> Response:
         if not sensitive_allowed_for_request(request):
-            return JSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
+            return SafeJSONResponse(_REMOTE_DISABLED_BODY, status_code=403)
         if _cross_origin_blocked(request, side_effect_get=side_effect_get):
-            return JSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
+            return SafeJSONResponse({"error": "cross-origin dashboard request is blocked"}, status_code=403)
         # Successful admission also attaches the digest-only stream lease used
         # by long-lived SSE handlers to revalidate after this wrapper returns.
         if not pairing_exempt and not dashboard_access_ok(request):
-            return JSONResponse(
+            return SafeJSONResponse(
                 _PAIRING_REQUIRED_BODY,
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},

@@ -63,6 +63,7 @@ def _make_subject(tmp_path: Path) -> SessionIOMixin:
     subj._last_markdown_capture_url = None
     subj._last_markdown_capture_key = None
     subj._pending_markdown_capture = None
+    subj.durable_text_scrubber = None
     subj.console = deque()
     subj.console_count = 0
     subj.pages = []
@@ -742,9 +743,11 @@ class TestHandleWebsocket:
 
 class TestAppendWebsocketCacheByteCeiling:
     """OCTOWRIGHT_WEBSOCKET_MAX_BYTES bounds the per-session WS sidecar file so a
-    firehose page can't fill the disk. OFF by default."""
+    firehose page can't fill the disk. ON by default at a generous 256 MiB."""
 
-    def test_off_by_default_writes_all_frames(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_the_default_ceiling_writes_an_ordinary_stream(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.delenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", raising=False)
         subj = _make_subject(tmp_path)
         for i in range(20):

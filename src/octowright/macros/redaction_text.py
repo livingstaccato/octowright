@@ -26,29 +26,20 @@ from __future__ import annotations
 import re
 import unicodedata
 
-#: Characters that render as nothing: C0 and C1 controls, and Unicode
-#: ``Default_Ignorable_Code_Point`` ranges from ``DerivedCoreProperties.txt``.
-IGNORABLE_RANGES: tuple[tuple[int, int], ...] = (
-    (0x0000, 0x001F),
-    (0x007F, 0x009F),
-    (0x00AD, 0x00AD),
-    (0x034F, 0x034F),
-    (0x061C, 0x061C),
-    (0x115F, 0x1160),
-    (0x17B4, 0x17B5),
-    (0x180B, 0x180F),
-    (0x200B, 0x200F),
-    (0x202A, 0x202E),
-    (0x2060, 0x206F),
-    (0x3164, 0x3164),
-    (0xFE00, 0xFE0F),
-    (0xFEFF, 0xFEFF),
-    (0xFFA0, 0xFFA0),
-    (0xFFF0, 0xFFF8),
-    (0x1BCA0, 0x1BCA3),
-    (0x1D173, 0x1D17A),
-    (0xE0000, 0xE0FFF),
-)
+# The ranges and ``normalize`` live with expect_no_text's portable check, which
+# the exported CLI renders verbatim and which must not import this package.
+from octowright.drawn_text import IGNORABLE_CLASS, IGNORABLE_RANGES, normalize
+
+__all__ = [
+    "DIGIT_SEPARATORS",
+    "IGNORABLE_RANGES",
+    "JS_DIGIT_SEPARATOR_CLASS",
+    "JS_IGNORABLE_CLASS",
+    "MIN_DIGITS",
+    "digit_needles",
+    "digits_form",
+    "normalize",
+]
 
 #: The same ranges as the body of a JavaScript ``u``-flag character class.
 JS_IGNORABLE_CLASS = "".join(f"\\u{{{low:X}}}-\\u{{{high:X}}}" for low, high in IGNORABLE_RANGES)
@@ -62,15 +53,8 @@ JS_DIGIT_SEPARATOR_CLASS = "".join(f"\\u{{{ord(character):X}}}" for character in
 #: The fewest trailing digits of a numeric value that still identify it on a page.
 MIN_DIGITS = 7
 
-_IGNORABLE_CLASS = "".join(f"\\U{low:08X}-\\U{high:08X}" for low, high in IGNORABLE_RANGES)
-_INVISIBLE = re.compile("[\\s" + _IGNORABLE_CLASS + "]+")
-_INVISIBLE_OR_SEPARATOR = re.compile("[\\s" + _IGNORABLE_CLASS + re.escape(DIGIT_SEPARATORS) + "]+")
+_INVISIBLE_OR_SEPARATOR = re.compile("[\\s" + IGNORABLE_CLASS + re.escape(DIGIT_SEPARATORS) + "]+")
 _ASCII_DIGITS = re.compile("[0-9]+")
-
-
-def normalize(text: str) -> str:
-    """The comparable form of ``text``: NFKC, no whitespace or ignorable characters, casefolded."""
-    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", text)).casefold()
 
 
 def digits_form(text: str) -> str:

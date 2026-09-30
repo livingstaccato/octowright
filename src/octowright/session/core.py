@@ -13,7 +13,7 @@ from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString
-from weakref import WeakSet
+from weakref import WeakKeyDictionary, WeakSet
 
 from playwright.async_api import Browser, BrowserContext, Page, Video
 from provide.telemetry import get_logger
@@ -21,12 +21,13 @@ from provide.telemetry import get_logger
 from octowright._tracing import counter
 from octowright.defaults import NETWORK_EVENT_LIMIT
 from octowright.recorder import Recorder
+from octowright.request_failures import NetworkLedger
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session.core_expect_mixin import SessionExpectMixin
 from octowright.session.core_interaction_mixin import SessionInteractionMixin
 from octowright.session.core_io_mixin import SessionIOMixin
 from octowright.session.core_locator_mixin import SessionLocatorMixin
-from octowright.session.core_network_mixin import SessionNetworkMixin
+from octowright.session.core_network_mixin import PAGE_ERROR_LIMIT, SessionNetworkMixin
 from octowright.session.core_ops_mixin import SessionOpsMixin
 from octowright.session.core_page_mixin import SessionPageMixin
 from octowright.session.operation.gate import (
@@ -74,6 +75,7 @@ _VIEWPORT_MODE_UNKNOWN = "unknown"
 
 if TYPE_CHECKING:  # pragma: no cover - import-time-only assertion
     from octowright.browser_pool.viewport import ViewportMode as _ViewportMode
+    from octowright.macros.privacy import DurableTextScrubber
 
     # Compile-time assertion that the literal default still matches the enum.
     _: str = _ViewportMode.UNKNOWN.value
@@ -100,6 +102,15 @@ class BrowserSession(
     log_path: Path
     user_data_dir: Path | None = None
     profile: str | None = None
+    # The persona/explicit ``base_url`` the context was launched with. Kept
+    # because Playwright offers no getter, and the macro header guard
+    # (``substitution.own_site_origins``) trusts it as operator-chosen.
+    base_url: str | None = None
+    # The URL the browser was launched at. Unlike ``url``, which every navigate
+    # rewrites, nothing writes this after launch: the macro header guard trusts
+    # its host as operator-chosen, and a field a macro's own navigate step could
+    # move would let the macro choose it.
+    launch_url: str | None = None
     stabilize: bool = False
     protected: bool = False
     protected_reason: str = "explicit"
@@ -129,17 +140,18 @@ class BrowserSession(
     # old 80px bar), and a permanent warning cannot warn.
     viewport_frame_inset_w: int | None = None
     viewport_frame_inset_h: int | None = None
-    # Per-launch capability token the viewport pill's init script must present
-    # on every ``__octowright_viewport_action`` binding call. The binding is
-    # installed on ``window`` for every frame of every page in the context
-    # (Playwright's ``expose_binding`` has no notion of caller identity), so
-    # without this a hostile/compromised page could call it directly and, via
-    # ``relaunch-fluid``, force a ``protected`` browser closed. The token is
-    # generated once per launch, spliced into the init script text (never
-    # assigned to ``window`` -- see ``viewport_pill.js``'s ``VIEWPORT_TOKEN``
-    # closure const), and checked with a constant-time compare in
-    # ``BrowserPool._expose_viewport_binding``. ``repr=False`` keeps it out of
-    # any ``repr(session)``/logging that might stringify the dataclass.
+    # Per-launch seed for the viewport pill's capability tokens. The binding
+    # ``__octowright_viewport_action`` is installed on ``window`` for every
+    # frame of every page in the context (Playwright's ``expose_binding`` has
+    # no notion of caller identity), so without a token a hostile page could
+    # call it directly and, via ``relaunch-fluid``, force a ``protected``
+    # browser closed. One token per state-changing action is derived from this
+    # seed (``visuals.viewport_action_token_for``), spliced into the init
+    # script text (never assigned to ``window`` -- see ``viewport_pill.js``),
+    # and checked with a constant-time compare in
+    # ``BrowserPool._expose_viewport_binding``. The seed itself never reaches
+    # the page. ``repr=False`` keeps it out of any ``repr(session)``/logging
+    # that might stringify the dataclass.
     viewport_action_token: str = field(default_factory=lambda: secrets.token_urlsafe(24), repr=False)
     console: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=1000))
     video_path: Path | None = None
@@ -218,6 +230,31 @@ class BrowserSession(
     _websocket_truncated: bool = field(default=False, repr=False)
     _network_requests: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=NETWORK_EVENT_LIMIT))
     _network_requests_dropped: int = 0
+    # Uncaught page exceptions (Playwright's ``pageerror``), kept in memory for
+    # a human debugging. Bounded like the console ring; the running count in
+    # ``_network`` is what ``expect_network_clean`` reads, so eviction cannot
+    # hide an error.
+    page_errors: deque[dict[str, Any]] = field(default_factory=lambda: deque(maxlen=PAGE_ERROR_LIMIT))
+    # The counts, windows and in-flight requests ``expect_network_clean``
+    # judges; counted in the event handlers rather than read back from
+    # ``_network_requests``, a bounded diagnostic whose evictions must still count.
+    _network: NetworkLedger = field(default_factory=NetworkLedger, repr=False)
+    # Whether request start/end events are subscribed to. Off until something
+    # will judge them: every request's start and end costs protocol traffic and
+    # pins Request objects, which a session that never asks should not pay for.
+    _inflight_tracking: bool = False
+    # Per page, the handlers tracking attached, so turning it off removes them.
+    _tracked_pages: WeakKeyDictionary[Page, list[tuple[str, Any]]] = field(
+        default_factory=WeakKeyDictionary, repr=False
+    )
+    # Applied to page-derived text the recorder wrapper does not see: the
+    # markdown cache, captures, the websocket sidecar and (through
+    # ``input_redaction.live_scrubbed``) the in-memory console, page-error and
+    # network buffers. Installed by macros.privacy.install_sensitive_recorder
+    # -- for a macro's credential values, or a typed password the recorder
+    # redacted -- so the session scrubs the privacy ledger without importing
+    # the macro layer; the recorder is protected the same way, by a wrapper.
+    durable_text_scrubber: DurableTextScrubber | None = field(default=None, repr=False)
     _last_mcp_navigation: str | None = None
     # Set by _notify_call_timeout when a Playwright call ran past its budget.
     # Deliberately NOT _crashed: the target may still be executing, and the
@@ -246,6 +283,14 @@ class BrowserSession(
     # and detect crash loops vs occasional crashes.
     _crash_recoveries: int = field(default=0, repr=False)
     _last_crash_monotonic: float = field(default=0.0, repr=False)
+    # The OS process behind a persistent context, resolved at launch, and how
+    # the first evicting close signal judged its exit ("crashed"/"closed"). See
+    # browser_pool/process_crash: Playwright reports a browser-process crash and
+    # a user closing the last window identically.
+    _browser_process: Any = field(default=None, repr=False)
+    _exit_verdict: str | None = field(default=None, repr=False)
+    _exit_verdict_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _process_crash_incident: dict[str, Any] | None = field(default=None, repr=False)
     console_count: int = 0
     download_count: int = 0
     page_count: int = 1

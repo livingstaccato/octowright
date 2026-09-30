@@ -10,8 +10,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from octowright._export_shared import (
+    _UNSUPPORTED,
     _has_semantic_locator,
+    _input_file_paths,
     _launch_viewport,
+    _route_pattern,
     _safe_int,
     _validate_dialog_policy,
     _validate_kind,
@@ -233,6 +236,8 @@ def _py_wait_for(entry: dict) -> str:
             f"'t => document.body && document.body.innerText.includes(t)', "
             f"arg={entry['text']!r})"
         )
+    if entry.get("expression"):
+        return f"        await page.wait_for_function({entry['expression']!r})"
     return "        await page.wait_for_load_state('networkidle')"
 
 
@@ -243,7 +248,8 @@ def _py_select_option(entry: dict) -> str:
     if entry.get("label") is not None:
         return f"        await page.select_option({sel!r}, label={entry['label']!r})"
     if entry.get("index") is not None:
-        return f"        await page.select_option({sel!r}, index={entry['index']!r})"
+        index = _safe_int(entry["index"], action="select_option", field="index")
+        return f"        await page.select_option({sel!r}, index={index})"
     return f"        await page.select_option({sel!r})"
 
 
@@ -262,6 +268,49 @@ def _py_cond_while(e: dict) -> str | None:
     if a in ("if_not", "while_not"):
         c = f"not ({c})"
     return f"        {p}{c}:"
+
+
+# The recorded mode/present/equals fields change what an assertion means, as
+# they do in the session method that wrote the row: ignoring ``present=False``
+# exported an absence check as a presence check.
+
+
+def _py_expect_text(entry: dict) -> str:
+    text, actual = entry["text"], f"await page.locator({entry['selector']!r}).inner_text()"
+    mode = entry.get("mode", "contains")
+    if mode == "equals":
+        check = f"{actual} != {text!r}"
+    elif mode == "regex":
+        check = f"not __import__('re').search({text!r}, {actual})"
+    else:
+        check = f"{text!r} not in {actual}"
+    return f"        if {check}: raise RuntimeError('Text mismatch')"
+
+
+def _py_expect_selector(entry: dict) -> str:
+    comparison = "== 0" if entry.get("present", True) else "> 0"
+    return f"        if await page.locator({entry['selector']!r}).count() {comparison}: raise RuntimeError('Selector mismatch')"
+
+
+def _py_expect_js(entry: dict) -> str:
+    result = f"await page.evaluate({entry['expression']!r})"
+    check = f"not {result}" if entry.get("equals") is None else f"{result} != {entry['equals']!r}"
+    return f"        if {check}: raise RuntimeError('JS mismatch')"
+
+
+def _py_mock_route(entry: dict) -> str:
+    # content_type/headers are the live mock's too (the recorder writes both);
+    # emitted only when recorded, so older rows export as they always have.
+    status = _safe_int(entry.get("status"), action="mock_route", field="status", default=200)
+    extra = ""
+    if entry.get("content_type") is not None:
+        extra += f", content_type={str(entry['content_type'])!r}"
+    if entry.get("headers"):
+        extra += f", headers={dict(entry['headers'])!r}"
+    return (
+        f"        await page.route({_route_pattern(entry)!r}, lambda route: route.fulfill("
+        f"status={status}, body={entry.get('body') or ''!r}{extra}))"
+    )
 
 
 def _py_set_dialog_policy(entry: dict) -> str:
@@ -315,28 +364,32 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
             else f"        if {e['pattern']!r} not in page.url: raise RuntimeError('URL mismatch')"
         )
     ),
-    "expect_text": lambda e: (
-        f"        if {e['text']!r} not in await page.locator({e['selector']!r}).inner_text(): raise RuntimeError('Text mismatch')"
+    "expect_text": _py_expect_text,
+    "expect_selector": _py_expect_selector,
+    "expect_js": _py_expect_js,
+    # Fail closed: a silently dropped security check lets the script pass on a
+    # leaking or broken page. macro_export_cli runs both.
+    "expect_network_clean": lambda _e: (
+        f"        raise RuntimeError({_UNSUPPORTED.format(kind='expect_network_clean')!r})"
     ),
-    "expect_selector": lambda e: (
-        f"        if await page.locator({e['selector']!r}).count() == 0: raise RuntimeError('Selector mismatch')"
-    ),
-    "expect_js": lambda e: (
-        f"        if not await page.evaluate({e['expression']!r}): raise RuntimeError('JS mismatch')"
+    "expect_no_text": lambda _e: f"        raise RuntimeError({_UNSUPPORTED.format(kind='expect_no_text')!r})",
+    "mark_network_clean": lambda _e: (
+        "        # mark_network_clean: only meaningful with expect_network_clean (see macro_export_cli)"
     ),
     "open_url": _py_open_url,
     "switch_page": _py_switch_page,
     "close_page": _py_close_page,
     "switch_frame": _py_switch_frame,
     "reset_frame": lambda _e: "        _upload_target = page",
-    "mock_route": lambda e: (
-        f"        await page.route({e['url_pattern']!r}, lambda route: route.fulfill("
-        f"status={_safe_int(e.get('status'), action='mock_route', field='status', default=200)}, "
-        f"body={e.get('body', '')!r}))"
-    ),
-    "unmock_route": lambda e: f"        await page.unroute({e['url_pattern']!r})",
+    "mock_route": _py_mock_route,
+    "unmock_route": lambda e: f"        await page.unroute({_route_pattern(e)!r})",
     "set_dialog_policy": _py_set_dialog_policy,
-    "set_input_files": lambda e: f"        await page.set_input_files({e['selector']!r}, {e.get('files', [])!r})",
+    # _upload_target, not page: the session method resolves the selector in the
+    # active frame. Through locator() because a selector-switched frame is a
+    # FrameLocator, which has no set_input_files of its own.
+    "set_input_files": lambda e: (
+        f"        await _upload_target.locator({e['selector']!r}).set_input_files({_input_file_paths(e)!r})"
+    ),
     "upload_files": _py_upload_files,
     "if": _py_cond_while,
     "if_not": _py_cond_while,
@@ -408,7 +461,9 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python", manifest:
         comment_prefix = "#" if fmt == "python" else "//"
         lines.append(f"{comment_prefix} Critical Points:")
         for cp in manifest["critical_points"]:
-            lines.append(f"{comment_prefix} - {cp}")
+            # One line per point: a line break in the text would end the
+            # comment and make the rest of it source.
+            lines.append(f"{comment_prefix} - {' '.join(str(cp).splitlines())}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(out_path, "\n".join(lines) + "\n")

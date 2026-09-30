@@ -5,12 +5,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import functools
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf, ssrf_guard
 from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
@@ -78,6 +82,12 @@ def _console_recent_reserve(limit: int) -> int:
 
 def _copy_console_message(message: Any) -> Any:
     return dict(message) if isinstance(message, dict) else message
+
+
+def _resolve_once(future: asyncio.Future[str], outcome: str, *_args: Any) -> None:
+    """Page-event handler: resolve *future* with the first event's name."""
+    if not future.done():
+        future.set_result(outcome)
 
 
 def _html_preview(html: str, html_preview_chars: int) -> str | None:
@@ -348,11 +358,128 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
 
     @gated_operation("browser_navigate_back")
     async def navigate_back(self) -> dict[str, Any]:
-        response = await self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
+        response = await ssrf_guard.guarded_navigation(
+            self.page.main_frame, self.page.go_back(timeout=DEFAULT_NAV_TIMEOUT_MS)
+        )
         url = self.page.url
         title = await bounded(self.page.title(), operation="browser_navigate_back")
         self.recorder.record("navigate_back", url=url)
         return {"ok": response is not None, "url": url, "title": title}
+
+    @gated_operation("browser_open_url_settle")
+    async def _settle_guarded_popup(self, page: Any) -> None:
+        """Return once a popup the SSRF guard served has reached its destination.
+
+        A redirect reaches the popup as a client-redirect document, and that
+        document's ``domcontentloaded`` is not the destination's: waiting for
+        it alone returned ``open_url`` on the stub (measured on firefox and
+        webkit). So while the page is still the stub, this waits for the NEXT
+        ``domcontentloaded`` -- the unredirected popup's own settle point, not
+        ``load``, which a single hanging image on the destination held until
+        the navigation timeout (measured on firefox and webkit). The listener
+        goes on before the probe, so a destination that loads during the probe
+        is not missed. A refused or failed hop fires no event at all on those
+        engines, which is why every wait also ends on the guard's word. The
+        whole wait shares one navigation budget.
+
+        A popup may close itself -- an OAuth popup does once it has handed its
+        result to the opener -- and a closed page fires no further
+        ``domcontentloaded``, so each wait also ends on ``close`` (and
+        ``crash``). A popup that closes after a ``domcontentloaded`` that was
+        not the stub's has reached its destination and is settled, as it is
+        with the policy off; one that closes while still on the stub never got
+        there, which is an error (measured on all three engines). The probe
+        alone cannot always say which: the ``domcontentloaded`` awaited first
+        may have been the stub's and the page closed before any probe, or the
+        probe could not tell and the close followed. So at a close the guard's
+        own record of what it last served the frame counts too
+        (:func:`ssrf_guard.served_client_redirect_last`).
+        """
+        deadline = time.monotonic() + DEFAULT_NAV_TIMEOUT_MS / 1000
+
+        def remaining_s() -> float:
+            return max(0.001, deadline - time.monotonic())
+
+        chain = ssrf_guard.frame_chain(page.main_frame)
+        refusal = await ssrf_guard.until_refused(
+            page.wait_for_load_state("domcontentloaded", timeout=remaining_s() * 1000), chain
+        )
+        # True once the probe has seen the stub and no domcontentloaded has
+        # followed it: the page is known not to have reached its destination.
+        on_stub = False
+        while refusal is None:
+            if page.is_closed():
+                return self._closed_popup(page.main_frame, on_stub)
+            probe, refusal, event = await self._next_popup_event(page, chain, remaining_s())
+            if probe is False:
+                return None
+            on_stub = on_stub or probe is True
+            if event == "crash":
+                raise RuntimeError("popup crashed before it reached its destination")
+            if event == "close":
+                return self._closed_popup(page.main_frame, on_stub)
+            if event == "domcontentloaded":
+                on_stub = False  # a domcontentloaded after the stub's: probe what it loaded
+        raise chain.error()
+
+    @gated_operation("browser_open_url_settle")
+    async def _next_popup_event(
+        self, page: Any, chain: ssrf_guard.FrameChain, budget_s: float
+    ) -> tuple[bool | None, str | None, str | None]:
+        """Probe *page* for the stub and, while on it, wait for its next event.
+
+        Returns ``(probe, refusal, event)``: the probe's answer (see
+        :meth:`_on_client_redirect`); the guard's refusal if it ended the wait;
+        and the event that did -- ``domcontentloaded``, ``close`` or ``crash``
+        -- else ``None``. The listeners go on before the probe, so an event
+        during it is not missed.
+        """
+        changed: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        handlers = {
+            event: functools.partial(_resolve_once, changed, event) for event in ("domcontentloaded", "close", "crash")
+        }
+        for event, handler in handlers.items():
+            page.on(event, handler)
+        try:
+            probe = await self._on_client_redirect(page)
+            if probe is False:
+                return probe, None, None
+            try:
+                refusal = await ssrf_guard.until_refused(asyncio.wait_for(changed, budget_s), chain)
+            except TimeoutError:
+                raise TimeoutError(
+                    f"popup did not leave the redirect document within {DEFAULT_NAV_TIMEOUT_MS} ms"
+                ) from None
+        finally:
+            for event, handler in handlers.items():
+                page.remove_listener(event, handler)
+        return probe, refusal, None if refusal is not None else changed.result()
+
+    @staticmethod
+    def _closed_popup(frame: Any, on_stub: bool) -> None:
+        """Settle a popup that closed itself: done unless it closed on the redirect document.
+
+        *on_stub* is what the probe saw; the guard's record covers the
+        orderings in which the probe never saw the stub it was on.
+        """
+        if on_stub or ssrf_guard.served_client_redirect_last(frame):
+            raise RuntimeError("popup closed before it left the redirect document")
+
+    @gated_operation("browser_open_url_settle")
+    async def _on_client_redirect(self, page: Any) -> bool | None:
+        """Whether *page* is still the guard's client-redirect document; ``None`` if the probe could not tell.
+
+        The probe fails when the document is replaced under it (still
+        navigating) and when the page closes or crashes; the caller's next wait
+        ends on whichever of those it was, so this does not guess.
+        """
+        try:
+            return bool(await bounded(page.evaluate(ssrf_guard.IS_CLIENT_REDIRECT_JS), operation="browser_open_url"))
+        except SessionCallTimeoutError:
+            raise
+        except Exception as exc:
+            log.debug("octowright.open_url.redirect_probe_failed", error=repr(exc))
+            return None
 
     @gated_operation("browser_open_url")
     async def open_url(
@@ -371,15 +498,17 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         """
         if target not in ("tab", "window"):
             raise ValueError(f"target must be 'tab' or 'window', got {target!r}")
-        from octowright.session.core_page_mixin import _reject_unsafe_url
+        from octowright.session.core_page_mixin import reject_unsafe_url_resolved
 
-        _reject_unsafe_url(url)
+        await reject_unsafe_url_resolved(url)
 
         nav_error: str | None = None
         if target == "tab":
             new_page = await self.context.new_page()
             try:
-                await new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                await ssrf_guard.guarded_navigation(
+                    new_page.main_frame, new_page.goto(url, timeout=DEFAULT_NAV_TIMEOUT_MS)
+                )
             except Exception as exc:
                 # Surface the failure to the caller — open_url is a user-action
                 # path, so a swallowed nav must not be reported as ok=True.
@@ -401,7 +530,10 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
                 )
             new_page = await popup_info.value
             try:
-                await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
+                if ssrf.policy_enabled():
+                    await self._settle_guarded_popup(new_page)
+                else:
+                    await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)
             except Exception as exc:
                 log.warning(
                     "octowright.open_url.nav_failed",

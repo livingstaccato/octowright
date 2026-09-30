@@ -30,7 +30,7 @@ log = get_logger(__name__)
 
 # OFF by default (see resolve_operation_active_timeout_seconds) -- the ceiling
 # is a backstop for unenumerated call sites, and cancelling in-flight browser
-# work is a heavier intervention than Task 1's per-call budget failing one
+# work is a heavier intervention than the per-call budget failing one
 # call. Mirrors session/timeouts.py's _OFF_TOKENS plus "" for an env var set
 # to the empty string, which os.environ.get(..., default) alone would not
 # catch (an explicit empty value is not "unset").
@@ -57,7 +57,7 @@ def resolve_operation_active_timeout_seconds(
 
     ``explicit`` (a direct caller override, not an env var) is still
     validated strictly and raises on an invalid value -- that path is a
-    programming error, not an operator typo, and Task 1's resolver treats
+    programming error, not an operator typo, and the per-call timeout resolver treats
     its own ``explicit`` parameter the same way.
     """
     if explicit is not None:

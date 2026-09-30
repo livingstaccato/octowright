@@ -21,6 +21,7 @@ test_http_server_writes.py suites don't pin:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -280,6 +281,31 @@ class TestRecordingDelete:
         assert not jsonl.exists()
         assert stray.exists(), "non-allowlisted suffix should not be unlinked"
 
+    def test_artifact_removal_runs_off_the_event_loop(
+        self,
+        client: TestClient,
+        isolated_recordings: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The removal ``rmtree``s whole video/download/frame-cache dirs; on
+        the loop that stalls every live browser the leader serves."""
+        _write_recording(isolated_recordings, "offloop00001")
+        original = session_recording_routes._remove_session_artifacts
+        loop_running: list[bool] = []
+
+        def spy(*args: Any, **kwargs: Any) -> tuple[list[str], int, int]:
+            try:
+                asyncio.get_running_loop()
+                loop_running.append(True)
+            except RuntimeError:
+                loop_running.append(False)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(session_recording_routes, "_remove_session_artifacts", spy)
+        r = client.delete("/api/sessions/offloop00001/recording")
+        assert r.status_code == 200
+        assert loop_running == [False]
+
 
 # ─── session_selector_validate (POST /api/sessions/{id}/selector/validate) ──
 
@@ -472,8 +498,7 @@ class TestSelectorValidate:
 
     async def test_session_busy_timeout_error_maps_to_503(self, fakes: dict[str, Any]) -> None:
         """A SessionBusyTimeoutError from the gate maps to 503, distinctly
-        from the generic locator-exception 400 branch -- locks in Task 10's
-        Step 5 error-mapping contract."""
+        from the generic locator-exception 400 branch."""
         from octowright.session.operation.gate import SessionBusyTimeoutError
 
         pool: _FakePool = fakes["pool"]
@@ -494,8 +519,7 @@ class TestSelectorValidate:
 
     async def test_session_closing_error_maps_to_409(self, fakes: dict[str, Any]) -> None:
         """A SessionClosingError from the gate maps to 409, not the generic
-        locator-exception 400 branch -- locks in Task 10's Step 5
-        error-mapping contract."""
+        locator-exception 400 branch."""
         from octowright.session.operation.gate import SessionClosingError
 
         pool: _FakePool = fakes["pool"]

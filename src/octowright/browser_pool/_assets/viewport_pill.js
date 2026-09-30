@@ -4,13 +4,40 @@
     const ROOT_ID = "__octowright_viewport_status__";
     const MODAL_ID = "__octowright_viewport_modal__";
     const INITIAL = __VIEWPORT_INFO__;
-    // Per-launch capability token for __octowright_viewport_action. Lives only
-    // in this closure -- never assigned to `window` -- so page script cannot
-    // read it via property enumeration; it can still CALL the binding (it's a
-    // real global function) but cannot supply a matching token, which the
-    // Python side now requires on every action. See BrowserSession.
-    // viewport_action_token / BrowserPool._expose_viewport_binding.
-    const VIEWPORT_TOKEN = __VIEWPORT_TOKEN__;
+    // Per-action capability tokens for __octowright_viewport_action ("sync",
+    // "relaunch-fluid"). Live only in this closure -- never assigned to
+    // `window` -- and are sent only from a trusted click (see guardTrusted):
+    // anything this script sends is readable by page script, because
+    // Playwright's binding controller serialises each call with the page's own
+    // JSON.stringify at call time. "state" needs no token and so leaks none.
+    // See viewport_action_token_for / BrowserPool._expose_viewport_binding.
+    const VIEWPORT_TOKENS = __VIEWPORT_TOKENS__;
+    // Take the binding into this closure NOW and never read the global again.
+    // Init scripts run before any page script, and the binding is already
+    // installed at this point (measured on chromium, firefox and webkit), so
+    // this is the one moment the global is known to be ours. A page that
+    // later wraps it would otherwise sit between this script and Python. The
+    // global is then locked so the wrapping cannot happen at all -- nothing
+    // else reads it, but a page replacing it could still spoof it to anything
+    // that did.
+    const BINDING_NAME = "__octowright_viewport_action";
+    const viewportAction = typeof window[BINDING_NAME] === "function" ? window[BINDING_NAME] : null;
+    if (viewportAction) {
+        try {
+            Object.defineProperty(window, BINDING_NAME, {
+                value: viewportAction,
+                writable: false,
+                configurable: false,
+                enumerable: false,
+            });
+        } catch {
+            /* already locked by an earlier run in this realm */
+        }
+    }
+    // Page script can call .click() on this pill's buttons, or dispatch a
+    // synthetic Alt keydown -- the pill lives in the page's own DOM. Only a
+    // trusted event (a human, or Playwright's real input) may act.
+    const guardTrusted = (event) => Boolean(event && event.isTrusted);
     const CLICK_MODIFIER = "altKey";
     const ALT_HOLD_MS = 1000;
     // CSS pixels of slack when comparing the viewport against the window's
@@ -117,15 +144,15 @@
     };
 
     const action = async (name) => {
-        if (!window.__octowright_viewport_action) {
+        if (!viewportAction) {
             setModalMessage("Viewport action binding is unavailable.", false);
             return;
         }
         try {
-            const result = await window.__octowright_viewport_action({
+            const result = await viewportAction({
                 action: name,
                 measured: measure(),
-                token: VIEWPORT_TOKEN,
+                token: VIEWPORT_TOKENS[name],
             });
             if (name === "sync") {
                 // Spread `current` first: the chrome inset was measured at
@@ -160,6 +187,7 @@
         btn.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (!guardTrusted(event)) return;
             onClick();
         });
         return btn;
@@ -227,6 +255,7 @@
         root.addEventListener("click", (event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (!guardTrusted(event)) return;
             openModal();
         });
         document.body.append(root);
@@ -241,9 +270,9 @@
     // the next navigation. Best-effort: if the binding is not there (an
     // isolated page, an old session) the launch values still stand.
     const refresh = async () => {
-        if (!window.__octowright_viewport_action) return;
+        if (!viewportAction) return;
         try {
-            const state = await window.__octowright_viewport_action({ action: "state", token: VIEWPORT_TOKEN });
+            const state = await viewportAction({ action: "state" });
             if (state && state.mode) {
                 current = { ...current, ...state };
                 render();
@@ -276,7 +305,7 @@
     window.addEventListener(
         "keydown",
         (event) => {
-            if (!event[CLICK_MODIFIER] || modifierActive) return;
+            if (!guardTrusted(event) || !event[CLICK_MODIFIER] || modifierActive) return;
             modifierActive = true;
             if (modifierTimer) clearTimeout(modifierTimer);
             modifierTimer = setTimeout(() => {

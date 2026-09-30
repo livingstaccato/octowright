@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 from collections import deque
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,6 +44,10 @@ CATEGORY_DRIVER_LOST = "driver_lost"
 # recorded from session/timeouts.py's call budget rather than observed like
 # a renderer crash, and it has no crash report to correlate.
 CATEGORY_UNRESPONSIVE_TARGET = "unresponsive_target"
+# The browser PROCESS died while its session was live (a signal death, not a
+# window the user closed) -- see browser_pool/process_crash. Distinct from
+# renderer_crash: the context is gone with it, so there is no page to replace.
+CATEGORY_BROWSER_PROCESS_CRASH = "browser_process_crash"
 
 _RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)
@@ -66,10 +71,14 @@ def record(category: str, **fields: Any) -> dict[str, Any]:
     return rec
 
 
-def recent(*, category: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
-    """Recent incidents oldest→newest, optionally filtered by category and capped
-    to the newest ``limit``."""
-    items = [r for r in _RING if category is None or r.get("category") == category]
+def recent(*, category: str | Collection[str] | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """Recent incidents oldest→newest, optionally filtered by category -- one
+    name, or a set of them -- and capped to the newest ``limit``."""
+    if category is None:
+        items = list(_RING)
+    else:
+        wanted = frozenset({category}) if isinstance(category, str) else frozenset(category)
+        items = [r for r in _RING if r.get("category") in wanted]
     return items[-limit:] if limit is not None else items
 
 

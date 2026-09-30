@@ -29,7 +29,7 @@ class _FakeLocator:
 
     def __init__(self, aria: str) -> None:
         self._aria = aria
-        self.first = SimpleNamespace(evaluate=AsyncMock(return_value=[]))
+        self.first = SimpleNamespace(evaluate=AsyncMock(return_value=[]), wait_for=AsyncMock())
 
     async def aria_snapshot(self) -> str:
         return self._aria

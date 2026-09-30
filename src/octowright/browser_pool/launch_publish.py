@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
+from octowright.browser_pool import process_crash
 from octowright.browser_pool.launch_helpers import _record_launch_event
 from octowright.browser_pool.listeners import (
     _wire_close_evictor,
@@ -121,9 +123,15 @@ def _make_new_tab_redirector(new_session: BrowserSession) -> Any:
                             pass
                     try:
                         if _is_blank_newtab_url(new_page.url):
-                            await new_page.goto(get_default_url())
-                    except Exception:
-                        pass
+                            await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(get_default_url()))
+                    except Exception as exc:
+                        # Best-effort: the tab stays blank. Logged, not
+                        # swallowed, so a refused redirect is findable.
+                        log.debug(
+                            "octowright.launch.new_tab_redirect_failed",
+                            instance_id=new_session.instance_id,
+                            error=repr(exc),
+                        )
             except (
                 SessionClosingError,
                 SessionClosedError,
@@ -150,6 +158,7 @@ def _build_session_object(
     kind: str,
     label: str | None,
     target_url: str,
+    base_url: str | None,
     browser: Any,
     context: Any,
     page: Any,
@@ -180,6 +189,9 @@ def _build_session_object(
         kind=kind,
         label=label,
         url=target_url,
+        # A handoff/relaunch replacement opens at the page's current URL but
+        # trusts the original's (LaunchOptions.trusted_launch_url).
+        launch_url=launch_options.trusted_launch_url or target_url,
         browser=browser,
         context=context,
         page=page,
@@ -187,6 +199,7 @@ def _build_session_object(
         log_path=log_path,
         user_data_dir=Path(user_data_dir) if user_data_dir is not None else None,
         profile=profile,
+        base_url=base_url,
         stabilize=launch_options.stabilize,
         protected=launch_options.protected,
         protected_reason=launch_options.protected_reason,
@@ -232,6 +245,7 @@ async def _prepare_session_before_publication(
     kind: str,
     label: str | None,
     target_url: str,
+    base_url: str | None,
     headless: bool,
     log_path: Path,
     viewport_info: Any,
@@ -294,6 +308,7 @@ async def _prepare_session_before_publication(
         kind=kind,
         label=label,
         target_url=target_url,
+        base_url=base_url,
         browser=browser,
         context=context,
         page=page,
@@ -306,6 +321,11 @@ async def _prepare_session_before_publication(
         viewport_info=viewport_info,
         operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
     )
+    if user_data_dir is not None:
+        # Playwright never says whether its browser died on a signal or closed
+        # its windows; the OS does. See process_crash. Resolved before the
+        # close evictor is wired below, so its first signal can be judged.
+        new_session._browser_process = await process_crash.resolve_browser_process(kind, user_data_dir)
     new_session.attach_console()
     await new_session.measure_frame_inset(page)
     await pool._expose_viewport_binding(context, new_session)

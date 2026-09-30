@@ -57,7 +57,7 @@ def digest_recording_text(text: str, *, max_chars: int = DEFAULT_DIGEST_CHARS) -
         events += 1
         action = _safe_label(entry.get("action", "unknown"))
         counts[action] += 1
-        if url := _sanitize_url(_entry_url(entry)):
+        if url := sanitize_url(_entry_url(entry)):
             first_url = first_url or url
             last_url = url
     lines = [f"events: {events}", f"malformed: {malformed}"]
@@ -99,7 +99,14 @@ def _safe_label(value: Any) -> str:
     return text[:MAX_LABEL_CHARS]
 
 
-def _sanitize_url(url: str) -> str:
+def sanitize_url(url: str) -> str:
+    """*url* reduced to origin and path: no userinfo, query or fragment.
+
+    Anything that does not parse cleanly -- a netloc with no host, a bad port --
+    collapses to ``INVALID_URL`` rather than being guessed at, since the guess is
+    where a credential survives. Also the macro failure payload's URL rule
+    (``failure_context.payload_url``).
+    """
     if not url:
         return ""
     try:

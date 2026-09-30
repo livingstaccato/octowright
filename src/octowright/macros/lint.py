@@ -8,13 +8,15 @@
 Pure module — no I/O, no MCP dependency. Surfaces probable mistakes before
 the runtime fails partway through with a generic error: missing required
 fields, unknown action types, lifecycle actions that don't belong in
-macros, empty conditional branches, and string literals that look like
-credentials but aren't parameterized.
+macros, empty conditional branches, string literals that look like
+credentials but aren't parameterized, an ``allowed_origins`` replay would
+refuse, and an ``expect_no_text`` still holding the recording's redaction
+marker.
 
 The set of supported simple actions and their required fields is mirrored
-from `octowright.macros._dispatch_simple`; conditional action shapes mirror
-`octowright.conditional`. The lifecycle / replay-skip set mirrors
-`octowright.macros._REPLAY_SKIP`.
+from `octowright.macros.runtime.dispatch_simple`; conditional action shapes
+mirror `octowright.conditional`. The lifecycle / replay-skip set mirrors
+`octowright.macros.runtime._REPLAY_SKIP`.
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+from octowright.credential_sinks import ALLOWED_ORIGINS_KEY, CREDENTIAL_FILL_FIELDS, parse_allowed_origins
+from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 
 from .lint_credentials import (
     _CREDENTIAL_CANDIDATE_KEYS,
@@ -39,7 +44,7 @@ from .substitution import SEMANTIC_FINDER_KEYS
 # ---------------------------------------------------------------------------
 
 # Map: simple action name -> tuple of REQUIRED field names.
-# Mirrors `octowright.macros._dispatch_simple`.
+# Mirrors `octowright.macros.runtime.dispatch_simple`.
 _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "navigate": ("url",),
     "click": ("selector",),
@@ -55,6 +60,9 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "expect_text": ("selector", "text"),
     "expect_selector": ("selector",),
     "expect_js": ("expression",),
+    "expect_network_clean": (),
+    "mark_network_clean": (),
+    "expect_no_text": ("text",),
     "mock_route": ("pattern",),
     "unmock_route": ("pattern",),
     "set_dialog_policy": ("policy",),
@@ -71,7 +79,7 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
 }
 
 # Lifecycle / inspection actions that the runtime silently skips during
-# replay. Mirrors `octowright.macros._REPLAY_SKIP`.
+# replay. Mirrors `octowright.macros.runtime._REPLAY_SKIP`.
 _REPLAY_SKIP: frozenset[str] = frozenset({"launch", "close", "snapshot"})
 
 # Conditional action names. Mirrors `octowright.conditional.CONDITIONAL_ACTIONS`.
@@ -182,6 +190,13 @@ def _check_simple(action: dict[str, Any], kind: str, outer_index: int, issues: l
     _check_simple_drag_fields(action, kind, _report)
     _check_a11y_dragdrop_verify_arity(action, kind, _report)
     _check_simple_required_fields(action, kind, _report)
+    _check_unbound_assertion_text(action, kind, _report)
+
+
+def _check_unbound_assertion_text(action: dict[str, Any], kind: str, report: _Report) -> None:
+    """A recorded expect_no_text whose text was redacted and never bound to a parameter."""
+    if kind == "expect_no_text" and action.get("text") == REDACTED_ASSERTION_TEXT:
+        report(REDACTED_TEXT_REFUSAL, code="redacted_assertion_text")
 
 
 def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
@@ -222,6 +237,16 @@ def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, i
         )
 
 
+def _check_allowed_origins(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Report an ``allowed_origins`` that replay would refuse, at save time rather than mid-run."""
+    if kind not in CREDENTIAL_FILL_FIELDS or ALLOWED_ORIGINS_KEY not in action:
+        return
+    try:
+        parse_allowed_origins(action[ALLOWED_ORIGINS_KEY])
+    except ValueError as exc:
+        issues.append(Issue(severity="error", code="bad_allowed_origins", message=str(exc), action_index=outer_index))
+
+
 def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
     """Flag an action carrying both spellings of a renamed field."""
     for recorded, param in ambiguous_rename_fields(kind, frozenset(action)):
@@ -231,8 +256,8 @@ def _check_ambiguous_fields(action: dict[str, Any], kind: str, outer_index: int,
                 code="ambiguous_field",
                 message=(
                     f"action {kind!r} carries both {recorded!r} and {param!r}, which are the same field — "
-                    "replay keeps whichever comes last in the JSON, so the effective value is not stable; "
-                    "keep one"
+                    "replay refuses the action when they differ, and a later edit to one leaves them "
+                    "differing; keep one"
                 ),
                 action_index=outer_index,
             )
@@ -564,6 +589,7 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     # neither. These fail open outside _ACTION_MAP, so conditionals are unaffected.
     _check_unknown_fields(action, kind, outer_index, issues)
     _check_ambiguous_fields(action, kind, outer_index, issues)
+    _check_allowed_origins(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)

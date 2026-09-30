@@ -136,6 +136,9 @@ async def browser_expect_selector(
     description=(
         "Assert a JavaScript expression evaluates to a truthy value (or equals `equals` "
         "if supplied). The expression runs in the page, like browser_evaluate. "
+        "`equals` compares as Python `==` does: object key order is ignored and true "
+        "equals 1 (false equals 0); the Python, TypeScript and macro-CLI exports compare "
+        "the same way. "
         "Pass timeout_ms to override the default 30-second evaluation bound. "
         "The stringified result is capped by default to bound token cost; pass "
         "max_chars=N for a custom cap or full=True to disable truncation."

@@ -25,10 +25,10 @@ POST   /api/sessions                             → SessionSummary (201) — la
 GET    /api/sessions/{id}                        → SessionDetail
 DELETE /api/sessions/{id}                        → SessionCloseResponse (200); 404 if not in live pool.  
   SessionCloseResponse: {"closed": true, "instance_id": str, "log_path": str, "video_path": str|null, "trace_path": str|null, "cache": CacheReport}
-DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int} (200); 404 if no recording on disk; 409 if the session is still live
-POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS (this route does not use the shorter dashboard timeout)
+DELETE /api/sessions/{id}/recording              → {"deleted": true, "session_id": str, "files_removed": int, "dirs_removed": int, "removed": [str]} (200; `removed` is relative to the recordings root and covers the JSONL sidecars, `<id>-fail-*` dumps, `videos/<stem>/`, `downloads/<id>/`, `.frame-cache/<id>/`); 404 if no recording on disk; 409 if the session is still live
+POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (200); 400 if url missing/empty, or its scheme or the SSRF policy refuses it (including a later redirect hop, under OCTOWRIGHT_SSRF_POLICY); 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past OCTOWRIGHT_OPERATION_QUEUE_TIMEOUT_SECONDS (this route does not use the shorter dashboard timeout)
 POST   /api/sessions/{id}/selector/validate      → {"ok": true, "count": int} (200) — CSS selector match count against the live page, bounded by OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS. 400 if selector missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past the dashboard timeout
-POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record.
+POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record, or one the launch options refuse (the error names the field).
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
 GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
 GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
@@ -57,7 +57,26 @@ POST   /api/macros/{name:path}/validate          → {"error_count": int, "warni
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str,
                                                     "installed_version"?: str}
+POST   /api/pair/mint                            → {"code": str, "expires_in": int} (200, Cache-Control: no-store). Requires the
+                                                 X-Octowright-Token capability token (403 otherwise). 503 on an inline
+                                                 (--no-singleton) leader, which publishes no token: it mints in-process
+                                                 (the URL `serve` prints at startup, or the octowright_dashboard_url tool).
+POST   /api/pair/redeem                          → {"bearer": str, "expires_at": int} (200, no-store) for {"code": str};
+                                                 403 if the code is invalid, expired or already used. The body is capped at
+                                                 PAIR_REDEEM_MAX_BODY_BYTES (4096) whatever OCTOWRIGHT_MAX_REQUEST_BODY_BYTES
+                                                 says (413 over it), since this route is reached with no credential.
+GET    /pair                                     → the dashboard index.html (no-store); the SPA reads the code from the fragment.
 ```
+
+The pairing routes are exempt from dashboard pairing (they are its bootstrap) but
+not from the loopback/Host/cross-origin guard. Every other `/api/*` route above except `/api/health`
+answers `401` + `WWW-Authenticate: Bearer` without a paired bearer or the
+capability token while `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is on (the default).
+
+Every JSON response is a `SafeJSONResponse` (`http/json_response.py`): an ordinary
+body is byte-identical to Starlette's `JSONResponse`, and a body holding a lone
+UTF-16 surrogate (page text can) is sent with JSON `\uXXXX` escapes instead of
+answering 500.
 
 HTTP request metrics are not exposed as a scrape endpoint: they are recorded
 through `provide.telemetry`'s `TelemetryMiddleware` (RED metrics
@@ -78,12 +97,33 @@ notifications/octowright/session_closed   — a session left the pool
   params: { instance_id, kind, label, profile, reason, log_path }
   reason: "agent_close" | "user_close" | "external_disconnect" | "crashed" | "shutdown"
 
-notifications/octowright/browser_crashed  — a crash was observed (page.on("crash"));
+notifications/octowright/browser_crashed  — a crash was observed (page.on("crash")), or a
+                                            call hit its budget (scope="unresponsive");
                                             the session may still be alive
-  params: { instance_id, kind, label, profile, scope, log_path, hint }
-  scope:  "renderer" | "process"
-  hint:   actionable text ("reload it, or relaunch with browser_launch")
+  params: { instance_id, kind, label, profile, scope, recovering, log_path, hint }
+  scope:  "renderer" | "process" | "unresponsive"
+  recovering: true when auto-recovery is scheduled (wait for browser_recovered);
+              always false for "unresponsive", which is never auto-recovered
+  hint:   actionable text
+
+notifications/octowright/browser_recovered — a renderer-crash recovery resolved
+  params: { instance_id, kind, label, profile, outcome, attempts, log_path,
+            navigation_error, recovered_elsewhere, hint }
+  outcome: "recovered" | "failed" | "exhausted"
+  recovered_elsewhere: true when a "recovered" page is NOT at the dead page's
+            last URL, judged by where the page is (refused by the SSRF policy,
+            or its navigation failed). Navigate again before continuing.
+  navigation_error: why the navigation failed, else null -- also set, with
+            recovered_elsewhere false, when the page reached its last URL but
+            its load timed out after commit.
+  "failed" includes a fresh page that itself crashed loading the last URL.
+
+notifications/octowright/driver_died       — the shared Playwright driver died
+  params: { restart_count, relaunch_mode, lost_count, lost_instance_ids, hint }
 ```
+
+`docs/telemetry.md` is the reference for these payloads; this block mirrors
+`server/mcp_notifications.notification_payload`.
 
 `browser_crashed` fires proactively the moment the crash is seen, so a client
 learns the page died immediately rather than only on its next failing tool call;
@@ -106,9 +146,13 @@ POST /api/sessions
     "stabilize": bool,                           // default: false
     "record_video": bool,                        // default: false
     "trace": bool                                // default: false
+    // ...or any other caller-settable LaunchOptions field
+    // (browser_pool/options.CALLER_SETTABLE_FIELDS): the body goes through
+    // LaunchOptions.from_mapping, the same path as the MCP browser_launch tool
   }
   → 201 + SessionSummary (identical shape to GET /api/sessions live[] entries)
   → 400 if `kind` is missing/invalid or body is malformed JSON (valid Content-Type, unparsable bytes)
+  → 400 if `url`'s scheme, or the SSRF policy (host resolved, OCTOWRIGHT_SSRF_POLICY), refuses it
   → 400 if the body carries a field that is not a launch option — an unreadable
         field used to be discarded silently, so a caller could believe half its
         body applied; the message names every offending key
@@ -258,8 +302,11 @@ MacroSummary = {
 }
 
 ConsoleMessage = {
-    "level": str,           # "log" | "warn" | "error" | "info" | "debug" | …
-    "text": str,
+    "level": str,           # Playwright's msg.type: "log" | "warning" | "error" | "assert" | "info" | "debug" | …
+                            # (every engine says "warning" for console.warn, not "warn")
+    "text": str,            # capped at CONSOLE_TEXT_MAX_CHARS
+    "text_truncated"?: bool,   # present (true) only when text was capped
+    "text_length"?: int,       # the original length, alongside text_truncated
     "page_index": int | None,  # set on popup pages, None for the main page
 }
 

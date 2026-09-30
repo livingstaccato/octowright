@@ -109,12 +109,18 @@ def test_opting_out_returns_the_plain_url(monkeypatch: pytest.MonkeyPatch) -> No
     assert "/pair#" not in result["url"]
 
 
-def test_tokenless_leader_returns_the_plain_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An inline --no-singleton leader cannot pair, and its dashboard is open."""
-    _http_app.build_app(mcp_token="")
+def test_tokenless_leader_mints_a_pair_url_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An inline --no-singleton leader is gated too, so the tool is its way in.
+
+    It used to report the bare URL because its dashboard was open to every
+    local user; with no lockfile, ``octowright dashboard`` cannot mint for it.
+    """
+    app = _http_app.build_app(mcp_token="")
     result = _call()
-    assert result["pairing_required"] is False
-    assert result["url"] == _BASE
+    assert result["pairing_required"] is True
+    assert result["url"].startswith(f"{_BASE.rstrip('/')}/pair#")
+    code = result["url"].split("#", 1)[1]
+    assert app.state.dashboard_pairing.redeem_code(code) is not None
 
 
 def test_no_pairing_store_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

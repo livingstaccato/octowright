@@ -14,6 +14,9 @@ from provide.telemetry import get_logger
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
 from octowright._tracing import span
+from octowright.credential_sinks import REPLAY_RENAME_KEYS, canonical_aliases
+from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
+from octowright.macros.assertion_results import observe
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -61,6 +64,8 @@ _REPLAY_PASSIVE = {
     # it is the 608-bogus-errors bug. See test_replay_passive_covers_recorder.
     "page_crash",
     "page_recovered",
+    # A dead browser PROCESS (browser_pool/process_crash); an outcome, like page_crash.
+    "browser_crash",
     "try_each_succeeded",
     "try_each_branch_failed",
     "try_suppressed",
@@ -91,6 +96,9 @@ _ACTION_MAP = {
     "expect_text": "expect_text",
     "expect_selector": "expect_selector",
     "expect_js": "expect_js",
+    "expect_network_clean": "expect_network_clean",
+    "mark_network_clean": "mark_network_clean",
+    "expect_no_text": "expect_no_text",
     "mock_route": "mock_route",
     "set_extra_http_headers": "set_extra_http_headers",
     "inject_headers": "inject_headers",
@@ -140,24 +148,14 @@ _REPLAY_DROP_KEYS: dict[str, tuple[str, ...]] = {
     # as an unexpected kwarg -- it would be passed to the locator builder as
     # though it were a finder.
     "get_text_by": ("result",),
+    # expect_no_text records what it checked (counts and the snapshot state,
+    # never the text), so a vacuous pass is visible in the recording.
+    "expect_no_text": NO_TEXT_OBSERVATION_KEYS,
 }
 
-# Recorded keys that need renaming to match the method's parameter names.
-# mock_route/unmock_route: session/core_interaction_mixin.py's recorder.record()
-# writes the field as "pattern" (matching macros/lint.py's required-field name),
-# but the session methods' parameter is "url_pattern" — without this rename,
-# every recorded mock_route/unmock_route replay raised TypeError: unexpected
-# keyword argument 'pattern', dead on arrival since the two sides disagreed
-# on the field name.
-_REPLAY_RENAME_KEYS: dict[str, dict[str, str]] = {
-    "drag": {"source": "source_selector", "target": "target_selector"},
-    "mock_route": {"pattern": "url_pattern"},
-    "unmock_route": {"pattern": "url_pattern"},
-    # Same split, same reason: the recorder writes "pattern", the session
-    # method's parameter is "url_pattern".
-    "inject_headers": {"pattern": "url_pattern"},
-    "uninject_headers": {"pattern": "url_pattern"},
-}
+# The alias table lives beside the credential-sink guard, which must judge the
+# spelling replay uses (``credential_sinks.canonical_aliases``).
+_REPLAY_RENAME_KEYS = REPLAY_RENAME_KEYS
 
 
 def _normalize_replay_kwargs(kind: str, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -178,10 +176,8 @@ def _normalize_replay_kwargs(kind: str, kwargs: dict[str, Any]) -> dict[str, Any
     drop_keys = _REPLAY_DROP_KEYS.get(kind)
     if drop_keys:
         kwargs = {k: v for k, v in kwargs.items() if k not in drop_keys}
-    rename_map = _REPLAY_RENAME_KEYS.get(kind)
-    if rename_map:
-        kwargs = {rename_map.get(k, k): v for k, v in kwargs.items()}
-    return kwargs
+    # Refuses two spellings that disagree rather than letting key order pick.
+    return canonical_aliases(kind, kwargs)
 
 
 async def _dispatch_standard(
@@ -195,7 +191,7 @@ async def _dispatch_standard(
         await getattr(session, method_name)(screenshot_path)
         return 1, 0
     kwargs = _normalize_replay_kwargs(kind, kwargs)
-    await getattr(session, method_name)(**kwargs)
+    observe(kind, kwargs, await getattr(session, method_name)(**kwargs))
     return 1, 0
 
 

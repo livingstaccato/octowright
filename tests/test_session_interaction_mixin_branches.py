@@ -663,6 +663,22 @@ class TestSetInputFiles:
         assert result == {"ok": True, "selector": "#upload", "paths": [str(f_x), str(f_y)]}
 
     @pytest.mark.anyio
+    async def test_targets_the_active_frame(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
+        """After switch_frame the input is looked up in the frame, as upload_files and every element action do."""
+        page = MagicMock()
+        page.url = "about:blank"
+        page.set_input_files = AsyncMock()
+        frame = MagicMock()
+        frame.set_input_files = AsyncMock()
+        session = _make_session(tmp_path, page=page)
+        session.active_frame = frame
+        f = tmp_path / "x"
+        f.write_text("")
+        await session.set_input_files("#upload", [str(f)])
+        frame.set_input_files.assert_awaited_once_with("#upload", [str(f)])
+        page.set_input_files.assert_not_awaited()
+
+    @pytest.mark.anyio
     async def test_empty_paths_list_passes_through(self, tmp_path: Path, _allow_tmp_uploads: Path) -> None:
         """Empty paths list flows through verbatim (no paths to validate)."""
         page = MagicMock()

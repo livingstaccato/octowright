@@ -18,6 +18,7 @@ from octowright.defaults import (
     SCENARIO_TEMPLATES_DIR,
     SCENARIOS_DIR,
 )
+from octowright.scenario_templates import near_miss_hint, substitute_placeholders, unquoted_placeholder_hint
 
 # ``LiveScenario`` and ``ScenarioPool`` are the runtime/registry classes —
 # their canonical home is ``octowright.scenarios_pool``. They are NOT re-
@@ -119,7 +120,10 @@ def _validate_scenario(s: Scenario) -> None:
 
 
 def load_yaml_scenario(content: str, name: str) -> Scenario:
-    raw = yaml.safe_load(content)
+    return _scenario_from_raw(yaml.safe_load(content), name)
+
+
+def _scenario_from_raw(raw: Any, name: str) -> Scenario:
     if not isinstance(raw, dict):
         # Scenario YAML must be a mapping; a list or scalar at top level is
         # almost certainly a hand-edit mistake. Reset to {} so the caller
@@ -311,7 +315,30 @@ def _validate_optional_ints(
     for field_name in fields:
         value = raw.get(field_name)
         if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
-            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer")
+            # A quoted YAML number and a template arg substituted as text both
+            # arrive as a string ("1280"), and this validator cannot tell which
+            # loader it serves, so the hint names both fixes. Only for such a
+            # string: unquoting ``true``, a list or "wide" would not make an
+            # integer of it.
+            hint = (
+                " (unquote it in the YAML, or pass a JSON number as the template arg)"
+                if _is_integer_text(value)
+                else ""
+            )
+            raise ValueError(
+                f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be an integer, "
+                f"got {type(value).__name__} {value!r}{hint}"
+            )
+
+
+def _is_integer_text(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _validate_optional_bools(
@@ -324,7 +351,9 @@ def _validate_optional_bools(
     for field_name in fields:
         value = raw.get(field_name)
         if value is not None and not isinstance(value, bool):
-            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be a boolean")
+            hint = near_miss_hint(value)
+            got = f", got {value!r}{hint}" if hint else ""
+            raise ValueError(f"scenario {scenario_name!r}: participants[{index}] {field_name!r} must be a boolean{got}")
 
 
 def load_python_scenario(path: Path) -> Scenario:
@@ -395,22 +424,34 @@ def load_scenario_template(name: str, args: dict[str, Any]) -> Scenario:
     )
     if not path.exists():
         raise FileNotFoundError(f"no scenario template named {name!r} in {SCENARIO_TEMPLATES_DIR}")
-    content = path.read_text(encoding="utf-8")
-    # Reject arg values that contain CR/LF before raw substitution into YAML:
-    # a newline in a value lets the caller inject arbitrary YAML structure
-    # (extra keys, list items) once the {{placeholder}} is replaced and the
-    # result is fed to yaml.safe_load.
+    # Every character PyYAML treats as a line break, not only CR/LF. The
+    # substitution below does not go through YAML text, so this is not what
+    # stops injection -- but a persona or URL containing a line break is never
+    # what a caller meant.
     for k, v in args.items():
-        sv = str(v)
-        if "\n" in sv or "\r" in sv:
-            raise ValueError(
-                f"scenario template arg {k!r} contains a newline; "
-                "templates substitute raw into YAML and newlines would inject structure"
-            )
-    # Simple jinja-style substitution if args are provided.
-    for k, v in args.items():
-        content = content.replace(f"{{{{{k}}}}}", str(v))
-    return load_yaml_scenario(content, name)
+        if any(c in str(v) for c in _YAML_LINE_BREAKS):
+            raise ValueError(f"scenario template arg {k!r} contains a newline (a YAML line break)")
+    # Parse the template FIRST, then substitute into the parsed strings. Raw
+    # text substitution let a value rewrite the document: a line break
+    # (including NEL/LS/PS, which PyYAML also honours) started a new key, and a
+    # bare quote ended a flow-style scalar, so ``cosmo", url: "http://evil/"``
+    # added a url with no line break at all. A value substituted into an
+    # already-parsed string cannot become structure.
+    # A quoted scalar that is exactly one placeholder turns true/false/null
+    # into a bool / None and leaves everything else a string, without
+    # re-parsing it; see scenario_templates.
+    text = path.read_text(encoding="utf-8")
+    try:
+        raw = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ValueError(
+            f"scenario template {name!r} is not valid YAML before substitution ({exc}); "
+            f"{unquoted_placeholder_hint(text)}"
+        ) from exc
+    return _scenario_from_raw(substitute_placeholders(raw, args), name)
+
+
+_YAML_LINE_BREAKS = ("\n", "\r", "\x85", "\u2028", "\u2029")
 
 
 def list_scenarios() -> list[dict[str, Any]]:
