@@ -221,6 +221,12 @@ def _validate_persona_yaml_doc(doc: Any) -> None:
         raise ValueError(f"persona YAML field 'app' must be a mapping, got {type(doc['app']).__name__}")
 
 
+#: A persona's private HOME for Chromium's NSS trust store (see persona_trust).
+#: It sits beside the engine profile dirs but is not one: it is rebuilt on every
+#: launch and must never be aged out as a stale profile.
+TRUST_HOME_DIRNAME = "trust-home"
+
+
 def persona_dir(name: str) -> Path:
     return PROFILES_DIR / _slug(name)
 
@@ -423,37 +429,68 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     return result.stdout.strip()
 
 
-def _read_credential_file(raw_path: str, persona_name: str, cred_name: str) -> str:
-    """Read a credential from a file only its owner can read.
+def _posix_file_permissions() -> bool:
+    """Whether this host has the owner and mode bits a credential file is held to.
 
-    The rules a secret file has to meet elsewhere: no symlink, no second hard
-    link, the current user as owner, nothing for group or other. Errors name
-    the rule and never the contents.
+    Windows reports every file as ``0o666`` and has no ``O_NOFOLLOW`` or
+    ``getuid``, so none of the rules below can be checked there.
     """
-    where = f"persona {persona_name!r} field {cred_name!r}"
-    path = Path(raw_path).expanduser()
+    return os.name != "nt"
+
+
+def _open_credential_file(path: Path, where: str) -> int:
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        return os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
     except FileNotFoundError:
         raise MissingCredential(f"{where}: credential file not found") from None
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise MissingCredential(f"{where}: credential file is a symlink") from None
         raise MissingCredential(f"{where}: credential file cannot be opened") from None
+
+
+def _check_credential_file(info: os.stat_result, where: str) -> None:
+    if not stat.S_ISREG(info.st_mode):
+        raise MissingCredential(f"{where}: credential file is not a regular file")
+    if info.st_nlink != 1:
+        raise MissingCredential(f"{where}: credential file has another hard link")
+    if info.st_uid != os.getuid():
+        raise MissingCredential(f"{where}: credential file is owned by another user")
+    if info.st_mode & 0o077:
+        raise MissingCredential(f"{where}: credential file is readable by others; chmod 600")
+
+
+def _read_credential_file(raw_path: str, persona_name: str, cred_name: str) -> str:
+    """Read a credential from a file only its owner can read.
+
+    The rules a secret file has to meet elsewhere: no symlink, no second hard
+    link, the current user as owner, nothing for group or other. Errors name
+    the rule and never the contents.
+
+    Opened non-blocking so a FIFO at the path is refused as not a regular file
+    instead of blocking the caller until some writer appears; ``O_NONBLOCK``
+    has no effect on reading a regular file. On a host without POSIX
+    permissions the file is refused rather than read unchecked.
+    """
+    where = f"persona {persona_name!r} field {cred_name!r}"
+    if not _posix_file_permissions():
+        raise MissingCredential(
+            f"{where}: file credentials need POSIX file permissions and are not supported on this platform; "
+            f"use {cred_name}_env or {cred_name}_cmd"
+        )
+    fd = _open_credential_file(Path(raw_path).expanduser(), where)
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            raise MissingCredential(f"{where}: credential file is not a regular file")
-        if info.st_nlink != 1:
-            raise MissingCredential(f"{where}: credential file has another hard link")
-        if info.st_uid != os.getuid():
-            raise MissingCredential(f"{where}: credential file is owned by another user")
-        if info.st_mode & 0o077:
-            raise MissingCredential(f"{where}: credential file is readable by others; chmod 600")
-        with os.fdopen(fd, "r", encoding="utf-8", closefd=False) as handle:
-            value = handle.read()
+        _check_credential_file(os.fstat(fd), where)
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read()
     finally:
         os.close(fd)
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # The decode error names the offending byte and its offset -- part of
+        # the secret. Name the rule instead.
+        raise MissingCredential(f"{where}: credential file is not valid UTF-8") from None
     value = value[:-1] if value.endswith("\n") else value
     if not value:
         raise MissingCredential(f"{where}: credential file is empty")
