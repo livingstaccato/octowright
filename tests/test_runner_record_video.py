@@ -195,12 +195,12 @@ def test_a_close_that_raises_still_reports_the_video(tmp_path: Path, recordings:
 
     pool.close = AsyncMock(side_effect=close_fails)
     videos: list[Path] = []
-    with (
-        patch("octowright.runner.macro_mod.run_macro", side_effect=passing),
-        pytest.raises(RuntimeError, match="timed out"),
-    ):
-        run_seq(tmp_path, recordings, pool, videos=videos)
+    with patch("octowright.runner.macro_mod.run_macro", side_effect=passing):
+        # A failed close is a teardown warning, as in a suite; the report is still written.
+        result = run_seq(tmp_path, recordings, pool, videos=videos)
     assert videos == [(recordings / "evidence" / "repair.webm").resolve()]
+    assert "timed out" in result["results"][-1]["teardown_warning"]
+    assert (recordings / "evidence" / "octowright-report.xml").is_file()
 
 
 def test_without_artifacts_the_video_stays_in_the_launch_videos_dir(tmp_path: Path, recordings: Path) -> None:

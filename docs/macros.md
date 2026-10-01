@@ -682,15 +682,36 @@ test runner. The runner emits JUnit XML so the result drops cleanly into any CI
 reporting pipeline.
 
 ```bash
-uv run octowright test [path] --kind webkit --tag smoke --out dist/macro-tests.xml
+uv run octowright test [path] --kind webkit --tag smoke --out "$OCTOWRIGHT_RECORDINGS/ci/macro-tests.xml"
 ```
 
 Equivalent MCP tool: `run_test_suite`.
 
+**Where the report goes.** `--out` must resolve under `OCTOWRIGHT_RECORDINGS`,
+like every other path octowright writes; its directory is created if it does
+not exist. Without `--out` the report is `<artifacts>/octowright-report.xml`
+when `--artifacts` is given, else a timestamped
+`octowright-report-<UTC stamp>.xml` directly under `OCTOWRIGHT_RECORDINGS`.
+The path is checked **before** anything launches, so a refused one (say
+`--out dist/x.xml` from a checkout) fails at once with
+`test run refused: suite report path ... resolves outside ...` and no browser.
+To keep the report in a CI workspace, point `OCTOWRIGHT_RECORDINGS` there, or
+copy the file out after the run from the printed `report:` line.
+
 `--persona <name>` launches each test browser as that persona, so it gets the
-persona's profile, `default_url`, trusted roots and credentials.
+persona's profile, `default_url`, trusted roots and credentials. Every test
+would open the persona's one persistent profile, and a second browser on a
+profile that is already open fails (Chromium's `SingletonLock`), so a persona
+runs its tests one at a time: `--persona` with `--max-parallel` above 1 is
+refused as a usage error.
 `--redact-errors` records a failure as macro, step and action only, never
-exception text, for runs whose reports are kept as evidence.
+exception text, for runs whose reports are kept as evidence. That covers a
+browser that fails to close, too.
+
+A browser that fails to **close** does not fail a passing test: it is carried as
+the test's `teardown_warning` (appended to the error of a test that had already
+failed), and the report is still written -- for a sequence as for a suite, on
+the last step that ran.
 
 ### Sequences
 
@@ -713,10 +734,15 @@ octowright test --kind chromium --persona buyer --sequence sequences/smoke.json 
 
 - `{"credential": name}` is resolved from the persona at run time, so no
   secret is ever written into the sequence file. A credential the persona
-  cannot supply fails the run before any browser launches.
+  cannot supply fails the run before any browser launches. The argument stays
+  a **credential whatever the macro calls it**: `{"pin": {"credential": "pin"}}`
+  is scrubbed from the recording and failure text, redacted in `args_used`,
+  and held to the credential sink and fill-origin guards, though `pin` is not
+  a name the classifier would recognise on its own.
 - `{"artifact": file}` becomes a path under `--artifacts`, which must sit
   under `OCTOWRIGHT_RECORDINGS`. The JUnit report is written there as
-  `octowright-report.xml` unless `--out` names another path.
+  `octowright-report.xml` unless `--out` names another path (see
+  [where the report goes](#test-suite-mode)).
 - The sequence stops at the first failing macro; later steps are reported as
   skipped. One JUnit testcase per step. `--sequence` and `--tag` are exclusive.
 
@@ -741,15 +767,25 @@ video: /…/smoke/smoke.webm
   until its context closes, so it is never copied early.
 - With `--artifacts` it is copied there as `<sequence-stem>.webm`. A page the
   run opened later (a popup, a new tab) records its own video, copied as
-  `<stem>-2.webm`, `<stem>-3.webm`, … in the order the pages opened. Each
+  `<stem>-2.webm`, `<stem>-3.webm`, … numbered by the order the pages opened
+  (a page whose video could not be read keeps its number free). Each
   `video:` line follows the `report:` line, in that same order. Copies are
   written `0600`, like the session recording.
+- **Nothing is overwritten.** A name already taken -- by another test or page
+  of the run, or by a file already in the directory (compared
+  case-insensitively, as macOS and Windows file systems do) -- gets `_2`,
+  `_3`, … before `.webm`: re-running into the same `--artifacts` gives
+  `smoke_2.webm`, and macros `a b` / `a_b` or `Login` / `login` get two files.
+  The `video:` lines name what was actually written.
+- A video still **empty** after the browser closed is saved once more through
+  Playwright's `Video.save_as` (which waits for the file); if it is still empty
+  it is left out and logged as `octowright.runner.video_empty`.
 - Without `--artifacts` the video stays where Playwright wrote it, in the
   launch's directory under `$OCTOWRIGHT_RECORDINGS/videos/`, and that path is
   printed.
 - A **failed** run keeps its video and prints its path -- including a run that
-  raised, or whose browser failed to close cleanly. That is usually the video
-  you want.
+  raised, was interrupted with Ctrl-C, or whose browser failed to close
+  cleanly. That is usually the video you want.
 - `[test]` suites (no `--sequence`) record one video per test, copied as
   `<macro>.webm` when `--artifacts` is given (a macro name is reduced to a safe
   file name first). With `--max-parallel` above 1 the `video:` lines come in
@@ -758,7 +794,9 @@ video: /…/smoke/smoke.webm
   but the video itself is not redacted: it shows whatever the page displayed.
   Treat it with the same care as the session recording.
 - **Size.** `octowright test` launches at `OCTOWRIGHT_VIEWPORT_W` x
-  `OCTOWRIGHT_VIEWPORT_H` (default 1280x800, so unset nothing changes), and
+  `OCTOWRIGHT_VIEWPORT_H` (default 1280x800, so unset nothing changes; a value
+  that is not a positive integer, such as `1920px` or `0`, falls back to the
+  default with a logged warning), and
   the video is recorded at exactly that size -- octowright pins Playwright's
   `record_video_size` to the viewport, since Playwright's own default scales
   the video down to fit 800x800 (a 1920x1080 page otherwise records at

@@ -39,6 +39,20 @@ class SequenceStep:
     macro: str
     args: dict[str, Any]
 
+    @property
+    def credential_args(self) -> frozenset[str]:
+        """The args written as ``{"credential": name}``, by name.
+
+        Resolution turns each into a plain string, and the macro would then
+        classify it by its parameter name alone -- so ``{"pin": {"credential":
+        "pin"}}`` reached the recording and a failure payload in the clear,
+        because ``pin`` does not look like a credential. The runner hands these
+        names to ``run_macro(credential_args=...)``, which treats them as
+        credential-tier whatever they are called, the same way a ``macro_call``
+        keeps its caller's credential classified across a rename.
+        """
+        return frozenset(key for key, value in self.args.items() if isinstance(value, dict) and "credential" in value)
+
 
 def _check_arg(index: int, key: str, value: Any) -> None:
     if not isinstance(value, dict):

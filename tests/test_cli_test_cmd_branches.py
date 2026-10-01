@@ -356,3 +356,45 @@ class TestTestCmdRecordVideo:
         assert result.exit_code == 0, result.output
         assert captured["videos"] == []
         assert str(captured["artifacts"]) == str(tmp_path / "ev")
+
+
+class TestTestCmdRefusals:
+    def test_a_persona_with_parallel_tests_is_refused_up_front(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, Any] = {}
+        _patch_runner(monkeypatch, return_value=_result(passed=1, failed=0, total=1), capture=captured)
+        result = CliRunner().invoke(cli, ["test", "--persona", "lab", "--max-parallel", "2"])
+        assert result.exit_code == 2
+        assert "--persona" in result.output and "--max-parallel" in result.output
+        assert captured == {}
+
+    def test_a_report_path_outside_the_recordings_root_fails_before_any_browser(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        from octowright import browser_pool as _bp
+        from octowright import defaults
+
+        monkeypatch.setattr(defaults, "RECORDINGS_DIR", tmp_path / "recordings")
+        pool_stub = MagicMock()
+        pool_stub.launch = AsyncMock()
+        pool_stub.shutdown = AsyncMock()
+        monkeypatch.setattr(_bp, "BrowserPool", lambda *_a, **_kw: pool_stub)
+        result = CliRunner().invoke(cli, ["test", "--out", str(tmp_path / "dist" / "x.xml")])
+        assert result.exit_code == 1
+        assert "test run refused: suite report path" in result.output
+        assert "Traceback" not in result.output
+        pool_stub.launch.assert_not_called()
+
+
+def test_an_interrupted_run_still_prints_its_videos(capsys: pytest.CaptureFixture[str]) -> None:
+    from pathlib import Path
+
+    from octowright.cli.test_cmd import _run_and_report
+
+    videos = [Path("/rec/ev/smoke.webm")]
+
+    async def interrupted() -> Any:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        _run_and_report(interrupted, redact_errors=False, videos=videos)
+    assert f"video: {videos[0]}" in capsys.readouterr().out
