@@ -12,6 +12,8 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from provide.telemetry import get_logger
+
 from octowright import drawn_text as _drawn_text
 from octowright.config_paths import upload_staging_dir, user_cache_dir, user_config_dir, user_state_dir
 
@@ -21,6 +23,8 @@ from octowright.config_paths import upload_staging_dir, user_cache_dir, user_con
 # win. defaults.py is imported by every CLI entrypoint via the modules
 # they load, so this lands before setup_telemetry() runs.
 os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
+
+log = get_logger(__name__)
 
 _DEFAULT_PORT = os.environ.get("OCTOWRIGHT_HTTP_PORT", "6286")
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", f"http://127.0.0.1:{_DEFAULT_PORT}/new-tab")
@@ -125,8 +129,27 @@ def get_default_label() -> str:
         return "user"
 
 
-DEFAULT_VIEWPORT_W = int(os.environ.get("OCTOWRIGHT_VIEWPORT_W", "1280"))
-DEFAULT_VIEWPORT_H = int(os.environ.get("OCTOWRIGHT_VIEWPORT_H", "800"))
+def _parse_viewport_dim(name: str, raw: str | None, default: int) -> int:
+    """A viewport dimension from *raw*, or *default* with a warning when it is not a positive integer.
+
+    Read at import, so a bare ``int()`` turned ``1920px`` or an empty value
+    into a traceback from every command, and let ``0`` or a negative size
+    through to Playwright.
+    """
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        value = 0
+    if value > 0:
+        return value
+    log.warning("octowright.defaults.viewport_invalid", name=name, value=raw, default=default)
+    return default
+
+
+DEFAULT_VIEWPORT_W = _parse_viewport_dim("OCTOWRIGHT_VIEWPORT_W", os.environ.get("OCTOWRIGHT_VIEWPORT_W"), 1280)
+DEFAULT_VIEWPORT_H = _parse_viewport_dim("OCTOWRIGHT_VIEWPORT_H", os.environ.get("OCTOWRIGHT_VIEWPORT_H"), 800)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CONFIG_DIR = user_config_dir()
