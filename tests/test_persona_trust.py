@@ -220,6 +220,10 @@ def test_every_certificate_in_a_bundle_is_trusted(monkeypatch: pytest.MonkeyPatc
     assert "CN=second" in subjects
 
 
+# X11 and Path.home() following $HOME are Linux facts; Windows' home is USERPROFILE.
+_REAL_LINUX = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="X11 XAUTHORITY lookup is Linux-only")
+
+
 def _fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
     """A saved persona with roots, a store builder that records its thread, and a real HOME."""
     monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path / "profiles")
@@ -232,6 +236,7 @@ def _fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, P
     return store, real_home
 
 
+@_REAL_LINUX
 @pytest.mark.usefixtures("on_linux")
 def test_the_real_xauthority_is_kept_when_home_moves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """X11 looks for $HOME/.Xauthority; moving HOME must not lose the display cookie."""
@@ -242,6 +247,7 @@ def test_the_real_xauthority_is_kept_when_home_moves(monkeypatch: pytest.MonkeyP
     assert env["XAUTHORITY"] == str(real_home / ".Xauthority")
 
 
+@_REAL_LINUX
 @pytest.mark.usefixtures("on_linux")
 def test_xauthority_is_left_as_found_otherwise(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _store, real_home = _fake_home(monkeypatch, tmp_path)

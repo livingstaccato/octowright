@@ -303,6 +303,10 @@ def _patch_recording_sequence(
     monkeypatch.setattr(_bp, "BrowserPool", lambda *_a, **_kw: pool_stub)
 
 
+#: How the CLI prints the fake video path on this platform (backslashes on Windows).
+_VIDEO = __import__("pathlib").Path("/rec/ev/repair.webm")
+
+
 class TestTestCmdRecordVideo:
     def test_the_flag_asks_the_runner_for_videos(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         sequence = tmp_path / "repair.json"
@@ -318,7 +322,7 @@ class TestTestCmdRecordVideo:
         sequence.write_text("[]")
         _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture={})
         result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video"])
-        assert result.stdout == "2/2 passed\nreport: /tmp/junit.xml\nvideo: /rec/ev/repair.webm\n"
+        assert result.stdout == f"2/2 passed\nreport: /tmp/junit.xml\nvideo: {_VIDEO}\n"
 
     def test_without_the_flag_nothing_changes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         sequence = tmp_path / "repair.json"
@@ -335,7 +339,7 @@ class TestTestCmdRecordVideo:
         _patch_recording_sequence(monkeypatch, "/rec/ev/repair.webm", capture={}, failed=1)
         result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video", "--redact-errors"])
         assert result.exit_code == 1
-        assert result.stdout.endswith("report: /tmp/junit.xml\nvideo: /rec/ev/repair.webm\n")
+        assert result.stdout.endswith(f"report: /tmp/junit.xml\nvideo: {_VIDEO}\n")
 
     def test_a_run_that_raises_still_prints_its_video(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
         sequence = tmp_path / "repair.json"
@@ -345,7 +349,7 @@ class TestTestCmdRecordVideo:
         )
         result = CliRunner().invoke(cli, ["test", "--sequence", str(sequence), "--record-video", "--redact-errors"])
         assert result.exit_code == 1
-        assert "video: /rec/ev/repair.webm\n" in result.output
+        assert f"video: {_VIDEO}\n" in result.output
         assert "test run failed: OSError" in result.output
         assert PLANTED not in result.output
 
