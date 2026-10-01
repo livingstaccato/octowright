@@ -313,7 +313,9 @@ def macro_compile(
         "Run all `[test]`-tagged macros against ephemeral browsers and emit a JUnit "
         "XML report. Discovery uses MACROS_DIR (override via OCTOWRIGHT_MACROS_DIR). "
         "Spawns one browser per test (kind defaults to 'webkit') with up to "
-        "max_parallel running concurrently. Returns "
+        "max_parallel running concurrently. out_path must sit under the recordings "
+        "root (OCTOWRIGHT_RECORDINGS) and is checked before any browser launches; "
+        "omitted, the report is a timestamped file there. Returns "
         "{passed, failed, total, report_path, results: [per-test summary]}."
     ),
 )

@@ -25,11 +25,27 @@ from octowright.mcp_types import TestSuiteResult
 @cli.command()
 @click.option("--kind", default="webkit", help="Browser engine to use for tests.")
 @click.option("--tag", default=None, help="Only run macros tagged with [tag].")
-@click.option("--out", "out_path", default=None, help="JUnit XML output path.")
 @click.option(
-    "--max-parallel", default=1, type=click.IntRange(min=1), show_default=True, help="Maximum tests to run at once."
+    "--out",
+    "out_path",
+    default=None,
+    help=(
+        "JUnit XML output path; must sit under OCTOWRIGHT_RECORDINGS. Default: <artifacts>/octowright-report.xml "
+        "with --artifacts, else a timestamped file directly under OCTOWRIGHT_RECORDINGS."
+    ),
 )
-@click.option("--persona", default=None, help="Launch every browser as this persona (profile, trust, credentials).")
+@click.option(
+    "--max-parallel",
+    default=1,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Maximum tests to run at once. Must be 1 with --persona.",
+)
+@click.option(
+    "--persona",
+    default=None,
+    help="Launch every browser as this persona (profile, trust, credentials). Runs tests one at a time.",
+)
 @click.option(
     "--sequence",
     "sequence_path",
@@ -76,6 +92,10 @@ def test(
 
     if sequence_path and tag:
         raise click.UsageError("--sequence and --tag are exclusive")
+    if persona and max_parallel > 1:
+        # Every test would open the persona's one persistent profile; a second
+        # browser on an open profile fails (Chromium's SingletonLock).
+        raise click.UsageError("--persona runs tests one at a time; drop --max-parallel or set it to 1")
     artifacts = Path(artifacts_dir) if artifacts_dir else None
     if artifacts is not None and out_path is None:
         out_path = str(artifacts / "octowright-report.xml")
@@ -131,6 +151,7 @@ def _run_and_report(
     import asyncio
 
     from octowright import runner
+    from octowright.request_errors import InvalidRequestError
     from octowright.sequences import SequenceError
 
     try:
@@ -139,9 +160,16 @@ def _run_and_report(
         # Sequence errors name the step and argument, never a resolved value.
         click.echo(f"sequence refused: {exc}", err=True)
         raise SystemExit(1) from None
-    except Exception as exc:
+    except InvalidRequestError as exc:
+        # A refused path (the report outside OCTOWRIGHT_RECORDINGS), raised
+        # before any browser launched. The message names the path only.
+        click.echo(f"test run refused: {exc}", err=True)
+        raise SystemExit(1) from None
+    except BaseException as exc:
+        # BaseException: a Ctrl-C'd run's browser was still closed and its
+        # videos collected, and those are worth printing on the way out too.
         _echo_videos(videos)
-        if not redact_errors:
+        if not redact_errors or not isinstance(exc, Exception):
             raise
         click.echo(f"test run failed: {runner.redact_error(exc)}", err=True)
         raise SystemExit(1) from None

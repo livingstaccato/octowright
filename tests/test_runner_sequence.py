@@ -246,3 +246,31 @@ def test_without_out_the_report_lands_in_the_artifacts_directory(
         )
     assert result["report_path"] == str(artifacts / "octowright-report.xml")
     assert (artifacts / "octowright-report.xml").is_file()
+
+
+def test_a_credential_argument_reaches_run_macro_as_credential_tier(
+    tmp_path: Path, recordings: Path, lab_persona: str
+) -> None:
+    """`{"pin": {"credential": "password"}}` resolves to a plain string; the name
+    `pin` would not classify it, so the runner says which args were credentials."""
+    seen: list[dict[str, Any]] = []
+
+    async def run_macro(**kwargs: Any) -> dict[str, Any]:
+        seen.append(kwargs)
+        return {}
+
+    steps = [{"macro": "m1", "args": {"pin": {"credential": "password"}, "route": "/x"}}]
+    with patch("octowright.runner.macro_mod.run_macro", side_effect=run_macro):
+        run(
+            runner.run_sequence_file(
+                sequence=sequence_file(tmp_path, steps),
+                kind="chromium",
+                persona=lab_persona,
+                artifacts=None,
+                redact_errors=False,
+                out_path=str(recordings / "r.xml"),
+                pool=fake_pool(),
+            )
+        )
+    assert seen[0]["args"] == {"pin": PLANTED, "route": "/x"}
+    assert seen[0]["credential_args"] == frozenset({"pin"})

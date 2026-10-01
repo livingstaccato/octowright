@@ -382,13 +382,20 @@ class MacroArgPrivacy:
     """
 
     assertion_args: frozenset[str] = frozenset()
+    #: Args the CALLER says hold a credential, whatever they are named: a
+    #: sequence's ``{"credential": ...}`` arguments (``run_macro``'s
+    #: *credential_args*). Name classification alone cannot see them.
+    credential_args: frozenset[str] = frozenset()
 
     @classmethod
-    def for_macro(cls, actions: Any) -> MacroArgPrivacy:
-        return cls(assertion_text_args(actions))
+    def for_macro(cls, actions: Any, *, credential_args: frozenset[str] = frozenset()) -> MacroArgPrivacy:
+        return cls(assertion_text_args(actions), frozenset(credential_args))
+
+    def _positional(self, key: object) -> bool:
+        return key in self.assertion_args or key in self.credential_args
 
     def _tier(self, key: object) -> PrivacyTier | None:
-        return "credential" if key in self.assertion_args else _privacy_tier(key)
+        return "credential" if self._positional(key) else _privacy_tier(key)
 
     def classified(self, args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
         """Classified leaves with their effective tier and value-free-safe path."""
@@ -406,7 +413,7 @@ class MacroArgPrivacy:
         """*args* for a response or a log: sensitive keys replaced, admitted values scrubbed."""
         redacted = {
             str(key): marker
-            if is_sensitive_arg_key(key) or key in self.assertion_args
+            if is_sensitive_arg_key(key) or self._positional(key)
             else _redact_nested_args(value, marker)
             for key, value in args.items()
         }

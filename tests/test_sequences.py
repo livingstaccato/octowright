@@ -105,3 +105,20 @@ def test_artifacts_must_sit_under_the_recordings_root(monkeypatch: pytest.Monkey
     steps = sequences.load_sequence(write(tmp_path / "j.json", [{"macro": "m", "args": {"s": {"artifact": "a.png"}}}]))
     with pytest.raises(sequences.SequenceError, match="artifacts"):
         sequences.resolve_steps(steps, persona=None, artifacts=tmp_path / "elsewhere")
+
+
+def test_a_step_names_its_credential_arguments_whatever_they_are_called(tmp_path: Path) -> None:
+    doc = [{"macro": "m", "args": {"pin": {"credential": "pin"}, "route": "/x", "shot": {"artifact": "a.png"}}}]
+    [step] = sequences.load_sequence(write(tmp_path / "j.json", doc))
+    assert step.credential_args == frozenset({"pin"})
+
+
+def test_a_credential_argument_is_credential_tier_under_any_name() -> None:
+    from octowright.macros.privacy import MacroArgPrivacy
+
+    args = {"pin": "4711-planted", "route": "/orders"}  # pragma: allowlist secret
+    assert MacroArgPrivacy().blind_scrub(args) == ()  # by name alone, `pin` is nothing
+    privacy = MacroArgPrivacy.for_macro([], credential_args=frozenset({"pin"}))
+    assert privacy.blind_scrub(args) == ("4711-planted",)
+    assert privacy.redact(args)["pin"] != "4711-planted"
+    assert privacy.redact(args)["route"] == "/orders"
