@@ -13,18 +13,34 @@ persona's Chromium is started with HOME pointing at it.
 
 from __future__ import annotations
 
+import asyncio
+import os
 import shutil
 import subprocess
+import sys
+import threading
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from octowright import persona_trust, personas
+from octowright.browser_pool import BrowserPool, launch_helpers
+from octowright.request_errors import InvalidRequestError
 
+#: Scoped trust is a Linux feature (Chromium reads $HOME/.pki/nssdb there
+#: only), and Windows ships an unrelated System32 certutil.exe, so a tool that
+#: merely exists is not enough.
 needs_tools = pytest.mark.skipif(
-    shutil.which("certutil") is None or shutil.which("openssl") is None,
-    reason="needs NSS certutil and openssl",
+    not sys.platform.startswith("linux") or shutil.which("certutil") is None or shutil.which("openssl") is None,
+    reason="needs Linux, NSS certutil and openssl",
 )
+
+
+@pytest.fixture
+def on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the Linux path's logic on any host."""
+    monkeypatch.setattr(persona_trust, "_trusted_roots_supported", lambda: True)
 
 
 def make_root(directory: Path, name: str) -> Path:
@@ -104,6 +120,7 @@ def test_missing_certutil_is_named(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 
 @pytest.mark.parametrize("kind", ["firefox", "webkit"])
+@pytest.mark.usefixtures("on_linux")
 def test_other_engines_are_refused_not_ignored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
     monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
     write_persona(tmp_path, "lab", "name: lab\ntrusted_roots: [/x.pem]\n")
@@ -142,7 +159,182 @@ def test_launch_kwargs_point_home_at_the_store_and_keep_the_rest(
     assert kwargs["env"]["OCTOWRIGHT_SENTINEL"] == "kept"
 
 
-def test_the_persistent_launch_path_applies_persona_trust() -> None:
-    """The MCP daemon and `octowright test` both open contexts here."""
-    source = Path(persona_trust.__file__).parent.joinpath("browser_pool/launch_helpers.py").read_text()
-    assert "persona_trust_launch_kwargs(profile, kind)" in source
+def test_a_non_linux_host_is_refused_not_launched_untrusted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """macOS and Windows Chromium never read $HOME/.pki/nssdb: launching would drop the trust."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    monkeypatch.setattr(persona_trust, "_trusted_roots_supported", lambda: False)
+    write_persona(tmp_path, "lab", "name: lab\ntrusted_roots: [/x.pem]\n")
+    with pytest.raises(persona_trust.TrustError, match="Linux only"):
+        persona_trust.persona_trust_launch_kwargs("lab", "chromium")
+    # A persona without roots is unaffected on any host.
+    write_persona(tmp_path, "plain", "name: plain\n")
+    assert persona_trust.persona_trust_launch_kwargs("plain", "chromium") == {}
+
+
+def test_the_platform_check_matches_the_host() -> None:
+    assert persona_trust._trusted_roots_supported() is sys.platform.startswith("linux")
+
+
+def test_a_trust_refusal_is_the_callers_mistake_not_an_engine_fault() -> None:
+    assert issubclass(persona_trust.TrustError, InvalidRequestError)
+
+
+def test_a_persona_file_that_is_not_yaml_is_a_trust_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    write_persona(tmp_path, "broken", "name: [unclosed\n")
+    with pytest.raises(persona_trust.TrustError, match="broken"):
+        persona_trust.persona_trust_launch_kwargs("broken", "chromium")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
+def test_a_symlinked_trust_home_is_refused_and_left_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path / "profiles")
+    monkeypatch.setattr(persona_trust, "_certutil", lambda: "certutil-never-run")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep").write_text("kept")
+    (tmp_path / "profiles" / "lab").mkdir(parents=True)
+    (tmp_path / "profiles" / "lab" / "trust-home").symlink_to(elsewhere, target_is_directory=True)
+    pem = tmp_path / "r.pem"
+    pem.write_text("-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n")
+    with pytest.raises(persona_trust.TrustError, match="symlink"):
+        persona_trust.build_trust_home("lab", [pem])
+    assert (elsewhere / "keep").read_text() == "kept"
+
+
+@needs_tools
+def test_every_certificate_in_a_bundle_is_trusted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """certutil -A -i imports only a file's first certificate; the rest must not vanish."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path / "profiles")
+    first, second, third = (make_root(tmp_path, n) for n in ("first", "second", "third"))
+    bundle = tmp_path / "bundle.pem"
+    bundle.write_text(first.read_text() + second.read_text())
+    home = persona_trust.build_trust_home("lab", [bundle, third])
+    assert nicknames(home) == {"octowright-trust-0", "octowright-trust-1", "octowright-trust-2"}
+    subjects = subprocess.run(
+        ["certutil", "-d", f"sql:{home / '.pki/nssdb'}", "-L", "-n", "octowright-trust-1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "CN=second" in subjects
+
+
+def _fake_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
+    """A saved persona with roots, a store builder that records its thread, and a real HOME."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path / "profiles")
+    write_persona(tmp_path / "profiles", "lab", "name: lab\ntrusted_roots: [/x.pem]\n")
+    store = tmp_path / "store"
+    real_home = tmp_path / "real-home"
+    real_home.mkdir()
+    monkeypatch.setenv("HOME", str(real_home))
+    monkeypatch.setattr(persona_trust, "build_trust_home", lambda _persona, _roots: store)
+    return store, real_home
+
+
+@pytest.mark.usefixtures("on_linux")
+def test_the_real_xauthority_is_kept_when_home_moves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """X11 looks for $HOME/.Xauthority; moving HOME must not lose the display cookie."""
+    _store, real_home = _fake_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("XAUTHORITY", raising=False)
+    (real_home / ".Xauthority").write_bytes(b"cookie")
+    env = persona_trust.persona_trust_launch_kwargs("lab", "chromium")["env"]
+    assert env["XAUTHORITY"] == str(real_home / ".Xauthority")
+
+
+@pytest.mark.usefixtures("on_linux")
+def test_xauthority_is_left_as_found_otherwise(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _store, real_home = _fake_home(monkeypatch, tmp_path)
+    monkeypatch.delenv("XAUTHORITY", raising=False)
+    assert "XAUTHORITY" not in persona_trust.persona_trust_launch_kwargs("lab", "chromium")["env"]
+    monkeypatch.setenv("XAUTHORITY", "/run/user/1/xauth")
+    (real_home / ".Xauthority").write_bytes(b"cookie")
+    assert persona_trust.persona_trust_launch_kwargs("lab", "chromium")["env"]["XAUTHORITY"] == "/run/user/1/xauth"
+
+
+class _FakeContext:
+    def __init__(self) -> None:
+        self.pages: list[Any] = []
+
+    async def new_page(self) -> object:
+        page = object()
+        self.pages.append(page)
+        return page
+
+
+class _FakeBrowserType:
+    def __init__(self) -> None:
+        self.persistent_kwargs: dict[str, Any] | None = None
+
+    async def launch_persistent_context(self, _user_data_dir: str, **kwargs: Any) -> _FakeContext:
+        self.persistent_kwargs = kwargs
+        return _FakeContext()
+
+
+async def _open(browser_type: _FakeBrowserType, kind: str = "chromium") -> None:
+    await launch_helpers._open_browser_context(
+        browser_type=browser_type,
+        kind=kind,
+        profile="lab",
+        session_user_data_dir=None,
+        headless=True,
+        viewport_kwargs={},
+        ctx_video_kwargs={},
+        ctx_har_kwargs={},
+        launch_kwargs={"args": ["--kept"]},
+    )
+
+
+@pytest.mark.usefixtures("on_linux")
+async def test_the_persistent_launch_path_applies_persona_trust_off_the_loop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The MCP daemon and `octowright test` both open contexts here.
+
+    The store rebuild is an rmtree plus certutil subprocesses with a 30s
+    timeout each, so it must not run on the event loop thread.
+    """
+    store, _real_home = _fake_home(monkeypatch, tmp_path)
+    threads: list[int] = []
+    monkeypatch.setattr(
+        persona_trust, "build_trust_home", lambda _persona, _roots: threads.append(threading.get_ident()) or store
+    )
+    browser_type = _FakeBrowserType()
+    await _open(browser_type)
+    assert browser_type.persistent_kwargs is not None
+    assert browser_type.persistent_kwargs["env"]["HOME"] == str(store)
+    assert browser_type.persistent_kwargs["args"] == ["--kept"]
+    assert threads and threads[0] != threading.get_ident()
+    assert asyncio.get_running_loop() is not None
+
+
+def _pool_opening(monkeypatch: pytest.MonkeyPatch, pool: BrowserPool, kind: str) -> None:
+    async def _impl(_options: dict[str, Any], _sp: object) -> dict[str, Any]:
+        await _open(_FakeBrowserType(), kind)
+        return {"instance_id": "never"}
+
+    monkeypatch.setattr(pool, "_launch_impl", _impl)
+
+
+@pytest.mark.parametrize(
+    ("doc", "kind"),
+    [
+        ("name: lab\ntrusted_roots: [/x.pem]\n", "firefox"),
+        ("name: lab\ntrusted_roots: /not-a-list.pem\n", "chromium"),
+        ("name: [unclosed\n", "chromium"),
+    ],
+    ids=["wrong-engine", "malformed-persona", "not-yaml"],
+)
+@pytest.mark.usefixtures("on_linux")
+async def test_a_trust_refusal_leaves_engine_health_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, doc: str, kind: str
+) -> None:
+    """A persona's own misconfiguration must not report the engine broken (issue #214)."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    write_persona(tmp_path, "lab", doc)
+    pool = BrowserPool()
+    _pool_opening(monkeypatch, pool, kind)
+    with pytest.raises(persona_trust.TrustError):
+        await pool.launch(kind=kind)
+    assert pool.engine_health() == {}
+    assert pool.refusals()["total"] == 1

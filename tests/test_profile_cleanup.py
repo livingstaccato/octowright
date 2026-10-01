@@ -114,3 +114,16 @@ def test_find_stale_returns_StaleProfile_with_size_and_age(tmp_path: Path) -> No
     assert isinstance(sp, StaleProfile)
     assert sp.size_bytes > 0
     assert sp.age_days >= 30
+
+
+def test_find_stale_never_offers_a_persona_trust_store(tmp_path: Path) -> None:
+    """``trust-home`` is a persona's NSS store, rebuilt on every launch, not an engine profile.
+
+    Its mtime is the launch that built it, so a browser that stays up long
+    enough would see its own trust store reported stale and deleted.
+    """
+    _make_profile(tmp_path, "lab", "trust-home", age_days=45)
+    _make_profile(tmp_path, "lab", "chromium", age_days=45)
+
+    stale = find_stale_profiles(tmp_path, days=30.0)
+    assert {(s.persona, s.engine) for s in stale} == {("lab", "chromium")}

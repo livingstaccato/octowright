@@ -17,6 +17,7 @@ import http.server
 import shutil
 import ssl
 import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from pathlib import Path
@@ -28,8 +29,8 @@ from tests.test_engine_matrix_live import _configure_runtime_paths, _maybe_skip_
 from tests.test_persona_trust import make_root, write_persona
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("certutil") is None or shutil.which("openssl") is None,
-    reason="needs NSS certutil and openssl",
+    not sys.platform.startswith("linux") or shutil.which("certutil") is None or shutil.which("openssl") is None,
+    reason="needs Linux, NSS certutil and openssl",
 )
 
 
