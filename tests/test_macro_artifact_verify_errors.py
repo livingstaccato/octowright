@@ -316,7 +316,7 @@ async def test_a_replay_that_reports_no_counts_records_zero(monkeypatch: pytest.
     storage, macro_artifacts = _reload(monkeypatch, tmp_path)
     _write_macro(storage)
 
-    async def bare_replay(*, session, name, args, slowmo_ms=None):
+    async def bare_replay(*, session, name, args, slowmo_ms=None, **_private):
         return {"macro": name}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", bare_replay)
@@ -342,7 +342,7 @@ async def test_a_failed_replay_is_recorded_with_its_traceback(monkeypatch: pytes
     storage, macro_artifacts = _reload(monkeypatch, tmp_path)
     _write_macro(storage)
 
-    async def exploding_replay(*, session, name, args, slowmo_ms=None):
+    async def exploding_replay(*, session, name, args, slowmo_ms=None, **_private):
         raise RuntimeError("selector never appeared")
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", exploding_replay)

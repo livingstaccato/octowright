@@ -569,6 +569,27 @@ scrubs more (no floor, session-wide); see [env-vars.md](env-vars.md). Under the
 default `credentials` policy none of this applies, because no identity/contextual
 value is blind-scrubbed at all.
 
+**A full scrub set** (#248). The session ledger is append-only and never
+cleared, and every recorder write, console message, network row and socket URL
+is scrubbed against it, so its cost grows with every distinct value it holds.
+`OCTOWRIGHT_MACRO_SCRUB_MAX_VALUES` (default 256, `0` for no cap) bounds the
+session-wide values -- credentials, and passwords typed into a password field
+-- but never by dropping one: privacy wins over cost, so every value that
+reaches the ledger is still added and scrubbed. Run-scoped values are not
+counted. Once the count reaches the cap the session is `scrub_saturated` for
+its lifetime (logged once as `octowright.macro.scrub_saturated`, with the
+count and cap), and the only enforcement is a refusal: a `macro_run`, sequence
+step, `macro_artifact_run` or nested `macro_call` that would add a value the
+ledger does not already hold is refused with an invalid-request error before
+anything runs or is written (an artifact run creates no run directory). The
+message gives the count and cap, never the value; relaunch the browser for a
+fresh session or raise the cap. A run whose values are all already held runs
+normally, a refused sequence step is a failed step, and a refused nested call
+fails the step that made it. A direct `browser_fill` into a password field is
+never refused -- the text is already typed -- so it can still take the session
+over the cap. Run results, failure payloads and `macro_artifact_run` results
+carry `scrub_saturated: true` on a saturated session, and omit it otherwise.
+
 **Credential-named arguments in URLs, code and outbound fields.** A
 credential-named argument expanded into `url`, `expression`, `verify_js`,
 `grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload

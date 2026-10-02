@@ -3,10 +3,11 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""Nested macro-call execution helpers."""
+"""Macro execution helpers: nested calls, and the hooks a run calls around its steps."""
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 from octowright.credential_sinks import CREDENTIAL_CALL_MARKER
@@ -45,6 +46,34 @@ def actions_assert_network_clean(actions: Any, load_macro: MacroLoader | None = 
     return any(
         action.get("action") == "expect_network_clean" for action in iter_nested_actions(actions, load_macro=load_macro)
     )
+
+
+def start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], load_macro: MacroLoader) -> None:
+    """Before a run's first step, so the requests the journey starts are the ones
+    expect_network_clean waits for; a run that never asserts pays nothing."""
+    if actions_assert_network_clean(actions, load_macro):
+        session.enable_inflight_tracking()
+
+
+def end_request_tracking(session: SessionLike) -> None:
+    """Pass or fail, the run that needed request tracking is over; an open
+    mark_network_clean window keeps it on for the verify macro after it."""
+    session.disable_inflight_tracking()
+
+
+async def report_progress(ctx: Any | None, progress: float, total: float, message: str | None) -> None:
+    """Best-effort MCP progress emission for a long-running macro.
+
+    No-ops when there is no Context (direct, non-MCP callers) and never raises out
+    of macro execution — a progress hiccup must not fail the macro. When the
+    follower bridge has injected a progressToken, each notification also re-arms
+    the in-flight deadline so a steadily-progressing macro isn't killed by the
+    flat bridge timeout (see ``proxy_supervisor``).
+    """
+    if ctx is None:
+        return
+    with contextlib.suppress(Exception):
+        await ctx.report_progress(progress, total=total, message=message)
 
 
 async def dispatch_macro_call(

@@ -62,6 +62,11 @@ def end_fill_audit(token: Token[FillAudit | None]) -> None:
     _AUDIT.reset(token)
 
 
+def offsite_fields(audit: FillAudit) -> dict[str, Any]:
+    """What warn mode let through, for a failure payload: a failed run still typed it off-site."""
+    return {"credential_fill_offsite": list(audit.offsite)} if audit.offsite else {}
+
+
 @asynccontextmanager
 async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) -> AsyncIterator[None]:
     """Refuse (or, in warn mode, record) a credential typed onto a foreign origin.

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -20,11 +19,13 @@ from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
     MAX_MACRO_CALL_DEPTH,
-    actions_assert_network_clean,
     dispatch_macro_call,
     dispatch_plain_action,
+    end_request_tracking,
+    report_progress,
+    start_request_tracking,
 )
-from octowright.macros.credential_fill import FillAudit, begin_fill_audit, credential_fill_guard, end_fill_audit
+from octowright.macros.credential_fill import begin_fill_audit, credential_fill_guard, end_fill_audit, offsite_fields
 from octowright.macros.descriptions import describe_action
 from octowright.macros.failure_context import _truncate_bundle_console
 from octowright.macros.nesting import RunMacros
@@ -34,6 +35,7 @@ from octowright.macros.privacy import (
     RunPrivacyLedger,
     admit_call_privacy,
     run_privacy_ledger,
+    scrub_saturation_fields,
     with_session_values,
 )
 from octowright.macros.privacy import (
@@ -386,21 +388,6 @@ def repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
     )
 
 
-async def _report_progress(ctx: Any | None, progress: float, total: float, message: str | None) -> None:
-    """Best-effort MCP progress emission for a long-running macro.
-
-    No-ops when there is no Context (direct, non-MCP callers) and never raises out
-    of macro execution — a progress hiccup must not fail the macro. When the
-    follower bridge has injected a progressToken, each notification also re-arms
-    the in-flight deadline so a steadily-progressing macro isn't killed by the
-    flat bridge timeout (see ``proxy_supervisor``).
-    """
-    if ctx is None:
-        return
-    with contextlib.suppress(Exception):
-        await ctx.report_progress(progress, total=total, message=message)
-
-
 async def run_macro(
     session: SessionLike,
     name: str,
@@ -410,6 +397,7 @@ async def run_macro(
     ctx: Any | None = None,
     credential_args: frozenset[str] = frozenset(),
     _macros: RunMacros | None = None,
+    _run_ledger: RunPrivacyLedger | None = None,
 ) -> MacroRunResult:
     """Run macro *name* on *session*.
 
@@ -417,8 +405,11 @@ async def run_macro(
     (a sequence's ``{"credential": ...}``): scrubbed, redacted and sink-guarded
     as a ``macro_call`` keeps a caller's credential passed under another name.
 
-    ``_macros`` is for `run_sequence`, whose members share one `RunMacros`;
-    any other caller leaves it out and the run gets its own.
+    ``_macros`` is for `run_sequence`, whose members share one `RunMacros`,
+    and `run_macro_artifact`, which loads the macro through the one it passes;
+    any other caller leaves it out and the run gets its own. ``_run_ledger`` is
+    `run_macro_artifact`'s: a ledger that has ALREADY admitted this run's own
+    arguments (from the same `RunMacros`), and whose scope the caller closes.
     """
     async with session.operation("macro_run"):
         with span(
@@ -431,7 +422,14 @@ async def run_macro(
             session.mark_network_clean_window()
             macros = _macros if _macros is not None else RunMacros(load_macro)
             return await _run_macro_impl(
-                session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros, credential_args=credential_args
+                session,
+                name,
+                args,
+                slowmo_ms=slowmo_ms,
+                ctx=ctx,
+                macros=macros,
+                credential_args=credential_args,
+                run_ledger=_run_ledger,
             )
 
 
@@ -557,13 +555,47 @@ async def _finish_macro_run(
 
 
 async def _run_macro_impl(
-    session: SessionLike, name: str, args: dict[str, Any] | None, **kwargs: Any
+    session: SessionLike,
+    name: str,
+    args: dict[str, Any] | None,
+    *,
+    run_ledger: RunPrivacyLedger | None = None,
+    macros: RunMacros | None = None,
+    credential_args: frozenset[str] = frozenset(),
+    **kwargs: Any,
 ) -> MacroRunResult:
-    """One run, its session privacy scope closed however it ends."""
-    with run_privacy_ledger(session) as run_ledger:
-        result = await _run_admitted(session, name, args, run_ledger=run_ledger, **kwargs)
+    """One run, its session privacy scope closed however it ends.
+
+    A supplied *run_ledger* already holds the run's own arguments and its owner
+    closes it, so it is neither admitted to again nor closed here.
+    """
+    macros = macros if macros is not None else RunMacros(load_macro)
+    admitted = run_ledger is not None
+    with run_privacy_ledger(session, run_ledger) as run_ledger:
+        macro = macros(name)
+        # An argument that IS the forbidden text is sensitive whatever it is named;
+        # the exported CLI reads the same set (privacy.assertion_text_args).
+        privacy = MacroArgPrivacy.for_macro(macro.get("actions", []), credential_args=credential_args)
+        if not admitted:
+            # What THIS run has admitted for blind scrubbing: its own arguments plus
+            # every nested call's, appended as they execute. Failure payloads and
+            # screenshot privacy read it; the recorder reads the session ledger.
+            run_ledger.admit(name, privacy.admission(args or {}))
+        result = await _run_admitted(
+            session,
+            name,
+            args,
+            macro=macro,
+            privacy=privacy,
+            macros=macros,
+            run_ledger=run_ledger,
+            credential_args=credential_args,
+            **kwargs,
+        )
     if exempt := run_ledger.exempt_args:  # what the #247 floor/list left visible
         result["scrub_exempt_args"] = exempt
+    if scrub_saturation_fields(session):  # the session's scrub set is full (#248)
+        result["scrub_saturated"] = True
     return result
 
 
@@ -574,25 +606,18 @@ async def _run_admitted(
     *,
     slowmo_ms: int | None,
     ctx: Any | None = None,
-    macros: RunMacros | None = None,
+    macro: dict[str, Any],
+    privacy: MacroArgPrivacy,
+    macros: RunMacros,
     run_ledger: RunPrivacyLedger,
     credential_args: frozenset[str] = frozenset(),
 ) -> MacroRunResult:
-    macros = macros if macros is not None else RunMacros(load_macro)
-    macro = macros(name)
     effective_args = args or {}
-    # An argument that IS the forbidden text is sensitive whatever it is named;
-    # the exported CLI reads the same set (privacy.assertion_text_args).
-    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []), credential_args=credential_args)
-    # What THIS run has admitted for blind scrubbing: its own arguments plus every
-    # nested call's, appended as they execute. Failure payloads and screenshot
-    # privacy read it; the recorder reads the session ledger, which it feeds.
-    run_ledger.admit(name, privacy.admission(effective_args))
     origins = own_site_origins(session)
     actions = substitute(
         macro.get("actions", []), effective_args, trusted_origins=origins, credential_args=credential_args
     )
-    _start_request_tracking(session, actions, macros)
+    start_request_tracking(session, actions, macros)
 
     executed = 0
     skipped = 0
@@ -646,7 +671,8 @@ async def _run_admitted(
                 )
                 payload.update(assertions.fields(run_values))
                 payload.update(run_ledger.exempt_fields())
-                payload.update(_offsite_fields(audit))
+                payload.update(offsite_fields(audit))
+                payload.update(scrub_saturation_fields(session))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
@@ -658,12 +684,12 @@ async def _run_admitted(
             skipped += skipped_count
             # Emit progress after each landed step (count up to the total). Drives
             # the follower bridge's deadline re-arm and any client progress bar.
-            await _report_progress(ctx, index + 1, len(actions), action.get("action"))
+            await report_progress(ctx, index + 1, len(actions), action.get("action"))
         completed_ok = True
     finally:
         end_collecting(collecting)
         end_fill_audit(audit_token)
-        _end_request_tracking(session)
+        end_request_tracking(session)
         elapsed_s = await _finish_macro_run(
             session,
             name=name,
@@ -686,24 +712,6 @@ async def _run_admitted(
     if audit.offsite:  # warn mode let a credential onto a foreign origin
         result["credential_fill_offsite"] = audit.offsite
     return result
-
-
-def _offsite_fields(audit: FillAudit) -> dict[str, Any]:
-    """What warn mode let through, for a failure payload: a failed run still typed it off-site."""
-    return {"credential_fill_offsite": list(audit.offsite)} if audit.offsite else {}
-
-
-def _start_request_tracking(session: SessionLike, actions: list[dict[str, Any]], macros: RunMacros) -> None:
-    """Before the first step, so the requests the journey starts are the ones
-    expect_network_clean waits for; a run that never asserts pays nothing."""
-    if actions_assert_network_clean(actions, macros):
-        session.enable_inflight_tracking()
-
-
-def _end_request_tracking(session: SessionLike) -> None:
-    """Pass or fail, the run that needed request tracking is over; an open
-    mark_network_clean window keeps it on for the verify macro after it."""
-    session.disable_inflight_tracking()
 
 
 async def run_sequence(
@@ -748,7 +756,7 @@ async def run_sequence(
                 except sequence_steps.GATE_ERRORS:
                     raise
                 except Exception as exc:
-                    used = _redact_args_for_response(step_args, _macro_privacy(macros, name))
+                    used = sequence_steps.step_args_used(macros, name, step_args)
                     steps.append(sequence_steps.failed_step(name, exc, used))
                     if stop_on_failure:
                         stopped_at = index
