@@ -1640,15 +1640,24 @@ def test_session_deep_link_with_complex_id() -> None:
             assert "session debugger" in r.text
 
 
-def test_no_frontend_routes_when_bundle_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """If the frontend hasn't been built yet, the API still works — the dashboard is just 404."""
+def test_a_missing_bundle_says_how_to_build_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """An unbuilt frontend (a fresh source checkout or worktree) names the fix instead of a bare 404.
+
+    The bundle is gitignored build output, so every editable install starts without
+    it, and a plain "Not Found" at / sent people reading source to find out why.
+    """
     monkeypatch.setattr(_http_state, "FRONTEND_DIR", tmp_path / "does-not-exist")
     with TestClient(_http.build_app()) as client:
         # API still works.
         assert client.get("/api/health").status_code == 200
-        # Static routes are absent; / is unhandled by Starlette and 404s.
-        assert client.get("/").status_code == 404
-        assert client.get("/sessions/abc").status_code == 404
+        for path in ("/", "/sessions/abc", "/index.html"):
+            r = client.get(path)
+            assert r.status_code == 404
+            assert r.headers["content-type"].startswith("text/html")
+            assert "dashboard is not built" in r.text
+            assert "npm run build --workspace=packages/octowright-frontend" in r.text
+        # An unknown API path is still an ordinary 404, not the dashboard hint.
+        assert "dashboard is not built" not in client.get("/api/does-not-exist").text
 
 
 # ---------------------------------------------------------------------------

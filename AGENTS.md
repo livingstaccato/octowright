@@ -10,7 +10,7 @@ This file provides guidance to coding agents when working with code in this repo
 
 ```bash
 # Install
-make install              # uv sync --all-groups
+make install              # uv sync --all-groups, then builds the dashboard bundle (skipped with a warning without npm)
 
 # Test & quality
 make test                 # pytest — DOES launch real browsers where engines are installed
@@ -182,7 +182,7 @@ The idle watchdog is **disabled by default**: the daemon stays up until an expli
 
 ### Frontend
 
-TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `packages/octowright-frontend/src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
+TypeScript SPA in `packages/octowright-frontend/`. Built files land in `src/octowright/server/frontend/`, which is **gitignored**: a wheel ships the bundle (`release.yml` builds it first), but an editable install from a source checkout, and every fresh git worktree, has none until `make install` / `make frontend-build` runs. Without it the daemon serves a "dashboard not built" page at every dashboard path naming the build command (`octowright/frontend_bundle.BUILD_COMMAND`), `octowright doctor` reports `dashboard:bundle` as WARN, and the daemon only notices a new build at startup, so restart it after building. The dashboard auto-polls `/api/sessions` and uses WebSockets for live event streaming. Types in `packages/octowright-frontend/src/types.ts` mirror the Python Pydantic/dataclass models. A session-kind plugin may ship its own dashboard renderer (`FrontendAsset` in `octowright.plugins.contract`), served as a static asset by `http/routes/plugin_assets.py`; `session.ts` resolves a non-core `kind` through the plugin registry (`plugin-registry.ts`) rather than importing any plugin's renderer directly, so a plugin's bundle never lands in core's own SPA bundle. The terminal plugin's xterm-based renderer is the first example — see `packages/octowright-terminal/README.md`.
 
 ### Terminal Sessions (plugin)
 

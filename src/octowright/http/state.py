@@ -32,12 +32,12 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys as _sys
-from pathlib import Path
 from types import ModuleType as _ModuleType
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import frontend_bundle
 from octowright import macros as _macros
 from octowright import personas as _personas
 from octowright import video as _video
@@ -50,7 +50,7 @@ from octowright.defaults import (
 log = get_logger("octowright.http")
 
 # Frontend bundle lives here (sibling subagent populates the directory).
-FRONTEND_DIR = Path(__file__).parent.parent / "server" / "frontend"
+FRONTEND_DIR = frontend_bundle.FRONTEND_DIR
 
 # Re-exported from defaults so handlers reference `state.<NAME>`. Tests swap
 # with `monkeypatch.setattr(_http.state, "X", value)`.

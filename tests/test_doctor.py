@@ -181,6 +181,7 @@ class TestCoreAudioCheck:
             "check_stray_drivers",
             "check_orphan_browsers",
             "check_storage",
+            "check_dashboard_bundle",
         ):
             monkeypatch.setattr(_doctor, name, lambda: _doctor.Check("x", "ok", ""))
         checks = await _doctor.run_checks(engines=False)
@@ -235,6 +236,32 @@ class TestBrowserInstallCheck:
     def test_a_missing_root_is_a_warning_not_a_crash(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path / "nope"))
         assert _doctor.check_browser_installs().status == "warn"
+
+
+class TestDashboardBundleCheck:
+    def test_a_built_bundle_passes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        (tmp_path / "index.html").write_text("<html></html>", encoding="utf-8")
+        monkeypatch.setattr(_doctor, "_frontend_dir", lambda: tmp_path)
+        assert _doctor.check_dashboard_bundle().status == "ok"
+
+    def test_a_missing_bundle_warns_with_the_build_command(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """WARN, not FAIL: the MCP tools work without the dashboard."""
+        monkeypatch.setattr(_doctor, "_frontend_dir", lambda: tmp_path / "nope")
+        check = _doctor.check_dashboard_bundle()
+        assert check.status == "warn"
+        assert "npm run build --workspace=packages/octowright-frontend" in check.detail
+        assert check.data["path"] == str(tmp_path / "nope")
+
+    def test_a_directory_without_index_html_still_warns(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(_doctor, "_frontend_dir", lambda: tmp_path)
+        assert _doctor.check_dashboard_bundle().status == "warn"
+
+    async def test_run_checks_includes_it(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(_doctor, "_frontend_dir", lambda: tmp_path / "nope")
+        checks = await _doctor.run_checks(engines=False)
+        assert any(c.name == "dashboard:bundle" for c in checks)
 
 
 class TestStorageCheck:
