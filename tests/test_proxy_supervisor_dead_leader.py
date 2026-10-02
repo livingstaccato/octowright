@@ -133,7 +133,7 @@ async def test_run_supervised_proxy_exits_when_connect_and_health_fail(
 
     monkeypatch.setattr(supervisor, "streamable_http_client", failing_client)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
     # Window 0 = no recovery grace = legacy immediate-exit when the leader is gone.
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 0.0)
@@ -167,7 +167,7 @@ async def test_request_timeout_recycles_remote_session(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(supervisor, "BRIDGE_REQUEST_TIMEOUT_SECONDS", 0.03)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     # The timed-out session dies ~30ms after opening, so the success-path flap
     # guard throttles the recycle; keep that backoff tiny so the recycle still
     # lands inside the test's wait window (the guard itself is covered by
@@ -226,7 +226,7 @@ async def test_clean_remote_stream_end_exits_when_health_is_dead(monkeypatch: py
     """A leader stream may close without raising; dead health still exits the follower."""
 
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
 
     @asynccontextmanager
     async def closing_client(_url: str, **_kwargs: Any):  # type: ignore[no-untyped-def]
@@ -273,7 +273,7 @@ async def test_survives_leader_bounce_within_recovery_window(monkeypatch: pytest
     (an `octowright restart` / respawn) must NOT kill the follower — it retries
     through the gap and reconnects to the new leader, keeping the client session."""
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 5.0)
     from tests._metric_recorders import RecordingCounter
@@ -352,7 +352,7 @@ async def test_silent_sse_is_unstuck_so_follower_reconnects(monkeypatch: pytest.
     connection so the inline loop reconnects, instead of hanging on a dead socket
     until the recovery window expires (and then giving up)."""
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 5.0)
 
@@ -426,7 +426,7 @@ async def test_reconnects_on_transient_drop_while_leader_healthy(monkeypatch: py
     the follower reconnects in place and clears the recovery clock, rather than
     counting it against the recovery window."""
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
 
     async def health_alive(_url: str) -> bool:
@@ -493,7 +493,7 @@ async def test_exits_after_recovery_window_with_permanently_dead_leader(monkeypa
 
     monkeypatch.setattr(supervisor, "streamable_http_client", failing_client)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.02)
     monkeypatch.setattr(supervisor, "BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 0.1)
     from tests._metric_recorders import RecordingCounter
@@ -529,7 +529,7 @@ async def test_exits_after_recovery_window_with_permanently_dead_leader(monkeypa
 @pytest.mark.anyio
 async def test_remote_reader_forwards_messages_and_handles_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
     monkeypatch.setattr(supervisor, "reconnect_delay", lambda _attempt, *, max_delay: 0.01)
 
     remote_read_sends: list[anyio.abc.ObjectSendStream[Any]] = []
@@ -590,7 +590,7 @@ async def test_flapping_session_is_throttled_not_hot_looped(monkeypatch: pytest.
     monkeypatch.setattr(supervisor, "reconnect_delay", spy_delay)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
     monkeypatch.setattr(supervisor, "resolve_leader_token", lambda: "")
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
 
     async def _noop_consumer(*_args: Any, **_kwargs: Any) -> None:
         await anyio.sleep_forever()
@@ -656,7 +656,7 @@ async def test_connect_then_abort_storm_is_throttled(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(supervisor, "reconnect_delay", spy_delay)
     monkeypatch.setattr(supervisor, "resolve_leader_url", lambda url: url)
     monkeypatch.setattr(supervisor, "resolve_leader_token", lambda: "")
-    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: None)
+    monkeypatch.setattr(supervisor.bridge_state, "record_snapshot", lambda **_kwargs: True)
 
     async def _noop_consumer(*_args: Any, **_kwargs: Any) -> None:
         await anyio.sleep_forever()

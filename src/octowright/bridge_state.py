@@ -38,10 +38,24 @@ UNKNOWN_FOLLOWER_VERSION = "unknown"
 STATE_LOCK_TIMEOUT_SECONDS = 2.0
 STATE_LOCK_POLL_SECONDS = 0.01
 
+# Backoff between retries of a follower snapshot that was skipped (lock timeout
+# or a failed write). A follower writes only on connect and on session reset,
+# so without a retry one skipped write leaves it unregistered for the life of a
+# stable connection. Bounded (~2 min in all) so a lock that is broken rather
+# than contended does not retry, and warn, forever.
+SNAPSHOT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0, 60.0)
+
 # Monotonic counter disambiguates concurrent snapshots (and survives PID reuse
 # after a follower crash + OS PID recycle) so two writers can't collide on a
 # single tmp filename and one silently overwrite the other's contents.
 _TMP_COUNTER = itertools.count(1)
+
+# Newest snapshot generation per (state path, follower pid), so a retry of an
+# older snapshot never overwrites a newer one; and the pending retry tasks,
+# held so they are not garbage-collected mid-flight.
+_SNAPSHOT_GENERATIONS = itertools.count(1)
+_LATEST_SNAPSHOT: dict[tuple[str, int], int] = {}
+_SNAPSHOT_RETRIES: set[asyncio.Task[None]] = set()
 
 
 @dataclass
@@ -150,9 +164,11 @@ def _acquire_bounded(fh: Any, lock_path: Path, *, deadline: float | None = None)
     lock, against wait-free writes where no process can block another.
 
     Poll non-blocking until the deadline, then return ``False`` so the caller
-    skips that snapshot/removal. A later heartbeat or housekeeping pass retries
-    naturally, preserving responsiveness without reopening the lost-update
-    window this lock exists to close.
+    skips that snapshot/removal. A skipped removal is retried by the next
+    housekeeping pass; a skipped snapshot by ``record_snapshot_async``'s own
+    background retry, since a follower has no heartbeat that would rewrite it.
+    That preserves responsiveness without reopening the lost-update window
+    this lock exists to close.
     """
     deadline = time.monotonic() + STATE_LOCK_TIMEOUT_SECONDS if deadline is None else deadline
     if sys.platform == "win32":
@@ -183,9 +199,47 @@ def _acquire_bounded(fh: Any, lock_path: Path, *, deadline: float | None = None)
             time.sleep(STATE_LOCK_POLL_SECONDS)
 
 
-async def record_snapshot_async(**kwargs: Any) -> None:
-    """Offload the bounded synchronous lock transaction from an event loop."""
-    await asyncio.to_thread(record_snapshot, **kwargs)
+async def record_snapshot_async(**kwargs: Any) -> bool:
+    """Offload the bounded synchronous lock transaction from an event loop.
+
+    Returns whether the snapshot was written. One that was not (the bounded
+    lock timed out, or the write failed) is retried in the background with
+    backoff (``SNAPSHOT_RETRY_DELAYS_SECONDS``) until it is written or a newer
+    snapshot from the same follower supersedes it. The retry is what makes
+    skipping on a timeout safe: a follower snapshots only when it connects and
+    when its session resets, so a skipped write was otherwise a registration
+    lost for the whole connection -- the dead-follower reaper never learned
+    the pid, and status under-counted followers and version skew. The caller
+    is not held for the retries, so a reconnect is never delayed by them.
+    """
+    key = (str(kwargs.get("path")), int(kwargs.get("follower_pid", 0)))
+    generation = next(_SNAPSHOT_GENERATIONS)
+    _LATEST_SNAPSHOT[key] = generation
+
+    def still_current() -> bool:
+        return _LATEST_SNAPSHOT.get(key) == generation
+
+    if await asyncio.to_thread(record_snapshot, still_current=still_current, **kwargs):
+        return True
+    task = asyncio.get_running_loop().create_task(_retry_snapshot(kwargs, still_current))
+    _SNAPSHOT_RETRIES.add(task)
+    task.add_done_callback(_SNAPSHOT_RETRIES.discard)
+    return False
+
+
+async def _retry_snapshot(kwargs: dict[str, Any], still_current: Callable[[], bool]) -> None:
+    for delay in SNAPSHOT_RETRY_DELAYS_SECONDS:
+        await asyncio.sleep(delay)
+        if not still_current():
+            return
+        if await asyncio.to_thread(record_snapshot, still_current=still_current, **kwargs):
+            return
+    log.warning(
+        "octowright.bridge_state.snapshot_retries_exhausted",
+        path=str(kwargs.get("path")),
+        follower_pid=kwargs.get("follower_pid"),
+        attempts=len(SNAPSHOT_RETRY_DELAYS_SECONDS) + 1,
+    )
 
 
 async def remove_followers_async(path: Path, pids: Iterable[int]) -> None:
@@ -426,8 +480,15 @@ def record_snapshot(
     request_timeouts: int,
     max_events: int = 50,
     follower_version: str = VERSION,
-) -> None:
-    """Record one follower's bridge snapshot.
+    still_current: Callable[[], bool] | None = None,
+) -> bool:
+    """Record one follower's bridge snapshot; return whether it is settled.
+
+    ``False`` means it was skipped -- the bounded state lock timed out or the
+    write failed -- and is worth retrying (``record_snapshot_async`` does).
+    ``still_current``, checked under the lock, says whether this snapshot is
+    still the follower's newest; a superseded one is settled without writing,
+    so a retry can never replace a newer snapshot with an older one.
 
     ``follower_version`` defaults to this process's own version because the
     only caller is a follower describing itself. It exists because a follower
@@ -453,7 +514,9 @@ def record_snapshot(
     }
     with _state_lock(path) as locked:
         if not locked:
-            return
+            return False
+        if still_current is not None and not still_current():
+            return True
         state = read_state(path)
         state["followers"][str(follower_pid)] = snapshot
         state["followers"] = _prune_dead_followers(state["followers"], keep_pid=follower_pid)
@@ -464,8 +527,10 @@ def record_snapshot(
             tmp = path.with_suffix(path.suffix + f".{follower_pid}.{next(_TMP_COUNTER)}.tmp")
             tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
             tmp.replace(path)
-        except OSError:
-            return
+        except OSError as exc:
+            log.debug("octowright.bridge_state.snapshot_write_failed", path=str(path), error=repr(exc))
+            return False
+    return True
 
 
 # A live write's tmp sibling exists for microseconds (write, then os.replace).

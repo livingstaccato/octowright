@@ -20,13 +20,15 @@ wired, so the session recovers onto it and says why, as the incident's
 ``navigation_error``. Whether it is elsewhere (``recovered_elsewhere``) is
 decided by where the page actually is, whether or not the navigation raised: a
 load that timed out after its navigation committed has recovered AT its last
-URL, and one that loaded through a redirect to ``/login`` has not. The one
-exception is the guard's own client-redirect document, which sits AT the last
+URL, and one that loaded through a redirect to ``/login`` has not. The
+exceptions are the guard's own client-redirect document, which sits AT the last
 URL: a chain the guard refused or failed, or a page still showing that
-document, is elsewhere. A fresh page that itself crashes -- while loading, or
-before the recovery has finished swapping it in -- is not recovered by its own
-crash listener; the recovery loading it opens another, within the same
-crash-loop bound, and ends ``exhausted`` once that is spent.
+document, is elsewhere -- as is a navigation that failed with anything but a
+timeout, since Firefox's error page also carries the URL it could not load.
+A fresh page that itself crashes -- while loading, or before the recovery has
+finished swapping it in -- is not recovered by its own crash listener; the
+recovery loading it opens another, within the same crash-loop bound, and ends
+``exhausted`` once that is spent.
 
 Bounding (so a page that crashes on every reload doesn't loop forever): a
 per-session attempt counter capped at ``CRASH_RECOVERY_MAX``, with a crash-loop
@@ -47,6 +49,7 @@ import weakref
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from provide.telemetry import get_logger
 
 from octowright import ssrf, ssrf_guard
@@ -540,13 +543,14 @@ async def _replace_crashed_page(
         # not the event ran first: new_page ends up present exactly once, dead_page
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
-        navigation_error, chain_ended = await _load_replacement(session, dead_page, new_page, timeout_ms, last_url)
+        navigation_error, unreached = await _load_replacement(session, dead_page, new_page, timeout_ms, last_url)
         # Decided by where the page is, whether or not the navigation raised: a
         # load that timed out after commit is AT its last URL, a goto that
         # succeeded through a redirect to /login is not -- nor is a page still on
-        # the guard's client-redirect document.
+        # the guard's client-redirect document, nor a browser error page that
+        # merely carries the last URL (``unreached``).
         elsewhere = (
-            chain_ended
+            unreached
             or ssrf_guard.served_client_redirect_last(new_page.main_frame)
             or not _same_url(new_page.url, last_url)
         )
@@ -557,16 +561,24 @@ async def _replace_crashed_page(
 async def _load_replacement(
     session: SessionLike, dead_page: Any, new_page: Any, timeout_ms: float, last_url: str
 ) -> tuple[str | None, bool]:
-    """Navigate *new_page* to *last_url*: ``(navigation_error, chain_ended)``, or raise if it cannot be used.
+    """Navigate *new_page* to *last_url*: ``(navigation_error, unreached)``, or raise if it cannot be used.
 
-    ``chain_ended`` is whether the SSRF guard refused or failed a hop of this
-    navigation (its own record, begun by ``guarded_navigation``). A refused
-    LATER hop leaves the page on the guard's client-redirect document, which
-    sits AT the last URL, so where the page is cannot say it was not reached.
+    ``unreached`` is whether the navigation is known not to have loaded
+    *last_url*'s document even though the page's URL may say it did: either
+    the SSRF guard refused or failed a hop of it (its own record, begun by
+    ``guarded_navigation``) -- a refused LATER hop leaves the page on the
+    guard's client-redirect document, which sits AT the last URL -- or it
+    failed with anything but a timeout. Firefox commits its ``about:neterror``
+    document with ``location.href`` set to the URL it could not load (measured,
+    Playwright 1.62: ``page.url`` is still ``about:blank`` when ``goto`` raises
+    ``NS_ERROR_CONNECTION_REFUSED`` and the target a beat later), so judging
+    by the URL alone made the report a race against that commit. Only a
+    timeout can leave the page genuinely at its last URL, committed and still
+    loading.
     Re-enters the caller's ``crash_recovery`` lease, as the other helpers here do.
     """
     navigation_error: str | None = None
-    chain_ended = False
+    unreached = False
     async with session.operation("crash_recovery", wait_timeout_seconds=None):
         try:
             await ssrf_guard.guarded_navigation(new_page.main_frame, new_page.goto(last_url, timeout=timeout_ms))
@@ -582,7 +594,9 @@ async def _load_replacement(
                     ) from exc
                 raise
             navigation_error = str(exc)
-            chain_ended = ssrf.policy_enabled() and ssrf_guard.frame_chain(new_page.main_frame).refused.is_set()
+            unreached = not _is_timeout(exc) or (
+                ssrf.policy_enabled() and ssrf_guard.frame_chain(new_page.main_frame).refused.is_set()
+            )
             await _settle_crash_signal(session, new_page)
         if _REPLACEMENTS.get(new_page):
             # Left in _REPLACEMENTS, so a crash event still in flight stays this recovery's.
@@ -592,7 +606,12 @@ async def _load_replacement(
                 + (f": {navigation_error}" if navigation_error else ""),
                 dead_page=dead_page,
             )
-    return navigation_error, chain_ended
+    return navigation_error, unreached
+
+
+def _is_timeout(exc: BaseException) -> bool:
+    """Whether *exc* is a navigation timeout: Playwright's own ``TimeoutError`` is not the builtin one."""
+    return isinstance(exc, (TimeoutError, PlaywrightTimeoutError))
 
 
 async def _swap_in(session: SessionLike, dead_page: Any, new_page: Any, last_url: str) -> None:

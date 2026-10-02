@@ -610,6 +610,64 @@ async def test_a_slow_load_at_the_last_url_is_a_recovery_at_it(monkeypatch: pyte
     assert "Timeout" in inc["navigation_error"] and inc["recovered_elsewhere"] is False
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("Page.goto: NS_ERROR_CONNECTION_REFUSED"),
+        RuntimeError("Page.goto: NS_ERROR_UNKNOWN_HOST"),
+    ],
+)
+async def test_a_failed_load_whose_error_page_sits_at_the_last_url_is_elsewhere(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    """Firefox commits its ``about:neterror`` document AT the URL it could not load.
+
+    Measured (Playwright 1.62, firefox): a ``goto`` refused with
+    ``NS_ERROR_CONNECTION_REFUSED`` raises with ``page.url`` still
+    ``about:blank``, and a beat later the error page commits with
+    ``location.href`` (and so ``page.url``) equal to the target. Whether the
+    recovery read the URL before or after that commit decided the report, so a
+    page that never reached its last URL was reported as recovered AT it
+    (macOS arm64 CI). A navigation that failed with anything but a timeout did
+    not load its document, wherever the error page says it is.
+    """
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.url = "https://example.com/"  # the error page, committed at the target
+    fresh.goto = AsyncMock(side_effect=error)
+    assert await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com") is True
+    (event,) = events
+    assert event.outcome == "recovered" and event.recovered_elsewhere is True
+    assert event.navigation_error == str(error)
+    (inc,) = incidents.recent(category="renderer_crash")
+    assert inc["recovered_elsewhere"] is True
+
+
+async def test_a_playwright_load_timeout_at_the_last_url_is_still_a_recovery_at_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Playwright's own ``TimeoutError`` is not the builtin one; it is a timeout all the same."""
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+    from octowright.browser_pool import session_event_bus as _bus
+
+    events: list[Any] = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    s = _session()
+    fresh = s.context.new_page.return_value
+    fresh.is_closed = MagicMock(return_value=False)
+    fresh.url = "https://example.com/"
+    fresh.goto = AsyncMock(side_effect=PlaywrightTimeoutError("Page.goto: Timeout 15000ms exceeded."))
+    assert await crash_recovery._recover(s, s.page, reload_timeout_ms=15000.0, url="https://example.com") is True
+    (event,) = events
+    assert event.outcome == "recovered" and event.recovered_elsewhere is False
+
+
 def _crashing_page(s: _FakeCrashSession, name: str) -> MagicMock:
     """A replacement whose renderer crashes while it loads, as its crash listener reports it."""
     page = MagicMock(name=name)
