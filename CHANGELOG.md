@@ -12,6 +12,244 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.26.0] - 2026-10-02
+
+### Added
+- **Macros can now assert that a run left the network clean and that a secret
+  is not on the page.** `expect_network_clean` fails a step on failed requests
+  and uncaught page errors since the run started, or since a
+  `mark_network_clean` step, with an opt-in HTTP-status check (`http_errors`)
+  and a settle wait for in-flight requests (`settle_timeout_ms`).
+  `expect_no_text` passes only when a value, a credential argument included, is
+  not drawn anywhere under its selector; the value is never echoed in its
+  error, the recording or the diagnostics, and its element budget is set per
+  step (`element_limit`) or per daemon (`OCTOWRIGHT_NO_TEXT_ELEMENT_LIMIT`). A
+  scan that reaches the limit fails rather than passing on a page it only
+  partly read. `require_settled` and `require_match` turn the remaining
+  partial-scan warnings into failures. Python and TypeScript script exports
+  and the exported macro CLI enforce the same rules as replay.
+- **A persona can trust its own root CAs and read credentials from a private
+  file.** `trusted_roots` names PEM root certificates that persona's Chromium
+  trusts, in a trust store of its own; every certificate in a PEM file is
+  imported. It is Linux-only and is refused at launch elsewhere rather than
+  launching untrusted. It changes the browser's `HOME`, so user fonts and GTK
+  settings are not visible to that persona's Chromium. A `<name>_file`
+  credential is read at use time from a regular file that is yours, mode
+  0600, and neither a symlink nor a hard link; it is refused on Windows, where
+  those permissions cannot be checked. `persona_credentials_check` reports
+  file credentials per field.
+- **`octowright test` runs a check written as a sequence of small macros, and
+  can record it.** `--sequence <file>` runs an ordered list of macros as one
+  persona, one JUnit testcase per step; its errors carry no page or argument
+  text, and a value written as `{"credential": ...}` stays a credential under
+  any parameter name. `--record-video` copies a video of the run into
+  `--artifacts`, never overwriting an earlier one. Test browsers now launch at
+  the configured default viewport (`OCTOWRIGHT_VIEWPORT_W`/`_H`).
+- **A session's scrub set is capped, so a runaway run cannot make every write
+  slower without limit.** `OCTOWRIGHT_MACRO_SCRUB_MAX_VALUES` (default 256,
+  `0` for no cap) counts session-wide values: credentials, and passwords typed
+  into password fields. The cap never drops or skips a value. Reaching it marks
+  the session `scrub_saturated` until it closes and logs
+  `octowright.macro.scrub_saturated` once, without values. A macro run that
+  would add a credential the session does not already hold is then refused
+  with an invalid-request error before anything is dispatched or written,
+  including an artifact run's manifest; a run whose credentials are already
+  held runs normally, and a password typed with `browser_fill` is never
+  refused. Run results, artifact results and failure payloads carry
+  `scrub_saturated: true` when the session is saturated. An unparsable cap
+  falls back to 256, never to no cap.
+- **A `fill` or `type` that times out now says which phase spent its budget.**
+  The step re-raises Playwright's `TimeoutError` with Playwright's own message
+  first and one added line: the budget, the total elapsed time, and each
+  phase's milliseconds (attach, metadata, redaction, action), with the running
+  phase marked `(timed out)`. The typed value never appears in it; other errors
+  pass through unchanged.
+
+### Changed
+- **A stopped `macro_run_sequence` returns its steps instead of raising.**
+  With `stop_on_failure=True`, the default, the first failing step's error used
+  to be re-raised and every step record was lost, including the ones that had
+  passed. Both modes now return `{sequence, steps, ok, stopped_at}`.
+  `stopped_at` is always present: the index of the step the sequence stopped
+  at, or `null` when it ran to the end, even if a step failed under
+  `stop_on_failure=False`. A failed macro step keeps `ok: false`, `error` and
+  the redacted `args_used`, and now carries the failure payload `macro_run`
+  raises as `failure` (`failed_at_step`, `failed_action`, `bundle`,
+  `failed_requests`, `page_errors` and the rest), scrubbed exactly as the
+  single-macro error is. `error` is now one line, `macro <name> failed at step
+  <n> (<action>): <first line of the cause>`, rather than the whole payload's
+  text, in both modes. A missing macro is a failed step naming it, not an error
+  for the whole call. **Callers that caught the raise must check `ok` /
+  `stopped_at` instead, and callers that parsed `error` should read `failure`.**
+  The call still raises when the sequence cannot run at all: malformed `names`
+  or `args_list` (now checked before any step runs), the operation gate
+  refusing a step's lease, cancellation, or an unknown instance. The sequence
+  span records `ok`, `failed_steps` and `stopped_at`.
+- **A credential is typed only into the session's own origins unless the step
+  lists another.** A macro `fill`, `fill_by` or `type` whose value comes from a
+  credential-tier argument now checks the origin of the document that receives
+  it, before the step and again as each key lands, against the launch URL and
+  the persona's `base_url`. A sign-in page on a separate identity provider, or
+  a no-URL launch that navigates to the login form, is refused until the step
+  names the origin literally, for example `"allowed_origins":
+  ["https://login.idp.example"]`. `OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS`
+  defaults to `block`; `warn` logs and records `credential_fill_offsite`
+  instead, and any unrecognised value means `block`. A credential `fill_by`
+  that matches two elements is now a strict-mode error, as it already was
+  without a credential. A credential `type` stops, with an error naming the
+  step but never the value, when the page navigates (same origin included) or
+  focus moves to the body or a non-text element partway through. Its `delay_ms`
+  pauses are not counted against its budget, so it can take longer than the
+  same plain `type`. Identity and contextual arguments are never checked.
+- **A `fill`, `fill_by` or `type` whose target never appears fails within its
+  own `timeout_ms`.** It used to wait about 30 seconds, with or without a
+  credential.
+- **Crash recovery reports success when it lands somewhere other than the last
+  URL.** When the dead page's last URL fails to load, recovery now completes
+  on the replacement page and says so with `recovered_elsewhere: true` and
+  `navigation_error`, instead of failing; the agent must navigate again. A
+  replacement page that crashes while loading fails the recovery rather than
+  being swapped in.
+- **Scenario templates are parsed before substitution, so an argument cannot
+  change the document's structure.** Only a lowercase `true`, `false` or
+  `null` placeholder is converted; numbers stay strings, so `viewport_w:
+  "1280"` must now be written as a JSON number.
+- **`octowright test` checks its inputs before launching anything.** The report
+  path is checked first and defaults under the recordings root; a path outside
+  `OCTOWRIGHT_RECORDINGS` is refused. `--persona` with `--max-parallel` above 1
+  is refused, since every test would open the same persistent profile.
+  Re-running into the same `--artifacts` directory writes `smoke_2.webm`
+  instead of overwriting `smoke.webm`. A trust or malformed-persona refusal is
+  an `InvalidRequestError` and no longer counts as an engine fault in
+  `engine_health`.
+- **Octowright now requires Playwright 1.63 and mcp 2.1 or newer**, and the
+  lock moves to mcp 2.2, so CI runs the same Chromium build a fresh install
+  gets.
+
+### Fixed
+- **Headed Chromium no longer crashes on its first download.** Chrome 153,
+  which Playwright 1.63 installs, killed its own browser process with a
+  use-after-free on the first download of a headed run whenever the profile's
+  History database already held a download row. Before every persistent
+  Chromium launch, Octowright now deletes the profile's download-history rows,
+  leaving browsing history untouched and `chrome://downloads` still listing its
+  entries. Measured through the pool, 27 of 27 relaunches crashed before and 0
+  of 30 after. Opt out with `OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY=off`.
+- **A browser process that died is reported as a crash, not as a user
+  closing it.** Playwright reports both identically. For a persistent context
+  on Linux, Octowright resolves the browser pid at launch and, at the first
+  close signal, counts a browser already gone (or, for headed Chromium, one
+  that left its `SingletonLock` behind) as a crash: a `browser_crashed`
+  notification with `scope="process"`, the new
+  `octowright_browser_process_crashed_total` metric, a `browser_process_crash`
+  incident in `crash.recent`, a session closed with `reason=crashed`, and an
+  interrupted download marked `cause: browser_crashed`. Reopening still
+  requires `OCTOWRIGHT_DRIVER_RELAUNCH`. Ephemeral contexts, macOS and Windows
+  behave as before.
+- **Headless WebKit closing every page on request is no longer recorded as a
+  crash.** WebKit quits about 2 ms after its last page closes, so on a loaded
+  host the liveness check found the process gone and filed a crash, a crash
+  notification and a `crash.recent` entry for a close the client had asked
+  for. A liveness-only verdict is now a close when the client called `close()`
+  on every page; a page's own `window.close()` or a user clicking the window's
+  close button is still judged by liveness.
+- **Tool failures keep their cause under mcp 2.2.** mcp 2.2 reduces any
+  exception that is not a `ToolError` to `Error executing tool <name>`, which
+  would have hidden the selector Playwright waited for, an SSRF refusal or an
+  unknown launch option from the agent. Errors read `Error executing tool
+  <name>: <cause>` again.
+- **Crash recovery on Firefox no longer claims to be at its last URL after a
+  refused load.** Firefox loads its error page about 0.3 seconds after `goto`
+  fails, and from then on `page.url` reads as the target, so the outcome
+  depended on timing. Any load failure other than a timeout now counts as not
+  having reached the URL; a load that timed out after commit is still a
+  recovery at the last URL.
+- **A follower whose bridge snapshot was skipped is registered after all.** A
+  follower writes its snapshot only on connect and on session reset, so one
+  write skipped under lock contention left it invisible to the dead-follower
+  reaper and to `octowright_status`'s follower and version-skew counts for its
+  whole connection. A skipped or failed write is now retried in the
+  background with backoff for about two minutes without delaying the
+  reconnect, a retry can never overwrite a newer snapshot, and exhausting the
+  retries logs `octowright.bridge_state.snapshot_retries_exhausted`.
+- **A navigation between finding a credential field and filling it is refused
+  with the credential refusal, not a raw Playwright error.** The field's
+  owner-frame lookup now runs inside the same detach retry as the fill, so the
+  step re-resolves the field and re-checks its origin before typing anything.
+- **Short and common identity values no longer rewrite unrelated recording
+  rows under `OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY=all`.** A value such as
+  `session=1` or `user=admin` used to be scrubbed out of every later row,
+  turning `nth-child(1)` into `nth-child(<redacted>)`. Identity and contextual
+  values shorter than `OCTOWRIGHT_MACRO_SCRUB_MIN_LENGTH` (default 4) or on
+  `OCTOWRIGHT_MACRO_SCRUB_COMMON_VALUES` stay visible and are named, by path
+  and never by value, in the run's `scrub_exempt_args`; the rest are scrubbed
+  for their own run only (`OCTOWRIGHT_MACRO_SCRUB_RUN_SCOPED`, on by default).
+  Credential-tier values are unchanged: scrubbed at any length for the whole
+  session. Every unparsable setting falls back to the side that scrubs more,
+  and exported scripts apply the same rules.
+- **A refused classified screenshot says why, never what.** A refusal used to
+  surface only as `macro <name> failed at step <n> (screenshot)`. It now names
+  the reason (rendered text, form value, page changed, no privacy handler and
+  so on), the tier and the argument path, in the error line, in a
+  `screenshot_refused` field of the failure payload, and in one
+  `octowright.macro.screenshot_refused` warning. Only the values the page
+  actually draws are named, and an argument path that itself spells a value
+  is shown as `<redacted>`.
+- **A failed `expect_network_clean` says when requests were still in
+  flight.** Its message adds `(N request(s) still in flight when the check
+  judged)`, in the session and in the exported CLI, so a slow refusal reads as
+  a settle timeout rather than a missed failure.
+- **An unbuilt dashboard explains itself instead of answering a bare 404.** A
+  source checkout or fresh worktree has no dashboard bundle until it is built,
+  and every dashboard path used to return `Not Found`. Those paths now serve a
+  page naming the build command and saying the daemon must be restarted after
+  building; unknown `/api/` paths still return a plain 404. `octowright doctor`
+  reports `dashboard:bundle` as a warning when the bundle is missing, and
+  `make install` builds it when npm is available.
+- **An unusable `OCTOWRIGHT_VIEWPORT_W` or `_H` no longer crashes every
+  command at import.** A value such as `1920px`, an empty string or `0` falls
+  back to the default with a warning.
+- **The websocket sidecar's disk ceiling counts the bytes Windows actually
+  writes**, as the recorder already did.
+
+### Security
+- **Capability opt-ins turn on only for an explicit yes.**
+  `OCTOWRIGHT_ALLOW_PY_SCENARIOS`, `OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS`,
+  `OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS` and `OCTOWRIGHT_ALLOW_EXECUTABLE_PATH`
+  used to treat any value other than an explicit no as consent, so an empty or
+  mistyped value enabled code execution or shell credential commands. These
+  flags, and `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD`, now accept only `1`, `true`,
+  `yes` or `on`; any other value stays off and logs
+  `octowright.defaults.opt_in_unrecognized` naming the variable.
+  `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD` previously accepted only `1`.
+- **Every redirect hop is checked under `OCTOWRIGHT_SSRF_POLICY=block-private`.**
+  A public page answering with a redirect to a private address used to reach
+  it, because Playwright follows the chain without calling the route handler
+  again. The guard now fetches each navigation once itself, checks each
+  redirect's target before it is fetched, follows only `http` and `https`
+  targets, and keeps the real redirect chain on the network rows. Each
+  navigation keeps its own hop count and verdict, so a late ending from an
+  older navigation cannot cancel a new one, and popups that close themselves
+  settle promptly. Subresource redirects are still not re-checked and DNS
+  rebinding is still not closed; deployments that need either should enforce
+  egress at the network layer.
+- **A credential passed through `macro_call` stays a credential in the called
+  macro**, whatever the parameter is renamed to there.
+- **Macro failure payloads no longer leak session secrets.** They show the
+  macro's own steps as written, with `{{placeholders}}`, and scrub every
+  session-typed secret from page-derived text wherever it appears. Once a
+  session holds a typed password or a macro credential, its screenshots are
+  redacted or refused according to the new `OCTOWRIGHT_LEDGER_SCREENSHOTS`
+  (default `refuse`; any value but `allow` means refuse).
+- **An artifact run scrubs its evidence against every value its replay
+  admitted.** `macro_artifact_run` loaded the macro and admitted its arguments,
+  then replayed through a second load and a second ledger, so a credential
+  that arrived only through a nested `macro_call` reached the "after"
+  screenshot unscrubbed and the summary and run bundle in cleartext. The run
+  now loads the macro once and uses one ledger for the whole run, so an edit
+  between two reads can no longer make the redaction describe a different file
+  than the one that ran.
+
 ## [0.25.0] - 2026-09-21
 
 ### Added
@@ -3117,7 +3355,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.25.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/livingstaccato/octowright/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/livingstaccato/octowright/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/livingstaccato/octowright/compare/v0.22.1...v0.23.0
