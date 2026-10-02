@@ -207,3 +207,21 @@ Known edge: the system-Chrome-channel test in
 `test_browser_launch_engine_selection_live.py` skips from an `except` when no
 system Chrome is installed, and counts as Chromium. Deselect it on a runner
 that requires Chromium without installing system Chrome.
+
+### Socket-leak tripwire
+
+`tests/_socket_leak_tripwire.py` (registered from `pytest_configure`) fails an
+otherwise green run whose pytest process ends holding more than `LEAK_BOUND`
+(16) sockets it did not hold at session start, and names the tests that opened
+them. Linux only (it reads `/proc/self/fd`); everywhere else it is a no-op.
+
+It exists because a Windows leg failed a loopback navigation with
+`net::ERR_NO_BUFFER_SPACE` (`WSAENOBUFS`, ephemeral-port exhaustion), and a
+per-test test server or client left open is how a serial run would get there
+without Linux noticing. Measured when it was added, nothing in the suite leaks:
+across all 9,678 tests the process never held more than 9 sockets at a test's
+end, and the session-end excess was 0 in 52 of 53 chunked runs and 2 in the
+other (a handler thread still inside `time.sleep(20)`). So that failure is not
+explained by a leak in this process. Per-test cost is one `listdir` plus a
+`readlink` per fd new since the previous test (~56us). To run without it, pass
+`-p no:octowright-socket-leak-tripwire`.

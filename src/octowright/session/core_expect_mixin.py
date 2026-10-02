@@ -199,7 +199,7 @@ class SessionExpectMixin(SessionLike):
         self.enable_inflight_tracking()
         settle = NETWORK_SETTLE_TIMEOUT_MS if settle_timeout_ms is None else settle_timeout_ms
         in_flight = await settle_network(self._network.pending, settle) if settle > 0 else self._network.pending()
-        counts = self._network.judge(window, http_errors)
+        counts = self._network.judge(window, http_errors, in_flight)
         result = {**counts, "in_flight": in_flight}
         untracked = self._network.since(window)[3]
         if untracked > 0:

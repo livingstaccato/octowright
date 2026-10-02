@@ -117,6 +117,27 @@ async def _typed_values(session: Any, origin: str) -> list[str]:
     return values
 
 
+#: How long the injected foreign frame may take to show its field. Generous on
+#: purpose: it is the test's precondition, not what the test measures.
+FRAME_READY_TIMEOUT_MS = 60_000
+
+
+async def _inject_foreign_frame(session: Any, monkeypatch: pytest.MonkeyPatch, evil: str) -> None:
+    """Put *evil*'s form in an iframe and wait for its field, outside the typing step.
+
+    In one macro, the frame's load came out of the typing step's budget: a step
+    waits for its element under the action timeout and types in what is left.
+    A windows-2025 Firefox took ~14.5s of the 15s default to show the frame's
+    ``#pw``, so 20 per-key round trips through the frame got 500ms and the
+    allowed case failed with "did not finish within 500ms". The same cases take
+    ~0.3-0.5s to type on Linux once the field is there.
+    """
+    inject = {"action": "evaluate", "expression": f"document.body.innerHTML = '<iframe src=\"{evil}/form\"></iframe>'"}
+    await _run(session, monkeypatch, [inject])
+    field = session.page.frame_locator("iframe").locator("#pw")
+    await field.wait_for(state="attached", timeout=FRAME_READY_TIMEOUT_MS)
+
+
 def _move_later(url: str) -> dict[str, Any]:
     # No placeholder, so the sink guard has nothing to say about it. The delay
     # outlasts the pre-dispatch read, and the fill's wait outlasts the delay.
@@ -136,10 +157,10 @@ async def test_a_navigation_during_the_wait_does_not_carry_the_credential(
 async def test_a_selector_that_enters_a_foreign_frame_is_refused(
     session: Any, evil: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    inject = {"action": "evaluate", "expression": f"document.body.innerHTML = '<iframe src=\"{evil}/form\"></iframe>'"}
+    await _inject_foreign_frame(session, monkeypatch, evil)
     step = _typing_step("fill", "iframe >> internal:control=enter-frame >> #pw")
     with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
-        await _run(session, monkeypatch, [inject, step])
+        await _run(session, monkeypatch, [step])
     assert SECRET not in await _typed_values(session, evil)
 
 
@@ -147,9 +168,9 @@ async def test_a_selector_that_enters_a_foreign_frame_is_refused(
 async def test_a_foreign_frame_the_step_allows_is_typed_into(
     session: Any, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    inject = {"action": "evaluate", "expression": f"document.body.innerHTML = '<iframe src=\"{evil}/form\"></iframe>'"}
+    await _inject_foreign_frame(session, monkeypatch, evil)
     step = _typing_step(kind, "iframe >> internal:control=enter-frame >> #pw", allowed_origins=[evil])
-    await _run(session, monkeypatch, [inject, step])
+    await _run(session, monkeypatch, [step])
     assert await _typed_values(session, evil) == [SECRET]
 
 
