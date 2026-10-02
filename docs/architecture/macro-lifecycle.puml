@@ -39,8 +39,8 @@ if (reject + identity/context value?) then (yes)
   stop
 else (no)
   :structurally redact every classified key;
-  :select blind-scrub values by policy;
-  :append selected values to run +\npermanent session privacy ledgers;
+  :select blind-scrub values by policy;\nunder all, skip identity/context values\nshorter than the floor or on the common list\n(reported as scrub_exempt_args, by path);
+  :append credentials to run + permanent\nsession privacy ledgers; identity/context\nvalues to run ledger + this run's session scope\n(dropped when the run ends);
 endif
 :substitute {{...}} from args;
 :dispatch each action through BrowserSession\n(navigate, click, fill, expect_*, mock_route, ...);

@@ -26,7 +26,7 @@ top to bottom direction
 [BrowserSession] as SESSION
 [Macro argument classifier\ncredential / identity / contextual] as CLASSIFIER
 [Blind-scrub policy\ncredentials (default) / all / reject] as POLICY
-[SensitiveRecorder\npolicy-admitted session ledger] as SCRUBBER
+[SensitiveRecorder\npolicy-admitted session ledger\n(identity/context values: open runs only)] as SCRUBBER
 [Structured args / results\nall classified keys redacted] as STRUCTURED
 
 ' ─── WRITE PATHS: every arrow leaves SESSION going down ───────────────

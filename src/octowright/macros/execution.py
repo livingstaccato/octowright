@@ -31,7 +31,9 @@ from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
     MacroArgPrivacy,
     PrivacyLedger,
-    install_sensitive_recorder,
+    RunPrivacyLedger,
+    admit_call_privacy,
+    run_privacy_ledger,
     with_session_values,
 )
 from octowright.macros.privacy import (
@@ -268,16 +270,15 @@ def _collect_nested_call_privacy(
     Parent substitution has already run, so these are the values the child will
     see, and a deeper call reaches ``_dispatch_one`` again with its own
     substituted arguments, so every depth is covered. Values admitted by the
-    configured policy join the run's set and the session ledger the one recorder
-    wrapper reads. A malformed ``args`` is left for
-    ``validate_macro_call_shape`` to report.
+    configured policy join the run's set, and reach the session ledger the one
+    recorder wrapper reads as the run's own do (`admit_call_privacy`). A
+    malformed ``args`` is left for ``validate_macro_call_shape`` to report.
     """
     call_args = action.get("args")
     if not isinstance(call_args, dict):
         return
-    nested = _macro_privacy(macros, action.get("name")).blind_scrub(call_args)
-    run_ledger.add(nested)
-    install_sensitive_recorder(session, nested)
+    name = action.get("name")
+    admit_call_privacy(session, run_ledger, str(name), _macro_privacy(macros, name).admission(call_args))
 
 
 async def _dispatch_nested_call(
@@ -573,6 +574,17 @@ async def _finish_macro_run(
 
 
 async def _run_macro_impl(
+    session: SessionLike, name: str, args: dict[str, Any] | None, **kwargs: Any
+) -> MacroRunResult:
+    """One run, its session privacy scope closed however it ends."""
+    with run_privacy_ledger(session) as run_ledger:
+        result = await _run_admitted(session, name, args, run_ledger=run_ledger, **kwargs)
+    if exempt := run_ledger.exempt_args:  # what the #247 floor/list left visible
+        result["scrub_exempt_args"] = exempt
+    return result
+
+
+async def _run_admitted(
     session: SessionLike,
     name: str,
     args: dict[str, Any] | None,
@@ -580,6 +592,7 @@ async def _run_macro_impl(
     slowmo_ms: int | None,
     ctx: Any | None = None,
     macros: RunMacros | None = None,
+    run_ledger: RunPrivacyLedger,
 ) -> MacroRunResult:
     macros = macros if macros is not None else RunMacros(load_macro)
     macro = macros(name)
@@ -587,12 +600,10 @@ async def _run_macro_impl(
     # An argument that IS the forbidden text is sensitive whatever it is named;
     # the exported CLI reads the same set (privacy.assertion_text_args).
     privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
-    sensitive_values = privacy.blind_scrub(effective_args)
-    install_sensitive_recorder(session, sensitive_values)
     # What THIS run has admitted for blind scrubbing: its own arguments plus every
     # nested call's, appended as they execute. Failure payloads and screenshot
-    # privacy read it; the recorder reads the session ledger instead.
-    run_ledger = PrivacyLedger(sensitive_values)
+    # privacy read it; the recorder reads the session ledger, which it feeds.
+    run_ledger.admit(name, privacy.admission(effective_args))
     actions = substitute(macro.get("actions", []), effective_args, trusted_origins=own_site_origins(session))
     _start_request_tracking(session, actions, macros)
 
@@ -647,6 +658,7 @@ async def _run_macro_impl(
                     sensitive_values=run_values,
                 )
                 payload.update(assertions.fields(run_values))
+                payload.update(run_ledger.exempt_fields())
                 payload.update(_offsite_fields(audit))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is

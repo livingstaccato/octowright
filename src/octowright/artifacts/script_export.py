@@ -17,6 +17,7 @@ from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.config_paths import upload_staging_dir, user_config_dir
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
+from octowright.macros import scrub_admission
 from octowright.macros.calls import actions_assert_network_clean
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
@@ -89,6 +90,8 @@ def render_macro_cli(
     # And how a credential step types: one key at a time into a checked
     # document, the fill into a checked element -- the session's own helpers.
     credential_input_source = _module_source(credential_input)
+    # And which identity/contextual values are too short or common to scrub (#247).
+    scrub_admission_source = _module_source(scrub_admission)
     # The live upload allowlist, so an exported set_input_files cannot read a
     # file macro_run would refuse (~/.ssh/id_rsa).
     # The default staging dir is rendered as its resolver, not its value: the
@@ -317,8 +320,18 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
     if resolved == "reject" and rejected:
         details = ", ".join(sorted({{f"{{item[1]}} ({{item[2]}})" for item in rejected}}))
         raise ValueError(f"non-credential classified arguments refused: {{details}}")
-    selected = classified if resolved == "all" else [item for item in classified if item[2] == "credential"]
-    return sorted({{item[0] for item in selected}}, key=lambda value: (-len(value), value))
+    credentials = {{item[0] for item in classified if item[2] == "credential"}}
+    # Under "all", an identity/contextual value too short or common to scrub is
+    # left out, as live replay leaves it out (scrub_admission, #247).
+    selected = credentials | {{
+        item[0]
+        for item in classified
+        if resolved == "all" and item[2] != "credential" and scrub_exemption_reason(item[0]) is None
+    }}
+    return sorted(selected, key=lambda value: (-len(value), value))
+
+
+{scrub_admission_source}
 
 
 {serialized_variants}

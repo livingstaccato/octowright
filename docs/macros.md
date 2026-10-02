@@ -479,7 +479,9 @@ after a login on Firefox or WebKit that keeps the recordings redacted.
 
 **Nested calls and later runs.** A `macro_call`'s own arguments are classified
 where the call executes, at every depth. Values admitted by the selected policy
-join the run ledger and the session ledger. So does a value typed by any fill or
+join the run ledger; credential-tier values also join the session ledger, and
+identity/contextual ones (admitted only under `all`) join it only for the run
+that supplied them -- see **Short and common values** below. A value typed by any fill or
 type, `browser_fill` and `browser_type` included, into a field classified as a
 password (`type=password`, or `autocomplete` `current-password`, `new-password` or
 `one-time-code`), unless `OCTOWRIGHT_REDACT_INPUTS=off`. The session ledger lasts for the session's lifetime,
@@ -516,10 +518,10 @@ three strict modes:
   ledger. Identity/context values remain structurally redacted, but a value
   such as `session="1"` does not rewrite `li:nth-child(1)` or `?page=1`, and
   `user="admin"` does not rewrite unrelated prose.
-- `all` admits every classified tier and preserves the behavior before issue
-  #247. It offers maximum identity/context redaction, but a short or common
-  value can corrupt selectors, URLs and text anywhere in the current or later
-  recording rows.
+- `all` admits every classified tier, except identity/contextual values that
+  are short or common (below). It offers more identity/context redaction, at
+  the cost that a value it does admit can still rewrite a selector, URL or
+  text that happens to contain it, in the rows its own run writes.
 - `reject` refuses an invocation containing identity or contextual values
   before substitution, recording changes, artifact writes, screenshots or
   browser activity. Its error lists argument paths and tiers, never values.
@@ -529,6 +531,43 @@ Unknown values fail configuration rather than silently choosing a privacy
 posture. This setting also governs diagnostics, automatic and explicit
 screenshots, artifact reports and generated scripts. It does not change the
 classifier vocabulary or the credential sink guard.
+
+**Short and common values** (#247). A blind scrub has no provenance, so under
+`all` an identity or contextual value such as `session="1"` rewrote
+`li:nth-child(1)` and `?page=1`, and `user="admin"` rewrote the word "admin" --
+in every later row on the session, because the session ledger is never cleared.
+Two rules now bound that, and neither ever applies to a credential-tier value
+(a credential-named argument, or one that is credential-tier by position, such
+as an `expect_no_text` text), which is still scrubbed at any length and for the
+session's lifetime, so a short password is never left in cleartext:
+
+- **Too short or too common to scrub.** An identity/contextual value shorter
+  than `OCTOWRIGHT_MACRO_SCRUB_MIN_LENGTH` (default 4: below that a value is a
+  small number, an initial or a two-letter code, exactly the strings selectors,
+  query strings and prose are made of) or on the common-value list
+  (`OCTOWRIGHT_MACRO_SCRUB_COMMON_VALUES`; by default `admin`,
+  `administrator`, `anonymous`, `default`, `demo`, `example`, `guest`,
+  `none`, `null`, `root`, `test`, `tester`, `user`, compared ignoring case and
+  surrounding space) is not blind-scrubbed. It is still structurally redacted
+  from `args_used` and every other record of the arguments. The run result
+  says so: `scrub_exempt_args: [{macro, path, tier, reason}]`, with `reason`
+  `short` or `common` and the argument's path -- never its value -- for the
+  run's own arguments and every nested call's. It is present only when
+  something was exempted, and also appears on a failure payload and on a
+  `macro_artifact_run` result.
+- **Scrubbed for its own run only.** An identity/contextual value that is
+  admitted is scrubbed from the rows, buffers, captures and screenshots of the
+  run that supplied it (nested calls included), and dropped from the session
+  ledger when that run ends, pass or fail. The next `macro_run_sequence` step
+  or a later run does not rewrite it. The cost: a page that keeps echoing the
+  value after the run ends records it in clear, which is acceptable for a value
+  that is not a secret. Set `OCTOWRIGHT_MACRO_SCRUB_RUN_SCOPED=off` to keep
+  such values session-wide, as credentials are.
+
+Every unparsable value for these three knobs falls back to the side that
+scrubs more (no floor, session-wide); see [env-vars.md](env-vars.md). Under the
+default `credentials` policy none of this applies, because no identity/contextual
+value is blind-scrubbed at all.
 
 **Credential-named arguments in URLs, code and outbound fields.** A
 credential-named argument expanded into `url`, `expression`, `verify_js`,
@@ -637,8 +676,9 @@ on an origin passed as `--trusted-origin` (or listed in the step's
 the same source.
 
 **Exported scripts** carry their own copy of the classifier, stamped
-`_ARG_PRIVACY_CLASSIFIER_VERSION = 5`, and resolve the same blind-scrub policy
-when they run. A script exported by an older octowright keeps the classifier
+`_ARG_PRIVACY_CLASSIFIER_VERSION = 6`, and resolve the same blind-scrub policy,
+length floor and common-value list when they run (a script is one run, so run
+scoping does not arise there). A script exported by an older octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
 default.
 
