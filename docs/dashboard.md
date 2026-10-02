@@ -59,8 +59,8 @@ it on demand if a live session hasn't populated the cache yet.
 
 ## Implementation
 
-The dashboard is a TypeScript SPA built into `packages/octowright-frontend/`
-(Vite + strict tsc + Biome + vitest). It uses `@provide-io/telemetry` for structured
+The dashboard is a TypeScript SPA whose source lives in `packages/octowright-frontend/`
+(Vite + strict tsc + Biome + vitest) and builds into `src/octowright/server/frontend/`. It uses `@provide-io/telemetry` for structured
 logging so frontend log lines are correlated with the Python server's
 `provide.telemetry` calls (see [telemetry.md](telemetry.md)). The compiled bundle ships inside the wheel; the
 frontend has zero runtime dependency on Node — Node is only needed at build

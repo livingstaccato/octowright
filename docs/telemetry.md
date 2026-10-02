@@ -102,10 +102,10 @@ Span names follow the `octowright.<area>.<verb>` convention. The list below is a
 | `octowright.artifact.verify` | `artifact_type`, `name`, `critical_points`, `run_id` | `artifacts/verification.py` |
 | `octowright.artifact.verify.check` | `artifact_type`, `check_type` | `artifacts/verification.py` |
 | `octowright.bridge.forward_rpc` | `method`, `request_id` | `proxy_supervisor.forward_rpc` (follower leg) |
-| `octowright.browser.handoff` | `old_instance_id`, `kind`, `headed`, `close_original`, `accept_stateless` | `browser_pool/lifecycle.handoff_browser` |
+| `octowright.browser.handoff` | `old_instance_id`, `kind`, `headed`, `close_original`, `accept_stateless` | `browser_pool/relaunch.handoff_browser` |
 | `octowright.browser.launch` | `kind` | `browser_pool/_metrics.launch_span` (wraps `pool.launch`) |
-| `octowright.browser.relaunch_fluid` | `instance_id`, `kind` | `browser_pool/pool.relaunch_fluid` |
-| `octowright.browser.spawn_roster` | `roster_size` | `browser_pool/roster.browser_spawn_roster` |
+| `octowright.browser.relaunch_fluid` | `instance_id`, `kind` | `browser_pool/relaunch.relaunch_fluid_browser` (behind `pool.relaunch_fluid`) |
+| `octowright.browser.spawn_roster` | `roster_size` | `browser_pool/roster.spawn_roster` |
 | `octowright.macro.action` | `action`, `instance_id` | `macros/runtime.dispatch_simple` |
 | `octowright.macro.artifact.run` | `macro`, `run_id`, `verify` | `macros/artifacts.py` |
 | `octowright.macro.run` | `macro`, `instance_id`, `kind` | `macros/execution.run_macro` |
