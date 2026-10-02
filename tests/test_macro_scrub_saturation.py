@@ -340,7 +340,9 @@ async def test_an_artifact_run_on_a_saturated_session_reports_it(
     session = _FakeSession(tmp_path)
     _saturate(session, monkeypatch, HELD)
 
-    async def fake_run_macro(*, session: Any, name: str, args: Any, slowmo_ms: Any = None) -> dict[str, Any]:
+    async def fake_run_macro(
+        *, session: Any, name: str, args: Any, slowmo_ms: Any = None, **_private: Any
+    ) -> dict[str, Any]:
         return {"macro": name, "executed": 1, "skipped": 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)

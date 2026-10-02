@@ -420,7 +420,9 @@ async def test_an_artifact_run_names_exempt_arguments(monkeypatch: pytest.Monkey
             macro={"name": "greet", "parameters": ["user"], "actions": [{"action": "click", "selector": "#go"}]},
         )
 
-        async def fake_run_macro(*, session: Any, name: str, args: Any, slowmo_ms: Any = None) -> dict[str, Any]:
+        async def fake_run_macro(
+            *, session: Any, name: str, args: Any, slowmo_ms: Any = None, **_private: Any
+        ) -> dict[str, Any]:
             raise RuntimeError("replay failed before reporting")
 
         monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)

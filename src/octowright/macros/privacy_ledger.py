@@ -403,8 +403,15 @@ class RunPrivacyLedger(PrivacyLedger):
 
 
 @contextmanager
-def run_privacy_ledger(session: Any) -> Iterator[RunPrivacyLedger]:
-    """A run's ledger, its session scope closed however the run ends."""
+def run_privacy_ledger(session: Any, supplied: RunPrivacyLedger | None = None) -> Iterator[RunPrivacyLedger]:
+    """A run's ledger, its session scope closed however the run ends.
+
+    A *supplied* ledger is yielded as it is and left open: it belongs to an
+    enclosing run (`run_macro_artifact`'s) that closes it when it ends.
+    """
+    if supplied is not None:
+        yield supplied
+        return
     ledger = RunPrivacyLedger(session)
     try:
         yield ledger

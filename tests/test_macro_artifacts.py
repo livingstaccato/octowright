@@ -350,7 +350,7 @@ async def test_run_macro_artifact_writes_bundle(monkeypatch: pytest.MonkeyPatch,
     _write_macro(storage)
     session = FakeSession(tmp_path)
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {"macro": name, "executed": 4, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
@@ -388,7 +388,7 @@ async def test_run_macro_artifact_never_persists_social_identity_values(
         "payload": {"profile": {"subject": "nested-subject-a4"}},
     }
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {
             "macro": name,
             "executed": 1,
@@ -433,7 +433,7 @@ async def test_artifact_plan_run_and_verification_scrub_sensitive_value_aliases(
     raw = "A4-ARTIFACT-ALIAS-CANARY"
     args = {"password": raw, "display": raw}
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {
             "macro": name,
             "executed": 1,
@@ -480,7 +480,7 @@ async def test_run_macro_artifact_uses_notes_for_summary(monkeypatch: pytest.Mon
     _write_macro(storage)
     session = FakeSession(tmp_path)
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
@@ -528,7 +528,7 @@ async def test_run_macro_artifact_ignores_symlinked_manifest_outside_recordings(
     manifest_path = artifact_dir / "artifact.json"
     manifest_path.symlink_to(outside_manifest)
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
@@ -553,7 +553,7 @@ async def test_run_macro_artifact_records_failure(monkeypatch: pytest.MonkeyPatc
     _write_macro(storage)
     session = FakeSession(tmp_path)
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
@@ -588,7 +588,7 @@ async def test_run_macro_artifact_handles_missing_log_path(monkeypatch: pytest.M
     session = FakeSession(tmp_path)
     del session.log_path  # simulate absence
 
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private):
         return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
