@@ -78,8 +78,10 @@ def pytest_configure(config: pytest.Config) -> None:
     that touches them isolates them itself. A temp config home is not the
     blanket hermeticity it can look like.
     """
-    del config
     _relocate_user_config()
+    from tests._socket_leak_tripwire import SocketLeakTripwire
+
+    config.pluginmanager.register(SocketLeakTripwire(), "octowright-socket-leak-tripwire")
 
 
 def _relocate_user_config() -> None:
