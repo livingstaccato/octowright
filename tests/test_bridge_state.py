@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
 import json
 import os
@@ -42,18 +43,20 @@ async def test_async_state_transactions_keep_event_loop_responsive(monkeypatch: 
     entered = threading.Event()
     release = threading.Event()
 
-    def _blocking_record(**_kwargs: object) -> None:
+    def _blocking_record(**_kwargs: object) -> bool:
         entered.set()
         release.wait(timeout=1.0)
+        return True
 
     monkeypatch.setattr(bridge_state, "record_snapshot", _blocking_record)
-    transaction = asyncio.create_task(bridge_state.record_snapshot_async(path=Path("ignored")))
+    transaction = asyncio.create_task(bridge_state.record_snapshot_async(path=Path("ignored"), follower_pid=1))
     assert await asyncio.to_thread(entered.wait, 0.5)
     ticker = asyncio.create_task(asyncio.sleep(0.01))
     await asyncio.wait_for(ticker, timeout=0.1)
     assert not transaction.done()
     release.set()
-    await transaction
+    assert await transaction is True
+    assert not bridge_state._SNAPSHOT_RETRIES  # a written snapshot schedules no retry
 
 
 def _all_alive(_pid: int) -> bool:
@@ -647,6 +650,14 @@ def test_concurrent_record_snapshot_keeps_both_followers(tmp_path: Path, monkeyp
         return state
 
     monkeypatch.setattr(bridge_state, "read_state", _barriered_read)
+    # What is under test is serialization, not the bound. With the default 2s
+    # bound a runner that stalls the first writer inside the lock (observed on
+    # Windows arm64: thread_lock_timeout, the test taking 5.5s) makes the
+    # second writer SKIP -- correct, bounded behaviour that this assertion
+    # would misread as a lost update. The bound has its own tests
+    # (test_same_process_state_lock_wait_is_bounded, and the retry of a skipped
+    # snapshot in TestASkippedRegistrationIsRetried).
+    monkeypatch.setattr(bridge_state, "STATE_LOCK_TIMEOUT_SECONDS", 60.0)
     # keep_pid protects each writer's own entry; other pids must look alive.
     monkeypatch.setattr(bridge_state, "_pid_alive", lambda _pid: True)
 
@@ -666,8 +677,9 @@ def test_concurrent_record_snapshot_keeps_both_followers(tmp_path: Path, monkeyp
     t2 = threading.Thread(target=_write, args=(222,))
     t1.start()
     t2.start()
-    t1.join(timeout=10)
-    t2.join(timeout=10)
+    t1.join(timeout=90)
+    t2.join(timeout=90)
+    assert not t1.is_alive() and not t2.is_alive()
 
     data = json.loads(path.read_text())
     assert set(data["followers"]) == {"111", "222"}
@@ -745,3 +757,119 @@ class TestDeadFollowersAreNotCountedAsStale:
         summary = bridge_state.summarize_state(state)
         assert summary["dead_follower_count"] == 1, "pid 999999 should not be alive"
         assert summary["stale_follower_count"] == 0
+
+
+def _snapshot_kwargs(path: Path, pid: int = 4242, *, last_error: str | None = None) -> dict:
+    return {
+        "path": path,
+        "follower_pid": pid,
+        "remote_url": "http://127.0.0.1:8765/mcp/",
+        "remote_session_id": f"sid-{pid}",
+        "last_error": last_error,
+        "in_flight": 0,
+        "reconnect_attempts": 0,
+        "request_timeouts": 0,
+    }
+
+
+async def _drain_snapshot_retries() -> None:
+    while bridge_state._SNAPSHOT_RETRIES:
+        await asyncio.gather(*list(bridge_state._SNAPSHOT_RETRIES))
+
+
+class TestASkippedRegistrationIsRetried:
+    """A snapshot skipped on a lock timeout used to be lost for the whole session.
+
+    A follower writes a snapshot only when it connects and when its session
+    resets -- there is no heartbeat -- so a stable connection writes exactly
+    one. When that one write timed out on the bounded state lock (observed on
+    a Windows arm64 runner: ``octowright.bridge_state.thread_lock_timeout``
+    with the peer inside the lock for >2s), the follower was never registered:
+    the dead-follower reaper never learned its pid, and status under-counted
+    followers and version skew, until it next happened to reconnect. The
+    docstring's "a later heartbeat retries naturally" described a heartbeat
+    that does not exist.
+    """
+
+    def test_record_snapshot_says_whether_it_wrote(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        path = tmp_path / "bridge-state.json"
+        monkeypatch.setattr(bridge_state, "_pid_alive", lambda _pid: True)
+        assert bridge_state.record_snapshot(**_snapshot_kwargs(path)) is True
+
+        @contextlib.contextmanager
+        def _timed_out(_path: Path):
+            yield False
+
+        monkeypatch.setattr(bridge_state, "_state_lock", _timed_out)
+        assert bridge_state.record_snapshot(**_snapshot_kwargs(path, 5151)) is False
+
+    def test_a_superseded_snapshot_is_settled_without_writing(self, tmp_path: Path) -> None:
+        path = tmp_path / "bridge-state.json"
+        assert bridge_state.record_snapshot(**_snapshot_kwargs(path), still_current=lambda: False) is True
+        assert not path.exists()
+
+    async def test_a_snapshot_skipped_on_lock_timeout_is_written_later(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "bridge-state.json"
+        monkeypatch.setattr(bridge_state, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(bridge_state, "SNAPSHOT_RETRY_DELAYS_SECONDS", (0.0, 0.0))
+        real_lock = bridge_state._state_lock
+        timeouts = iter([True])
+
+        @contextlib.contextmanager
+        def _first_times_out(p: Path):
+            if next(timeouts, False):
+                yield False
+                return
+            with real_lock(p) as locked:
+                yield locked
+
+        monkeypatch.setattr(bridge_state, "_state_lock", _first_times_out)
+        assert await bridge_state.record_snapshot_async(**_snapshot_kwargs(path)) is False
+        await _drain_snapshot_retries()
+        assert set(json.loads(path.read_text())["followers"]) == {"4242"}
+
+    async def test_a_retry_never_overwrites_a_newer_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_path / "bridge-state.json"
+        monkeypatch.setattr(bridge_state, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(bridge_state, "SNAPSHOT_RETRY_DELAYS_SECONDS", (0.0,))
+        real_lock = bridge_state._state_lock
+        timeouts = iter([True])
+
+        @contextlib.contextmanager
+        def _first_times_out(p: Path):
+            if next(timeouts, False):
+                yield False
+                return
+            with real_lock(p) as locked:
+                yield locked
+
+        monkeypatch.setattr(bridge_state, "_state_lock", _first_times_out)
+        assert await bridge_state.record_snapshot_async(**_snapshot_kwargs(path, last_error="old")) is False
+        assert await bridge_state.record_snapshot_async(**_snapshot_kwargs(path, last_error="new")) is True
+        await _drain_snapshot_retries()
+        state = json.loads(path.read_text())
+        assert state["followers"]["4242"]["last_error"] == "new"
+        assert [e["last_error"] for e in state["events"]] == ["new"]
+
+    async def test_retries_are_bounded_and_say_so(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "bridge-state.json"
+        monkeypatch.setattr(bridge_state, "SNAPSHOT_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+        attempts: list[int] = []
+
+        @contextlib.contextmanager
+        def _always_times_out(_path: Path):
+            attempts.append(1)
+            yield False
+
+        monkeypatch.setattr(bridge_state, "_state_lock", _always_times_out)
+        assert await bridge_state.record_snapshot_async(**_snapshot_kwargs(path)) is False
+        await _drain_snapshot_retries()
+        assert len(attempts) == 4  # the first try plus one per retry delay
+        assert not path.exists()
+        assert "octowright.bridge_state.snapshot_retries_exhausted" in caplog.text
