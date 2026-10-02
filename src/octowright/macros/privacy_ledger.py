@@ -30,6 +30,9 @@ SESSION_PRIVACY_LEDGER_ATTR = "_octowright_privacy_ledger"
 
 log = get_logger(__name__)
 
+#: Strongest first, for `SessionPrivacyLedger.provenance`.
+_TIER_ORDER = {"credential": 0, "identity": 1, "contextual": 2}
+
 
 class PrivacyLedger:
     """An append-only, de-duplicated set of values to scrub, longest first.
@@ -139,7 +142,21 @@ class SessionPrivacyLedger(PrivacyLedger):
     def __init__(self, values: Iterable[str] = ()) -> None:
         self._scopes: dict[object, frozenset[str]] = {}
         self._saturated = False
+        # value -> {(tier, argument path or "")}: what a refused screenshot names, never the value.
+        self._sources: dict[str, set[tuple[str, str]]] = {}
         super().__init__(values)
+
+    def note_sources(self, sources: Iterable[tuple[str, str, str]]) -> None:
+        """Remember each ``(value, tier, path)`` an admission came from; an empty path is no argument."""
+        for value, tier, path in sources:
+            if isinstance(value, str) and value:
+                self._sources.setdefault(value, set()).add((tier, path))
+
+    def provenance(self, values: Iterable[str]) -> tuple[list[str], list[str]]:
+        """The tiers (strongest first) and argument paths *values* were admitted from; never a value."""
+        found = {source for value in values for source in self._sources.get(value, ())}
+        tiers = sorted({tier for tier, _ in found}, key=lambda tier: (_TIER_ORDER.get(tier, len(_TIER_ORDER)), tier))
+        return tiers, sorted({path for _, path in found if path})
 
     def _scoped(self) -> frozenset[str]:
         return frozenset().union(*self._scopes.values())
@@ -206,6 +223,8 @@ class SessionPrivacyLedger(PrivacyLedger):
     def close_run_scope(self, token: object) -> None:
         if self._scopes.pop(token, None) is not None:
             self._refresh()
+            held = set(self.values)
+            self._sources = {value: found for value, found in self._sources.items() if value in held}
 
 
 class SensitiveRecorder:
@@ -348,7 +367,9 @@ def admit_redacted_input(session: Any, value: str) -> None:
     unlike a macro's classified values: only the field type says this is a
     secret, and a typed password is often an ordinary word.
     """
-    install_sensitive_recorder(session).add([value], word_bounded=True)
+    ledger = install_sensitive_recorder(session)
+    ledger.add([value], word_bounded=True)
+    ledger.note_sources([(value, "credential", "")])  # a password field's value, typed by no argument
 
 
 class RunPrivacyLedger(PrivacyLedger):
@@ -382,6 +403,7 @@ class RunPrivacyLedger(PrivacyLedger):
         self.add(admission.values)
         self._session_ledger.add(admission.persistent)
         self._session_ledger.add_run_scoped(self._scope, admission.run_scoped)
+        self._session_ledger.note_sources(_sources(admission))
         # A call repeated in a loop reports its exemption once.
         self._exempt.extend(
             row for row in (item.as_dict(macro) for item in admission.exempt) if row not in self._exempt
@@ -430,4 +452,14 @@ def admit_call_privacy(session: Any, run_ledger: PrivacyLedger, macro: str, admi
         return
     run_ledger.add(admission.values)
     refuse_if_scrub_set_full(session, admission)
-    install_sensitive_recorder(session, admission.values)
+    install_sensitive_recorder(session, admission.values).note_sources(_sources(admission))
+
+
+def _sources(admission: ScrubAdmission) -> list[tuple[str, str, str]]:
+    return [(item.value, item.tier, item.path) for item in admission.sources]
+
+
+def held_provenance(session: Any, values: Iterable[str]) -> tuple[list[str], list[str]]:
+    """`SessionPrivacyLedger.provenance` of the session's ledger; nothing when it has none."""
+    ledger = _existing_session_ledger(session)
+    return ledger.provenance(values) if ledger is not None else ([], [])

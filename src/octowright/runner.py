@@ -17,6 +17,7 @@ from provide.telemetry import get_logger
 from octowright import defaults, personas, runner_video, sequences
 from octowright import macros as macro_mod
 from octowright._paths import reject_unsafe_path
+from octowright.macros import screenshot_refusal
 from octowright.mcp_types import TestSuiteCaseResult, TestSuiteResult
 
 log = get_logger(__name__)
@@ -171,14 +172,18 @@ def redact_error(exc: BaseException) -> str:
 
     octowright's macro failures raise ``RuntimeError(payload)``; the payload
     names the macro, the step and the action, which is enough to find the fault
-    and is never derived from page content or arguments. Anything else is
-    reduced to its type, because an exception message can quote a typed value.
+    and is never derived from page content or arguments. A refused classified
+    screenshot adds its value-free ``screenshot_refused`` summary (surface kind,
+    tier, argument name; `screenshot_refusal`). Anything else is reduced to its
+    type, because an exception message can quote a typed value.
     """
     payload = exc.args[0] if exc.args else None
     if isinstance(payload, dict) and "macro" in payload and "failed_at_step" in payload:
         action = payload.get("failed_action") or {}
         kind = action.get("action", "?") if isinstance(action, dict) else "?"
-        return f"macro {payload['macro']} failed at step {payload['failed_at_step']} ({kind})"
+        line = f"macro {payload['macro']} failed at step {payload['failed_at_step']} ({kind})"
+        refused = payload.get(screenshot_refusal.FIELD)
+        return f"{line}: {screenshot_refusal.summary(refused)}" if isinstance(refused, dict) else line
     return type(exc).__name__
 
 
