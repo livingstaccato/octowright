@@ -111,25 +111,48 @@ def test_the_cap_is_not_raised_past_the_measured_safe_value() -> None:
     assert MAX_URL_PATTERN_WILDCARDS <= 5
 
 
-def test_the_cap_actually_bounds_the_match_cost() -> None:
-    """And the accepted worst case really is fast, against the real converter.
-
-    The bound is generous rather than tight: 4 wildcards against this URL
-    measured ~0.95s locally, so asserting anything near that would flake on a
-    loaded CI box. It still separates "under a second-ish" from the 18s the
-    next wildcard costs, which is the distinction that matters.
-    """
-    pytest.importorskip("playwright")
+def _worst_case_seconds(wildcards: int, url: str, *, runs: int) -> float:
+    """Best-of-*runs* time for the worst pattern with *wildcards* ``**`` segments."""
     from playwright._impl._glob import glob_to_regex_pattern
 
+    compiled = re.compile(glob_to_regex_pattern("**a" * (wildcards - 1) + "**b"))
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        compiled.search(url)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+#: How much one more ``**`` may multiply the worst-case match cost. Measured
+#: ~23x per wildcard at the cap (0.071 s at 4, 1.67 s at 5, Linux, Playwright
+#: 1.62); the uncapped next step is the same factor again, so a converter change
+#: that made each wildcard much more expensive would blow through this.
+MAX_COST_GROWTH_PER_WILDCARD = 100.0
+
+#: A hang guard, not the bound under test: an absolute wall-clock limit is what
+#: this test used to assert (< 5 s), and the same 1.67 s took 6.9 s on a
+#: loaded macOS Intel runner. Speed varies by machine; the growth ratio does not.
+WORST_CASE_HANG_GUARD_SECONDS = 60.0
+
+
+def test_the_cap_actually_bounds_the_match_cost() -> None:
+    """And the accepted worst case really is bounded, against the real converter.
+
+    Judged on the machine running it: the cost at the cap against the cost one
+    wildcard below, both measured here, so a slow or loaded runner slows both
+    alike. What the cap protects is the exponential step -- each ``**`` past it
+    multiplies the backtracking cost -- and that is what the ratio pins.
+    """
+    pytest.importorskip("playwright")
     worst_allowed = "**a" * (MAX_URL_PATTERN_WILDCARDS - 1) + "**b"
     validate_url_pattern(worst_allowed, field="url_pattern")
 
-    compiled = re.compile(glob_to_regex_pattern(worst_allowed))
     url = "http://a.test/" + "a" * 115
-    start = time.perf_counter()
-    compiled.search(url)
-    assert time.perf_counter() - start < 5.0
+    below_cap = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS - 1, url, runs=3)
+    at_cap = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS, url, runs=1)
+    assert at_cap < WORST_CASE_HANG_GUARD_SECONDS
+    assert at_cap / max(below_cap, 1e-6) < MAX_COST_GROWTH_PER_WILDCARD
 
 
 # ---------------------------------------------------------------------------
