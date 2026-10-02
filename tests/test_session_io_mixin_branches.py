@@ -759,6 +759,15 @@ class TestAppendWebsocketCacheByteCeiling:
         assert len(lines) == 20
         assert not any("websocket_truncated" in ln for ln in lines)
 
+    def test_the_counted_bytes_are_the_bytes_on_disk(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The ceiling counts each line's "\n"; a text-mode handle wrote "\r\n" on Windows."""
+        monkeypatch.setenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "100000")
+        subj = _make_subject(tmp_path)
+        for i in range(5):
+            subj._append_websocket_cache(direction="framesent", id_=i, url="ws://x", payload="z" * 10, payload_size=10)
+        subj._websocket_fh.flush()
+        assert subj._websocket_bytes == subj.websocket_path.stat().st_size
+
     def test_ceiling_stops_appending_and_marks_truncated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OCTOWRIGHT_WEBSOCKET_MAX_BYTES", "300")
         subj = _make_subject(tmp_path)

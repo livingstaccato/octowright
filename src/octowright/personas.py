@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import re
 import shlex
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -114,6 +116,9 @@ class Persona:
     # title prefix and corner badge. When None, the launcher hash-picks from
     # a curated pool keyed off the persona name (deterministic).
     emoji: str | None = None
+    # PEM roots this persona's Chromium trusts, and only this persona's.
+    # See ``persona_trust``.
+    trusted_roots: list[str] = field(default_factory=list)
 
 
 # Allowed top-level keys in a persona YAML document. Mirrors the Persona
@@ -127,13 +132,14 @@ _PERSONA_ALLOWED_KEYS: frozenset[str] = frozenset(
         "credentials",
         "app",
         "emoji",
+        "trusted_roots",
     }
 )
 
 # Suffixes valid on credential keys. resolve_credential() only consults
-# ``<name>_env`` / ``<name>_cmd`` pairs, so any other suffix is a typo or
-# spec drift that should fail loudly rather than silently no-op.
-_CREDENTIAL_KEY_SUFFIXES: tuple[str, ...] = ("_env", "_cmd")
+# ``<name>_env`` / ``<name>_cmd`` / ``<name>_file``, so any other suffix is a
+# typo or spec drift that should fail loudly rather than silently no-op.
+_CREDENTIAL_KEY_SUFFIXES: tuple[str, ...] = ("_env", "_cmd", "_file")
 
 
 def _validate_scalar_str_fields(doc: dict[str, Any]) -> None:
@@ -176,6 +182,17 @@ def _validate_credentials(doc: dict[str, Any]) -> None:
             )
 
 
+def _validate_trusted_roots(doc: dict[str, Any]) -> None:
+    roots = doc.get("trusted_roots")
+    if "trusted_roots" not in doc or roots is None:
+        return
+    if not isinstance(roots, list):
+        raise ValueError(f"persona YAML field 'trusted_roots' must be a list of paths, got {type(roots).__name__}")
+    for i, item in enumerate(roots):
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"persona YAML field 'trusted_roots[{i}]' must be a non-empty path string")
+
+
 def _validate_persona_yaml_doc(doc: Any) -> None:
     """Validate a parsed persona YAML document against the Persona schema.
 
@@ -199,8 +216,15 @@ def _validate_persona_yaml_doc(doc: Any) -> None:
     _validate_scalar_str_fields(doc)
     _validate_default_macros(doc)
     _validate_credentials(doc)
+    _validate_trusted_roots(doc)
     if "app" in doc and doc["app"] is not None and not isinstance(doc["app"], dict):
         raise ValueError(f"persona YAML field 'app' must be a mapping, got {type(doc['app']).__name__}")
+
+
+#: A persona's private HOME for Chromium's NSS trust store (see persona_trust).
+#: It sits beside the engine profile dirs but is not one: it is rebuilt on every
+#: launch and must never be aged out as a stale profile.
+TRUST_HOME_DIRNAME = "trust-home"
 
 
 def persona_dir(name: str) -> Path:
@@ -234,6 +258,7 @@ def load_persona(name: str) -> Persona:
         credentials=dict(raw.get("credentials") or {}),
         app=dict(raw.get("app") or {}),
         emoji=raw.get("emoji"),
+        trusted_roots=list(raw.get("trusted_roots") or []),
     )
 
 
@@ -404,16 +429,87 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
     return result.stdout.strip()
 
 
+def _posix_file_permissions() -> bool:
+    """Whether this host has the owner and mode bits a credential file is held to.
+
+    Windows reports every file as ``0o666`` and has no ``O_NOFOLLOW`` or
+    ``getuid``, so none of the rules below can be checked there.
+    """
+    return os.name != "nt"
+
+
+def _open_credential_file(path: Path, where: str) -> int:
+    try:
+        return os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise MissingCredential(f"{where}: credential file not found") from None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise MissingCredential(f"{where}: credential file is a symlink") from None
+        raise MissingCredential(f"{where}: credential file cannot be opened") from None
+
+
+def _check_credential_file(info: os.stat_result, where: str) -> None:
+    if not stat.S_ISREG(info.st_mode):
+        raise MissingCredential(f"{where}: credential file is not a regular file")
+    if info.st_nlink != 1:
+        raise MissingCredential(f"{where}: credential file has another hard link")
+    if info.st_uid != os.getuid():
+        raise MissingCredential(f"{where}: credential file is owned by another user")
+    if info.st_mode & 0o077:
+        raise MissingCredential(f"{where}: credential file is readable by others; chmod 600")
+
+
+def _read_credential_file(raw_path: str, persona_name: str, cred_name: str) -> str:
+    """Read a credential from a file only its owner can read.
+
+    The rules a secret file has to meet elsewhere: no symlink, no second hard
+    link, the current user as owner, nothing for group or other. Errors name
+    the rule and never the contents.
+
+    Opened non-blocking so a FIFO at the path is refused as not a regular file
+    instead of blocking the caller until some writer appears; ``O_NONBLOCK``
+    has no effect on reading a regular file. On a host without POSIX
+    permissions the file is refused rather than read unchecked.
+    """
+    where = f"persona {persona_name!r} field {cred_name!r}"
+    if not _posix_file_permissions():
+        raise MissingCredential(
+            f"{where}: file credentials need POSIX file permissions and are not supported on this platform; "
+            f"use {cred_name}_env or {cred_name}_cmd"
+        )
+    fd = _open_credential_file(Path(raw_path).expanduser(), where)
+    try:
+        _check_credential_file(os.fstat(fd), where)
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            raw = handle.read()
+    finally:
+        os.close(fd)
+    try:
+        value = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        # The decode error names the offending byte and its offset -- part of
+        # the secret. Name the rule instead.
+        raise MissingCredential(f"{where}: credential file is not valid UTF-8") from None
+    value = value[:-1] if value.endswith("\n") else value
+    if not value:
+        raise MissingCredential(f"{where}: credential file is empty")
+    return value
+
+
 def resolve_credential(persona: Persona, cred_name: str) -> str:
-    """Resolve a credential like 'email' via _env or _cmd references in
-    persona.credentials. *_cmd wins if both are set."""
+    """Resolve a credential like 'email' via _cmd, _file or _env references in
+    persona.credentials, in that order of precedence."""
     creds = persona.credentials
     cmd_key = f"{cred_name}_cmd"
+    file_key = f"{cred_name}_file"
     env_key = f"{cred_name}_env"
     if cmd_key in creds:
         if env_key in creds:
             log.warning("persona.cred.both_set", persona=persona.name, cred_name=cred_name)
         return _exec_credential_cmd(creds[cmd_key], persona.name, cred_name)
+    if file_key in creds:
+        return _read_credential_file(creds[file_key], persona.name, cred_name)
     if env_key in creds:
         env_name = creds[env_key]
         value = os.environ.get(env_name)
@@ -421,7 +517,8 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
             raise MissingCredential(f"persona {persona.name!r} field {cred_name!r}: env var {env_name} is unset")
         return value
     raise MissingCredential(
-        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env or {cred_name}_cmd in credentials. "
+        f"persona {persona.name!r} field {cred_name!r}: no {cred_name}_env, {cred_name}_cmd or {cred_name}_file "
+        "in credentials. "
         f"Add one to {persona_dir(persona.name) / 'profile.yaml'} under `credentials:` "
         f"(e.g. {cred_name}_env: {cred_name.upper()}_VAR or {cred_name}_cmd: 'op read op://…')."
     )
@@ -440,6 +537,8 @@ def _credential_names(persona: Persona) -> list[str]:
             names.add(key[: -len("_env")])
         elif key.endswith("_cmd"):
             names.add(key[: -len("_cmd")])
+        elif key.endswith("_file"):
+            names.add(key[: -len("_file")])
     return sorted(names)
 
 
@@ -447,14 +546,14 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
     """Try to resolve every declared credential reference WITHOUT raising.
 
     Returns a structured report per field — success/failure + the reference
-    type (env or cmd) and its literal reference (env var name or the shell
-    command). Never includes the resolved secret value.
+    type (env, cmd or file) and its literal reference (env var name, shell
+    command or file path). Never includes the resolved secret value.
 
     Shape:
         {
           "persona": str,
           "checked": [
-              {"name": str, "source": "env"|"cmd", "reference": str, "ok": bool,
+              {"name": str, "source": "env"|"cmd"|"file", "reference": str, "ok": bool,
                "error": str | None},
               ...
           ],
@@ -465,33 +564,9 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
     Fields with both ``_env`` and ``_cmd`` are checked as ``cmd`` only (matching
     ``resolve_credential`` precedence) — the ``_env`` value is ignored.
     """
-    names = _credential_names(persona)
-    checked: list[CredentialCheckEntry] = []
-    for name in names:
-        cmd_key = f"{name}_cmd"
-        env_key = f"{name}_env"
-        if cmd_key in persona.credentials:
-            source = "cmd"
-            reference = persona.credentials[cmd_key]
-        else:
-            source = "env"
-            reference = persona.credentials[env_key]
-        try:
-            resolve_credential(persona, name)
-            checked.append({"name": name, "source": source, "reference": reference, "ok": True, "error": None})
-        except MissingCredential as e:
-            checked.append({"name": name, "source": source, "reference": reference, "ok": False, "error": str(e)})
-
+    checked = [_check_credential(persona, name) for name in _credential_names(persona)]
     total = len(checked)
     passed = sum(1 for c in checked if c["ok"])
-    if total == 0:
-        summary = f"persona {persona.name!r} declares no credentials"
-    else:
-        failing = [c["name"] for c in checked if not c["ok"]]
-        if not failing:
-            summary = f"{passed}/{total} credentials resolved"
-        else:
-            summary = f"{passed}/{total} credentials resolved; failing: {', '.join(failing)}"
     return {
         "persona": persona.name,
         "checked": checked,
@@ -499,5 +574,25 @@ def check_credentials(persona: Persona) -> CredentialCheckReport:
         # has nothing to verify. Treat that as ok so callers can use the flag
         # as "no missing creds" rather than "creds exist AND resolve".
         "ok": total == 0 or passed == total,
-        "summary": summary,
+        "summary": _credential_summary(persona.name, checked),
     }
+
+
+def _check_credential(persona: Persona, name: str) -> CredentialCheckEntry:
+    # Same precedence as resolve_credential: cmd, then file, then env.
+    source = next(kind for kind in ("cmd", "file", "env") if f"{name}_{kind}" in persona.credentials)
+    reference = persona.credentials[f"{name}_{source}"]
+    try:
+        resolve_credential(persona, name)
+    except MissingCredential as e:
+        return {"name": name, "source": source, "reference": reference, "ok": False, "error": str(e)}
+    return {"name": name, "source": source, "reference": reference, "ok": True, "error": None}
+
+
+def _credential_summary(persona_name: str, checked: list[CredentialCheckEntry]) -> str:
+    if not checked:
+        return f"persona {persona_name!r} declares no credentials"
+    passed = sum(1 for c in checked if c["ok"])
+    failing = [c["name"] for c in checked if not c["ok"]]
+    summary = f"{passed}/{len(checked)} credentials resolved"
+    return f"{summary}; failing: {', '.join(failing)}" if failing else summary

@@ -29,6 +29,8 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.personas import TRUST_HOME_DIRNAME
+
 log = get_logger(__name__)
 
 
@@ -62,7 +64,9 @@ def find_stale_profiles(
 
     A profile lives at ``profiles_root/<persona>/<engine>/`` (post-personas
     layout). Each engine subdir is treated as an independent unit so you can
-    age out chromium without touching the firefox of the same persona.
+    age out chromium without touching the firefox of the same persona. A
+    persona's ``trust-home`` (its private NSS store, see ``persona_trust``)
+    sits beside them but is not an engine profile and is never returned.
     """
     if not profiles_root.exists():
         return []
@@ -73,7 +77,9 @@ def find_stale_profiles(
         if not persona_dir.is_dir():
             continue
         for engine_dir in persona_dir.iterdir():
-            if not engine_dir.is_dir():
+            # The persona's private trust store is rebuilt on every launch and
+            # used by a running browser; it is not an engine profile to age out.
+            if not engine_dir.is_dir() or engine_dir.name == TRUST_HOME_DIRNAME:
                 continue
             try:
                 resolved = engine_dir.resolve()

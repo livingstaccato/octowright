@@ -182,9 +182,9 @@ test `isinstance(exc, InvalidRequestError)`, so a new check written with the
 formerly conventional `raise ValueError(...)` would be filed as machinery
 failure and silently recreate this bug — and a hand-maintained list of guards
 in a test is documentation, not enforcement.
-`tests/test_launch_guard_classification.py` AST-scans the eight modules whose
+`tests/test_launch_guard_classification.py` AST-scans the nine modules whose
 `ValueError`-shaped raises are launch-reachable input checks (`_paths`, `ssrf`,
-`url_patterns`, `http_headers`, and `browser_pool/`'s `options`,
+`url_patterns`, `http_headers`, `persona_trust`, and `browser_pool/`'s `options`,
 `launch_helpers`, `launch_execution`, `launch_pipeline`), plus the two URL
 guards in `session/core_page_mixin.py` by function (`_reject_unsafe_url`,
 `_check_url_shape` -- that mixin also raises ordinary `ValueError`s nowhere

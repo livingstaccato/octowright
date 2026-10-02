@@ -148,3 +148,37 @@ class TestCacheDir:
         monkeypatch.setattr("platform.system", lambda: "Windows")
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
         assert user_cache_dir() == tmp_path / "Local" / "octowright" / "Cache"
+
+
+class TestViewportDefaults:
+    """OCTOWRIGHT_VIEWPORT_W/H are read at import, so a bad value must not crash every command."""
+
+    @pytest.mark.parametrize(("raw", "expected"), [(None, 1280), ("1920", 1920), (" 1920 ", 1920)])
+    def test_a_usable_value_is_taken(self, raw: str | None, expected: int) -> None:
+        from octowright import defaults
+
+        assert defaults._parse_viewport_dim("OCTOWRIGHT_VIEWPORT_W", raw, 1280) == expected
+
+    @pytest.mark.parametrize("raw", ["1920px", "", "  ", "0", "-5", "wide", "1e3"])
+    def test_an_unusable_value_falls_back_to_the_default_with_a_warning(self, raw: str) -> None:
+        from unittest.mock import patch
+
+        from octowright import defaults
+
+        with patch.object(defaults, "log") as log:
+            assert defaults._parse_viewport_dim("OCTOWRIGHT_VIEWPORT_W", raw, 1280) == 1280
+        log.warning.assert_called_once()
+        assert log.warning.call_args.kwargs["name"] == "OCTOWRIGHT_VIEWPORT_W"
+
+    def test_a_bad_value_no_longer_breaks_import(self, tmp_path: Path) -> None:
+        import os
+        import subprocess  # nosec B404 -- this interpreter, fixed arguments
+        import sys
+
+        env = dict(os.environ, OCTOWRIGHT_VIEWPORT_W="1920px", OCTOWRIGHT_VIEWPORT_H="0")
+        code = "from octowright import defaults; print(defaults.DEFAULT_VIEWPORT_W, defaults.DEFAULT_VIEWPORT_H)"
+        proc = subprocess.run(  # nosec B603 -- fixed argv, no shell
+            [sys.executable, "-c", code], env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60, check=False
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.split() == ["1280", "800"]

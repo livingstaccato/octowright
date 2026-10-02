@@ -126,10 +126,13 @@ class TestSuiteCaseResult(TypedDict, total=False):
     ok: bool
     error: str | None
     duration: float
-    # Present only when the test passed but teardown (browser close) failed.
-    # The test is still reported as ok=True; this carries the close-error repr
-    # so callers can surface it as a soft warning.
+    # Present only when the test passed but teardown (browser close) failed --
+    # for a sequence, on the last step that ran. The test is still reported as
+    # ok=True; this carries the close-error repr (only its type under
+    # redact_errors) so callers can surface it as a soft warning.
     teardown_warning: str
+    # Present on sequence steps that never ran because an earlier step failed.
+    skipped: bool
 
 
 class TestSuiteResult(TypedDict):
