@@ -331,7 +331,7 @@ class BrowserSession(
         ``SessionOperationGate.operation()``'s ``_mark_call_timeout_published``
         dedup) -- not necessarily the outermost/root frame, since a caller can
         swallow the error inside its own root lease (``macros/artifacts.py``'s
-        ``macro_artifact_run``, ``run_sequence(stop_on_failure=False)``) before
+        ``macro_artifact_run``, ``run_sequence``, which returns a failed step in either mode) before
         it ever reaches one. ``error`` is always a ``SessionCallTimeoutError``
         even when the exception that actually escaped this frame was something
         else that wrapped it (``_call_timeout_cause`` in ``operation/gate/core.py``

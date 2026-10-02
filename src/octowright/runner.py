@@ -196,8 +196,9 @@ async def run_sequence_file(
     """Run a macro sequence file in one browser of *persona*, as a test suite.
 
     The same walk as ``macro_run_sequence`` with ``stop_on_failure=True``, kept
-    as its own loop because that call raises on a failure and discards the
-    steps that had already passed, which the JUnit report needs.
+    as its own loop because each step carries its own ``credential_args`` and
+    the JUnit report lists the steps after a failure as skipped, neither of
+    which ``run_sequence`` does.
 
     Every reference is resolved, and the report path checked, before anything
     launches, so a sequence naming a credential its persona cannot supply -- or

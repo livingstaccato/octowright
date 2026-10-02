@@ -820,15 +820,17 @@ class TestRunSequenceShape:
         assert out["steps"][1]["ok"] is True
 
     @pytest.mark.anyio
-    async def test_stop_on_failure_reraises_after_recording(
+    async def test_stop_on_failure_returns_after_recording(
         self, fake_session: _FakeSession, patched_runners: dict[str, Any]
     ) -> None:
-        """stop_on_failure=True (default) re-raises after the failed step is appended."""
+        """stop_on_failure=True (default) stops after the failed step and returns it (#248)."""
         patched_runners["register"]("a", [{"action": "click", "selector": "#x"}])
         patched_runners["register"]("b", [])
         patched_runners["raise_on"]["click"] = ValueError("boom")
-        with pytest.raises(RuntimeError):
-            await run_sequence(session=fake_session, names=["a", "b"])
+        out = await run_sequence(session=fake_session, names=["a", "b"])
+        assert out["ok"] is False
+        assert out["stopped_at"] == 0
+        assert [step["macro"] for step in out["steps"]] == ["a"]
 
     @pytest.mark.anyio
     async def test_failure_step_carries_args_used(

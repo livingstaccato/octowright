@@ -431,6 +431,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_expect_js_equality.py",
     "tests/test_lone_surrogate_sinks.py",
     "tests/test_macro_nested_scan.py",
+    "tests/test_macro_sequence_stop.py",
     "tests/test_macro_no_text_element_limit.py",
     "tests/test_macro_assertion_privacy.py",
     "tests/test_durable_page_content_scrub.py",

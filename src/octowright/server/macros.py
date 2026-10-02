@@ -198,8 +198,14 @@ def macro_delete(name: str) -> MacroDeleteResult:
     description=(
         "Replay several saved macros in order against one live instance. "
         "`names` is the list of macro names; `args_list[i]` supplies args for `names[i]`. "
-        "By default a failing step aborts the chain (stop_on_failure=True); pass False "
-        "to keep going and collect per-step outcomes."
+        "A failing step does not error the call: it returns {sequence, steps, ok, stopped_at}. "
+        "By default (stop_on_failure=True) the chain stops after the first failing step; the "
+        "result has ok: false, stopped_at: <that step's index>, and steps up to and including "
+        "it (a failed step carries ok: false, error, and `failure` with the macro's structured "
+        "failure details such as failed_at_step). Pass False to run every step and collect "
+        "per-step outcomes; stopped_at is then null. A missing macro is a failed step. The call "
+        "still errors when it cannot run at all: unknown instance, malformed names/args_list, "
+        "or the session's operation gate refusing."
     ),
 )
 async def macro_run_sequence(
