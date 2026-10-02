@@ -25,7 +25,14 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import MacroArgPrivacy, ScrubAdmission, scrub_sensitive_values, with_session_values
+from octowright.macros.privacy import (
+    MacroArgPrivacy,
+    ScrubAdmission,
+    refuse_if_scrub_set_full,
+    scrub_saturation_fields,
+    scrub_sensitive_values,
+    with_session_values,
+)
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -192,6 +199,9 @@ async def run_macro_artifact(
         # whatever it is named, so every record below uses it, not the name alone.
         privacy = _privacy(macro)
         admission = privacy.admission(args_used)
+        # Before the manifest or run dir is written: a run that would add to a
+        # full scrub set is refused with nothing on disk (#248).
+        refuse_if_scrub_set_full(session, admission)
         sensitive_values = admission.values
         # What the #247 floor/list left visible; a finished replay's own report
         # replaces it below, since that one also covers nested calls.
@@ -320,6 +330,7 @@ async def run_macro_artifact(
                 **verification_paths,
             },
             **_exempt_fields(scrub_exempt),
+            **scrub_saturation_fields(session),
         }
 
 
