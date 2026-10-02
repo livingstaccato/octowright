@@ -275,7 +275,10 @@ things are load-bearing:
   after a loop stall, on an engine judged by liveness alone -- reads as a
   crash, so the incident records `evidence` (`singleton_lock` / `liveness`) and
   a `liveness` crash is labelled but never reopened under
-  `OCTOWRIGHT_DRIVER_RELAUNCH`. Neither is a session whose teardown a close
+  `OCTOWRIGHT_DRIVER_RELAUNCH`. A liveness "crash" whose every page the
+  client itself asked Playwright to close is a close instead
+  (`_client_closed_every_page`): headless WebKit exits 8-11 ms after its last
+  page closes, which a loaded runner's loop overshoots. Neither is a session whose teardown a close
   already owns (`pool._closing_sessions`, or the gate's `close_reserved`, read
   BEFORE the acceptance seam installs its own reservation): a draining
   `browser_close`, a handoff, a fluid relaunch.
