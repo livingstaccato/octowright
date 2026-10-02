@@ -12,13 +12,34 @@ import hmac
 import os
 import re
 import secrets
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Any, Literal
 
 from octowright.macros.nesting import iter_nested_actions
+
+# The scrub sets live in ``privacy_ledger``; re-exported so every existing
+# import keeps its spelling.
+from octowright.macros.privacy_ledger import SESSION_PRIVACY_LEDGER_ATTR as SESSION_PRIVACY_LEDGER_ATTR
+from octowright.macros.privacy_ledger import DurableTextScrubber as DurableTextScrubber
+from octowright.macros.privacy_ledger import PrivacyLedger as PrivacyLedger
+from octowright.macros.privacy_ledger import RunPrivacyLedger as RunPrivacyLedger
+from octowright.macros.privacy_ledger import SensitiveRecorder as SensitiveRecorder
+from octowright.macros.privacy_ledger import SessionPrivacyLedger as SessionPrivacyLedger
+from octowright.macros.privacy_ledger import admit_call_privacy as admit_call_privacy
+from octowright.macros.privacy_ledger import admit_redacted_input as admit_redacted_input
+from octowright.macros.privacy_ledger import install_sensitive_recorder as install_sensitive_recorder
+from octowright.macros.privacy_ledger import run_privacy_ledger as run_privacy_ledger
+from octowright.macros.privacy_ledger import session_privacy_ledger as session_privacy_ledger
+from octowright.macros.privacy_ledger import with_session_values as with_session_values
 from octowright.macros.redaction_text import normalize
+from octowright.macros.scrub_admission import (
+    scrub_common_values,
+    scrub_exemption_reason,
+    scrub_min_length,
+    scrub_run_scoped,
+)
 
 # The scrub itself (variants, patterns, the structure walk) lives in
 # ``scrub_engine``; re-exported so every existing import keeps its spelling.
@@ -28,7 +49,6 @@ from octowright.macros.scrub_engine import _scrub_patterns as _scrub_patterns
 from octowright.macros.scrub_engine import _scrub_text as _scrub_text
 from octowright.macros.scrub_engine import _scrub_tree as _scrub_tree
 from octowright.macros.scrub_engine import _serialized_variants as _serialized_variants
-from octowright.macros.scrub_engine import filtered_text_scrubber
 from octowright.macros.scrub_engine import scrub_sensitive_values as scrub_sensitive_values
 from octowright.macros.scrub_engine import sensitive_value_variants as sensitive_value_variants
 
@@ -38,7 +58,7 @@ from octowright.macros.scrub_engine import sensitive_value_variants as sensitive
 from octowright.placeholders import PLACEHOLDER_PATTERN as PLACEHOLDER_PATTERN
 from octowright.placeholders import PLACEHOLDER_RE as PLACEHOLDER_RE
 
-ARG_PRIVACY_CLASSIFIER_VERSION = 5
+ARG_PRIVACY_CLASSIFIER_VERSION = 6
 BLIND_SCRUB_POLICY_ENV = "OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY"
 
 BlindScrubPolicy = Literal["credentials", "all", "reject"]
@@ -52,6 +72,67 @@ class ClassifiedArgValue:
     value: str
     path: str
     tier: PrivacyTier
+
+
+@dataclass(frozen=True)
+class ScrubExemption:
+    """An identity/contextual argument left out of blind scrubbing (#247): never its value."""
+
+    path: str
+    tier: PrivacyTier
+    reason: str  # "short" or "common", see `scrub_admission`
+
+    def as_dict(self, macro: str | None = None) -> dict[str, str]:
+        row = {"path": self.path, "tier": self.tier, "reason": self.reason}
+        return {"macro": macro, **row} if macro is not None else row
+
+
+def _longest_first(values: Iterable[str]) -> tuple[str, ...]:
+    return tuple(sorted(set(values), key=lambda value: (-len(value), value)))
+
+
+@dataclass(frozen=True)
+class ScrubAdmission:
+    """What the blind-scrub policy admitted for one set of arguments, and for how long.
+
+    ``persistent`` values join the session-wide ledger: every credential, and
+    identity/contextual values when ``OCTOWRIGHT_MACRO_SCRUB_RUN_SCOPED`` is
+    off. ``run_scoped`` values are scrubbed for the supplying run only.
+    ``exempt`` names what the floor or the common-value list left visible.
+    """
+
+    persistent: tuple[str, ...] = ()
+    run_scoped: tuple[str, ...] = ()
+    exempt: tuple[ScrubExemption, ...] = ()
+
+    @property
+    def values(self) -> tuple[str, ...]:
+        """Everything admitted, longest first: what this run's own scrubbers use."""
+        return _longest_first((*self.persistent, *self.run_scoped))
+
+
+def _scrub_admission(admitted: tuple[ClassifiedArgValue, ...]) -> ScrubAdmission:
+    credentials = {item.value for item in admitted if item.tier == "credential"}
+    others = [item for item in admitted if item.value not in credentials]
+    if not others:
+        return ScrubAdmission(persistent=_longest_first(credentials))
+    min_length, common = scrub_min_length(), scrub_common_values()
+    exempt: list[ScrubExemption] = []
+    scoped: set[str] = set()
+    for item in others:
+        reason = scrub_exemption_reason(item.value, min_length=min_length, common=common)
+        if reason is None:
+            scoped.add(item.value)
+        else:
+            exempt.append(ScrubExemption(item.path, item.tier, reason))
+    if not scrub_run_scoped():
+        credentials |= scoped
+        scoped = set()
+    return ScrubAdmission(
+        persistent=_longest_first(credentials),
+        run_scoped=_longest_first(scoped),
+        exempt=tuple(sorted(exempt, key=lambda item: item.path)),
+    )
 
 
 class MacroBlindScrubRejected(ValueError):
@@ -404,10 +485,19 @@ class MacroArgPrivacy:
             values.update(_collect_classified_values(value, inherited=self._tier(key), path=str(key)))
         return tuple(sorted(values, key=lambda item: (item.path, -_TIER_RANK[item.tier], item.value)))
 
+    def admission(self, args: Mapping[str, Any], *, policy: BlindScrubPolicy | None = None) -> ScrubAdmission:
+        """What the configured policy admits to blind scrubbers, split by how long it is scrubbed.
+
+        A credential-tier value is admitted at any length and session-wide. An
+        identity/contextual one (admitted only under ``all``) is left out when
+        it is short or common (`scrub_admission`), and is otherwise scrubbed for
+        the supplying run only unless run scoping is off.
+        """
+        return _scrub_admission(_admitted_classified_values(self.classified(args), policy or blind_scrub_policy()))
+
     def blind_scrub(self, args: Mapping[str, Any], *, policy: BlindScrubPolicy | None = None) -> tuple[str, ...]:
         """Values admitted to blind scrubbers under the configured policy."""
-        selected = _admitted_classified_values(self.classified(args), policy or blind_scrub_policy())
-        return tuple(sorted({item.value for item in selected}, key=lambda value: (-len(value), value)))
+        return self.admission(args, policy=policy).values
 
     def redact(self, args: Mapping[str, Any], *, marker: str = REDACTED) -> dict[str, Any]:
         """*args* for a response or a log: sensitive keys replaced, admitted values scrubbed."""
@@ -457,220 +547,3 @@ def assertion_digest_matches(value: object, digest: object) -> bool:
     if not isinstance(value, str) or not value or not isinstance(digest, str):
         return False
     return hmac.compare_digest(assertion_text_digest(value), digest)
-
-
-#: The session attribute that owns its scrub set, in the private namespace
-#: composition roots already use (``_octowright_before_macro_action``).
-SESSION_PRIVACY_LEDGER_ATTR = "_octowright_privacy_ledger"
-
-
-class PrivacyLedger:
-    """An append-only, de-duplicated set of values to scrub, longest first.
-
-    Longest first because a replacing scrub must not let a shorter value consume
-    the characters a longer one needed. De-duplicated because the scrub cost is
-    per value per write, so it has to track distinct credentials, not runs.
-    """
-
-    def __init__(self, values: Iterable[str] = ()) -> None:
-        self._members: set[str] = set()
-        self._values: tuple[str, ...] = ()
-        self._bounded: set[str] = set()
-        self._anywhere: set[str] = set()
-        self._word_bounded: frozenset[str] = frozenset()
-        # Bumped by every add that changes what a scrub does; `_text_scrubber`
-        # rebuilds its cache when this moves.
-        self._version = 0
-        self._cached: tuple[int, Callable[[str], str]] | None = None
-        self.add(values)
-
-    def add(self, values: Iterable[str], *, word_bounded: bool = False) -> None:
-        """Append *values*; ``word_bounded`` ones are scrubbed only as whole identifiers.
-
-        A value admitted both ways is scrubbed anywhere: the stronger claim wins,
-        whichever order the two admissions arrived in.
-        """
-        admitted = {value for value in values if isinstance(value, str) and value}
-        claim = self._bounded if word_bounded else self._anywhere
-        if admitted <= claim:
-            return
-        claim.update(admitted)
-        new = admitted - self._members
-        if new:
-            self._members |= new
-            self._values = tuple(sorted(self._members, key=lambda value: (-len(value), value)))
-        self._word_bounded = frozenset(self._bounded - self._anywhere)
-        self._version += 1
-
-    @property
-    def values(self) -> tuple[str, ...]:
-        return self._values
-
-    @property
-    def word_bounded(self) -> frozenset[str]:
-        """Values scrubbed only where not embedded in a longer identifier.
-
-        The passwords `admit_redacted_input` adds. They are whatever someone
-        typed into a password field -- very often a test value such as
-        ``admin`` -- and replacing one anywhere rewrote ``administrator`` and
-        ``#admin-menu`` in every later row, so a macro saved from the recording
-        replayed broken selectors. Bounding keeps every echo that stands as its
-        own token (``pw=admin``, ``"admin"``, a URL parameter) scrubbed; what
-        it gives up is an echo glued to other identifier characters.
-        """
-        return self._word_bounded
-
-    def scrub(self, value: Any) -> Any:
-        """*value* scrubbed of this ledger's values, or *value* itself when it is empty.
-
-        Byte-identical to `scrub_sensitive_values` over the same state, which
-        the live buffers (`input_redaction.live_scrubbed`) call on every
-        console message, network row and socket URL: see `_text_scrubber`.
-        """
-        return _scrub_tree(value, self._text_scrubber()) if self._values else value
-
-    def _text_scrubber(self) -> Callable[[str], str]:
-        """The per-string scrub for the current state, built once per state.
-
-        Almost every string a page produces holds no ledger value; see
-        `scrub_engine.filtered_text_scrubber`.
-        """
-        cached = self._cached
-        if cached is not None and cached[0] == self._version:
-            return cached[1]
-        scrub_text = filtered_text_scrubber(self._values, self._word_bounded)
-        self._cached = (self._version, scrub_text)
-        return scrub_text
-
-
-class SessionPrivacyLedger(PrivacyLedger):
-    """A session's scrub set: appended to by every run and nested call, never cleared.
-
-    Deliberately not restored at the run boundary. Recorder rows are driven by
-    page events that outlive the run, and a credential typed in one sequence step
-    keeps appearing in the next step's page-derived rows, so restoring would
-    reopen cleartext rather than prevent stacking. Stacking is prevented by
-    identity instead: exactly one ``SensitiveRecorder`` reads this ledger.
-    """
-
-
-class SensitiveRecorder:
-    """Scrub macro values at the recorder boundary before any durable write.
-
-    Holds a reference to the session ledger, not a copy of its values, so a
-    value appended by a later run or a nested call is scrubbed from the very next
-    write without installing anything.
-    """
-
-    def __init__(self, recorder: Any, ledger: PrivacyLedger) -> None:
-        self._recorder = recorder
-        self.ledger = ledger
-
-    def _scrubbed(self, fields: dict[str, Any]) -> dict[str, Any]:
-        # Nothing to scrub is the common case for a session that never admitted a
-        # macro value, and scrubbing an empty set still copies every field --
-        # ``PrivacyLedger.scrub`` returns *fields* untouched then.
-        scrubbed: dict[str, Any] = self.ledger.scrub(fields)
-        return scrubbed
-
-    def record(self, action: str, **fields: Any) -> None:
-        self._recorder.record(action, **self._scrubbed(fields))
-
-    def record_control(self, action: str, **fields: Any) -> None:
-        self._recorder.record_control(action, **self._scrubbed(fields))
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._recorder, name)
-
-
-def session_privacy_ledger(session: Any) -> SessionPrivacyLedger:
-    """The session's ledger, created on first use."""
-    ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
-    # isinstance rather than ``is None``: a mock session answers every getattr.
-    if not isinstance(ledger, SessionPrivacyLedger):
-        ledger = SessionPrivacyLedger()
-        setattr(session, SESSION_PRIVACY_LEDGER_ATTR, ledger)
-    return ledger
-
-
-def with_session_values(session: Any, values: Iterable[str]) -> tuple[str, ...]:
-    """*values* and every value the session ledger holds, as one flat tuple, longest first.
-
-    For a caller that must redact everything the session holds, not only its
-    own run's values: the ledger also carries what was admitted outside any
-    macro -- a password the input classification hid from a direct
-    ``browser_fill`` -- and the page may still render it. Reads the ledger
-    without creating one.
-
-    Flat on purpose: the ledger's word bounds (`PrivacyLedger.word_bounded`)
-    belong to the recording, whose own scrub reads the session ledger
-    directly. Every caller here matches each value anywhere -- a failure
-    payload's page-derived text goes back to the MCP client, and a screenshot
-    is pixels -- and a tuple cannot carry the bounds, so none can be applied
-    by mistake.
-    """
-    merged = PrivacyLedger(values)
-    ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
-    if isinstance(ledger, SessionPrivacyLedger):
-        merged.add(ledger.values)
-    return merged.values
-
-
-def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:
-    """Add values to the session's scrub set and make sure exactly one wrapper reads it.
-
-    Idempotent and never uninstalled: a session that is already wrapped gets its
-    ledger appended to, never a second wrapper. It wraps even when there is
-    nothing to scrub yet, because a nested call or a later run may append a
-    credential, and that append has to reach a ledger something reads.
-    """
-    ledger = session_privacy_ledger(session)
-    ledger.add(sensitive_values)
-    recorder = getattr(session, "recorder", None)
-    if recorder is not None and not isinstance(recorder, SensitiveRecorder):
-        session.recorder = SensitiveRecorder(recorder, ledger)
-    # The markdown cache is the other durable write of page content; a page
-    # that renders the password would otherwise put it on disk in cleartext.
-    if session.durable_text_scrubber is None:
-        session.durable_text_scrubber = DurableTextScrubber(ledger)
-    return ledger
-
-
-class DurableTextScrubber:
-    """The session's ``durable_text_scrubber``: scrubs page text against its ledger.
-
-    ``active`` lets a caller with work to do BEFORE scrubbing skip it: the
-    websocket sidecar base64-decodes every binary frame to look for a value,
-    and a session that once ran a macro keeps this installed with a ledger that
-    may well be empty.
-    """
-
-    def __init__(self, ledger: PrivacyLedger) -> None:
-        self.ledger = ledger
-
-    @property
-    def active(self) -> bool:
-        return bool(self.ledger.values)
-
-    def __call__(self, text: str) -> str:
-        scrubbed: str = self.ledger.scrub(text)
-        return scrubbed
-
-    def scrub_value(self, value: Any) -> Any:
-        """A structure (a console entry, a network row) scrubbed like text."""
-        return self.ledger.scrub(value)
-
-
-def admit_redacted_input(session: Any, value: str) -> None:
-    """A value the recorder's input classification hid, now kept out of every other durable write.
-
-    ``OCTOWRIGHT_REDACT_INPUTS`` replaces a password field's typed value in the
-    ``fill``/``type`` row, but the page is free to echo it -- a
-    ``console.log``, a request body, a websocket frame, the rendered page --
-    and each of those rows used to persist it in cleartext. Appending to the
-    session ledger (never replacing it) keeps it scrubbed across every later
-    macro run as well. Admitted WORD-BOUNDED (`PrivacyLedger.word_bounded`),
-    unlike a macro's classified values: only the field type says this is a
-    secret, and a typed password is often an ordinary word.
-    """
-    install_sensitive_recorder(session).add([value], word_bounded=True)

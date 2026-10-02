@@ -25,7 +25,7 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values, with_session_values
+from octowright.macros.privacy import MacroArgPrivacy, ScrubAdmission, scrub_sensitive_values, with_session_values
 from octowright.macros.storage import load_macro, macro_path
 
 log = get_logger("octowright.artifacts.verification")
@@ -191,7 +191,11 @@ async def run_macro_artifact(
         # The view macro_run builds: an expect_no_text argument is secret
         # whatever it is named, so every record below uses it, not the name alone.
         privacy = _privacy(macro)
-        sensitive_values = privacy.blind_scrub(args_used)
+        admission = privacy.admission(args_used)
+        sensitive_values = admission.values
+        # What the #247 floor/list left visible; a finished replay's own report
+        # replaces it below, since that one also covers nested calls.
+        scrub_exempt = _exempt_args(name, admission)
         store = ArtifactStore()
         artifact_dir = store.macro_dir(name)
         runs_dir = artifact_dir / "runs"
@@ -231,6 +235,7 @@ async def run_macro_artifact(
             if isinstance(replay, dict):
                 executed = int(replay.get("executed", 0))
                 skipped = int(replay.get("skipped", 0))
+                scrub_exempt = replay.get("scrub_exempt_args", [])
         except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
             status = "failed"
             error = f"{exc.__class__.__name__}: {exc}"
@@ -314,7 +319,16 @@ async def run_macro_artifact(
                 "result": str(paths["result"]),
                 **verification_paths,
             },
+            **_exempt_fields(scrub_exempt),
         }
+
+
+def _exempt_args(name: str, admission: ScrubAdmission) -> list[dict[str, str]]:
+    return [item.as_dict(name) for item in admission.exempt]
+
+
+def _exempt_fields(scrub_exempt: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    return {"scrub_exempt_args": scrub_exempt} if scrub_exempt else {}
 
 
 async def _capture_screenshot(

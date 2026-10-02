@@ -76,6 +76,10 @@ class MacroRunResult(TypedDict):
     # credential be typed onto a foreign origin: step, action and origin, never the value.
     credential_fill_offsite: NotRequired[list[dict[str, Any]]]
     assertions: NotRequired[list[dict[str, Any]]]  # see MacroAssertionFields
+    # Present only when the length floor or common-value list left an
+    # identity/contextual argument out of blind scrubbing (#247): macro, path,
+    # tier and reason, never the value.
+    scrub_exempt_args: NotRequired[list[dict[str, str]]]
 
 
 class MacroSequenceStep(TypedDict, total=False):
@@ -89,6 +93,7 @@ class MacroSequenceStep(TypedDict, total=False):
     ok: bool
     error: str  # only set on failed steps
     assertions: list[dict[str, Any]]
+    scrub_exempt_args: list[dict[str, str]]
 
 
 class MacroSequenceResult(TypedDict):

@@ -73,8 +73,20 @@ def test_default_preserves_the_issue_247_recording_row() -> None:
         assert scrub_sensitive_values(row, blind_scrub_arg_values(args)) == row
 
 
-def test_all_preserves_legacy_blind_scrubbing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_all_blind_scrubs_every_tier_above_the_short_value_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``all`` admits identity/contextual values too, except short and common ones
+    (#247, ``test_macro_scrub_admission``); credentials at any length."""
     monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
+
+    values = blind_scrub_arg_values({"session": "s-4471", "password": "p"})  # pragma: allowlist secret
+
+    assert values == ("s-4471", "p")
+    assert scrub_sensitive_values("sid=s-4471 password=p", values) == "sid=<redacted> password=<redacted>"
+
+
+def test_all_with_the_floor_disabled_restores_legacy_blind_scrubbing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(BLIND_SCRUB_POLICY_ENV, "all")
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_SCRUB_MIN_LENGTH", "0")
 
     values = blind_scrub_arg_values({"session": "1", "password": "p"})  # pragma: allowlist secret
 

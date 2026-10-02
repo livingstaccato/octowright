@@ -352,3 +352,27 @@ async def ledger_screenshot(session: Any, path: Path, sensitive_values: tuple[st
             raise RuntimeError("the session's screenshot privacy handler refused the screenshot")
         return
     await redacted_screenshot(session, action, sensitive_values, root=path.parent)
+
+
+async def dispatch_classified_screenshot(
+    session: Any,
+    action: dict[str, Any],
+    sensitive_values: tuple[str, ...],
+) -> tuple[int, int]:
+    """Route a screenshot holding policy-admitted values through the privacy boundary.
+
+    A screenshot of a page a credential was typed into is a durable copy of
+    that credential, so the generic capture path is never used. In order: an
+    explicitly authorized handler decides; otherwise octowright's own redacted
+    screenshot runs when ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``;
+    otherwise the screenshot is refused.
+    """
+    handler = installed_handler(session)
+    if handler is not None:
+        handled = await handler(action=action, sensitive_values=sensitive_values)
+        if handled is None:
+            raise RuntimeError("classified macro screenshot privacy handler refused the action")
+        return handled
+    if classified_screenshot_policy() == "redact":
+        return await redacted_screenshot(session, action, sensitive_values)
+    raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
