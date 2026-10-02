@@ -137,7 +137,18 @@ _STOPPED_BECAUSE = {
 
 # What Playwright says when a handle's element is gone: replaced by a
 # re-render, or its document navigated away. Measured on all three engines.
-_DETACHED_MARKERS = ("not attached to the DOM", "Execution context was destroyed", "Frame was detached")
+# ``owner_frame()`` on a handle whose document navigated away does not say
+# "not attached": chromium says the context was destroyed, and firefox and
+# webkit raise their protocol's describeNode error (the last two below,
+# measured on Playwright 1.62). The webkit one is matched with its method,
+# because "Node not found" alone is not specific to a vanished handle.
+_DETACHED_MARKERS = (
+    "not attached to the DOM",
+    "Execution context was destroyed",
+    "Frame was detached",
+    "Cannot find object with id",
+    "(DOM.describeNode): Node not found",
+)
 
 
 class CredentialInputStopped(RuntimeError):
@@ -238,7 +249,15 @@ async def checked_fill(session: Any, locator: Any, value: str, check: Callable[[
             while True:
                 handle = await locator.element_handle(timeout=_ms_left(deadline))
                 handles.append(handle)
-                owner = await handle.owner_frame()
+                try:
+                    # A navigation after the resolve detaches the handle here
+                    # too: resolving again reaches the new document, which
+                    # *check* then refuses or accepts.
+                    owner = await handle.owner_frame()
+                except Exception as exc:
+                    if not credential_input_detached(exc) or time.monotonic() >= deadline:
+                        raise
+                    continue
                 check(str(getattr(owner, "url", "") or ""))
                 try:
                     progress.started = True
