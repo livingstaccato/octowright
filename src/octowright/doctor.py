@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 from provide.telemetry import get_logger
 
+from octowright import frontend_bundle
 from octowright.singleton import pid_is_alive, read_lock
 
 log = get_logger(__name__)
@@ -589,6 +590,30 @@ def check_browser_installs() -> Check:
     )
 
 
+def _frontend_dir() -> Path:
+    return frontend_bundle.FRONTEND_DIR
+
+
+def check_dashboard_bundle() -> Check:
+    """Is the dashboard's compiled bundle where the daemon will look for it?
+
+    A WARN, not a FAIL: the MCP tools and the API work without it. Missing is
+    the normal state of an editable install from a source checkout, because the
+    bundle is gitignored build output; the daemon then serves a page naming the
+    same command at ``/``, but only a restart after building picks it up.
+    """
+    root = _frontend_dir()
+    data = {"path": str(root)}
+    if (root / "index.html").is_file():
+        return Check("dashboard:bundle", "ok", "dashboard bundle present", data)
+    return Check(
+        "dashboard:bundle",
+        "warn",
+        f"dashboard not built at {root} -- run `{frontend_bundle.BUILD_COMMAND}` in the checkout, then `octowright restart`",
+        data,
+    )
+
+
 def _browsers_root() -> Path:
     """Where Playwright keeps its downloaded browser builds."""
     override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
@@ -661,7 +686,14 @@ async def run_checks(
     engine_timeout: float = DEFAULT_ENGINE_TIMEOUT_SECONDS,
 ) -> list[Check]:
     """Every check, engine probes last because they are the slow ones."""
-    checks = [check_daemon(), check_browser_installs(), check_stray_drivers(), check_orphan_browsers(), check_storage()]
+    checks = [
+        check_daemon(),
+        check_browser_installs(),
+        check_dashboard_bundle(),
+        check_stray_drivers(),
+        check_orphan_browsers(),
+        check_storage(),
+    ]
     # macOS only, and gated here rather than returning a "skip" from the check
     # itself: CoreAudio is the wedge that silently breaks WebKit on a Mac, and
     # a permanent SKIP line on every Linux run is noise a reader learns to

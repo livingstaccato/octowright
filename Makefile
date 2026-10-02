@@ -1,10 +1,22 @@
-.PHONY: help install test test-terminal test-frontend typecheck-assets lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
+.PHONY: help install frontend-build test test-terminal test-frontend typecheck-assets lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-install: ## uv sync --all-groups (deps + dev tools)
+install: ## uv sync --all-groups (deps + dev tools) and build the dashboard bundle
 	uv sync --all-groups
+	@$(MAKE) --no-print-directory frontend-build
+
+# The dashboard bundle is gitignored build output, so a source checkout (and
+# every fresh worktree) has none until this runs, and the daemon serves a
+# "dashboard not built" page instead of the UI. A wheel ships it prebuilt.
+# Without npm the install still succeeds -- the MCP tools need no dashboard.
+frontend-build: ## Build the dashboard bundle (npm ci + vite build) if npm is available
+	@if command -v npm >/dev/null 2>&1; then \
+		npm ci --no-audit --no-fund && npm run build --workspace=packages/octowright-frontend; \
+	else \
+		echo "WARNING: npm not found; dashboard bundle not built (the daemon will serve a 'dashboard not built' page)." >&2; \
+	fi
 
 # NOT a browser-free run, despite what this target used to claim. 18 test
 # modules carry the `live_browser` marker and NOTHING deselects it here or in
