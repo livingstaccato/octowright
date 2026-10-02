@@ -15,7 +15,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import failure_context, safe_screenshot
+from octowright.macros import failure_context, safe_screenshot, sequence_steps
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
@@ -719,50 +719,46 @@ async def run_sequence(
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
 ) -> MacroSequenceResult:
+    """Run *names* in order; a failing step is a result, never a raise (#248).
+
+    With *stop_on_failure* the walk ends after the failing step and
+    ``stopped_at`` is its index; otherwise ``stopped_at`` is ``None``. What
+    still raises is in `sequence_steps`.
+    """
+    resolved_args = sequence_steps.resolve_sequence_args(names, args_list)
     # The outer lease keeps "macro_run_sequence" as the observable root for
     # every member macro's run_macro re-entry (same task, no re-queueing) --
     # a manual action can't interleave between sequence steps any more than
     # it can between actions inside a single run_macro.
     async with session.operation("macro_run_sequence"):
-        # Wrap the whole sequence in a single parent span so the per-macro
-        # ``octowright.macro.run`` spans nest underneath it in the trace tree
-        # (OTel context propagation handles the nesting automatically). Without
-        # this, N successive run_macro calls produced N sibling top-level spans
-        # with no aggregate to anchor sequence-level latency / status views.
+        # One parent span, so the per-macro ``octowright.macro.run`` spans nest
+        # under it rather than as N sibling top-level spans.
         with span(
             "octowright.macro.run_sequence",
             names_count=len(names),
             stop_on_failure=stop_on_failure,
-        ):
-            resolved_args: list[dict[str, Any]] = []
-            for index in range(len(names)):
-                if args_list is not None and index < len(args_list):
-                    resolved_args.append(args_list[index] or {})
-                else:
-                    resolved_args.append({})
-
+        ) as sp:
             steps: list[MacroSequenceStep] = []
-            all_ok = True
+            stopped_at: int | None = None
             # One read of each macro for the whole sequence: a failed step's
             # args_used below is classified from the copy its run loaded.
             macros = RunMacros(load_macro)
-            for name, step_args in zip(names, resolved_args, strict=True):
+            for index, (name, step_args) in enumerate(zip(names, resolved_args, strict=True)):
                 try:
                     outcome = await run_macro(
                         session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx, _macros=macros
                     )
                     steps.append({**outcome, "ok": True})
+                except sequence_steps.GATE_ERRORS:
+                    raise
                 except Exception as exc:
-                    all_ok = False
-                    steps.append(
-                        {
-                            "macro": name,
-                            "ok": False,
-                            "error": str(exc),
-                            "args_used": _redact_args_for_response(step_args, _macro_privacy(macros, name)),
-                        }
-                    )
+                    used = _redact_args_for_response(step_args, _macro_privacy(macros, name))
+                    steps.append(sequence_steps.failed_step(name, exc, used))
                     if stop_on_failure:
-                        raise
+                        stopped_at = index
+                        break
 
-            return {"sequence": names, "steps": steps, "ok": all_ok}
+            all_ok = all(step["ok"] for step in steps)
+            failed = sum(1 for step in steps if not step["ok"])
+            sequence_steps.mark_sequence_span(sp, ok=all_ok, stopped_at=stopped_at, failed_steps=failed)
+            return {"sequence": names, "steps": steps, "ok": all_ok, "stopped_at": stopped_at}

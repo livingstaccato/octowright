@@ -627,8 +627,8 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
             # assumes the timeout always makes it all the way out. It does
             # not: macros/artifacts.py's macro_artifact_run swallows the
             # error from its own nested run_macro() lease inside its OWN
-            # root "macro_artifact_run" lease, and run_sequence(stop_on_
-            # failure=False) does the same per failed step -- in both shapes
+            # root "macro_artifact_run" lease, and run_sequence (either
+            # stop_on_failure mode) does the same per failed step -- in both shapes
             # nothing ever escapes a root frame for a root-only check to see.
             # Every `operation()` frame the exception actually passes through
             # runs this same check, but Python unwinds try/finally

@@ -921,6 +921,50 @@ happens between the status push and the action dispatch, so the pill always
 reflects the upcoming action while you have time to read it. The headed walkthrough
 under `examples/pill-status-demo/` shows this end-to-end.
 
+## Running macros in sequence
+
+`macro_run_sequence` replays `names` in order against one live instance, with
+`args_list[i]` as the arguments for `names[i]` (a shorter list pads with `{}`).
+It returns one shape whatever happens to the steps:
+
+```json
+{"sequence": ["login", "orders", "checkout"], "ok": false, "stopped_at": 1,
+ "steps": [
+   {"macro": "login", "ok": true, "executed": 4, "args_used": {"password": "<redacted>"}, "...": "..."},
+   {"macro": "orders", "ok": false, "error": "...", "args_used": {},
+    "failure": {"macro": "orders", "failed_at_step": 2, "failed_action": {"...": "..."}, "bundle": {"...": "..."}}}
+ ]}
+```
+
+- **A failing step is a result, not an error.** With `stop_on_failure=true`
+  (the default) the sequence stops after the first failing step: `ok` is
+  `false`, `stopped_at` is that step's index, and `steps` holds it and every
+  step before it. Later steps are not run and not listed.
+- With `stop_on_failure=false` every step runs; `stopped_at` is `null` and
+  `ok` is `false` if any step failed. `stopped_at` is always present, and is
+  `null` whenever the sequence ran to its end.
+- A failed step keeps `ok: false` and `error`, and when its macro raised the
+  structured failure a single `macro_run` reports, carries it as `failure`
+  (`failed_at_step`, `executed`, `failed_action`, `bundle`, `failed_requests`,
+  `page_errors`, ...). It is the same payload, scrubbed the same way, and
+  `args_used` is redacted as for any step. For such a step `error` is one
+  line -- `macro <name> failed at step <n> (<action>): <first line of the
+  cause>` -- rather than the whole payload's text, which `failure` already
+  carries. **This also changes `error` under `stop_on_failure=false`**, where
+  it used to be that payload text.
+- **A missing macro is a failed step**, whose `error` names it, not a refusal
+  of the whole call: the steps before it already ran against the browser, and
+  the point of the result is to keep them.
+- The call still **errors** when it cannot run at all: an unknown instance,
+  malformed `names` or `args_list` (refused before any step runs), the
+  session's operation gate refusing or breaking, and cancellation.
+
+**Breaking change.** `macro_run_sequence` used to raise the failing step's
+error when `stop_on_failure` was on, losing the steps that had passed. A caller
+that relied on the call erroring must now check `ok` (or `stopped_at`) in the
+result. `octowright test --sequence` is unaffected: it runs its own walk and
+reports per-step JUnit cases as before.
+
 ## Tools
 
 | Tool | Purpose |
@@ -928,7 +972,7 @@ under `examples/pill-status-demo/` shows this end-to-end.
 | `macro_save` | Snapshot a recording into a named macro JSON. |
 | `macro_list` | List saved macros in bounded pages. `response_mode="families"` rolls the flat namespace up by naming prefix and lists no macros — ask for that first on a large corpus, then narrow with `prefix`/`contains`. |
 | `macro_run` | Replay a single macro against a live instance. |
-| `macro_run_sequence` | Replay several macros in order on the same instance. |
+| `macro_run_sequence` | Replay several macros in order on the same instance; a failing step returns `ok: false` + `stopped_at`, it does not error the call (see [Running macros in sequence](#running-macros-in-sequence)). |
 | `macro_compile` | Compile YAML macro DSL to canonical JSON; optionally save it. |
 | `macro_delete` | Remove a saved macro file. |
 | `macro_lint` | Static-analysis pass on a saved macro. |

@@ -95,6 +95,9 @@ class MacroSequenceStep(TypedDict, total=False):
     credential_fill_offsite: list[dict[str, Any]]
     ok: bool
     error: str  # only set on failed steps
+    # Only on a failed step whose macro raised its structured failure payload
+    # (failed_at_step, failed_action, bundle, ...), scrubbed as `error` is.
+    failure: dict[str, Any]
     assertions: list[dict[str, Any]]
     scrub_exempt_args: list[dict[str, str]]
     scrub_saturated: bool
@@ -104,6 +107,9 @@ class MacroSequenceResult(TypedDict):
     sequence: list[str]
     steps: list[MacroSequenceStep]
     ok: bool
+    # Index of the failed step a stop_on_failure run stopped after; None when
+    # the sequence ran to its end, whether or not a step failed.
+    stopped_at: int | None
 
 
 class MacroRepairSuggestion(TypedDict):
