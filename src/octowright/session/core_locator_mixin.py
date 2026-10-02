@@ -16,7 +16,6 @@ locator-based actions a single home.
 
 from __future__ import annotations
 
-import time
 from typing import Any
 
 from provide.telemetry import get_logger
@@ -33,6 +32,7 @@ from octowright.session.input_redaction import (
     recorded_input_value,
 )
 from octowright.session.operation.gate import gated_operation
+from octowright.session.step_phases import StepPhases
 
 log = get_logger(__name__)
 
@@ -134,17 +134,21 @@ class SessionLocatorMixin(SessionLike):
         # One budget for the whole step: the element's attached-wait gets all
         # of it, so a target that never appears fails naming the timeout asked
         # for; see input_redaction.probe_timeout_ms.
-        deadline = time.monotonic() + budget / 1000
-        locator = await self._locator(**finders)
-        await locator.wait_for(state="attached", timeout=budget)
-        recorded_value = await self._redacted_or_original_for_locator(
-            locator, value, timeout_ms=attached_probe_timeout_ms(deadline)
-        )
-        check = pending_fill_origin_check()
-        if check is None:
-            await locator.fill(value, timeout=probe_timeout_ms(deadline))
-        else:
-            await self._checked_fill(locator, value, check, probe_timeout_ms(deadline))
+        # Its timeout names the phase that spent the budget; see step_phases.
+        with StepPhases(budget, "attach", "redaction", "fill") as phases:
+            deadline = phases.deadline
+            locator = await self._locator(**finders)
+            await locator.wait_for(state="attached", timeout=budget)
+            phases.done()
+            recorded_value = await self._redacted_or_original_for_locator(
+                locator, value, timeout_ms=attached_probe_timeout_ms(deadline)
+            )
+            phases.done()
+            check = pending_fill_origin_check()
+            if check is None:
+                await locator.fill(value, timeout=probe_timeout_ms(deadline))
+            else:
+                await self._checked_fill(locator, value, check, probe_timeout_ms(deadline))
         self.recorder.record("fill_by", value=recorded_value, **finders)
         return {"ok": True}
 
