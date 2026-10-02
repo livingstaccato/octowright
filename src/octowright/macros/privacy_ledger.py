@@ -15,7 +15,11 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from provide.telemetry import get_logger
+
+from octowright.macros.scrub_capacity import scrub_max_values, scrub_set_full
 from octowright.macros.scrub_engine import _scrub_tree, filtered_text_scrubber
+from octowright.request_errors import InvalidRequestError
 
 if TYPE_CHECKING:
     from octowright.macros.privacy import ScrubAdmission
@@ -23,6 +27,8 @@ if TYPE_CHECKING:
 #: The session attribute that owns its scrub set, in the private namespace
 #: composition roots already use (``_octowright_before_macro_action``).
 SESSION_PRIVACY_LEDGER_ATTR = "_octowright_privacy_ledger"
+
+log = get_logger(__name__)
 
 
 class PrivacyLedger:
@@ -132,10 +138,49 @@ class SessionPrivacyLedger(PrivacyLedger):
 
     def __init__(self, values: Iterable[str] = ()) -> None:
         self._scopes: dict[object, frozenset[str]] = {}
+        self._saturated = False
         super().__init__(values)
 
     def _scoped(self) -> frozenset[str]:
         return frozenset().union(*self._scopes.values())
+
+    def add(self, values: Iterable[str], *, word_bounded: bool = False) -> None:
+        """Append *values*, cap or no cap: the cap marks saturation, it never drops a value (#248)."""
+        super().add(values, word_bounded=word_bounded)
+        if not self._saturated:
+            self._note_saturation(scrub_max_values())
+
+    @property
+    def persistent_count(self) -> int:
+        """The session-wide values held; what `scrub_capacity` caps. Run scopes are not counted."""
+        return len(self._members)
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the persistent count has reached the cap at any point; never clears."""
+        return self._saturated
+
+    def _note_saturation(self, cap: int) -> None:
+        if self._saturated or cap <= 0 or len(self._members) < cap:
+            return
+        self._saturated = True
+        log.warning("octowright.macro.scrub_saturated", count=len(self._members), cap=cap)
+
+    def refuse_if_full(self, persistent: Iterable[str]) -> None:
+        """Raise `scrub_capacity.scrub_set_full` when *persistent* would add to a full set.
+
+        A value already held adds nothing and is never refused, saturated or not.
+        Checked before anything is admitted, so a refusal leaves the ledger as it was.
+        """
+        cap = scrub_max_values()
+        if cap <= 0:
+            return
+        new = {value for value in persistent if isinstance(value, str) and value} - self._members
+        if not new:
+            return
+        self._note_saturation(cap)
+        if self._saturated or len(self._members) + len(new) > cap:
+            raise scrub_set_full(len(self._members), cap)
 
     def open_run_scope(self) -> object:
         """A token for a new, empty run scope."""
@@ -200,6 +245,27 @@ def session_privacy_ledger(session: Any) -> SessionPrivacyLedger:
         ledger = SessionPrivacyLedger()
         setattr(session, SESSION_PRIVACY_LEDGER_ATTR, ledger)
     return ledger
+
+
+def _existing_session_ledger(session: Any) -> SessionPrivacyLedger | None:
+    ledger = getattr(session, SESSION_PRIVACY_LEDGER_ATTR, None)
+    return ledger if isinstance(ledger, SessionPrivacyLedger) else None
+
+
+def refuse_if_scrub_set_full(session: Any, admission: ScrubAdmission) -> None:
+    """Refuse *admission* when it would add a persistent value to the session's full scrub set.
+
+    Reads the ledger without creating one: a session with no ledger holds nothing.
+    """
+    ledger = _existing_session_ledger(session)
+    if ledger is not None:
+        ledger.refuse_if_full(admission.persistent)
+
+
+def scrub_saturation_fields(session: Any) -> dict[str, bool]:
+    """``{"scrub_saturated": True}`` for a run result or failure payload; empty otherwise."""
+    ledger = _existing_session_ledger(session)
+    return {"scrub_saturated": True} if ledger is not None and ledger.saturated else {}
 
 
 def with_session_values(session: Any, values: Iterable[str]) -> tuple[str, ...]:
@@ -303,6 +369,13 @@ class RunPrivacyLedger(PrivacyLedger):
         self._exempt: list[dict[str, str]] = []
 
     def admit(self, macro: str, admission: ScrubAdmission) -> None:
+        try:
+            refuse_if_scrub_set_full(self._session, admission)
+        except InvalidRequestError:
+            # The run's own set is memory only, and what its failure payload and
+            # screenshots scrub: a refused nested call's values stay out of both.
+            self.add(admission.values)
+            raise
         if self._session_ledger is None:
             self._session_ledger = install_sensitive_recorder(self._session)
             self._scope = self._session_ledger.open_run_scope()
@@ -349,4 +422,5 @@ def admit_call_privacy(session: Any, run_ledger: PrivacyLedger, macro: str, admi
         run_ledger.admit(macro, admission)
         return
     run_ledger.add(admission.values)
+    refuse_if_scrub_set_full(session, admission)
     install_sensitive_recorder(session, admission.values)

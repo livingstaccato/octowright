@@ -80,6 +80,9 @@ class MacroRunResult(TypedDict):
     # identity/contextual argument out of blind scrubbing (#247): macro, path,
     # tier and reason, never the value.
     scrub_exempt_args: NotRequired[list[dict[str, str]]]
+    # Present (True) only once the session's scrub set reached
+    # OCTOWRIGHT_MACRO_SCRUB_MAX_VALUES (#248); sticky for the session.
+    scrub_saturated: NotRequired[bool]
 
 
 class MacroSequenceStep(TypedDict, total=False):
@@ -97,6 +100,7 @@ class MacroSequenceStep(TypedDict, total=False):
     failure: dict[str, Any]
     assertions: list[dict[str, Any]]
     scrub_exempt_args: list[dict[str, str]]
+    scrub_saturated: bool
 
 
 class MacroSequenceResult(TypedDict):

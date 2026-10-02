@@ -34,6 +34,7 @@ from octowright.macros.privacy import (
     RunPrivacyLedger,
     admit_call_privacy,
     run_privacy_ledger,
+    scrub_saturation_fields,
     with_session_values,
 )
 from octowright.macros.privacy import (
@@ -564,6 +565,8 @@ async def _run_macro_impl(
         result = await _run_admitted(session, name, args, run_ledger=run_ledger, **kwargs)
     if exempt := run_ledger.exempt_args:  # what the #247 floor/list left visible
         result["scrub_exempt_args"] = exempt
+    if scrub_saturation_fields(session):  # the session's scrub set is full (#248)
+        result["scrub_saturated"] = True
     return result
 
 
@@ -647,6 +650,7 @@ async def _run_admitted(
                 payload.update(assertions.fields(run_values))
                 payload.update(run_ledger.exempt_fields())
                 payload.update(_offsite_fields(audit))
+                payload.update(scrub_saturation_fields(session))
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
