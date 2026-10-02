@@ -5,7 +5,6 @@
     "block \"src/octowright/http/routes/meta.py persona_sizes_endpoint\" has a rank of C",
     "block \"src/octowright/macros/repair.py replacement_preview\" has a rank of C",
     "block \"src/octowright/macros/runtime.py _dispatch_click_or_fill\" has a rank of C",
-    "block \"src/octowright/personas.py check_credentials\" has a rank of C",
     "block \"src/octowright/profile_cleanup.py find_stale_profiles\" has a rank of C",
     "block \"src/octowright/recording_cleanup.py cleanup_stale\" has a rank of C",
     "block \"src/octowright/scenarios_pool.py remap_participant\" has a rank of C",

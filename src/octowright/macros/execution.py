@@ -234,30 +234,6 @@ def _format_status(invocation_stack: list[str] | None, action: dict[str, Any]) -
     return f"{chain} | {desc}" if chain else desc
 
 
-async def _dispatch_classified_screenshot(
-    session: SessionLike,
-    action: dict[str, Any],
-    sensitive_values: tuple[str, ...],
-) -> tuple[int, int]:
-    """Route a screenshot holding policy-admitted values through the privacy boundary.
-
-    A screenshot of a page a credential was typed into is a durable copy of
-    that credential, so the generic capture path is never used. In order: an
-    explicitly authorized handler decides; otherwise octowright's own redacted
-    screenshot runs when ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``;
-    otherwise the screenshot is refused.
-    """
-    handler = safe_screenshot.installed_handler(session)
-    if handler is not None:
-        handled = await handler(action=action, sensitive_values=sensitive_values)
-        if handled is None:
-            raise RuntimeError("classified macro screenshot privacy handler refused the action")
-        return handled
-    if safe_screenshot.classified_screenshot_policy() == "redact":
-        return await safe_screenshot.redacted_screenshot(session, action, sensitive_values)
-    raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
-
-
 def _run_values(run_ledger: PrivacyLedger | None) -> tuple[str, ...]:
     return run_ledger.values if run_ledger is not None else ()
 
@@ -360,7 +336,7 @@ async def _dispatch_one(
             # Flattened on purpose: screenshot redaction matches every value
             # anywhere (see safe_screenshot.redacted_screenshot).
             screenshot_values = with_session_values(session, run_values)
-            return await _dispatch_classified_screenshot(session, action, screenshot_values)
+            return await safe_screenshot.dispatch_classified_screenshot(session, action, screenshot_values)
 
         if action.get("action") in conditional.CONDITIONAL_ACTIONS:
 
@@ -432,9 +408,14 @@ async def run_macro(
     *,
     slowmo_ms: int | None = None,
     ctx: Any | None = None,
+    credential_args: frozenset[str] = frozenset(),
     _macros: RunMacros | None = None,
 ) -> MacroRunResult:
     """Run macro *name* on *session*.
+
+    *credential_args* name args that hold a credential whatever they are called
+    (a sequence's ``{"credential": ...}``): scrubbed, redacted and sink-guarded
+    as a ``macro_call`` keeps a caller's credential passed under another name.
 
     ``_macros`` is for `run_sequence`, whose members share one `RunMacros`;
     any other caller leaves it out and the run gets its own.
@@ -449,7 +430,9 @@ async def run_macro(
             # expect_network_clean judges this run, not the session's past.
             session.mark_network_clean_window()
             macros = _macros if _macros is not None else RunMacros(load_macro)
-            return await _run_macro_impl(session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros)
+            return await _run_macro_impl(
+                session, name, args, slowmo_ms=slowmo_ms, ctx=ctx, macros=macros, credential_args=credential_args
+            )
 
 
 async def _build_failure_payload(
@@ -593,18 +576,22 @@ async def _run_admitted(
     ctx: Any | None = None,
     macros: RunMacros | None = None,
     run_ledger: RunPrivacyLedger,
+    credential_args: frozenset[str] = frozenset(),
 ) -> MacroRunResult:
     macros = macros if macros is not None else RunMacros(load_macro)
     macro = macros(name)
     effective_args = args or {}
     # An argument that IS the forbidden text is sensitive whatever it is named;
     # the exported CLI reads the same set (privacy.assertion_text_args).
-    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []), credential_args=credential_args)
     # What THIS run has admitted for blind scrubbing: its own arguments plus every
     # nested call's, appended as they execute. Failure payloads and screenshot
     # privacy read it; the recorder reads the session ledger, which it feeds.
     run_ledger.admit(name, privacy.admission(effective_args))
-    actions = substitute(macro.get("actions", []), effective_args, trusted_origins=own_site_origins(session))
+    origins = own_site_origins(session)
+    actions = substitute(
+        macro.get("actions", []), effective_args, trusted_origins=origins, credential_args=credential_args
+    )
     _start_request_tracking(session, actions, macros)
 
     executed = 0

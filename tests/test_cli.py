@@ -106,6 +106,8 @@ def test_test_command_forwards_max_parallel(monkeypatch: pytest.MonkeyPatch, tmp
         out_path=str(tmp_path / "j.xml"),
         pool=fake_pool,
         max_parallel=4,
+        persona=None,
+        redact_errors=False,
     )
     fake_pool.shutdown.assert_awaited_once()
 

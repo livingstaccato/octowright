@@ -14,6 +14,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import yaml
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
@@ -237,7 +238,7 @@ def persona_base_url_kwargs(profile: str | None) -> dict[str, str]:
         return {}
     try:
         persona = load_persona(profile)
-    except (FileNotFoundError, ValueError):
+    except (FileNotFoundError, ValueError, yaml.YAMLError):
         return {}
     return {"base_url": persona.default_url} if persona.default_url else {}
 
@@ -435,6 +436,14 @@ async def _open_browser_context(
             # See restore_prompt.
             clear_crash_restore_prompt(pdir)
             await _prune_chromium_download_history(kind, pdir)
+            # Scoped trust: a persona's roots reach its own Chromium only.
+            # Applied here because the daemon and `octowright test` both open
+            # persistent contexts through this function. See persona_trust.
+            # Off the loop: an rmtree plus certutil runs with 30s timeouts.
+            from octowright import persona_trust
+
+            trust_kwargs = await asyncio.to_thread(persona_trust.persona_trust_launch_kwargs, profile, kind)
+            launch_kwargs = {**launch_kwargs, **trust_kwargs}
         else:
             user_data_dir = session_user_data_dir
             if session_user_data_dir is not None:

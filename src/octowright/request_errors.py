@@ -28,7 +28,7 @@ wherever it happens to run.
 Nothing about that is *inherited*, though, and the docs deliberately do not
 claim it is: both sinks test ``isinstance``, so a new check written with a bare
 ``raise ValueError(...)`` is filed as machinery failure and recreates the bug.
-``tests/test_launch_guard_classification.py`` AST-scans the eight modules whose
+``tests/test_launch_guard_classification.py`` AST-scans the nine modules whose
 ``ValueError``-shaped raises are launch-reachable input checks and fails on
 one; a guard added in any other module is a maintenance requirement it cannot
 see.
@@ -54,8 +54,9 @@ class InvalidRequestError(ValueError):
     .reject_unsafe_path`` (containment), ``session.core_page_mixin
     ._reject_unsafe_url`` and ``ssrf.check_navigation_url`` (targets),
     ``browser_pool.options.LaunchOptions.validate`` (options),
-    ``http_headers`` (header names/values/URL lists) and ``url_patterns``
-    (route glob wildcards). The authoritative list is
+    ``http_headers`` (header names/values/URL lists), ``url_patterns``
+    (route glob wildcards) and ``persona_trust.TrustError`` (a persona's
+    trusted roots cannot be applied). The authoritative list is
     ``tests/test_launch_guard_classification.GUARD_TARGETS``, which is scanned;
     this one is prose and can drift.
 

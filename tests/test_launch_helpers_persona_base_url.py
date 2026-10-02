@@ -65,6 +65,16 @@ def test_a_malformed_persona_file_does_not_break_launching(monkeypatch: pytest.M
     assert launch_helpers.persona_base_url_kwargs("broken") == {}
 
 
+def test_a_persona_file_that_is_not_yaml_does_not_break_launching(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A YAML syntax error is a yaml.YAMLError, not a ValueError; it is just as malformed."""
+    monkeypatch.setattr(personas, "PROFILES_DIR", tmp_path)
+    _write_persona(tmp_path, "garbled", "name: [unclosed\n")
+
+    assert launch_helpers.persona_base_url_kwargs("garbled") == {}
+
+
 class _FakeContext:
     def __init__(self) -> None:
         self.pages: list[Any] = []

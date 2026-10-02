@@ -53,6 +53,7 @@ GUARD_TARGETS: tuple[tuple[str, str | None], ...] = (
     ("ssrf.py", None),
     ("url_patterns.py", None),
     ("http_headers.py", None),
+    ("persona_trust.py", None),
     ("session/core_page_mixin.py", "_reject_unsafe_url"),
     ("session/core_page_mixin.py", "_check_url_shape"),
     ("browser_pool/options.py", None),
