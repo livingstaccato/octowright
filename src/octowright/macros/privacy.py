@@ -13,7 +13,7 @@ import os
 import re
 import secrets
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from typing import Any, Literal
 
@@ -101,11 +101,15 @@ class ScrubAdmission:
     identity/contextual values when ``OCTOWRIGHT_MACRO_SCRUB_RUN_SCOPED`` is
     off. ``run_scoped`` values are scrubbed for the supplying run only.
     ``exempt`` names what the floor or the common-value list left visible.
+    ``sources`` is where each admitted value came from (its argument path and
+    tier), so a refused screenshot can say which argument it rendered; it holds
+    the values, so it is left out of ``repr`` and comparison.
     """
 
     persistent: tuple[str, ...] = ()
     run_scoped: tuple[str, ...] = ()
     exempt: tuple[ScrubExemption, ...] = ()
+    sources: tuple[ClassifiedArgValue, ...] = field(default=(), repr=False, compare=False)
 
     @property
     def values(self) -> tuple[str, ...]:
@@ -135,6 +139,12 @@ def _scrub_admission(admitted: tuple[ClassifiedArgValue, ...]) -> ScrubAdmission
         run_scoped=_longest_first(scoped),
         exempt=tuple(sorted(exempt, key=lambda item: item.path)),
     )
+
+
+def _with_sources(admission: ScrubAdmission, admitted: tuple[ClassifiedArgValue, ...]) -> ScrubAdmission:
+    """*admission* carrying the provenance of every value it kept."""
+    kept = set(admission.values)
+    return replace(admission, sources=tuple(item for item in admitted if item.value in kept))
 
 
 class MacroBlindScrubRejected(ValueError):
@@ -495,7 +505,8 @@ class MacroArgPrivacy:
         it is short or common (`scrub_admission`), and is otherwise scrubbed for
         the supplying run only unless run scoping is off.
         """
-        return _scrub_admission(_admitted_classified_values(self.classified(args), policy or blind_scrub_policy()))
+        admitted = _admitted_classified_values(self.classified(args), policy or blind_scrub_policy())
+        return _with_sources(_scrub_admission(admitted), admitted)
 
     def blind_scrub(self, args: Mapping[str, Any], *, policy: BlindScrubPolicy | None = None) -> tuple[str, ...]:
         """Values admitted to blind scrubbers under the configured policy."""

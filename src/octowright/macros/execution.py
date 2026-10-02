@@ -14,7 +14,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import failure_context, safe_screenshot, sequence_steps
+from octowright.macros import failure_context, safe_screenshot, screenshot_refusal, sequence_steps
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
@@ -640,6 +640,7 @@ async def _run_admitted(
             failure_cause: Exception | None = None
             safe_original: str | None = None
             run_values: tuple[str, ...] = ()
+            refused: dict[str, Any] = {}
             try:
                 executed_count, skipped_count = await _dispatch_one(
                     session,
@@ -652,6 +653,7 @@ async def _run_admitted(
             except Exception as exc:
                 run_values = failure_context.failure_scrub_values(session, run_ledger.values)
                 safe_original = str(_scrub_sensitive_values(repr(exc), run_values))
+                refused = _scrub_sensitive_values(screenshot_refusal.refusal_fields(exc), run_values)
                 if not run_values:
                     failure_cause = exc
             if safe_original is not None:
@@ -673,6 +675,7 @@ async def _run_admitted(
                 payload.update(run_ledger.exempt_fields())
                 payload.update(offsite_fields(audit))
                 payload.update(scrub_saturation_fields(session))
+                payload.update(refused)  # why a classified screenshot was refused, never the value
                 failure = RuntimeError(payload)
             # Raise after leaving the handler so the raw caught exception is
             # not retained as ``__context__`` on the caller-visible failure.
