@@ -27,7 +27,11 @@ from octowright.macros import execution, safe_screenshot, screenshot_refusal, se
 from octowright.macros.privacy import BLIND_SCRUB_POLICY_ENV, SESSION_PRIVACY_LEDGER_ATTR
 from tests.test_macro_redacted_screenshot import FakePage, _session
 
-USERNAME = "admin"  # the BMF lab's username: short, ordinary, rendered in the header
+# Stands in for the BMF lab's "admin": short, ordinary, rendered in the header.
+# Not "admin" itself, because the value-absent checks scan the whole payload and
+# a Windows runner's paths carry its user name (C:\\Users\\runneradmin\\...), so
+# "admin" is found in every html_path whether or not the value leaked.
+USERNAME = "quokka"
 EMAIL = "b7-refusal-canary@example.test"
 AROUND = "Signed in as"
 POLICY_ENV = "OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS"
@@ -102,7 +106,7 @@ async def test_the_bmf_case_names_surface_tier_and_argument(
     """A credential signed in by one step, rendered re-cased by the app, refuses the next step's screenshot."""
     shot = str(tmp_path / "header.png")
     _macros(monkeypatch, {"bmf-login": [], "bmf-screenshot": [{"action": "screenshot", "path": shot}]})
-    page = FakePage(snapshots=(_rendering(f"{AROUND} Admin"),))
+    page = FakePage(snapshots=(_rendering(f"{AROUND} {USERNAME.capitalize()}"),))
     session = _session(page)
     _ledger_screenshot(session)
 
