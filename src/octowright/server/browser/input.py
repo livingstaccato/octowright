@@ -13,14 +13,7 @@ from octowright.server._state import mcp, pool
 from octowright.server.browser._operation import browser_operation
 from octowright.server.browser.inspect import browser_brief, browser_page_outline
 from octowright.server.profiles import annotate_next_actions_for_profile
-
-# Re-exported for backwards compatibility: callers that imported
-# ``validate_upload_path`` from this module continue to work, but the
-# canonical home is now ``octowright.session.upload_paths`` so the same
-# allowlist applies whether the path comes in via an MCP tool or a macro
-# replay that calls the session method directly.
 from octowright.session import DEFAULT_PREVIEW_CHARS
-from octowright.session.upload_paths import validate_upload_path  # noqa: F401
 
 
 async def _with_outline(instance_id: str, result: dict[str, Any], response_mode: str | None) -> dict[str, Any]:

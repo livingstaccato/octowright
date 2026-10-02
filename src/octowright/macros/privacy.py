@@ -199,9 +199,6 @@ CONTEXTUAL_TOKEN_TOKENS = frozenset({"contact", "peer", "session", "subject", "u
 
 SUBSTRING_TOKENS = CREDENTIAL_SUBSTRING_TOKENS
 TOKEN_TOKENS = CREDENTIAL_TOKEN_TOKENS | IDENTITY_TOKEN_TOKENS | CONTEXTUAL_TOKEN_TOKENS
-#: Retained as the flat union so existing importers (notably the generated-script
-#: template) keep resolving; the match mode lives in the two sets above.
-SENSITIVE_KEY_TOKENS = SUBSTRING_TOKENS | TOKEN_TOKENS
 SENSITIVE_KEY_PAIRS = frozenset({("api", "key"), ("access", "key")})
 
 _CAMEL_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
