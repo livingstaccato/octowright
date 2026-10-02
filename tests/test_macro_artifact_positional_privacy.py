@@ -73,7 +73,9 @@ async def test_a_run_never_persists_an_assertion_arg(monkeypatch: pytest.MonkeyP
         screenshot_values.append(tuple(kwargs.get("sensitive_values", ())))
         await real_capture(**kwargs)
 
-    async def fake_run_macro(*, session: Any, name: str, args: Any, slowmo_ms: Any = None) -> dict[str, Any]:
+    async def fake_run_macro(
+        *, session: Any, name: str, args: Any, slowmo_ms: Any = None, **_private: Any
+    ) -> dict[str, Any]:
         return {"macro": name, "executed": 2, "skipped": 0, "args_used": args, "slowmo_ms": 0}
 
     monkeypatch.setattr(macro_artifacts, "_capture_screenshot", spy)

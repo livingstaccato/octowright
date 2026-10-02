@@ -25,10 +25,10 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
+from octowright.macros.nesting import RunMacros
 from octowright.macros.privacy import (
     MacroArgPrivacy,
-    ScrubAdmission,
-    refuse_if_scrub_set_full,
+    run_privacy_ledger,
     scrub_saturation_fields,
     scrub_sensitive_values,
     with_session_values,
@@ -193,153 +193,157 @@ async def run_macro_artifact(
     # re-enter it (same task); the root observable status stays
     # "macro_artifact_run" throughout.
     async with session.operation("macro_artifact_run"):
-        macro = load_macro(name)
-        args_used = dict(args or {})
-        # The view macro_run builds: an expect_no_text argument is secret
-        # whatever it is named, so every record below uses it, not the name alone.
-        privacy = _privacy(macro)
-        admission = privacy.admission(args_used)
-        # Before the manifest or run dir is written: a run that would add to a
-        # full scrub set is refused with nothing on disk (#248).
-        refuse_if_scrub_set_full(session, admission)
-        sensitive_values = admission.values
-        # What the #247 floor/list left visible; a finished replay's own report
-        # replaces it below, since that one also covers nested calls.
-        scrub_exempt = _exempt_args(name, admission)
-        store = ArtifactStore()
-        artifact_dir = store.macro_dir(name)
-        runs_dir = artifact_dir / "runs"
-        exports_dir = artifact_dir / "exports"
-        manifest_path = artifact_dir / "artifact.json"
-        manifest = _manifest_for_plan(
-            name=name,
-            macro=macro,
-            args_used=args_used,
-            missing_args=_missing_args(macro, args_used),
-            artifact_dir=artifact_dir,
-            runs_dir=runs_dir,
-            exports_dir=exports_dir,
-        )
-        existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
-        if existing_manifest_path is not None:
-            manifest = _merge_existing_manifest(existing_manifest_path, manifest)
-        write_artifact_manifest(manifest_path, manifest)
-
-        run_dir = store.next_run_dir(artifact_dir)
-        evidence = EvidenceBuilder()
-        await _capture_screenshot(
-            session=session,
-            run_dir=run_dir,
-            evidence=evidence,
-            label="before",
-            enabled=capture,
-            sensitive_values=sensitive_values,
-        )
-
-        status = "ok"
-        error: str | None = None
-        executed = 0
-        skipped = 0
-        try:
-            replay = await macro_mod.run_macro(session=session, name=name, args=args_used, slowmo_ms=slowmo_ms)
-            if isinstance(replay, dict):
-                executed = int(replay.get("executed", 0))
-                skipped = int(replay.get("skipped", 0))
-                scrub_exempt = replay.get("scrub_exempt_args", [])
-        except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
-            status = "failed"
-            error = f"{exc.__class__.__name__}: {exc}"
-            evidence.log_excerpt(
-                path=Path(getattr(session, "log_path", run_dir / "replay.jsonl")),
-                offset=0,
-                preview=traceback.format_exc(limit=8),
-            )
-
-        await _capture_screenshot(
-            session=session,
-            run_dir=run_dir,
-            evidence=evidence,
-            label="after",
-            enabled=capture,
-            sensitive_values=sensitive_values,
-        )
-
-        recording_path = str(getattr(session, "log_path", "")) or None
-        run_result = new_run_result(
-            run_id=run_dir.name,
-            status=status,
-            instance_id=str(getattr(session, "instance_id", "")),
-            macro=name,
-            args_used=privacy.redact(args_used),
-            executed=executed,
-            skipped=skipped,
-            error=error,
-            recording_path=recording_path,
-        )
-        summary = str(
-            scrub_sensitive_values(
-                notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}.",
-                sensitive_values,
-            )
-        )
-        paths = write_run_bundle(
-            run_dir=run_dir,
-            result=run_result,
-            evidence=evidence.records,
-            summary=summary,
-            sensitive_values=sensitive_values,
-        )
-
-        manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
-        write_artifact_manifest(manifest_path, manifest)
-
-        verification_status = "not_configured"
-        verification_paths = {}
-        critical_points = manifest.get("critical_points", [])
-        if verify and critical_points:
-            v_res = macro_artifact_verify(name, run_dir.name)
-            if v_res.get("ok"):
-                verification_status = v_res.get("status", "unknown")
-                verification_paths = v_res.get("paths", {})
-
-        with span("octowright.macro.artifact.run") as s:
-            set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
-            counter("octowright_macro_artifact_run_total").add(
-                1, attributes={"macro": _cap_macro(name), "status": status, "verified": str(bool(critical_points))}
-            )
-            log.info(
-                "octowright.macro.artifact.run.complete",
-                artifact_type="macro",
+        # The run's one privacy ledger: its session scope closes when the artifact
+        # run ends, after the evidence written below has been scrubbed with it.
+        with run_privacy_ledger(session) as run_ledger:
+            # One read of each macro for the whole artifact run, shared with the
+            # replay below, so what is redacted here is the dict that executes (#248).
+            macros = RunMacros(load_macro)
+            macro = macros(name)
+            args_used = dict(args or {})
+            # The view macro_run builds: an expect_no_text argument is secret
+            # whatever it is named, so every record below uses it, not the name alone.
+            privacy = _privacy(macro)
+            # Admitted into the one ledger the replay also uses, before the manifest
+            # or run dir is written: a run that would add to a full scrub set is
+            # refused with nothing on disk (#248). The replay does not admit it again.
+            run_ledger.admit(name, privacy.admission(args_used))
+            store = ArtifactStore()
+            artifact_dir = store.macro_dir(name)
+            runs_dir = artifact_dir / "runs"
+            exports_dir = artifact_dir / "exports"
+            manifest_path = artifact_dir / "artifact.json"
+            manifest = _manifest_for_plan(
                 name=name,
+                macro=macro,
+                args_used=args_used,
+                missing_args=_missing_args(macro, args_used),
+                artifact_dir=artifact_dir,
+                runs_dir=runs_dir,
+                exports_dir=exports_dir,
+            )
+            existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
+            if existing_manifest_path is not None:
+                manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+            write_artifact_manifest(manifest_path, manifest)
+
+            run_dir = store.next_run_dir(artifact_dir)
+            evidence = EvidenceBuilder()
+            await _capture_screenshot(
+                session=session,
+                run_dir=run_dir,
+                evidence=evidence,
+                label="before",
+                enabled=capture,
+                sensitive_values=run_ledger.values,
+            )
+
+            status = "ok"
+            error: str | None = None
+            executed = 0
+            skipped = 0
+            try:
+                replay = await macro_mod.run_macro(
+                    session=session,
+                    name=name,
+                    args=args_used,
+                    slowmo_ms=slowmo_ms,
+                    _macros=macros,
+                    _run_ledger=run_ledger,
+                )
+                if isinstance(replay, dict):
+                    executed = int(replay.get("executed", 0))
+                    skipped = int(replay.get("skipped", 0))
+            except Exception as exc:  # Return artifact paths to MCP callers even when replay fails.
+                status = "failed"
+                error = f"{exc.__class__.__name__}: {exc}"
+                evidence.log_excerpt(
+                    path=Path(getattr(session, "log_path", run_dir / "replay.jsonl")),
+                    offset=0,
+                    preview=traceback.format_exc(limit=8),
+                )
+
+            # From here on, everything written scrubs against what the run admitted,
+            # nested calls included -- not the pre-run tuple, which never held them.
+            sensitive_values = run_ledger.values
+            await _capture_screenshot(
+                session=session,
+                run_dir=run_dir,
+                evidence=evidence,
+                label="after",
+                enabled=capture,
+                sensitive_values=sensitive_values,
+            )
+
+            recording_path = str(getattr(session, "log_path", "")) or None
+            run_result = new_run_result(
                 run_id=run_dir.name,
                 status=status,
+                instance_id=str(getattr(session, "instance_id", "")),
+                macro=name,
+                args_used=privacy.redact(args_used),
+                executed=executed,
+                skipped=skipped,
+                error=error,
+                recording_path=recording_path,
+            )
+            summary = str(
+                scrub_sensitive_values(
+                    notes or f"Ran macro {name}: status={status}, executed={executed}, skipped={skipped}.",
+                    sensitive_values,
+                )
+            )
+            paths = write_run_bundle(
+                run_dir=run_dir,
+                result=run_result,
+                evidence=evidence.records,
+                summary=summary,
+                sensitive_values=sensitive_values,
             )
 
-        return {
-            "ok": status == "ok",
-            "macro": name,
-            "run_id": run_dir.name,
-            "summary": summary,
-            "verification_status": verification_status,
-            "paths": {
-                "run_dir": str(run_dir),
-                "manifest": str(manifest_path),
-                "summary": str(paths["summary"]),
-                "evidence": str(paths["evidence"]),
-                "result": str(paths["result"]),
-                **verification_paths,
-            },
-            **_exempt_fields(scrub_exempt),
-            **scrub_saturation_fields(session),
-        }
+            manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
+            write_artifact_manifest(manifest_path, manifest)
 
+            verification_status = "not_configured"
+            verification_paths = {}
+            critical_points = manifest.get("critical_points", [])
+            if verify and critical_points:
+                v_res = macro_artifact_verify(name, run_dir.name)
+                if v_res.get("ok"):
+                    verification_status = v_res.get("status", "unknown")
+                    verification_paths = v_res.get("paths", {})
 
-def _exempt_args(name: str, admission: ScrubAdmission) -> list[dict[str, str]]:
-    return [item.as_dict(name) for item in admission.exempt]
+            with span("octowright.macro.artifact.run") as s:
+                set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
+                counter("octowright_macro_artifact_run_total").add(
+                    1, attributes={"macro": _cap_macro(name), "status": status, "verified": str(bool(critical_points))}
+                )
+                log.info(
+                    "octowright.macro.artifact.run.complete",
+                    artifact_type="macro",
+                    name=name,
+                    run_id=run_dir.name,
+                    status=status,
+                )
 
-
-def _exempt_fields(scrub_exempt: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    return {"scrub_exempt_args": scrub_exempt} if scrub_exempt else {}
+            return {
+                "ok": status == "ok",
+                "macro": name,
+                "run_id": run_dir.name,
+                "summary": summary,
+                "verification_status": verification_status,
+                "paths": {
+                    "run_dir": str(run_dir),
+                    "manifest": str(manifest_path),
+                    "summary": str(paths["summary"]),
+                    "evidence": str(paths["evidence"]),
+                    "result": str(paths["result"]),
+                    **verification_paths,
+                },
+                # What the #247 floor/list left visible, nested calls included.
+                **run_ledger.exempt_fields(),
+                **scrub_saturation_fields(session),
+            }
 
 
 async def _capture_screenshot(

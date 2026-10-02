@@ -113,7 +113,7 @@ def _passing_critical_point() -> list[dict[str, Any]]:
 
 
 def _stub_replay(monkeypatch: pytest.MonkeyPatch, macro_artifacts) -> None:
-    async def fake_run_macro(*, session, name, args, slowmo_ms=None):
+    async def fake_run_macro(*, session, name, args, slowmo_ms=None, **_private: Any):
         return {"macro": name, "executed": 1, "skipped": 0, "args_used": args or {}, "slowmo_ms": slowmo_ms or 0}
 
     monkeypatch.setattr(macro_artifacts.macro_mod, "run_macro", fake_run_macro)
