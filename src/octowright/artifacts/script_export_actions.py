@@ -446,7 +446,7 @@ window = state["network"].window(action.get("since", "run"))
 settle = action.get("settle_timeout_ms")
 settle = NETWORK_SETTLE_TIMEOUT_MS if settle is None else int(settle)
 in_flight = await settle_network(state["network"].pending, settle) if settle > 0 else state["network"].pending()
-observation = {**state["network"].judge(window, bool(action.get("http_errors"))), "in_flight": in_flight}
+observation = {**state["network"].judge(window, bool(action.get("http_errors")), in_flight), "in_flight": in_flight}
 untracked = state["network"].since(window)[3]
 if untracked > 0:
     observation["in_flight_untracked"] = untracked
