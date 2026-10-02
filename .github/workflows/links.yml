@@ -49,12 +49,19 @@ jobs:
       # Scan README/CHANGELOG/AGENTS + all docs; fail the job on any broken link.
       # CLI `--exclude` adds to `.lychee.toml`'s list rather than replacing it
       # (verified against lychee 0.24).
+      # This repo's own github.com/.../blob/main/ links (the README needs them
+      # absolute so they work on PyPI) are remapped to the checked-out files.
+      # Fetched over the network they failed the job on GitHub 503s four times
+      # in one day, and they checked main's tree rather than the PR's: a PR
+      # that deletes a doc its README links to passed until it merged. As
+      # local files they are still checked, against the right tree, offline.
       - name: Check links with lychee
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
           args: >-
             --config .lychee.toml
             --exclude '${{ steps.exclusions.outputs.exclude }}'
+            --remap '^https://github\.com/livingstaccato/octowright/blob/main/(.*)$ file://${{ github.workspace }}/$1'
             './README.md'
             './CHANGELOG.md'
             './AGENTS.md'

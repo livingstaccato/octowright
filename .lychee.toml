@@ -2,7 +2,12 @@
 # Docs: https://lychee.cli.rs/#/usage/config
 #
 # Local run (matches CI):
-#   lychee --config .lychee.toml './README.md' './CHANGELOG.md' './AGENTS.md' './docs/**/*.md'
+#   lychee --config .lychee.toml \
+#     --remap "^https://github\.com/livingstaccato/octowright/blob/main/(.*)$ file://$PWD/\$1" \
+#     './README.md' './CHANGELOG.md' './AGENTS.md' './docs/**/*.md'
+#
+# The --remap (passed by links.yml, since it needs the checkout's absolute
+# path) checks this repo's own blob/main links as local files: see links.yml.
 
 # Up to 64 concurrent network requests, 3 retries each, 30s per-request timeout.
 max_concurrency = 64
