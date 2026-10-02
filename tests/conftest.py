@@ -302,6 +302,9 @@ def _breadcrumb(item: pytest.Item, phase: str) -> None:
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_setup(item: pytest.Item) -> Iterator[None]:
     _breadcrumb(item, "setup")
+    from tests._aria_stubs import mark_test_start
+
+    mark_test_start()  # bounds LeftOfBudget's slack by the test's real run time
     yield
 
 
