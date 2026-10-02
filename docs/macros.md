@@ -925,8 +925,12 @@ It returns one shape whatever happens to the steps:
 - A failed step keeps `ok: false` and `error`, and when its macro raised the
   structured failure a single `macro_run` reports, carries it as `failure`
   (`failed_at_step`, `executed`, `failed_action`, `bundle`, `failed_requests`,
-  `page_errors`, ...). It is the same payload, scrubbed the same way: `error`
-  is its text, and `args_used` is redacted as for any step.
+  `page_errors`, ...). It is the same payload, scrubbed the same way, and
+  `args_used` is redacted as for any step. For such a step `error` is one
+  line -- `macro <name> failed at step <n> (<action>): <first line of the
+  cause>` -- rather than the whole payload's text, which `failure` already
+  carries. **This also changes `error` under `stop_on_failure=false`**, where
+  it used to be that payload text.
 - **A missing macro is a failed step**, whose `error` names it, not a refusal
   of the whole call: the steps before it already ran against the browser, and
   the point of the result is to keep them.

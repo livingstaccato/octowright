@@ -76,10 +76,26 @@ def macro_failure_details(exc: BaseException) -> dict[str, Any] | None:
 
 
 def failed_step(name: str, exc: Exception, args_used: dict[str, Any]) -> MacroSequenceStep:
-    step: MacroSequenceStep = {"macro": name, "ok": False, "error": str(exc), "args_used": args_used}
-    if (details := macro_failure_details(exc)) is not None:
+    details = macro_failure_details(exc)
+    error = str(exc) if details is None else failure_line(details)
+    step: MacroSequenceStep = {"macro": name, "ok": False, "error": error, "args_used": args_used}
+    if details is not None:
         step["failure"] = details
     return step
+
+
+def failure_line(payload: dict[str, Any]) -> str:
+    """One line for a macro failure; the whole payload is the step's ``failure``.
+
+    ``str(exc)`` of a macro failure is the payload's repr, so carrying it as
+    ``error`` as well sent every bundle twice. The line keeps the scrubbed
+    original message's first line, which is what names the fault.
+    """
+    action = payload.get("failed_action")
+    kind = action.get("action", "?") if isinstance(action, dict) else "?"
+    original = str(payload.get("original") or "").strip().splitlines()
+    cause = f": {original[0]}" if original else ""
+    return f"macro {payload['macro']} failed at step {payload['failed_at_step']} ({kind}){cause}"
 
 
 def mark_sequence_span(sp: Any, *, ok: bool, stopped_at: int | None, failed_steps: int) -> None:

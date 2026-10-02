@@ -110,6 +110,18 @@ async def test_the_failed_step_carries_the_structured_macro_failure(session: _Se
 
 
 @pytest.mark.anyio
+async def test_a_macro_failure_error_is_one_line_not_the_payload(session: _Session, macros: dict[str, Any]) -> None:
+    _three(macros)
+    result = await run_sequence(session=session, names=["pre", "bad", "post"])
+
+    error = result["steps"][1]["error"]
+    assert error.startswith("macro bad failed at step 1 (click): ")
+    assert "no element #bad" in error
+    assert "\n" not in error
+    assert "bundle" not in error
+
+
+@pytest.mark.anyio
 async def test_a_completed_sequence_reports_no_stop(session: _Session, macros: dict[str, Any]) -> None:
     macros["saved"]["a"] = [{"action": "click", "selector": "#a"}]
     result = await run_sequence(session=session, names=["a", "a"])
