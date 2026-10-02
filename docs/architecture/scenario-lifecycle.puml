@@ -40,12 +40,22 @@ note right of SPOOL
   Scenario(participants, fixtures, teardown). Then
   resolve_launch_kwargs per participant:
   participant override → persona default → fallback.
+  A template (scenario_spawn_template) is parsed as YAML
+  FIRST, then its {{args}} substituted into the parsed
+  strings, so an arg can never become structure.
 end note
 
 SPOOL -> POOL : spawn_roster([launch_kwargs, ...])
 POOL -> SESS : launch in parallel (asyncio.gather)
 SESS --> POOL : {instance_id, log_path, ...}
 POOL --> SPOOL : {launched, errors}
+
+note right of SPOOL
+  Plugin-kind participants (e.g. kind: terminal, once
+  enabled via OCTOWRIGHT_PLUGINS) launch one at a time
+  through their own kind's pool, not the roster; their
+  fields arrive nested under ``extra``.
+end note
 
 alt errors non-empty
   SPOOL -> POOL : close(instance_id) for partials
@@ -55,6 +65,11 @@ end
 SPOOL -> SESS : apply_fixtures (mock_route, dialog_policy)
 SPOOL -> MACROS : run startup_macros per participant
 MACROS -> SESS : navigate / fill / click / ...
+
+alt fixture / startup macro fails (or cancelled)
+  SPOOL -> POOL : shielded rollback: deregister +\nclose every participant
+  SPOOL --> USER : re-raise
+end
 
 SPOOL --> USER : LiveScenario(scenario_id, participants[])
 

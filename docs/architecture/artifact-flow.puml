@@ -26,14 +26,14 @@ top to bottom direction
 [BrowserSession] as SESSION
 [Macro argument classifier\ncredential / identity / contextual] as CLASSIFIER
 [Blind-scrub policy\ncredentials (default) / all / reject] as POLICY
-[SensitiveRecorder\npolicy-admitted session ledger\n(identity/context values: open runs only)] as SCRUBBER
+[SensitiveRecorder\npolicy-admitted session ledger\n(identity/context values: open runs only;\npersistent values capped → scrub_saturated)] as SCRUBBER
 [Structured args / results\nall classified keys redacted] as STRUCTURED
 
 ' ─── WRITE PATHS: every arrow leaves SESSION going down ───────────────
 package "Write paths — session produces artifacts" #f9fafb {
   folder "RECORDINGS_DIR/" as REC {
     file "<ts>-<kind>-<id>[-label].jsonl\nappend-only action log" as JSONL
-    folder "videos/<uuid8>/" as VDIR {
+    folder "videos/<log-stem>/" as VDIR {
       file "<hash>.webm\n(only if record_video=True)" as WEBM
     }
     folder "downloads/<instance_id>/" as DLDIR {
@@ -42,6 +42,9 @@ package "Write paths — session produces artifacts" #f9fafb {
     file "<id>-fail-<ts>.png\n(diagnostic_bundle screenshot)" as FAILPNG
     file "<id>-fail-<ts>.html\n(diagnostic_bundle HTML body)" as FAILHTML
     file "<log>.trace.zip\n(if trace=True;\nshow with `npx playwright show-trace`)" as TRACEZIP
+    folder "artifacts/macros/<slug>/" as ARTDIR {
+      file "artifact.json + runs/run_####/\n(macro_artifact_run evidence;\nkept by octowright cleanup)" as ARTRUN
+    }
   }
 
   folder "GOLDENS_DIR/" as GOLD {
@@ -60,6 +63,7 @@ SESSION --> FAILPNG : on macro_run failure
 SESSION --> FAILHTML : on macro_run failure (≥0.4 KB preview inline)
 SESSION --> TRACEZIP : on context.tracing.stop()
 SESSION --> GOLDFILE : golden_save (aria_snapshot)
+SESSION --> ARTRUN : macro_artifact_run\n(one run ledger, admitted\nbefore anything is written)
 
 ' ─── READ-BACK PATHS: things that feed BACK into a session ────────────
 package "Read-back paths — disk drives a session" #fef9c3 {
@@ -81,14 +85,14 @@ SCNFILE --> SESSION : scenario_start /\nverify / fixtures
 ' ─── DERIVED ARTIFACTS (out-of-band, not a live session output) ───────
 package "Derived artifacts (post-hoc)" #f3f4f6 {
   cloud "ffmpeg" as FFMPEG
-  file "frame-####.png\n(extracted on demand)" as FRAMES
-  file "octowright-report-<ts>.xml\n(JUnit XML)" as JUNIT
+  file ".frame-cache/<id>/<t>.png\n(extracted on demand)" as FRAMES
+  file "octowright-report-<ts>.xml or\n<artifacts>/octowright-report.xml\n(JUnit XML; + <stem>.webm\nwith --record-video)" as JUNIT
   [runner.py / scenario_run_as_test] as TESTRUNNER
 }
 
 WEBM --> FFMPEG
-FFMPEG --> FRAMES : browser_extract_frames
-TESTRUNNER --> JUNIT : pass/fail per [test] or per role
+FFMPEG --> FRAMES : GET /api/sessions/{id}/frame?t=
+TESTRUNNER --> JUNIT : pass/fail per [test],\nsequence step or role
 
 ' ─── Path defaults ─────────────────────────────────────────────────────
 note bottom of REC
@@ -105,6 +109,8 @@ note right of POLICY
   credentials keeps short/common identity values from
   corrupting unrelated selectors, URLs and prose.
   all preserves the legacy maximum-privacy behavior.
+  A screenshot whose page renders a classified value
+  is refused, naming surface/tier/arg — never the value.
 end note
 
 note bottom of MAC

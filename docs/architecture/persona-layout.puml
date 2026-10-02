@@ -19,11 +19,12 @@ skinparam noteBackgroundColor #f9fafb
 
 folder "<octowright-config>/profiles/" as ROOT {
   folder "dante/" as DANTE {
-    file "profile.yaml\n  display_name, default_url,\n  default_macros, credentials, app" as DY
+    file "profile.yaml\n  display_name, default_url,\n  default_macros, credentials, app,\n  emoji, trusted_roots" as DY
     file "avatar.png\n(arbitrary persona files;\noctowright ignores)" as DA
     folder "webkit/\nPlaywright user-data-dir" as DW
     folder "chromium/\nPlaywright user-data-dir" as DC
     folder "firefox/\nPlaywright user-data-dir" as DF
+    folder "trust-home/.pki/nssdb/\nrebuilt each launch from trusted_roots" as DT
   }
 
   folder "tim/" as TIM {
@@ -44,6 +45,22 @@ note right of DY
   The macro is the BEHAVIOUR; the persona
   is the WHERE — swap persona to replay the
   same macro against another deployment.
+end note
+
+note right of DT
+  Only when `trusted_roots` lists PEM files:
+  this persona's Chromium starts with HOME here,
+  so its private CA never reaches any other browser.
+  Linux only (macOS/Windows Chromium reads the OS
+  store, so such a launch is refused). Not an engine
+  profile; never aged out as a stale one.
+end note
+
+note left of DY
+  `credentials`: `<name>_env`, `<name>_cmd` or
+  `<name>_file` (cmd > file > env). A `_file` must
+  be a regular, singly-linked, non-symlink file you
+  own with mode 600; POSIX hosts only.
 end note
 
 note right of DW
