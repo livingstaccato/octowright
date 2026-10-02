@@ -45,6 +45,18 @@ pytestmark = pytest.mark.live_browser
 
 HANG_SECONDS = 60
 
+#: The navigation budget these tests run under, and the bound that tells a
+#: wait which ended on its event from one which ran the budget out. The bound
+#: is half the budget rather than a fixed figure, because what it separates is
+#: the two, and the runner sets how long a prompt answer takes: on one
+#: windows-2025 run every Firefox test here took 15-20s, and open_url calls
+#: that ended on their event took 10.6-15.0s -- a refusal the guard logged at
+#: 12.8s ended the wait 3ms later -- against a 10s bound and a 15s budget. A
+#: regression now costs a failing case the 60s budget, under the 300s
+#: per-test timeout.
+NAV_TIMEOUT_MS = 60_000
+PROMPT_S = NAV_TIMEOUT_MS / 1000 / 2
+
 
 def _closed_port() -> int:
     """A loopback port nothing listens on, so a fetch to it is refused at once."""
@@ -121,8 +133,8 @@ async def pool(request: pytest.FixtureRequest, tmp_path: Any, monkeypatch: pytes
     monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
     monkeypatch.setenv("OCTOWRIGHT_SSRF_ALLOW", "127.0.0.1")
     # Short enough that a wait running out its budget fails the test rather
-    # than the per-test timeout.
-    monkeypatch.setattr(core_ops_mixin, "DEFAULT_NAV_TIMEOUT_MS", 15_000)
+    # than the per-test timeout; see NAV_TIMEOUT_MS.
+    monkeypatch.setattr(core_ops_mixin, "DEFAULT_NAV_TIMEOUT_MS", NAV_TIMEOUT_MS)
     browsers = BrowserPool(recordings_dir=tmp_path)
     browsers.kind = request.param
     try:
@@ -148,7 +160,7 @@ async def test_a_refused_redirect_fails_open_url_promptly(pool: Any, base: str, 
     result = await session.open_url(f"{base}{path}", target=target)
     assert result["ok"] is False, result
     assert "169.254.169.254" in result["error"], result
-    assert time.monotonic() - started < 10, "the refusal did not end the wait"
+    assert time.monotonic() - started < PROMPT_S, "the refusal did not end the wait"
 
 
 @pytest.mark.parametrize("path", ["/to-closed", "/later-closed"])
@@ -165,7 +177,7 @@ async def test_a_failed_fetch_fails_open_url_promptly(pool: Any, base: str, targ
     started = time.monotonic()
     result = await session.open_url(f"{base}/later-closed", target=target)
     assert result["ok"] is False and "failed" in result["error"], result
-    assert time.monotonic() - started < 10, "the failure did not end the wait"
+    assert time.monotonic() - started < PROMPT_S, "the failure did not end the wait"
 
 
 @pytest.mark.parametrize("path", ["/slow-page", "/to-slow-page"])
@@ -176,7 +188,7 @@ async def test_a_popup_returns_at_domcontentloaded_redirected_or_not(pool: Any, 
     result = await session.open_url(f"{base}{path}", target="window")
     assert result.get("error") is None, result
     assert result["url"] == f"{base}/slow-page"
-    assert time.monotonic() - started < 10, "the popup waited for load, not domcontentloaded"
+    assert time.monotonic() - started < PROMPT_S, "the popup waited for load, not domcontentloaded"
 
 
 @pytest.mark.parametrize("path", ["/closes-on-load", "/to-closes-on-load"])
@@ -185,7 +197,7 @@ async def test_a_popup_that_closes_itself_on_load_returns_at_once(pool: Any, bas
     session = await _launch(pool, f"{base}/start")
     started = time.monotonic()
     result = await session.open_url(f"{base}{path}", target="window")
-    assert time.monotonic() - started < 10, "a closed popup was waited on until the navigation timeout"
+    assert time.monotonic() - started < PROMPT_S, "a closed popup was waited on until the navigation timeout"
     # As with the policy off: the popup reached its destination before it closed.
     assert result.get("error") is None, result
     assert result["url"] == f"{base}/closes-on-load"
@@ -197,7 +209,7 @@ async def test_a_popup_that_closes_while_parsing_returns_at_once(pool: Any, base
     session = await _launch(pool, f"{base}/start")
     started = time.monotonic()
     result = await session.open_url(f"{base}{path}", target="window")
-    assert time.monotonic() - started < 10, "a closed popup was waited on until the navigation timeout"
+    assert time.monotonic() - started < PROMPT_S, "a closed popup was waited on until the navigation timeout"
     assert result.get("error") is None or "closed" in result["error"], result
 
 

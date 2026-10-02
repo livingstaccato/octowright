@@ -48,6 +48,10 @@ INFLIGHT_REQUEST_LIMIT = 1000
 #: How long expect_network_clean waits, by default, for in-flight requests to end.
 NETWORK_SETTLE_TIMEOUT_MS = 5000
 #: Quiet time after the last in-flight request ends, for the follow-up it triggers.
+#: It is also the only cover for a request whose ``request`` event has not
+#: arrived yet: Firefox delivers a ``fetch`` started by an ``evaluate`` AFTER
+#: that evaluate returns (measured 40/40 on Linux, 1.0-6.5ms later; Chromium and
+#: WebKit deliver it first, 0/40), and nothing Playwright exposes orders the two.
 NETWORK_QUIET_SECONDS = 0.1
 #: How often the settle wait looks while something is still in flight.
 NETWORK_SETTLE_POLL_SECONDS = 0.05
@@ -126,8 +130,16 @@ class NetworkLedger:
         now = self.counts()
         return now[0] - window[0], now[1] - window[1], now[2] - window[2], now[3] - window[3]
 
-    def judge(self, window: tuple[int, int, int, int], http_errors: bool) -> dict[str, int]:
-        """The window's counts; raises if it is not clean. Counts only: a URL can carry a credential."""
+    def judge(self, window: tuple[int, int, int, int], http_errors: bool, in_flight: int = 0) -> dict[str, int]:
+        """The window's counts; raises if it is not clean. Counts only: a URL can carry a credential.
+
+        *in_flight* is what the settle wait left pending. It never fails the
+        check, but a failure names it: a request that fails after the check
+        judged is missing from the count and present in every diagnostic read
+        a moment later (measured on a Windows runner, where Firefox took over
+        the 5s settle budget to refuse a loopback fetch), so a message that
+        does not say it was still running reads as the failure going unseen.
+        """
         failed, page_errors, http_error_count, _evicted = self.since(window)
         counts = {"failed_requests": failed, "page_errors": page_errors}
         if http_errors:
@@ -136,6 +148,8 @@ class NetworkLedger:
             detail = f"{failed} failed request(s), {page_errors} page error(s)"
             if http_errors:
                 detail += f", {http_error_count} HTTP error(s)"
+            if in_flight > 0:
+                detail += f" ({in_flight} request(s) still in flight when the check judged)"
             raise RuntimeError(f"network not clean: {detail}")
         return counts
 

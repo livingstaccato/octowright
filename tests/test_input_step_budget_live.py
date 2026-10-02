@@ -19,6 +19,7 @@ metadata, probe and action share what is left. Measured on all three engines.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -46,11 +47,29 @@ async def session(request: pytest.FixtureRequest, tmp_path: Path) -> Any:
     except Exception as exc:  # engine not installed on this host
         await pool.shutdown()
         pytest.skip(f"{request.param} unavailable: {exc}")
+    session = pool.get(inst["instance_id"])
+    await _launch_work_done(session)
     try:
-        yield pool.get(inst["instance_id"])
+        yield session
     finally:
         await pool.close(inst["instance_id"], force=True)
         await pool.shutdown()
+
+
+async def _launch_work_done(session: Any) -> None:
+    """Wait out the markdown capture a launch schedules, so the clock times only the step.
+
+    The capture takes the session's operation lease, so a step started while it
+    runs queues behind it, and that wait is not the step's: its timeout starts
+    at admission and the queue has a bound of its own. On a windows-2025 run a
+    500ms ``fill_by`` measured 1.343s here while the gate logged
+    ``active_duration_ms=500`` for it, so 0.84s went outside its lease.
+    Measured on Linux Firefox: the capture is still running when ``launch``
+    returns on every launch (4/4), and queueing behind it added 20-35ms.
+    """
+    pending = session._pending_markdown_capture
+    if pending is not None and not pending.done():
+        await asyncio.wait({pending}, timeout=30)
 
 
 async def _step(session: Any, kind: str, budget_ms: int) -> None:
