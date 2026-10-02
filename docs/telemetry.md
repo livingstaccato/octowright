@@ -109,7 +109,7 @@ Span names follow the `octowright.<area>.<verb>` convention. The list below is a
 | `octowright.macro.action` | `action`, `instance_id` | `macros/runtime.dispatch_simple` |
 | `octowright.macro.artifact.run` | `macro`, `run_id`, `verify` | `macros/artifacts.py` |
 | `octowright.macro.run` | `macro`, `instance_id`, `kind` | `macros/execution.run_macro` |
-| `octowright.macro.run_sequence` | `names_count`, `stop_on_failure` | `macros/execution.run_sequence` |
+| `octowright.macro.run_sequence` | `names_count`, `stop_on_failure`, `ok`, `failed_steps`, `stopped_at` (only when a `stop_on_failure` run stopped); status ERROR with the fixed description `macro sequence step failed` when a step failed -- the sequence returns rather than raises, so the step's message is never exported | `macros/execution.run_sequence` |
 | `octowright.mcp.request` | `method`, `path` | `_trace_propagation.TraceContextExtractionMiddleware` (leader leg, ends on `http.response.start`) |
 | `octowright.scenario.run_macro` | `scenario_id`, `macro`, `role`, `targeted` | `scenarios_pool.ScenarioPool.run_macro` |
 | `octowright.scenario.start` | `scenario_id`, `scenario_name`, `participants` | `scenarios_pool.ScenarioPool.start` |

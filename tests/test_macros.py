@@ -624,7 +624,7 @@ async def test_run_sequence_all_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 
 @pytest.mark.anyio
 async def test_run_sequence_stop_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Middle macro raises → chain stops, third macro not called."""
+    """Middle macro raises → chain stops and returns, third macro not called."""
     m = _import_macros(monkeypatch, tmp_path)
     _save_minimal_macro(m, tmp_path, "pre")
 
@@ -644,9 +644,12 @@ async def test_run_sequence_stop_on_failure(monkeypatch: pytest.MonkeyPatch, tmp
     _save_minimal_macro(m, tmp_path, "post")
 
     session = _FakeSessionForSequence(raises_on="__fail__")
-    with pytest.raises(RuntimeError):
-        await m.run_sequence(session=session, names=["pre", "bad", "post"])  # type: ignore[arg-type]
+    result = await m.run_sequence(session=session, names=["pre", "bad", "post"])  # type: ignore[arg-type]
 
+    # The stop is a result, not a raise (#248): the passed step is kept.
+    assert result["ok"] is False
+    assert result["stopped_at"] == 1
+    assert [step["ok"] for step in result["steps"]] == [True, False]
     # "post" macro should not have been called — navigate only runs for pre
     assert session.calls.count("navigate") == 1
 

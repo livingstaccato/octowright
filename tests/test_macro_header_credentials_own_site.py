@@ -276,8 +276,11 @@ async def test_a_sequence_step_after_a_navigating_step_is_refused(
     }
     session = _session(tmp_path, "https://app.example.test/")
     monkeypatch.setattr(execution, "load_macro", lambda name: {"name": name, "actions": macros[name]})
-    with pytest.raises(ValueError, match="credential arg"):
-        await execution.run_sequence(session=session, names=["go", "leak"], args_list=[{}, dict(TOKEN)])
+    # A refused step is a failed step of the sequence (#248), not a raise.
+    result = await execution.run_sequence(session=session, names=["go", "leak"], args_list=[{}, dict(TOKEN)])
+    assert result["stopped_at"] == 1
+    assert "credential arg" in result["steps"][1]["error"]
+    assert TOKEN["token"] not in repr(result)
     session.inject_headers.assert_not_awaited()
 
 

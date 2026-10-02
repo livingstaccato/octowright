@@ -437,6 +437,47 @@ class TestRunSequenceSpan:
         assert all_attrs
         assert all_attrs[-1].get("stop_on_failure") is False
 
+    @pytest.mark.anyio
+    async def test_a_stopped_sequence_marks_its_span_failed_without_the_message(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The sequence returns instead of raising (#248), so nothing escapes the
+        span for it to record: the outcome is set on it explicitly, ERROR status
+        with fixed text, never the step's exception message."""
+        from opentelemetry.trace import StatusCode
+
+        from octowright.macros.execution import run_sequence
+
+        exporter = _setup_span_exporter(monkeypatch)
+        patched_runners["register"]("m1", [{"action": "click", "selector": "#a"}])
+        patched_runners["register"]("m2", [])
+        patched_runners["raise_on"]["click"] = ValueError("boom-page-text")
+        result = await run_sequence(session=fake_session, names=["m1", "m2"])
+        assert result["stopped_at"] == 0
+
+        seq = next(s for s in exporter.get_finished_spans() if s.name == "octowright.macro.run_sequence")
+        assert seq.status.status_code == StatusCode.ERROR
+        assert "boom-page-text" not in (seq.status.description or "")
+        assert seq.attributes.get("ok") is False
+        assert seq.attributes.get("stopped_at") == 0
+        assert seq.attributes.get("failed_steps") == 1
+
+    @pytest.mark.anyio
+    async def test_a_passing_sequence_span_is_not_failed(
+        self, fake_session: _FakeSession, patched_runners: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from opentelemetry.trace import StatusCode
+
+        from octowright.macros.execution import run_sequence
+
+        exporter = _setup_span_exporter(monkeypatch)
+        patched_runners["register"]("m1", [])
+        await run_sequence(session=fake_session, names=["m1"])
+        seq = next(s for s in exporter.get_finished_spans() if s.name == "octowright.macro.run_sequence")
+        assert seq.status.status_code != StatusCode.ERROR
+        assert seq.attributes.get("ok") is True
+        assert "stopped_at" not in seq.attributes
+
 
 # ---------------------------------------------------------------------------
 # Fix 4: navigate URL sanitization for the span attribute
