@@ -104,6 +104,14 @@ def _macros(monkeypatch: pytest.MonkeyPatch, macros: dict[str, list[dict[str, An
     monkeypatch.setattr(execution, "load_macro", lambda name: {"name": name, "actions": macros[name]})
 
 
+#: What a refused loopback fetch may take to be reported. On Linux it is
+#: immediate; on the GitHub ``windows-2025`` runner Firefox took longer than the
+#: default 5s settle budget at least twice (the run's ``elapsed_s`` was 5.7s and
+#: 6.5s against that budget, and the refusal was in the failure payload built
+#: after the check judged). The settle wait returns as soon as nothing is in
+#: flight, so this costs nothing where the refusal is fast.
+REFUSAL_SETTLE_MS = 30_000
+
 _REFUSED_AND_THROWN = (
     "() => {{ fetch('http://127.0.0.1:{port}/').catch(() => {{}}); setTimeout(() => {{ throw new Error('x'); }}); }}"
 )
@@ -112,7 +120,7 @@ _REFUSED_AND_THROWN = (
 async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     session.enable_inflight_tracking()
     await session.page.evaluate(_REFUSED_AND_THROWN.format(port=_closed_port()))
-    await settle_network(session.pending_requests, 5000)
+    await settle_network(session.pending_requests, REFUSAL_SETTLE_MS)
     assert session.network_failures_since()[:2] == (1, 1), list(session._network_requests)
 
     _macros(monkeypatch, {"clean": [{"action": "expect_network_clean"}]})
@@ -121,13 +129,17 @@ async def test_failures_before_the_run_do_not_count(session: Any, monkeypatch: p
 
 
 async def test_failures_during_the_run_fail_it(session: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """No sleep between the step and the check: the settle wait is what must catch the failure."""
+    """No sleep between the step and the check: the settle wait is what must catch the failure.
+
+    The budget is explicit because what is under test is that the wait catches
+    the refusal, not that the engine refuses within the default budget.
+    """
     _macros(
         monkeypatch,
         {
             "dirty": [
                 {"action": "evaluate", "expression": _REFUSED_AND_THROWN.format(port=_closed_port())},
-                {"action": "expect_network_clean"},
+                {"action": "expect_network_clean", "settle_timeout_ms": REFUSAL_SETTLE_MS},
             ]
         },
     )
