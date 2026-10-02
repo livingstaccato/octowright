@@ -252,6 +252,36 @@ async def test_a_request_that_never_finishes_is_reported_not_failed(session: Bro
 
 
 @pytest.mark.anyio
+async def test_a_failure_judged_with_a_request_still_in_flight_says_so(
+    session: BrowserSession, clock: FakeClock
+) -> None:
+    """The Windows-runner shape: Firefox took over the settle budget to refuse a fetch.
+
+    The check failed on the page error alone and said "0 failed request(s)",
+    while the failure payload built a moment later listed the refused fetch --
+    so the message read as the refusal having gone unseen. The request was
+    still in flight when the check judged, and the message must say so.
+    """
+    pending = _request()
+    session._network.request_started(pending, session.page)
+    session._network.page_error()
+    clock.at(0.2, _refuse(session, pending))  # after the 150ms budget
+    with pytest.raises(RuntimeError) as excinfo:
+        await session.expect_network_clean(settle_timeout_ms=150)
+    assert str(excinfo.value) == (
+        "network not clean: 0 failed request(s), 1 page error(s) (1 request(s) still in flight when the check judged)"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_failure_with_nothing_in_flight_keeps_its_message(session: BrowserSession, clock: FakeClock) -> None:
+    session._network.page_error()
+    with pytest.raises(RuntimeError) as excinfo:
+        await session.expect_network_clean(settle_timeout_ms=150)
+    assert str(excinfo.value) == "network not clean: 0 failed request(s), 1 page error(s)"
+
+
+@pytest.mark.anyio
 async def test_settle_zero_judges_immediately(session: BrowserSession, clock: FakeClock) -> None:
     session._network.request_started(_request(), session.page)
     result = await session.expect_network_clean(settle_timeout_ms=0)
