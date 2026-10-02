@@ -52,6 +52,9 @@ _FIRST_IMAGE_STYLE = 2
 #: Elements whose pixels no text scan can read; they must be hidden in the screenshot.
 OPAQUE_ELEMENTS = frozenset({"CANVAS", "EMBED", "FRAME", "IFRAME", "OBJECT", "VIDEO"})
 
+#: The reasons an opaque element gives: it refuses whatever values are held, so it names none of them.
+OPAQUE_REASONS = frozenset(f"visible {name.lower()}" for name in OPAQUE_ELEMENTS)
+
 #: Attributes that load a resource; a shown element carrying a value in one is refused.
 LOADING_ATTRIBUTES = frozenset({"src", "srcset", "srcdoc", "data", "poster"})
 
@@ -281,7 +284,7 @@ def _visible_element_reasons(snap: _Snapshot, nodes: Mapping[str, Any], node: in
     reasons: set[str] = set()
     name = _name(snap, nodes, node)
     if name in OPAQUE_ELEMENTS:
-        reasons.add(f"visible {name.lower()}")
+        reasons.add(f"visible {name.lower()}")  # one of OPAQUE_REASONS
     # A ``<source>`` draws nothing itself; its picture's image is judged by ``_drawn_attribute_reasons``.
     if name != "SOURCE" and any(
         _loads(name, key) and snap.holds(value) for key, value in _attributes(snap, nodes, node)

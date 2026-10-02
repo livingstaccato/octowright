@@ -66,6 +66,7 @@ from octowright.macros.page_devtools import (
 )
 from octowright.macros.privacy import sensitive_value_variants
 from octowright.macros.rendered_surface import SNAPSHOT_PARAMS, rendered_leaks
+from octowright.macros.screenshot_refusal import Refusals
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -79,7 +80,6 @@ ClassifiedScreenshotPolicy = Literal["refuse", "redact"]
 ScreenshotHandler = Callable[..., Awaitable[tuple[int, int] | None]]
 
 _OPERATION = "macro_redacted_screenshot"
-_REFUSED = "screenshot refused"
 
 
 def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
@@ -167,26 +167,25 @@ def built_in_redaction_applies(session: Any) -> bool:
 
 
 async def _require_unrendered(
-    controller: PageController, changes: PageChanges, cdp: Any, values: list[str], *, stage: str
+    controller: PageController, changes: PageChanges, cdp: Any, values: list[str], refusals: Refusals, *, stage: str
 ) -> None:
     """Raise unless the page is unchanged since redaction and renders no classified value."""
     report = await bounded(controller.verify(), operation=_OPERATION)
     if int(report.get("changed", 1)) or changes.count:
-        raise RuntimeError(f"the page changed {stage} the redacted screenshot; {_REFUSED}")
+        raise refusals.refuse(f"the page changed {stage} the redacted screenshot", "page changed", stage=stage)
     if int(report.get("remaining", 1)):
-        raise RuntimeError(f"classified values are still in the page {stage} the screenshot; {_REFUSED}")
+        head = f"classified values are still in the page {stage} the screenshot"
+        raise refusals.refuse(head, "value left in the page", stage=stage)
     if int(report.get("transitioning", 1)):
-        raise RuntimeError(f"a view transition is running {stage} the screenshot; {_REFUSED}")
+        raise refusals.refuse(f"a view transition is running {stage} the screenshot", "view transition", stage=stage)
     # What Chrome draws, whatever root it is in: a root attached after the redaction collected its roots is not in them.
     document_tree = await bounded(cdp.send("DOM.getDocument", {"depth": -1, "pierce": True}), operation=_OPERATION)
     if view_transition_pseudo_elements(document_tree.get("root", {})):
-        raise RuntimeError(f"a view transition is drawn {stage} the screenshot; {_REFUSED}")
+        raise refusals.refuse(f"a view transition is drawn {stage} the screenshot", "view transition", stage=stage)
     snapshot = await bounded(cdp.send("DOMSnapshot.captureSnapshot", SNAPSHOT_PARAMS), operation=_OPERATION)
     leaks = rendered_leaks(snapshot, values)
     if leaks:
-        raise RuntimeError(
-            f"classified values are still rendered {stage} the screenshot ({', '.join(leaks)}); {_REFUSED}"
-        )
+        raise refusals.rendered(snapshot, leaks, stage=stage)
 
 
 async def _capture(cdp: Any, target: Path) -> None:
@@ -208,20 +207,20 @@ async def _pause_animations(cdp: Any) -> None:
     await bounded(cdp.send("Animation.setPlaybackRate", {"playbackRate": 0}), operation=_OPERATION)
 
 
-async def _end_view_transitions(cdp: Any) -> None:
+async def _end_view_transitions(cdp: Any, refusals: Refusals) -> None:
     """End every running view transition, which draws a raster of its scope taken before the redaction."""
     try:
         await bounded(end_view_transitions(cdp), operation=_OPERATION)
     except Exception as exc:
-        raise RuntimeError(f"a view transition could not be ended; {_REFUSED}") from exc
+        raise refusals.refuse("a view transition could not be ended", "view transition") from exc
 
 
-async def _apply_styles(changes: PageChanges) -> None:
+async def _apply_styles(changes: PageChanges, refusals: Refusals) -> None:
     """Have Chrome apply the page's pending style changes; one it cannot apply refuses the screenshot."""
     try:
         await bounded(changes.apply_styles(), operation=_OPERATION)
     except Exception as exc:
-        raise RuntimeError(f"the page's styles could not be applied; {_REFUSED}") from exc
+        raise refusals.refuse("the page's styles could not be applied", "styles not applied") from exc
 
 
 async def _release(cdp: Any, changes: PageChanges) -> None:
@@ -253,22 +252,24 @@ async def _restore(controller: PageController, target: Path, *, quiet: bool) -> 
             await bounded(controller.dispose(), operation=_OPERATION)
 
 
-async def _redact_and_capture(cdp: Any, changes: PageChanges, values: list[str], target: Path) -> PageController:
+async def _redact_and_capture(
+    cdp: Any, changes: PageChanges, values: list[str], target: Path, refusals: Refusals
+) -> PageController:
     """Pause, redact, count, prove, capture and prove again; on any failure restore and re-raise."""
     controller: PageController | None = None
     try:
         await _pause_animations(cdp)
-        await _end_view_transitions(cdp)
+        await _end_view_transitions(cdp, refusals)
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
         await bounded(controller.redact(closed_roots), operation=_OPERATION)
-        await _apply_styles(changes)
+        await _apply_styles(changes, refusals)
         latent = await bounded(changes.sheets_hold(values), operation=_OPERATION)
         await bounded(controller.watch(latent), operation=_OPERATION)
         changes.begin()
-        await _require_unrendered(controller, changes, cdp, values, stage="before")
+        await _require_unrendered(controller, changes, cdp, values, refusals, stage="before")
         await _capture(cdp, target)
-        await _require_unrendered(controller, changes, cdp, values, stage="after")
+        await _require_unrendered(controller, changes, cdp, values, refusals, stage="after")
     except BaseException:
         target.unlink(missing_ok=True)
         if controller is not None:
@@ -287,8 +288,8 @@ async def redacted_screenshot(
     """Pause animations, end a view transition, redact, prove nothing is rendered, screenshot, prove again, restore.
 
     Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
-    page was restored. Refusals raise ``RuntimeError`` naming what was found, never the
-    value.
+    page was restored. Refusals raise `ScreenshotRefused` (a ``RuntimeError``) naming
+    what was found, its tier and argument, never the value (see `screenshot_refusal`).
 
     Every value is matched anywhere, word-bounded ledger values included
     (`PrivacyLedger.word_bounded`), and that is deliberate. The redaction also
@@ -306,6 +307,7 @@ async def redacted_screenshot(
         label="screenshot path",
     )
     values = list(sensitive_value_variants(sensitive_values))
+    refusals = Refusals(session, sensitive_values)
     # Re-enters the caller's lease (the macro run, or an artifact run) in the same
     # task, so no other operation on this page interleaves with redact .. restore.
     async with session.operation("macro_run"):
@@ -313,12 +315,11 @@ async def redacted_screenshot(
         try:
             cdp = await bounded(page.context.new_cdp_session(page), operation=_OPERATION)
         except Exception as exc:
-            raise RuntimeError(
-                f"a redacted screenshot needs a Chromium page to read what is rendered; {_REFUSED}"
-            ) from exc
+            head = "a redacted screenshot needs a Chromium page to read what is rendered"
+            raise refusals.refuse(head, "no rendered-surface snapshot") from exc
         changes = PageChanges(cdp)
         try:
-            controller = await _redact_and_capture(cdp, changes, values, target)
+            controller = await _redact_and_capture(cdp, changes, values, target, refusals)
             await _restore(controller, target, quiet=False)
         finally:
             await _release(cdp, changes)
@@ -349,7 +350,8 @@ async def ledger_screenshot(session: Any, path: Path, sensitive_values: tuple[st
     handler = installed_handler(session)
     if handler is not None:
         if await handler(action=action, sensitive_values=sensitive_values) is None:
-            raise RuntimeError("the session's screenshot privacy handler refused the screenshot")
+            head = "the session's screenshot privacy handler refused the screenshot"
+            raise Refusals(session, sensitive_values).refuse(head, "handler refused")
         return
     await redacted_screenshot(session, action, sensitive_values, root=path.parent)
 
@@ -371,8 +373,10 @@ async def dispatch_classified_screenshot(
     if handler is not None:
         handled = await handler(action=action, sensitive_values=sensitive_values)
         if handled is None:
-            raise RuntimeError("classified macro screenshot privacy handler refused the action")
+            head = "classified macro screenshot privacy handler refused the action"
+            raise Refusals(session, sensitive_values).refuse(head, "handler refused")
         return handled
     if classified_screenshot_policy() == "redact":
         return await redacted_screenshot(session, action, sensitive_values)
-    raise RuntimeError("classified macro screenshot requires an explicit privacy handler")
+    head = "classified macro screenshot requires an explicit privacy handler"
+    raise Refusals(session, sensitive_values).refuse(head, "no privacy handler")

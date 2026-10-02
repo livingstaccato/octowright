@@ -458,6 +458,51 @@ The limits are real and deliberate:
 - Firefox and WebKit have no rendered-surface snapshot, so a redacted screenshot is
   refused there.
 
+**Why a screenshot was refused.** A refusal says what kind of surface held a
+classified value, the value's tier, and the argument it came from -- never the
+value, the page text around it, or a selector built from it. The same fields
+appear in three places: the failing step's error (so `octowright test`, with or
+without `--redact-errors`, and `macro_run`'s failure line name them), the failure
+payload's `screenshot_refused` field, and one `octowright.macro.screenshot_refused`
+warning in the log. For the field report that prompted this -- a sequence signs in
+with `username` as a credential argument, the app's header renders it as `Admin`,
+and the next step's `screenshot` is refused -- the `--redact-errors` line reads:
+
+```
+macro bmf-screenshot failed at step 1 (screenshot): screenshot refused (rendered text; tier credential; argument username)
+```
+
+and the payload carries
+`"screenshot_refused": {"reasons": ["rendered text"], "stage": "before", "tiers": ["credential"], "args": ["username"]}`.
+
+- `reasons` are the kinds the rendered-surface scan already tells apart:
+  `rendered text` (layout text or text boxes, in any of the arrangements above),
+  `form value` (a drawn, unmasked control value), `visible attribute text`
+  (`placeholder`, `alt`, `label`), `option text` (a `<select>` option's label),
+  `visible resource address` (a `src`, `srcset`, link and the like), `visible style
+  image` (an image style or `content: url()`), and `visible canvas`, `visible video`
+  and the like (an element whose pixels cannot be read, refused whatever it shows). A
+  refusal before or beside that scan names its own cause instead: `page changed`,
+  `value left in the page` (the redaction could not remove one), `view transition`,
+  `styles not applied`, `no rendered-surface snapshot` (not Chromium), `handler
+  refused`, or `no privacy handler` (the default `refuse` policy).
+- `stage` is `before` or `after` the capture, when the refusal has one.
+- `tiers` (`credential`, `identity`, `contextual`, strongest first) and `args` (the
+  argument path, as `scrub_exempt_args` reports it) come from where the session
+  ledger admitted each value. For a rendered-surface refusal they name the values
+  the page was found drawing; for any other refusal, every value the session holds,
+  which is why the screenshot was classified at all. A password typed into a
+  password field is `credential` with no argument, and a value with no recorded
+  origin (a direct `redacted_screenshot` call) adds nothing rather than a guess. An
+  argument path that itself spells a held value is shown as `<redacted>`.
+
+The refusal is correct by design: the page drew the value, so the pixels would
+hold it. The ways out are to keep the value off the screen (sign in as a user whose
+name the page does not show, or screenshot a page without it) or to stop
+classifying it. Declaring an argument not sensitive is not available yet: that is
+the open Part B (`parameter_specs`) of #248, and this reporting adds no
+declassify mechanism of its own.
+
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped
 policy value suppresses them rather than failing the artifact run. When one is not
@@ -767,7 +812,8 @@ runs its tests one at a time: `--persona` with `--max-parallel` above 1 is
 refused as a usage error.
 `--redact-errors` records a failure as macro, step and action only, never
 exception text, for runs whose reports are kept as evidence. That covers a
-browser that fails to close, too.
+browser that fails to close, too. A refused classified screenshot also keeps
+its value-free reason (see "Why a screenshot was refused" above).
 
 A browser that fails to **close** does not fail a passing test: it is carried as
 the test's `teardown_warning` (appended to the error of a test that had already
