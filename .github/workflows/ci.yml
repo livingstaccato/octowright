@@ -209,6 +209,17 @@ jobs:
       # Two-phase pytest: integration_local writes junitxml (artifact),
       # then the main suite runs. Script keeps the logic out of YAML so the
       # bash line continuations survive Windows' default-PowerShell parser.
+      # Socket/pool sampler for the rare `net::ERR_NO_BUFFER_SPACE` on Windows:
+      # runs in the background for the rest of the job and never fails it. See
+      # ci/windows_socket_sampler.ps1 for what it records and why.
+      - name: Start Windows socket sampler
+        if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          Start-Process pwsh -WindowStyle Hidden -ArgumentList @(
+            '-NoProfile', '-File', 'ci/windows_socket_sampler.ps1',
+            '-Out', '.ci/windows-sockets.log'
+          )
       - name: Run unit tests (headless, Windows verbose)
         if: ${{ env.ACT != 'true' && runner.os == 'Windows' }}
         shell: bash
@@ -225,6 +236,23 @@ jobs:
           RUNNER_OS: ${{ runner.os }}
           RUNNER_ARCH: ${{ matrix.arch }}
         run: bash ci/run_integration_and_main.sh
+      - name: Snapshot Windows sockets on failure
+        if: ${{ failure() && env.ACT != 'true' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path .ci | Out-Null
+          netstat -ano -p tcp | Out-File -Encoding utf8 .ci/windows-netstat-on-failure.txt
+          Get-Process | Sort-Object HandleCount -Descending | Select-Object -First 25 Id, ProcessName, HandleCount, NPM |
+            Format-Table -AutoSize | Out-File -Encoding utf8 -Append .ci/windows-netstat-on-failure.txt
+      - name: Upload Windows socket diagnostics
+        if: ${{ always() && env.ACT != 'true' && runner.os == 'Windows' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-sockets-${{ matrix.arch }}
+          path: |
+            .ci/windows-sockets.log
+            .ci/windows-netstat-on-failure.txt
+          if-no-files-found: warn
       - name: Upload integration-local media + reports
         if: ${{ env.ACT != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
