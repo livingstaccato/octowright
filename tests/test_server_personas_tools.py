@@ -57,7 +57,7 @@ async def test_profile_delete_refuses_while_a_browser_is_still_closing(_patch_de
     """A browser mid-teardown still has the directory open: deleting under it
     removes live database files the closing browser may then rewrite."""
     _patch_deps["pool"].profile_users.return_value = [("i-closing", True)]
-    with pytest.raises(RuntimeError, match="i-closing.*closing"):
+    with pytest.raises(RuntimeError, match=r"i-closing.*closing"):
         await _personas.profile_delete("webkit", "cosmo")
     _patch_deps["profile"].delete_profile.assert_not_called()
 
@@ -90,7 +90,7 @@ async def test_persona_delete_refuses_live_instance(_patch_deps: dict[str, Magic
 
 async def test_persona_delete_refuses_while_a_browser_is_still_closing(_patch_deps: dict[str, MagicMock]) -> None:
     _patch_deps["pool"].profile_users.return_value = [("i-closing", True)]
-    with pytest.raises(RuntimeError, match="i-closing.*closing"):
+    with pytest.raises(RuntimeError, match=r"i-closing.*closing"):
         await _personas.persona_delete("cosmo")
     _patch_deps["profile"].delete_persona.assert_not_called()
 

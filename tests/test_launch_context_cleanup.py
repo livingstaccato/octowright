@@ -30,6 +30,11 @@ _PERSISTENT_STEPS = ("new_page", "navigation_guard", "header_routes")
 _EPHEMERAL_STEPS = ("new_context", "new_page", "navigation_guard", "header_routes")
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 class _Script:
     """Which step misbehaves, and how: ``raise`` an error or ``hang`` until cancelled."""
 
@@ -181,10 +186,9 @@ def _processes_using(path: Path) -> list[int]:
 
 @pytest.mark.live_browser
 @pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="reads /proc")
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.anyio
 async def test_live_a_failed_route_install_releases_the_profile(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, anyio_backend: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Real Chromium, headless: a launch that fails after the browser opened
     must not leave it running on the user-data-dir. Measured without the fix:

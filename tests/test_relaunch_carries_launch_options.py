@@ -34,6 +34,11 @@ from octowright.browser_pool.options import CALLER_SETTABLE_FIELDS, LaunchOption
 from octowright.browser_pool.pool import BrowserPool
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    return "asyncio"
+
+
 def _existing(path: Path) -> Path:
     path.write_text("{}")
     return path
@@ -86,7 +91,9 @@ def test_the_fixture_sets_every_launch_option(tmp_path: Path) -> None:
     carry test below -- covers it."""
     original = _every_field_set(tmp_path)
     defaults = LaunchOptions()
-    unset = [f.name for f in dataclasses.fields(LaunchOptions) if getattr(original, f.name) == getattr(defaults, f.name)]
+    unset = [
+        f.name for f in dataclasses.fields(LaunchOptions) if getattr(original, f.name) == getattr(defaults, f.name)
+    ]
     # kind stays chromium (the chromium-only options need it), profile None and
     # ephemeral False (both exclusive with session=True), and protected_reason
     # is an output, not a launch option.
@@ -243,12 +250,9 @@ def _assert_carried(kwargs: dict[str, Any]) -> None:
     assert {name: kwargs.get(name) for name in _CARRIED} == _CARRIED
 
 
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.parametrize("path", ["handoff", "relaunch_fluid"])
 @pytest.mark.anyio
-async def test_handoff_and_fluid_relaunch_carry_the_launch_options(
-    monkeypatch: pytest.MonkeyPatch, anyio_backend: str, path: str
-) -> None:
+async def test_handoff_and_fluid_relaunch_carry_the_launch_options(monkeypatch: pytest.MonkeyPatch, path: str) -> None:
     from tests.test_handoff import _fake_source, _pop_manifest_noop
 
     _pop_manifest_noop(monkeypatch)
@@ -275,11 +279,8 @@ async def test_handoff_and_fluid_relaunch_carry_the_launch_options(
     assert launched["profile"] == "lab"
 
 
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.anyio
-async def test_the_driver_death_relaunch_carries_the_launch_options(
-    monkeypatch: pytest.MonkeyPatch, anyio_backend: str
-) -> None:
+async def test_the_driver_death_relaunch_carries_the_launch_options(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright.browser_pool import driver_relaunch
     from tests.test_driver_relaunch import _FakePool, _session
 
@@ -297,11 +298,8 @@ async def test_the_driver_death_relaunch_carries_the_launch_options(
     assert kwargs["url"] == lost.url
 
 
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.anyio
-async def test_a_launched_session_keeps_its_launch_options(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, anyio_backend: str
-) -> None:
+async def test_a_launched_session_keeps_its_launch_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The stored copy is written at launch, with the resolved headedness and
     the session directory's key."""
     from octowright.browser_pool import launch_execution
@@ -366,11 +364,8 @@ def _origin() -> Any:
 
 
 @pytest.mark.live_browser
-@pytest.mark.parametrize("anyio_backend", ["asyncio"])
 @pytest.mark.anyio
-async def test_live_an_anonymous_session_keeps_its_state_across_handoff(
-    tmp_path: Path, _origin: str, anyio_backend: str
-) -> None:
+async def test_live_an_anonymous_session_keeps_its_state_across_handoff(tmp_path: Path, _origin: str) -> None:
     """Real Chromium, headless. Measured before the fix: the replacement opened
     a fresh tmpdir keyed by its own instance_id, and the value was gone."""
     from octowright.browser_pool.lifecycle import shutdown_pool
