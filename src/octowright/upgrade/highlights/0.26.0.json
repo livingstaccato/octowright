@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Headed Chromium downloads no longer kill the browser",
+    "body": "Chrome 153, which Playwright 1.63 installs, crashed its own browser process on the first download of a headed run whenever the profile already remembered an earlier download. Octowright now clears a Chromium profile's download-history rows before each persistent launch, leaving browsing history alone, and set OCTOWRIGHT_PRUNE_DOWNLOAD_HISTORY=off to opt out. On Linux, a browser process that dies is now reported as a crash with scope \"process\" rather than looking like someone closed the window."
+  },
+  {
+    "title": "Macros can prove the network stayed clean and a secret stayed hidden",
+    "body": "Two new macro assertions. expect_network_clean fails a step on failed requests and uncaught page errors since the run began or since a mark_network_clean step, optionally on bad HTTP statuses too, and can wait for in-flight requests first. expect_no_text passes only when a value, such as {{password}}, is drawn nowhere under its selector, and never echoes that value in its error, the recording or the diagnostics. A scan that reaches its element limit fails instead of passing on a page it only partly read."
+  },
+  {
+    "title": "A stopped macro sequence hands back every step",
+    "body": "macro_run_sequence used to raise on the first failing step under the default stop_on_failure, losing the record of the steps that had passed. It now always returns {sequence, steps, ok, stopped_at}; a failed step's error is a single line and the full failure payload sits beside it as failure. Code that caught the exception should check ok and stopped_at instead."
+  },
+  {
+    "title": "Credentials are only typed where the session expects them",
+    "body": "A macro fill or type fed by a credential argument now checks the origin of the document receiving each keystroke against the launch URL and the persona's base_url, and refuses anywhere else. A sign-in page on a separate identity provider needs the step to list it, for example \"allowed_origins\": [\"https://login.idp.example\"]. Typing also stops if the page navigates mid-value, and OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=warn records the event instead of refusing."
+  },
+  {
+    "title": "Redirects to private addresses are caught at every hop",
+    "body": "Under OCTOWRIGHT_SSRF_POLICY=block-private, a public page that redirected to a private address used to reach it, because the browser followed the chain without asking the guard again. The guard now fetches each navigation itself, checks every redirect target before it is fetched, follows only http and https, and keeps the real chain visible in the network rows. Subresource redirects and DNS rebinding still need network-layer egress control."
+  },
+  {
+    "title": "Personas can trust private CAs and read secrets from files",
+    "body": "A persona's trusted_roots lists PEM root certificates that only its Chromium trusts, which makes internal and staging hosts with private CAs reachable without touching the system store; it is Linux-only and refused at launch elsewhere. A <name>_file credential reads its value at use time from a private file you own with mode 0600. octowright test also gains --sequence for checks written as a list of small macros and --record-video to keep a video of the run."
+  }
+]

@@ -16,7 +16,7 @@ The release path is wired: the octowright repo's `release.yml` builds this packa
 uv pip install ./packages/octowright-terminal   # from an octowright checkout
 ```
 
-**Versions here move independently of core's.** This package was at 0.1.1 against core's 0.19.4 when this was written, because locking them would force a plugin release on every core release even when nothing here changed. Read the two `pyproject.toml` files rather than this sentence for the current pairing. The practical consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's do not.
+**Versions here move independently of core's.** Locking them would force a plugin release on every core release even when nothing here changed, so read the two `pyproject.toml` files for the current pairing. The practical consequence is that most core releases re-present a plugin version the index already has, which is why the plugin's publish steps set `skip-existing` and core's do not.
 
 It needs a core carrying the plugin machinery (`octowright.plugins`). **0.17.0 is the first release that does** — the published wheel contains `octowright/plugins/`. That floor is declared here as `octowright>=0.17.0`, so an older core fails at resolve time with a readable error instead of installing cleanly and then dying at daemon start with `ModuleNotFoundError: No module named 'octowright.plugins'`.
 

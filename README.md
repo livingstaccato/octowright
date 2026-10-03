@@ -189,8 +189,8 @@ dirs under the same persona.
 engines, plus metadata: display name, `default_url` (which is also the
 context's Playwright `base_url`, so a macro can navigate `/orders` and stay
 portable across deployments), `default_macros` to run at launch,
-`credentials` (references to env vars or shell commands — secrets themselves
-are never stored on disk), and an `app` dict for
+`credentials` (references to env vars, shell commands or private files — secrets
+themselves are never stored in the persona), and an `app` dict for
 domain metadata. Think of a persona as "Dante — my Discord power
 user across all three engines", and a profile as one engine-specific piece
 of that identity. You launch it with `browser_launch profile=dante`;
@@ -378,7 +378,7 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 
 | Variable | Default | Description |
 |---|---|---|
-| `OCTOWRIGHT_DEFAULT_URL` | `https://octowright.com` | Fallback `url` when `browser_launch` omits it. |
+| `OCTOWRIGHT_DEFAULT_URL` | the daemon's own `http://127.0.0.1:<bound port>/new-tab` | Fallback `url` when `browser_launch` omits it. |
 | `OCTOWRIGHT_RECORDINGS` | POSIX: `${XDG_STATE_HOME:-~/.local/state}/octowright/sessions/`; Windows: `%LOCALAPPDATA%\octowright\State\sessions\` | Where session artifacts land: JSONL action logs, traces, screenshots, videos, downloads, and markdown captures. |
 | `OCTOWRIGHT_CAPTURES_DIR` | POSIX: `${XDG_CACHE_HOME:-~/.cache}/octowright/captures/`; Windows: `%LOCALAPPDATA%\octowright\Cache\captures\` | Where large cached analysis payloads live. |
 | `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` | `52428800` | Size cap for cached analysis captures before oldest captures are pruned. |
@@ -390,7 +390,7 @@ On Windows, config uses `%APPDATA%\octowright\`, while state and cache use
 | `OCTOWRIGHT_VIEWPORT_W` / `OCTOWRIGHT_VIEWPORT_H` | `1280` / `800` | Default viewport; a value that is not a positive integer falls back to the default with a logged warning. Used in headless mode, when dimensions are explicitly passed to `browser_launch`, and for every `octowright test` browser (whose `--record-video` video is recorded at the same size). In headed mode with neither set, context launches with `no_viewport=True` so the page tracks the OS window. |
 | `OCTOWRIGHT_HEADLESS` | auto | Explicit `0` / `1` overrides headless mode. Auto-detected: headed on macOS or Linux+display, headless on CI (`CI=true`) or Linux without `$DISPLAY` / `$WAYLAND_DISPLAY`. |
 | `OCTOWRIGHT_DISABLE_GPU` | unset (off) | Launch **Chromium** with `--disable-gpu --disable-gpu-compositing`. An escape hatch for a headed-Chromium crash seen on Chrome 148 / macOS 26 (a main-process abort reached through native macOS UI and the Metal GPU path) — **not a confirmed fix**, but something to try in one argument if your browsers are crashing. Per-launch override with `browser_launch disable_gpu=true`, which wins over this variable either way. Chromium-only. WebGL still works via software (SwiftShader) rather than disappearing. |
-| `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | — | Per-navigation / per-action timeouts. |
+| `OCTOWRIGHT_NAV_TIMEOUT_MS` / `OCTOWRIGHT_ACTION_TIMEOUT_MS` | `30000` / `15000` | Per-navigation / per-action timeouts. |
 | `OCTOWRIGHT_HTTP_HOST` / `OCTOWRIGHT_HTTP_PORT` | `127.0.0.1` / `6286` | Dashboard bind address. Binding to `0.0.0.0` makes the HTTP sidecar reachable on your network, but sensitive dashboard/API/MCP routes stay blocked unless `OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD=1` is also set. Only enable remote dashboard access on trusted networks because it exposes live browser state and local artifacts. If the port is in use, the server walks up 5 higher ports automatically. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_FPS` | `10` | Positive integer cap for backend live-preview stream FPS and requested frontend `fps`. |
 | `OCTOWRIGHT_LIVE_SCREENCAST_QUALITY` | `70` | JPEG quality for live-preview frames, clamped to `1..100`. |
@@ -411,7 +411,7 @@ without going through an MCP client:
 | `octowright selftest` | Print the list of registered MCP tools without needing a live MCP client. Sanity check after install. |
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. `--out` must sit under `OCTOWRIGHT_RECORDINGS` (checked before anything launches); without it the report is a timestamped file there. `--persona` runs tests one at a time (refused with `--max-parallel` above 1). |
 | `octowright test --sequence <file> [--persona <name>] [--artifacts <dir>] [--redact-errors] [--record-video]` | Run a macro sequence file (the names and arguments `macro_run_sequence` takes) in one browser of a persona; one JUnit case per step, later steps skipped after a failure. `--redact-errors` records only macro, step and action. `--record-video` records the browser and prints `video: <path>` after the report, failed and interrupted runs included; with `--artifacts` the video is copied there as `<sequence-stem>.webm` (`_2`, `_3`, ... when the name is taken; nothing is overwritten). The browser (and video) size is `OCTOWRIGHT_VIEWPORT_W`x`OCTOWRIGHT_VIEWPORT_H`, default 1280x800; `OCTOWRIGHT_MACRO_SLOWMO_MS` slows every action. |
-| `octowright cleanup [--days N] [--apply]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. |
+| `octowright cleanup [--days N] [--apply] [--browsers]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. `--browsers` also reaps stray Playwright-managed browser processes, machine-wide. |
 | `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup). Reversible — rename back to re-enable. |
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
@@ -433,7 +433,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | Profile | What | Tool count |
 |---|---|---|
 | `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 24 |
-| `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 31 |
+| `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 33 |
 | `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
 | `personas` | Persona + on-disk profile management. | 8 |

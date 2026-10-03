@@ -22,8 +22,9 @@ skinparam noteBackgroundColor #f9fafb
 top to bottom direction
 
 package "user surfaces" #eff6ff {
-  [server.py\nMCPServer (129 tools, slimmable via --profile)] as SERVER
-  [cli.py\nclick: serve / test / scenario / persona] as CLI
+  [server/\nMCPServer (134 tools, 141 with the terminal\nplugin; slimmable via --profile)] as SERVER
+  [cli/\nclick: serve / test / scenario / persona /\nrestart / doctor / dashboard / cleanup] as CLI
+  [http/\nStarlette dashboard + /mcp follower proxy] as HTTP
 }
 
 package "live state" #fef3c7 {
@@ -33,11 +34,13 @@ package "live state" #fef3c7 {
 }
 
 package "domain modules" #ecfccb {
-  [personas.py\nPersona, load, migrate, creds] as PERSONAS
+  [personas.py\nPersona, load, migrate,\ncreds (_env / _cmd / _file)] as PERSONAS
   [engine_profiles.py\nengine-profile path layer] as ENGPROF
   [scenarios.py\nScenario, Participant, loaders] as SCENARIOS
-  [macros/\nstorage, import, substitute, run, repair] as MACROS
-  [runner.py\ntest-macro discovery + JUnit] as RUNNER
+  [macros/\nstorage, import, substitute, run, repair,\nprivacy ledgers + scrub cap, sequence steps] as MACROS
+  [runner.py\ntest-tagged macros or --sequence file → JUnit\n(runner_video.py: --record-video)] as RUNNER
+  [sequences.py\nsequence files: names + args_list as data] as SEQUENCES
+  [persona_trust.py\nper-persona Chromium trust store] as PTRUST
   [goldens.py\naria-tree snapshots + diff] as GOLDENS
   [video.py\nffmpeg frame extraction] as VIDEO
   [stabilize.py\ndeterminism init script] as STABILIZE
@@ -48,13 +51,14 @@ package "session modules" #fdf4ff {
   [session/frames.py] as SF
   [session/downloads.py] as SD
   [session/locators.py] as SL
+  [session/fill_origin.py\ncredential fill bound to a checked origin] as SFO
 }
 
 package "infrastructure" #f3f4f6 {
   [defaults.py\nenv vars + paths] as DEFAULTS
   [recorder.py\nappend-only JSONL] as RECORDER
   [export.py\nrecording → playwright script] as EXPORT
-  [upgrade.py\npost-upgrade "what's new" notice] as UPGRADE
+  [upgrade/\npost-upgrade "what's new" notice] as UPGRADE
   ' Package-root shared helpers. They sit at the root deliberately: server/,
   ' session/ and the root summarizers all need them, and putting one inside
   ' any of those layers makes the others import a layer they have no business
@@ -64,6 +68,10 @@ package "infrastructure" #f3f4f6 {
   [dashboard_events.py\nin-process pub/sub for SSE/WS fanout] as DASHEVENTS
   [console_levels.py\ncanonical console-level classification] as CONSOLELEVELS
   [http_headers.py\nheader validation + record-time redaction] as HTTPHEADERS
+  ' Rendered verbatim into the exported macro CLI, so stdlib only: the live
+  ' replay and the generated script refuse the same credential sinks.
+  [credential_sinks.py + credential_input.py\ncredential sink + fill-origin rules\n(shared with the exported macro CLI)] as CREDSINKS
+  [request_failures.py\nexpect_network_clean ledger\n(shared with the exported macro CLI)] as REQFAIL
 }
 
 ' Playwright sits below everything that talks to it; only BrowserSession
@@ -75,6 +83,8 @@ CLI --> POOL
 CLI --> SPOOL
 SERVER --> POOL
 SERVER --> SPOOL
+HTTP --> POOL
+HTTP --> SPOOL
 
 ' ── live state composition ──
 POOL "1" *-- "*" SESSION : owns
@@ -83,15 +93,21 @@ SESSION "1" *-- "1" GATE : owns
 SESSION ..> SF
 SESSION ..> SD
 SESSION ..> SL
+SESSION ..> SFO
+SFO ..> CREDSINKS : origin check
 
 ' ── domain dependencies ──
 POOL ..> ENGPROF : engine_profile_dir
 POOL ..> STABILIZE : init script
+POOL ..> PTRUST : HOME for a persona\nwith trusted_roots
 SCENARIOS ..> PERSONAS : default URL / macros / creds
 SCENARIOS ..> MACROS : run_macro per participant
 SCENARIOS ..> POOL : spawn_roster
 RUNNER ..> MACROS
-RUNNER ..> POOL : ephemeral browser per [test]
+RUNNER ..> POOL : ephemeral browser per [test]\nor one per sequence
+RUNNER ..> SEQUENCES : --sequence
+MACROS ..> CREDSINKS : sink guard
+SESSION ..> REQFAIL : expect_network_clean
 SERVER ..> RUNNER
 SERVER ..> GOLDENS
 SERVER ..> VIDEO

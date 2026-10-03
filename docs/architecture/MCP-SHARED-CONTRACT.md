@@ -1,6 +1,6 @@
 # octowright debugger — shared API contract
 
-The Python `http_server.py` and the TypeScript `packages/octowright-frontend/`
+The Python `src/octowright/http/` package and the TypeScript `packages/octowright-frontend/`
 implement the two sides of this contract. Both subagents must keep the wire
 format here in lockstep.
 
@@ -10,6 +10,15 @@ format here in lockstep.
 - API: `/api/*`
 - WebSocket: `/api/sessions/{id}/tail`
 - WebSocket: `/api/sessions/{id}/screencast`
+- HTTP-MCP transport (follower bridge): `/mcp` — requires the `X-Octowright-Token` capability token
+- Plugin dashboard assets: `/plugins/{name}/{path}`
+
+When the dashboard bundle (`src/octowright/server/frontend/`, gitignored build
+output) is missing at startup — an editable install or fresh worktree that never
+ran the npm build — every non-`/api/` dashboard `GET` answers `404` with an HTML
+page naming the build command, and `octowright doctor` reports `dashboard:bundle`
+as WARN. An unknown `/api/` path keeps its plain-text `404`. The API and MCP tools
+work without the bundle.
 
 ## Endpoints
 
@@ -66,12 +75,24 @@ POST   /api/pair/redeem                          → {"bearer": str, "expires_at
                                                  PAIR_REDEEM_MAX_BODY_BYTES (4096) whatever OCTOWRIGHT_MAX_REQUEST_BODY_BYTES
                                                  says (413 over it), since this route is reached with no credential.
 GET    /pair                                     → the dashboard index.html (no-store); the SPA reads the code from the fragment.
+GET    /api/dashboard/events                     → text/event-stream: dashboard invalidation fanout (`dashboard_events`);
+                                                 revalidates the pairing lease on every heartbeat, which is what slides it.
+GET    /api/mcp-events                           → text/event-stream of MCP notifications for followers. Requires the
+                                                 X-Octowright-Token capability token; the browser dashboard never calls it.
+GET    /api/plugins                              → {<kind>: {moduleUrl, ...}} — renderer registry for session-kind plugins
+                                                 that declare a frontend; a kind without one is absent.
+GET    /plugins/{name}/{path}                    → one static file from an enabled plugin's frontend asset dir.
+GET    /new-tab                                  → HTML landing page for browser_launch with no URL (version, uptime, browser count).
+GET    /otto.svg                                 → image/svg+xml logo used by /new-tab.
 ```
 
 The pairing routes are exempt from dashboard pairing (they are its bootstrap) but
-not from the loopback/Host/cross-origin guard. Every other `/api/*` route above except `/api/health`
-answers `401` + `WWW-Authenticate: Bearer` without a paired bearer or the
-capability token while `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is on (the default).
+not from the loopback/Host/cross-origin guard; so are `/api/plugins`, `/plugins/{name}/{path}`
+and `/new-tab`, which the dashboard shell needs before pairing completes. `/api/mcp-events`
+is gated by the capability token instead (on a leader that has one). Every other `/api/*`
+route above except `/api/health` answers `401` + `WWW-Authenticate: Bearer` without a
+paired bearer or the capability token while `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is on
+(the default).
 
 Every JSON response is a `SafeJSONResponse` (`http/json_response.py`): an ordinary
 body is byte-identical to Starlette's `JSONResponse`, and a body holding a lone

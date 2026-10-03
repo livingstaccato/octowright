@@ -29,8 +29,10 @@ PLUGIN_API_VERSION = 1
 #: Frontend renderer contract version. Deliberately separate: collapsing the
 #: two makes the dashboard's mismatch fallback unreachable, because a
 #: version-mismatched plugin would be refused at load and never reach
-#: ``/api/plugins``. Unused until the frontend step; declared here so both
-#: versions live in one place.
+#: ``/api/plugins``. Core never compares it: the dashboard checks a plugin's
+#: declared ``renderer_api_version`` against its own copy in
+#: ``packages/octowright-frontend/src/plugin-registry.ts``. Declared here so
+#: both versions live in one place for plugin authors.
 RENDERER_API_VERSION = 1
 
 #: Closed, core-defined scenario-capability vocabulary. Core must know what a

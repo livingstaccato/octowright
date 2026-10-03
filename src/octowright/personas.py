@@ -527,9 +527,9 @@ def resolve_credential(persona: Persona, cred_name: str) -> str:
 def _credential_names(persona: Persona) -> list[str]:
     """Return the sorted list of credential names declared by a persona.
 
-    A name is any ``<name>_env`` or ``<name>_cmd`` key in credentials — the
-    same inference `resolve_credential` uses. Duplicates (both forms present
-    for one name) collapse to a single entry.
+    A name is any ``<name>_env``, ``<name>_cmd`` or ``<name>_file`` key in
+    credentials — the same inference `resolve_credential` uses. Duplicates
+    (several forms present for one name) collapse to a single entry.
     """
     names: set[str] = set()
     for key in persona.credentials:
