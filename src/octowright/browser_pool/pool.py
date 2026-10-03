@@ -249,8 +249,13 @@ class BrowserPool:
                 # A dead shared driver (its pipe closed) fails every launch until
                 # rebuilt. Reset it and retry ONCE — a second failure propagates,
                 # so there is no retry loop. Ordinary launch errors are re-raised
-                # untouched.
+                # untouched -- and so is one that only READS like driver death:
+                # a browser exiting during launch raises the same TargetClosed
+                # text, and resetting would evict every live browser for it.
                 if not driver_health.is_driver_dead_error(exc):
+                    raise
+                if await driver_health.driver_is_alive(self._pw):
+                    log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))
                     raise
                 log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
                 await self._reset_driver(reason=repr(exc))

@@ -31,7 +31,8 @@ from octowright.request_errors import InvalidRequestError
 
 #: The real failure text, captured from chromium-1243 launched with
 #: --ozone-platform=wayland against a missing socket (trimmed). Note the first
-#: line also matches driver_health's driver-dead markers.
+#: line also matches driver_health's driver-dead markers, which is why the pool
+#: confirms a dead driver with a liveness probe before resetting it.
 WAYLAND_FAILURE = (
     "BrowserType.launch: Target page, context or browser has been closed\n"
     "Browser logs:\n"
@@ -134,14 +135,16 @@ async def test_explicit_failure_does_not_fall_back(source: str) -> None:
 
 
 @pytest.mark.anyio
-async def test_explicit_failure_is_not_read_as_a_dead_driver() -> None:
-    """The raw text matches driver_health's markers; reading it as a dead
-    driver makes the pool stop the SHARED driver, taking every live browser
-    with it, for what is one browser's display problem."""
+async def test_explicit_failure_reports_the_browsers_line_and_chains_the_original() -> None:
+    """The raw text matches driver_health's markers. The message no longer has
+    to hide that line from them -- the pool confirms a dead driver with a
+    liveness probe before resetting (tests/test_driver_liveness_probe.py) --
+    but it still leads with the browser's own complaint, the useful part."""
     from octowright.browser_pool import driver_health
 
     assert driver_health.is_driver_dead_error(RuntimeError(WAYLAND_FAILURE)) is True
-    opener = _Opener(RuntimeError(WAYLAND_FAILURE))
+    original = RuntimeError(WAYLAND_FAILURE)
+    opener = _Opener(original)
     with pytest.raises(wayland.WaylandLaunchError) as excinfo:
         await launch_execution.open_with_wayland_fallback(
             decision=_decision(source="argument", requested=True),
@@ -149,7 +152,8 @@ async def test_explicit_failure_is_not_read_as_a_dead_driver() -> None:
             open_context=opener,
             cleanup=AsyncMock(),
         )
-    assert driver_health.is_driver_dead_error(excinfo.value) is False
+    assert "Chromium reported: ERROR:ui/ozone/platform/wayland/host/wayland_connection.cc" in str(excinfo.value)
+    assert excinfo.value.__cause__ is original
 
 
 @pytest.mark.anyio

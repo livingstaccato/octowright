@@ -185,9 +185,10 @@ async def open_with_wayland_fallback(
     The retry is internal to one ``pool.launch``, so engine health and the
     launch metrics see a single outcome: ``ok`` when the X11 browser opened
     (Chromium works on this machine), else the X11 attempt's error. The first
-    failure is caught HERE, before ``_launch_with_driver_retry`` sees it --
-    its text matches the dead-driver markers, and a dead-driver verdict stops
-    the shared driver and every live browser with it.
+    failure is caught HERE, before ``_launch_with_driver_retry`` sees it, so
+    the fallback stays inside this launch. (Its text matches the dead-driver
+    markers, but that alone no longer resets the shared driver: the pool
+    confirms with ``driver_health.driver_is_alive`` first.)
     """
     try:
         return await open_context(launch_kwargs), decision
