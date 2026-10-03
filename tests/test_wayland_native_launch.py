@@ -331,10 +331,6 @@ def test_launch_record_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     recorder.close()
     row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
     assert row["wayland_native"] is value
-    # A HAR-less launch records har_mode/har_url_filter/har_content as null,
-    # which from_launch_record does not accept (pre-existing, unrelated to
-    # this option); drop them so the round trip tests only wayland_native.
-    row = {k: v for k, v in row.items() if v is not None or k == "wayland_native"}
     assert LaunchOptions.from_launch_record(row).wayland_native is value
 
 

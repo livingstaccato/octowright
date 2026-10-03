@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Final
@@ -130,6 +131,17 @@ def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -
     return False, "unprotected"
 
 
+#: ``har_mode`` when none was given.
+_HAR_MODE_DEFAULT = "minimal"
+
+
+def _one_of(value: object, allowed: Collection[str]) -> bool:
+    """Membership that cannot raise: a poisoned recording can carry a list or
+    dict, which ``in`` on a set answers with ``TypeError`` (unhashable) -- a
+    500 instead of the ``InvalidRequestError`` a refused value gets."""
+    return isinstance(value, str) and value in allowed
+
+
 @dataclass(frozen=True)
 class LaunchOptions:
     kind: str = "chromium"
@@ -149,7 +161,7 @@ class LaunchOptions:
     trace: bool = False
     har: bool = False
     har_path: str | None = None
-    har_mode: str = "minimal"
+    har_mode: str = _HAR_MODE_DEFAULT
     har_url_filter: str | None = None
     har_content: str | None = None
     badge: bool = True
@@ -313,7 +325,11 @@ class LaunchOptions:
                 "trace": record.get("trace", False),
                 "har": bool(record.get("har")) and har_path is not None,
                 "har_path": har_path,
-                "har_mode": record.get("har_mode", "minimal"),
+                # The writer records har_mode as null for a launch without
+                # HAR, and the default of dict.get does not cover an explicit null.
+                # Null means "not set" here; a non-null junk value still
+                # reaches validate() and is refused.
+                "har_mode": _HAR_MODE_DEFAULT if record.get("har_mode") is None else record["har_mode"],
                 "har_url_filter": record.get("har_url_filter"),
                 "har_content": record.get("har_content"),
                 "badge": record.get("badge", True),
@@ -329,7 +345,7 @@ class LaunchOptions:
     def validate(self) -> None:
         if self.kind not in SUPPORTED_KINDS:
             raise InvalidRequestError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
-        if self.badge_position not in _BADGE_POSITIONS:
+        if not _one_of(self.badge_position, _BADGE_POSITIONS):
             raise InvalidRequestError(
                 f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {self.badge_position!r}"
             )
@@ -337,9 +353,9 @@ class LaunchOptions:
             raise InvalidRequestError("ephemeral and session are mutually exclusive")
         if self.profile and self.session:
             raise InvalidRequestError("profile and session are mutually exclusive")
-        if self.har_mode not in {"full", "minimal"}:
+        if not _one_of(self.har_mode, {"full", "minimal"}):
             raise InvalidRequestError("har_mode must be one of ['full', 'minimal']")
-        if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
+        if self.har_content is not None and not _one_of(self.har_content, {"omit", "embed", "attach"}):
             raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
         self._validate_engine_specific_options()

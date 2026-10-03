@@ -15,7 +15,9 @@ here, not editing four call sites in parallel.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -202,6 +204,93 @@ class TestFromLaunchRecord:
         assert opts_empty.url == DEFAULT_URL
         opts_blank = LaunchOptions.from_launch_record({"kind": "chromium", "url": ""})
         assert opts_blank.url == DEFAULT_URL
+
+
+# ─── a real HAR-less launch record ───────────────────────────────────────────
+
+
+def _har_less_launch_row(tmp_path: Path) -> dict[str, Any]:
+    """The ``launch`` row the real writer emits for a launch without HAR.
+
+    It writes ``har_mode``/``har_url_filter``/``har_content`` as explicit
+    ``null`` -- which ``dict.get``'s default does not cover."""
+    from octowright.recorder import Recorder
+
+    log_path = tmp_path / "s.jsonl"
+    recorder = Recorder(log_path)
+    launch_helpers._record_launch_event(
+        recorder,
+        instance_id="i1",
+        kind="chromium",
+        label=None,
+        profile=None,
+        user_data_dir=None,
+        target_url="https://x.test/",
+        headless=True,
+        log_viewport=None,
+        stabilize=False,
+        record_video=False,
+        video_dir=None,
+        trace=False,
+        har_path=None,
+        har_mode="minimal",
+        har_url_filter=None,
+        har_content=None,
+        badge=True,
+        badge_position="bottom-right",
+        tile=False,
+        ephemeral=False,
+        session=False,
+        disable_automation_controlled=False,
+    )
+    recorder.close()
+    row: dict[str, Any] = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
+    return row
+
+
+class TestHarLessLaunchRecord:
+    def test_writer_records_har_fields_as_null(self, tmp_path: Path) -> None:
+        row = _har_less_launch_row(tmp_path)
+        assert row["har_mode"] is None
+        assert row["har_url_filter"] is None
+        assert row["har_content"] is None
+
+    def test_round_trips_through_from_launch_record(self, tmp_path: Path) -> None:
+        opts = LaunchOptions.from_launch_record(_har_less_launch_row(tmp_path))
+        assert opts.har is False
+        assert opts.har_mode == "minimal"
+        assert opts.har_url_filter is None
+        assert opts.har_content is None
+        assert opts.headed is False
+        assert opts.url == "https://x.test/"
+
+    def test_http_relaunch_from_a_har_less_recording(self, tmp_path: Path) -> None:
+        from octowright.http.routes.sessions_recording import _relaunch_kwargs_from_record
+
+        kwargs = _relaunch_kwargs_from_record(_har_less_launch_row(tmp_path))
+        assert kwargs["har_mode"] == "minimal"
+        assert kwargs["har"] is False
+
+    @pytest.mark.parametrize("value", ["junk", "", 0, False, [], {}])
+    def test_a_non_null_junk_har_mode_is_still_refused(self, tmp_path: Path, value: object) -> None:
+        row = _har_less_launch_row(tmp_path)
+        row["har_mode"] = value
+        with pytest.raises(InvalidRequestError, match="har_mode must be one of"):
+            LaunchOptions.from_launch_record(row)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [("badge_position", "badge_position must be one of"), ("har_content", "har_content must be one of")],
+)
+@pytest.mark.parametrize("value", [[], {}])
+def test_an_unhashable_poisoned_value_is_refused_not_a_type_error(
+    tmp_path: Path, field: str, message: str, value: object
+) -> None:
+    row = _har_less_launch_row(tmp_path)
+    row[field] = value
+    with pytest.raises(InvalidRequestError, match=message):
+        LaunchOptions.from_launch_record(row)
 
 
 # ─── with_har_rotated ────────────────────────────────────────────────────────
