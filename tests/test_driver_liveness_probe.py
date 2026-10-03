@@ -9,7 +9,7 @@
 ("Target page, context or browser has been closed") is also what Playwright
 raises when ONE browser process exits during launch. Resetting on that text
 stopped the shared driver and evicted every live browser for one browser's
-problem. The pool now confirms the verdict with ``driver_health.driver_is_alive``
+problem. The pool now confirms the verdict with ``driver_health.driver_confirmed_dead``
 before resetting. These tests drive the real probe against a stand-in for the
 Playwright internals it reads; the real-driver measurements are in
 ``test_launch_death_keeps_driver_live.py``.
@@ -113,7 +113,7 @@ async def _noop() -> None:
 @pytest.mark.anyio
 async def test_probe_reports_a_responsive_driver_alive() -> None:
     pw, channel = _fake_pw("ok")
-    assert await driver_health.driver_is_alive(pw) is True
+    assert await driver_health.driver_confirmed_dead(pw) is False
     # The no-op round trip: traceDiscarded with an empty id returns before any
     # lookup in the driver, so it can never touch a real tracing session.
     assert channel.calls == [("traceDiscarded", None, {"stacksId": ""})]
@@ -122,14 +122,14 @@ async def test_probe_reports_a_responsive_driver_alive() -> None:
 @pytest.mark.anyio
 async def test_probe_reports_a_closed_transport_dead() -> None:
     pw, _ = _fake_pw("transport_closed")
-    assert await driver_health.driver_is_alive(pw) is False
+    assert await driver_health.driver_confirmed_dead(pw) is True
 
 
 @pytest.mark.anyio
 async def test_probe_counts_a_protocol_error_reply_as_alive() -> None:
     """A driver that answered -- even with an error -- is alive."""
     pw, _ = _fake_pw("protocol_error")
-    assert await driver_health.driver_is_alive(pw) is True
+    assert await driver_health.driver_confirmed_dead(pw) is False
 
 
 @pytest.mark.anyio
@@ -140,7 +140,7 @@ async def test_probe_reports_target_closed_from_the_send_dead() -> None:
         raise TargetClosedError()
 
     channel.send = closed  # type: ignore[method-assign]
-    assert await driver_health.driver_is_alive(pw) is False
+    assert await driver_health.driver_confirmed_dead(pw) is True
 
 
 @pytest.mark.anyio
@@ -155,31 +155,33 @@ async def test_probe_reports_target_closed_from_the_send_dead() -> None:
 )
 async def test_probe_trusts_authoritative_flags_without_a_round_trip(flags: dict[str, Any]) -> None:
     pw, channel = _fake_pw("ok", **flags)
-    assert await driver_health.driver_is_alive(pw) is False
+    assert await driver_health.driver_confirmed_dead(pw) is True
     assert channel.calls == []
 
 
 @pytest.mark.anyio
-async def test_probe_timeout_is_dead_and_bounded_even_when_cancel_hangs() -> None:
-    """A hung driver is dead, and the probe must return on its own bound --
+async def test_probe_timeout_is_not_confirmed_death_and_is_bounded_even_when_cancel_hangs() -> None:
+    """No answer in time is NOT death: real deaths always leave a local flag,
+    and a busy driver (trace zip, HAR flush) stalls the round trip -- measured
+    up to 243ms. And the probe must return on its own bound --
     ``asyncio.wait_for`` would await Playwright's cancellation, which waits for
     the very driver that is not answering."""
     pw, _ = _fake_pw("hang_and_resist_cancel")
     started = time.monotonic()
-    assert await driver_health.driver_is_alive(pw, timeout=0.05) is False
+    assert await driver_health.driver_confirmed_dead(pw, timeout=0.05) is False
     assert time.monotonic() - started < _CANCEL_RESISTANCE_S - 0.05
 
 
 @pytest.mark.anyio
 async def test_probe_without_a_driver_is_dead() -> None:
-    assert await driver_health.driver_is_alive(None) is False
+    assert await driver_health.driver_confirmed_dead(None) is True
 
 
 @pytest.mark.anyio
 async def test_probe_falls_back_to_dead_when_internals_are_missing() -> None:
     """A Playwright upgrade that moves these internals must degrade to the old
     behaviour (reset on the text verdict), not to never resetting a dead driver."""
-    assert await driver_health.driver_is_alive(SimpleNamespace()) is False
+    assert await driver_health.driver_confirmed_dead(SimpleNamespace()) is True
 
 
 # ─── the pool's use of it ────────────────────────────────────────────────────
@@ -248,16 +250,55 @@ async def test_launch_death_with_a_dead_driver_resets_and_retries_once(monkeypat
 
 
 @pytest.mark.anyio
-async def test_launch_death_with_a_hung_driver_resets(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_launch_death_with_an_unanswering_driver_does_not_reset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A probe timeout is "not confirmed dead": the original error is re-raised
+    and nothing is evicted (see browser_pool/AGENTS.md, "A hung driver")."""
     pw, _ = _fake_pw("hang_and_resist_cancel")
     monkeypatch.setattr(driver_health, "DRIVER_PROBE_TIMEOUT_SECONDS", 0.05)
-    pool, calls = _pool_with_failing_launch(monkeypatch, pw, RuntimeError("BrowserType.launch: Connection closed"))
+    error = RuntimeError("BrowserType.launch: Connection closed")
+    pool, calls = _pool_with_failing_launch(monkeypatch, pw, error)
 
-    out = await pool.launch(kind="chromium")
+    with pytest.raises(RuntimeError) as excinfo:
+        await pool.launch(kind="chromium")
 
-    assert out == {"instance_id": "retried"}
-    assert calls["n"] == 2
-    assert pool.driver_restart_count() == 1
+    assert excinfo.value is error
+    assert calls["n"] == 1
+    assert calls["evictions"] == 0
+    assert pool.driver_restart_count() == 0
+    assert pool._pw is pw
+
+
+class _HungStopDriver:
+    """A driver whose ``stop()`` never returns until its process is killed --
+    measured against a SIGSTOPped driver: ``stop()`` pending after 3s, done
+    10ms after the process was killed."""
+
+    def __init__(self) -> None:
+        self.killed = asyncio.Event()
+        proc = SimpleNamespace(returncode=None, kill=self._kill)
+        self._impl_obj = SimpleNamespace(_connection=SimpleNamespace(_transport=SimpleNamespace(_proc=proc)))
+
+    def _kill(self) -> None:
+        self.killed.set()
+
+    async def stop(self) -> None:
+        await self.killed.wait()
+
+
+@pytest.mark.anyio
+async def test_reset_driver_bounds_a_hung_stop_and_kills_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(driver_relaunch, "on_driver_reset", lambda *_a, **_k: None)
+    pool = BrowserPool()
+    hung = _HungStopDriver()
+    pool._pw = hung  # type: ignore[assignment]
+
+    started = time.monotonic()
+    await pool._reset_driver(reason="test")
+
+    assert time.monotonic() - started < 1.0
+    assert hung.killed.is_set()
+    assert pool._pw is None
 
 
 # ─── the probe must not misread, or consume, Playwright's own state ──────────
@@ -292,7 +333,7 @@ async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed() 
     channel = _InnerSendChannel(connection)
     connection.local_utils = SimpleNamespace(_channel=channel)
 
-    assert await driver_health.driver_is_alive(pw) is True
+    assert await driver_health.driver_confirmed_dead(pw) is False
     assert channel.calls, "the round trip must still reach the driver"
     assert connection._error is stored
 
@@ -305,7 +346,7 @@ async def test_a_probe_task_that_ends_cancelled_does_not_raise() -> None:
         raise asyncio.CancelledError
 
     channel.send = cancelled  # type: ignore[method-assign]
-    assert await driver_health.driver_is_alive(pw) is False
+    assert await driver_health.driver_confirmed_dead(pw) is False
 
 
 @pytest.mark.anyio
@@ -323,7 +364,7 @@ async def test_cancelling_the_caller_leaves_no_unretrieved_probe_exception() -> 
             raise Exception("Connection closed while reading from the driver")
 
         channel.send = fails_later  # type: ignore[method-assign]
-        caller = asyncio.ensure_future(driver_health.driver_is_alive(pw, timeout=30))
+        caller = asyncio.ensure_future(driver_health.driver_confirmed_dead(pw, timeout=30))
         await asyncio.sleep(0.01)
         caller.cancel()
         with pytest.raises(asyncio.CancelledError):

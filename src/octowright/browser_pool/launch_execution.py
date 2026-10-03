@@ -188,7 +188,7 @@ async def open_with_wayland_fallback(
     failure is caught HERE, before ``_launch_with_driver_retry`` sees it, so
     the fallback stays inside this launch. (Its text matches the dead-driver
     markers, but that alone no longer resets the shared driver: the pool
-    confirms with ``driver_health.driver_is_alive`` first.)
+    confirms with ``driver_health.driver_confirmed_dead`` first.)
     """
     try:
         return await open_context(launch_kwargs), decision

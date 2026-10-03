@@ -158,10 +158,9 @@ class BrowserPool:
         self._driver_restarts += 1
         driver_relaunch.on_driver_reset(self, reason=reason)
         if old is not None:
-            try:
-                await old.stop()
-            except Exception as exc:
-                log.debug("octowright.pool.driver_stop_failed", error=repr(exc))
+            # Bounded, killing the process on timeout: an unbounded stop of a
+            # hung driver never returns (driver_health.stop_driver).
+            await driver_health.stop_driver(old)
 
     def driver_restart_count(self) -> int:
         """How many times the shared driver has been rebuilt after a death."""
@@ -254,7 +253,7 @@ class BrowserPool:
                 # text, and resetting would evict every live browser for it.
                 if not driver_health.is_driver_dead_error(exc):
                     raise
-                if await driver_health.driver_is_alive(self._pw):
+                if not await driver_health.driver_confirmed_dead(self._pw):
                     log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))
                     raise
                 log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))

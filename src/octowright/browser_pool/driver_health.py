@@ -25,8 +25,8 @@ raises ``TargetClosedError: BrowserType.launch: Target page, context or browser
 has been closed`` while the driver stays healthy and every other browser stays
 usable). Resetting on that text stopped the shared driver and evicted every live
 browser for one browser's problem. So a reset additionally requires
-``driver_is_alive`` to say the driver is gone -- see its docstring for what it
-checks and what was measured.
+``driver_confirmed_dead`` to find evidence the driver is gone -- see its
+docstring for what it checks and what was measured.
 """
 
 from __future__ import annotations
@@ -40,10 +40,16 @@ from provide.telemetry import get_logger
 log = get_logger(__name__)
 
 #: Bound on the liveness round trip. Measured on Playwright 1.63: 0.57ms median,
-#: 4.6ms max idle; 1.1ms median, 7.4ms max with three pages navigating. Two
-#: seconds is ~300x the worst observed, so a busy event loop does not read as a
-#: dead driver -- a false "dead" is the bug this probe exists to prevent.
+#: 4.6ms max idle; 1.1ms median, 7.4ms max with three pages navigating; 243ms
+#: max while the driver zipped a trace and flushed a 120MB embedded HAR. No
+#: answer within it is NOT death (see ``driver_confirmed_dead``), so this only
+#: bounds how long a launch failure waits before it is re-raised.
 DRIVER_PROBE_TIMEOUT_SECONDS: Final = 2.0
+
+#: Bound on ``Playwright.stop()`` during a reset. Measured: 0.1ms against a
+#: SIGKILLed driver; never returns against a SIGSTOPped one (pending after 3s),
+#: and returns 10ms after that process is killed.
+DRIVER_STOP_TIMEOUT_SECONDS: Final = 5.0
 
 # Substrings that only appear when the driver connection/transport itself is gone,
 # not when a single browser action fails. Lower-cased compare.
@@ -135,22 +141,30 @@ def _restore_error(connection: Any, stored: BaseException | None) -> None:
         connection._error = stored
 
 
-async def driver_is_alive(pw: Any, *, timeout: float | None = None) -> bool:
-    """True only when the shared driver demonstrably answers.
+async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> bool:
+    """True only on EVIDENCE that the shared driver is gone.
 
-    1. No handle, or Playwright internals this cannot read -> ``False``
-       (dead): the caller then behaves as it did before this check existed.
-    2. ``_flagged_dead`` -> ``False``.
+    1. No handle, or Playwright internals this cannot read -> ``True``: the
+       caller then behaves as it did before this check existed (reset on the
+       text verdict), not "never reset".
+    2. ``_flagged_dead`` -> ``True``.
     3. A real protocol round trip, bounded by ``timeout``
        (``DRIVER_PROBE_TIMEOUT_SECONDS``): ``localUtils.traceDiscarded`` with
        an empty ``stacksId``. The driver returns before any lookup for a falsy
-       id, so it cannot touch a real tracing session. An answer -- success, or
-       a protocol error the driver sent back -- is alive. ``TargetClosedError``,
+       id, so it cannot touch a real tracing session. ``TargetClosedError`` or
        a transport error (``Connection closed while reading from the driver``,
-       measured after SIGKILL, <1ms; it always leaves ``_flagged_dead`` true),
-       or no answer in time is dead. Any other exception is a listener error
-       that reached the send in the window before it started (see
-       ``_start_probe``); it is put back and the round trip tried once more.
+       measured after SIGKILL, <1ms; it always leaves ``_flagged_dead`` true)
+       is dead. An answer -- success, or a protocol error the driver sent
+       back -- is alive. Any other exception is a listener error that reached
+       the send in the window before it started (see ``_start_probe``); it is
+       put back and the round trip tried once more.
+    4. **No answer in time is NOT confirmed death** -> ``False``. Every real
+       death measured leaves a local flag (step 2) -- after SIGKILL, after
+       ``stop()`` -- so a silent driver is one that is busy (a trace zip or HAR
+       flush stalled the round trip up to 243ms, measured) or hung (SIGSTOPped).
+       A reset evicts every live browser, which is the wrong answer for a busy
+       driver; and a hung one is not where this is reached from, since a launch
+       against it hangs rather than raising a dead-driver error.
 
     The bound uses ``asyncio.wait``, NOT ``asyncio.wait_for``: cancelling a
     Playwright channel send runs ``Connection._abort``, which waits for the
@@ -159,29 +173,63 @@ async def driver_is_alive(pw: Any, *, timeout: float | None = None) -> bool:
     unanswered send is left to finish (or fail) on its own.
     """
     if pw is None:
-        return False
+        return True
     bound = DRIVER_PROBE_TIMEOUT_SECONDS if timeout is None else timeout
     deadline = asyncio.get_running_loop().time() + bound
     for _attempt in range(2):
         try:
             connection = _connection_of(pw)
             if _flagged_dead(connection):
-                return False
+                return True
             task = _start_probe(connection)
         except Exception as exc:
             log.warning("octowright.pool.driver_probe_unavailable", error=repr(exc))
-            return False
+            return True
         remaining = max(0.0, deadline - asyncio.get_running_loop().time())
         done, _ = await asyncio.wait({task}, timeout=remaining)
         if not done or task.cancelled():
-            log.info("octowright.pool.driver_probe_timed_out", timeout_s=bound, cancelled=bool(done))
+            log.info("octowright.pool.driver_probe_unanswered", timeout_s=bound, cancelled=bool(done))
             return False
-        error = task.exception()
-        if error is None:
-            return True
-        if _is_target_closed(error) or _flagged_dead(connection):
-            return False
-        if isinstance(error, PlaywrightError):
-            return True  # the driver answered, with a refusal
-        connection._error = error  # newest wins, as in Playwright's own handler
+        verdict = _answer_verdict(task.exception(), connection)
+        if verdict is not None:
+            return verdict
     return False
+
+
+def _answer_verdict(error: BaseException | None, connection: Any) -> bool | None:
+    """Confirmed-dead verdict for a probe that finished; ``None`` = try again.
+
+    ``None`` is a listener error that reached the send in the window before it
+    started (see ``_start_probe``): it is put back for the caller's next call."""
+    if error is None:
+        return False
+    if _is_target_closed(error) or _flagged_dead(connection):
+        return True
+    if isinstance(error, PlaywrightError):
+        return False  # the driver answered, with a refusal
+    connection._error = error  # newest wins, as in Playwright's own handler
+    return None
+
+
+async def stop_driver(pw: Any) -> None:
+    """``pw.stop()``, bounded; on timeout kill the driver process so the stop
+    (and every call still waiting on that driver) finishes.
+
+    A reset clears the pool's handle before stopping, so nothing waits on this
+    but the reset itself -- yet an unbounded stop of a hung driver held the
+    launch that triggered the reset forever (measured: pending after 3s
+    against a SIGSTOPped driver; done 10ms after the process was killed)."""
+    task = asyncio.ensure_future(pw.stop())
+    task.add_done_callback(_consume)
+    done, _ = await asyncio.wait({task}, timeout=DRIVER_STOP_TIMEOUT_SECONDS)
+    if done:
+        if not task.cancelled() and task.exception() is not None:
+            log.debug("octowright.pool.driver_stop_failed", error=repr(task.exception()))
+        return
+    log.warning("octowright.pool.driver_stop_timed_out", timeout_s=DRIVER_STOP_TIMEOUT_SECONDS)
+    try:
+        pw._impl_obj._connection._transport._proc.kill()
+    except (AttributeError, ProcessLookupError, OSError) as exc:
+        log.warning("octowright.pool.driver_kill_failed", error=repr(exc))
+        return
+    await asyncio.wait({task}, timeout=DRIVER_STOP_TIMEOUT_SECONDS)

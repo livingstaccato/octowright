@@ -11,7 +11,7 @@ any host, headless or not, and it produces exactly the error that used to be
 read as driver death (``TargetClosedError: BrowserType.launch: Target page,
 context or browser has been closed``). The probe tests run against a real
 Playwright driver, so a Playwright upgrade that moves the internals
-``driver_health.driver_is_alive`` reads fails here rather than silently
+``driver_health.driver_confirmed_dead`` reads fails here rather than silently
 degrading to the old reset-on-text behaviour.
 """
 
@@ -107,18 +107,42 @@ async def test_probe_against_a_real_driver() -> None:
 
     pw = await async_playwright().start()
     try:
-        assert await driver_health.driver_is_alive(pw) is True
+        assert await driver_health.driver_confirmed_dead(pw) is False
         proc = pw._impl_obj._connection._transport._proc
         proc.kill()  # portable: SIGKILL on POSIX, TerminateProcess on Windows
         await proc.wait()
-        assert await driver_health.driver_is_alive(pw) is False
+        assert await driver_health.driver_confirmed_dead(pw) is True
     finally:
         try:
             await pw.stop()
         except Exception:
             pass
-    assert await driver_health.driver_is_alive(pw) is False
+    assert await driver_health.driver_confirmed_dead(pw) is True
 
     stopped = await async_playwright().start()
     await stopped.stop()
-    assert await driver_health.driver_is_alive(stopped) is False
+    assert await driver_health.driver_confirmed_dead(stopped) is True
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(os.name == "nt", reason="SIGSTOP is POSIX-only")
+async def test_a_hung_driver_is_not_confirmed_dead_and_its_stop_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Measured: a SIGSTOPped driver shows no local flag, never answers, and
+    ``Playwright.stop()`` against it does not return. The probe must not call
+    that death; a reset that does happen must still return, killing it."""
+    import signal
+
+    from playwright.async_api import async_playwright
+
+    monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.5)
+    pw = await async_playwright().start()
+    proc = pw._impl_obj._connection._transport._proc
+    os.kill(proc.pid, signal.SIGSTOP)
+    try:
+        assert await driver_health.driver_confirmed_dead(pw, timeout=0.3) is False
+        await driver_health.stop_driver(pw)
+        assert proc.returncode is not None or await proc.wait() is not None
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()

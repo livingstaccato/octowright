@@ -77,7 +77,7 @@ class WaylandLaunchError(RuntimeError):
     Playwright's first line; the full original stays on ``__cause__``. That the
     raw text matches ``driver_health``'s dead-driver markers no longer matters:
     the pool confirms a dead driver with a liveness probe before resetting it
-    (``driver_health.driver_is_alive``), so one browser's display problem cannot
+    (``driver_health.driver_confirmed_dead``), so one browser's display problem cannot
     stop the shared driver.
     """
 
