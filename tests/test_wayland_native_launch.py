@@ -103,6 +103,28 @@ async def test_auto_failure_retries_once_without_the_flags() -> None:
 
 
 @pytest.mark.anyio
+async def test_auto_does_not_fall_back_when_the_browser_did_not_blame_wayland() -> None:
+    """A failure with no Wayland complaint (a locked profile, a missing
+    library) would fail identically on X11: retrying doubled the launch time
+    and reported an unrelated error as the Wayland reason."""
+    unrelated = RuntimeError(
+        "BrowserType.launch_persistent_context: Target page, context or browser has been closed\n"
+        "Browser logs:\n<launching> /cache/chrome --ozone-platform=wayland --user-data-dir=/p\n"
+        "[pid=1][err] The profile appears to be in use by another Chromium process\n"
+    )
+    opener = _Opener(unrelated, "opened")
+    cleanup = AsyncMock()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await launch_execution.open_with_wayland_fallback(
+            decision=_decision(), launch_kwargs=ON_ARGS, open_context=opener, cleanup=cleanup
+        )
+    assert excinfo.value is unrelated
+    assert len(opener.calls) == 1
+    cleanup.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_a_second_failure_raises_the_x11_error() -> None:
     second = RuntimeError("x11 also broken")
     opener = _Opener(RuntimeError(WAYLAND_FAILURE), second)

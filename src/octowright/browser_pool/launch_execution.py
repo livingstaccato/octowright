@@ -175,7 +175,8 @@ async def open_with_wayland_fallback(
     """Open the browser; if a native-Wayland launch fails, retry ONCE with X11
     forced (``wayland.x11_retry_kwargs``).
 
-    Only AUTO falls back. Auto chose Wayland on the caller's behalf from a socket
+    Only AUTO falls back, and only when the browser blamed Wayland
+    (``wayland.mentions_wayland``). Auto chose Wayland on the caller's behalf from a socket
     that exists -- which says nothing about whether a compositor answers on it --
     so its failure must not cost the caller a browser. An explicit request
     (argument, or ``OCTOWRIGHT_WAYLAND_NATIVE=on``) fails loudly instead: quietly
@@ -202,12 +203,14 @@ async def open_with_wayland_fallback(
         raise
     except Exception as exc:
         await cleanup()
-        if not decision.effective:
+        # Only a failure the browser itself blamed on Wayland is Wayland's: any
+        # other (locked profile, missing library) fails identically on X11, so
+        # an auto retry would double the launch time and report an unrelated
+        # error as the Wayland reason.
+        if not decision.effective or not wayland_mod.mentions_wayland(exc):
             raise
         if decision.source != "auto":
-            if wayland_mod.mentions_wayland(exc):
-                raise wayland_mod.explicit_failure(decision, exc) from exc
-            raise
+            raise wayland_mod.explicit_failure(decision, exc) from exc
         decision = decision.fell_back(exc)
         log.warning(
             "octowright.launch.wayland_fallback_x11",
