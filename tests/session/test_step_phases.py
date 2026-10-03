@@ -86,9 +86,11 @@ async def test_a_fill_timeout_names_the_phase_that_spent_the_budget() -> None:
     # The metadata phase sleeps 150ms. Not ">= 150": Windows' ~15.6ms timer
     # granularity measured it as 140 (#270). What the test means is that
     # metadata clearly spent the budget, so it is bounded loosely below and
-    # compared with the phase that did no work.
+    # compared with the phase that did no work -- which keeps an absolute
+    # ceiling, so a phase misattributing the sleep to attach still fails.
     metadata, attach = _ms(message, "metadata"), _ms(message, "attach")
     assert metadata >= 100
+    assert attach < 50
     assert metadata > attach
     assert "fill (timed out)" in message
     assert "secret" not in message
