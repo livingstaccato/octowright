@@ -18,6 +18,7 @@ import yaml
 from provide.telemetry import get_logger
 
 from octowright._paths import reject_unsafe_path
+from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.download_history import prune_download_history
 from octowright.browser_pool.restore_prompt import clear_crash_restore_prompt
 from octowright.browser_pool.singleton_locks import prune_stale_singleton_locks
@@ -392,6 +393,42 @@ async def _prepare_session_user_data_dir(kind: str, session_dir: Path) -> None:
     await _prune_chromium_download_history(kind, session_dir)
 
 
+async def _prepare_persistent_user_data_dir(
+    *, kind: str, profile: str | None, session_user_data_dir: str | None, launch_kwargs: dict[str, Any]
+) -> tuple[str | None, dict[str, Any]]:
+    """Ready the directory a persistent launch opens; return it and the launch
+    kwargs (a persona's trust settings join them)."""
+    if not profile:
+        if session_user_data_dir is not None:
+            await _prepare_session_user_data_dir(kind, Path(session_user_data_dir))
+        return session_user_data_dir, launch_kwargs
+    pdir = engine_profile_dir(persona=profile, kind=kind)
+    pdir.mkdir(parents=True, exist_ok=True)
+    # Live session cookies live here; Firefox/WebKit write them 0644
+    # into an 0755 tree. See octowright.private_paths.
+    secure_profile_tree(pdir, PROFILES_DIR)
+    # A profile whose browser died without cleaning up — or whose lock
+    # socket went with a temp-dir sweep — keeps a lock naming a pid that
+    # no longer exists, and Chromium then refuses the profile ("already
+    # in use") on every future launch. Only a confirmed-dead local owner
+    # is pruned; see singleton_locks.
+    prune_stale_singleton_locks(pdir)
+    # A browser that died without an orderly shutdown also leaves the
+    # profile marked crashed, so every later launch opens behind a
+    # "Restore pages?" bubble covering the page we just navigated to.
+    # See restore_prompt.
+    clear_crash_restore_prompt(pdir)
+    await _prune_chromium_download_history(kind, pdir)
+    # Scoped trust: a persona's roots reach its own Chromium only.
+    # Applied here because the daemon and `octowright test` both open
+    # persistent contexts through this function. See persona_trust.
+    # Off the loop: an rmtree plus certutil runs with 30s timeouts.
+    from octowright import persona_trust
+
+    trust_kwargs = await asyncio.to_thread(persona_trust.persona_trust_launch_kwargs, profile, kind)
+    return str(pdir), {**launch_kwargs, **trust_kwargs}
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -410,74 +447,47 @@ async def _open_browser_context(
     """Open a Playwright BrowserContext + Page. Persistent profile and
     session-tmpdir paths both go through launch_persistent_context (no
     standalone Browser); the ephemeral path goes through Browser.new_context.
-    Cleanup-on-error is handled by the caller's outer except block.
 
     Returns (browser, context, page, user_data_dir). browser is None for the
-    persistent path."""
+    persistent path.
+
+    Owns its own cleanup from the engine launch on: a failure -- or a
+    cancellation, which is how the launch deadline and a client disconnect
+    arrive -- in any later step (opening the context or page, installing the
+    routes) closes what was launched before re-raising. Nothing is returned
+    on that path, so the caller's cleanup only ever sees ``context=None``; a
+    browser left to it stayed running and, on a persistent profile, kept the
+    ``SingletonLock`` that fails every later launch of that profile."""
     ctx_base_url_kwargs = base_url_kwargs(profile, base_url)
     ctx_headers_kwargs = extra_http_headers_kwargs(extra_http_headers, extra_http_headers_urls)
-    if profile or session_user_data_dir:
-        if profile:
-            pdir = engine_profile_dir(persona=profile, kind=kind)
-            pdir.mkdir(parents=True, exist_ok=True)
-            # Live session cookies live here; Firefox/WebKit write them 0644
-            # into an 0755 tree. See octowright.private_paths.
-            secure_profile_tree(pdir, PROFILES_DIR)
-            user_data_dir: str | None = str(pdir)
-            # A profile whose browser died without cleaning up — or whose lock
-            # socket went with a temp-dir sweep — keeps a lock naming a pid that
-            # no longer exists, and Chromium then refuses the profile ("already
-            # in use") on every future launch. Only a confirmed-dead local owner
-            # is pruned; see singleton_locks.
-            prune_stale_singleton_locks(pdir)
-            # A browser that died without an orderly shutdown also leaves the
-            # profile marked crashed, so every later launch opens behind a
-            # "Restore pages?" bubble covering the page we just navigated to.
-            # See restore_prompt.
-            clear_crash_restore_prompt(pdir)
-            await _prune_chromium_download_history(kind, pdir)
-            # Scoped trust: a persona's roots reach its own Chromium only.
-            # Applied here because the daemon and `octowright test` both open
-            # persistent contexts through this function. See persona_trust.
-            # Off the loop: an rmtree plus certutil runs with 30s timeouts.
-            from octowright import persona_trust
-
-            trust_kwargs = await asyncio.to_thread(persona_trust.persona_trust_launch_kwargs, profile, kind)
-            launch_kwargs = {**launch_kwargs, **trust_kwargs}
+    ctx_kwargs = {**ctx_base_url_kwargs, **ctx_headers_kwargs, **viewport_kwargs, **ctx_video_kwargs, **ctx_har_kwargs}
+    persistent = bool(profile or session_user_data_dir)
+    user_data_dir: str | None = None
+    if persistent:
+        user_data_dir, launch_kwargs = await _prepare_persistent_user_data_dir(
+            kind=kind, profile=profile, session_user_data_dir=session_user_data_dir, launch_kwargs=launch_kwargs
+        )
+    browser: Any = None
+    context: Any = None
+    try:
+        if persistent:
+            context = await browser_type.launch_persistent_context(
+                user_data_dir, headless=headless, accept_downloads=True, **ctx_kwargs, **launch_kwargs
+            )
+            page = await select_launch_page(context)
         else:
-            user_data_dir = session_user_data_dir
-            if session_user_data_dir is not None:
-                await _prepare_session_user_data_dir(kind, Path(session_user_data_dir))
-        context = await browser_type.launch_persistent_context(
-            user_data_dir,
-            headless=headless,
-            accept_downloads=True,
-            **ctx_base_url_kwargs,
-            **ctx_headers_kwargs,
-            **viewport_kwargs,
-            **ctx_video_kwargs,
-            **ctx_har_kwargs,
-            **launch_kwargs,
-        )
-        browser = None
-        page = await select_launch_page(context)
-    else:
-        browser = await browser_type.launch(headless=headless, **launch_kwargs)
-        context = await browser.new_context(
-            accept_downloads=True,
-            **ctx_base_url_kwargs,
-            **ctx_headers_kwargs,
-            **viewport_kwargs,
-            **ctx_video_kwargs,
-            **ctx_har_kwargs,
-        )
-        page = await context.new_page()
-        user_data_dir = None
-    # Pre-flight SSRF checks only see the URL that was asked for; a redirect
-    # is a different host, and a subresource was never asked for at all. No-op
-    # unless a policy is enabled. Registration order is load-bearing -- see
-    # install_context_routes.
-    await install_context_routes(context, extra_http_headers, extra_http_headers_urls)
+            browser = await browser_type.launch(headless=headless, **launch_kwargs)
+            context = await browser.new_context(accept_downloads=True, **ctx_kwargs)
+            page = await context.new_page()
+        # Pre-flight SSRF checks only see the URL that was asked for; a redirect
+        # is a different host, and a subresource was never asked for at all. No-op
+        # unless a policy is enabled. Registration order is load-bearing -- see
+        # install_context_routes.
+        await install_context_routes(context, extra_http_headers, extra_http_headers_urls)
+    except BaseException:
+        # Shielded inside, so a repeated cancellation cannot abort it halfway.
+        await cleanup_on_launch_failure(context=context, browser=browser, video_dir=None)
+        raise
     return browser, context, page, user_data_dir
 
 

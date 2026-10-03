@@ -104,8 +104,8 @@ async def launch_profile_locked(
         )
 
     async def cleanup() -> None:
-        # Nothing was assigned when _open_browser_context raised, so there is
-        # no context or browser to close here -- only the video dir to tidy.
+        # _open_browser_context closes any browser it launched before raising,
+        # so there is no context or browser to close here -- only the video dir.
         await cleanup_failed_launch(
             registered=False,
             context=None,
