@@ -467,8 +467,25 @@ class BrowserPool:
         # ``relaunch_fluid_browser`` / ``RelaunchSnapshot``.
         return await relaunch_fluid_browser(self, instance_id)
 
+    def profile_users(self, profile: str, *, kind: str | None = None) -> list[tuple[str, bool]]:
+        """``(instance_id, closing)`` for every browser holding ``profile`` open.
+
+        Includes sessions still draining in ``_closing_sessions``: the close
+        coordinator drops a session from ``_sessions`` once its ticket owns
+        the gate, which is BEFORE teardown releases the profile directory, so
+        a deletion that read ``_sessions`` alone removed live database files
+        out from under a closing browser. ``kind=None`` matches every engine.
+        """
+        users: dict[int, tuple[str, bool]] = {}
+        closing = [(entry.session, True) for entry in tuple(self._closing_sessions.values())]
+        live = [(s, False) for s in tuple(self._sessions.values())]
+        for session, is_closing in closing + live:
+            if (kind is None or session.kind == kind) and profile_names_match(session.profile, profile):
+                users.setdefault(id(session), (session.instance_id, is_closing))
+        return sorted(users.values())
+
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
+        return bool(self.profile_users(profile, kind=kind))
 
     def _accept_external_close_nowait(
         self,

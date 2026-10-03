@@ -46,23 +46,24 @@ def test_persona_get_maps_fields(_patch_deps: dict[str, MagicMock]) -> None:
 
 
 async def test_profile_delete_refuses_when_in_use(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].profile_in_use.return_value = True
-    _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-1", "kind": "webkit", "profile": "cosmo"}]
-    with pytest.raises(RuntimeError):
+    _patch_deps["pool"].profile_users.return_value = [("i-1", False)]
+    with pytest.raises(RuntimeError, match="i-1"):
         await _personas.profile_delete("webkit", "cosmo")
+    _patch_deps["pool"].profile_users.assert_called_once_with("cosmo", kind="webkit")
+    _patch_deps["profile"].delete_profile.assert_not_called()
 
 
-async def test_profile_delete_refusal_matches_slug_alias(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].profile_in_use.return_value = True
-    _patch_deps["pool"].list_sessions.return_value = [
-        {"instance_id": "i-alias", "kind": "webkit", "profile": "cosmo one"}
-    ]
-    with pytest.raises(RuntimeError, match="i-alias"):
-        await _personas.profile_delete("webkit", "cosmo-one")
+async def test_profile_delete_refuses_while_a_browser_is_still_closing(_patch_deps: dict[str, MagicMock]) -> None:
+    """A browser mid-teardown still has the directory open: deleting under it
+    removes live database files the closing browser may then rewrite."""
+    _patch_deps["pool"].profile_users.return_value = [("i-closing", True)]
+    with pytest.raises(RuntimeError, match="i-closing.*closing"):
+        await _personas.profile_delete("webkit", "cosmo")
+    _patch_deps["profile"].delete_profile.assert_not_called()
 
 
 async def test_profile_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].profile_in_use.return_value = False
+    _patch_deps["pool"].profile_users.return_value = []
     _patch_deps["profile"].delete_profile.return_value = "/tmp/prof"
     out = await _personas.profile_delete("chromium", "ziggy")
     assert out["deleted"] is True
@@ -81,19 +82,21 @@ def test_persona_create_success(_patch_deps: dict[str, MagicMock]) -> None:
 
 
 async def test_persona_delete_refuses_live_instance(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-2", "profile": "cosmo"}]
-    with pytest.raises(RuntimeError):
+    _patch_deps["pool"].profile_users.return_value = [("i-2", False)]
+    with pytest.raises(RuntimeError, match="i-2"):
         await _personas.persona_delete("cosmo")
+    _patch_deps["pool"].profile_users.assert_called_once_with("cosmo")
 
 
-async def test_persona_delete_refuses_live_slug_alias(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].list_sessions.return_value = [{"instance_id": "i-alias", "profile": "cosmo one"}]
-    with pytest.raises(RuntimeError, match="i-alias"):
-        await _personas.persona_delete("cosmo-one")
+async def test_persona_delete_refuses_while_a_browser_is_still_closing(_patch_deps: dict[str, MagicMock]) -> None:
+    _patch_deps["pool"].profile_users.return_value = [("i-closing", True)]
+    with pytest.raises(RuntimeError, match="i-closing.*closing"):
+        await _personas.persona_delete("cosmo")
+    _patch_deps["profile"].delete_persona.assert_not_called()
 
 
 async def test_persona_delete_success(_patch_deps: dict[str, MagicMock]) -> None:
-    _patch_deps["pool"].list_sessions.return_value = []
+    _patch_deps["pool"].profile_users.return_value = []
     _patch_deps["profile"].delete_persona.return_value = "/tmp/cosmo"
     out = await _personas.persona_delete("cosmo")
     assert out["deleted"] is True
@@ -104,7 +107,7 @@ async def test_profile_delete_waits_for_profile_lifecycle_lock(_patch_deps: dict
 
     from octowright.profile_lifecycle import profile_lifecycle_lock
 
-    _patch_deps["pool"].profile_in_use.return_value = False
+    _patch_deps["pool"].profile_users.return_value = []
     _patch_deps["profile"].delete_profile.return_value = "/tmp/prof"
 
     async with profile_lifecycle_lock("chromium", "cosmo"):
@@ -121,7 +124,7 @@ async def test_persona_delete_waits_for_every_engine_profile_lock(_patch_deps: d
 
     from octowright.profile_lifecycle import profile_lifecycle_lock
 
-    _patch_deps["pool"].list_sessions.return_value = []
+    _patch_deps["pool"].profile_users.return_value = []
     _patch_deps["profile"].delete_persona.return_value = "/tmp/cosmo"
 
     async with profile_lifecycle_lock("firefox", "cosmo"):
