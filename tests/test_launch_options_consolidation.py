@@ -159,6 +159,21 @@ class TestFromLaunchRecord:
         opts = LaunchOptions.from_launch_record({"kind": "chromium"})
         assert opts.disable_automation_controlled is False
 
+    @pytest.mark.parametrize("value", [None, "false", "true", 0, 1, [], {}])
+    def test_a_non_boolean_headed_is_refused_not_read_as_headless(self, value: object) -> None:
+        # The writer always records the resolved bool, so anything else came from
+        # a corrupt or poisoned file. Read loosely, a null meant auto-resolve
+        # (headless on a display-less host) and "false" meant headed.
+        with pytest.raises(InvalidRequestError, match="headed must be a boolean"):
+            LaunchOptions.from_launch_record({"kind": "chromium", "headed": value})
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_boolean_headed_is_restored(self, value: bool) -> None:
+        assert LaunchOptions.from_launch_record({"kind": "chromium", "headed": value}).headed is value
+
+    def test_a_record_without_headed_keeps_the_historical_headed_default(self) -> None:
+        assert LaunchOptions.from_launch_record({"kind": "chromium"}).headed is True
+
     def test_viewport_dict_unpacks_to_w_h(self) -> None:
         record = {
             "kind": "chromium",

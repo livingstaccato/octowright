@@ -297,6 +297,12 @@ class LaunchOptions:
         ``kind``/``badge_position``/``har_mode``/``har_content`` values, and
         the ``har_path`` containment check below blocks write-anywhere.
         """
+        # The writer always records the RESOLVED bool, so anything else is a
+        # corrupt or poisoned file. Read loosely, a null became "auto" (headless
+        # on a display-less host) and the string "false" became headed.
+        headed = record.get("headed", True)
+        if not isinstance(headed, bool):
+            raise InvalidRequestError("headed must be a boolean in a launch record")
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
         har_path = record.get("har_path")
         if har_path is not None:
@@ -319,7 +325,7 @@ class LaunchOptions:
                 "profile": record.get("profile"),
                 "viewport_w": viewport.get("w") if viewport else None,
                 "viewport_h": viewport.get("h") if viewport else None,
-                "headed": record.get("headed", True),
+                "headed": headed,
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
                 "trace": record.get("trace", False),
