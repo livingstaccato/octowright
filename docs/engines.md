@@ -69,6 +69,28 @@ Launch recordings, handoff, and fluid relaunch preserve the setting. Therefore,
 use a close plus a new launch—not handoff/fluid relaunch—when returning to the
 default after sign-in.
 
+## Native Wayland on Linux (trackpad pinch-to-zoom)
+
+Headed Chromium launched by the daemon on a Linux Wayland desktop can start as
+an X11 client under XWayland (in the field report the daemon's environment had
+`XDG_SESSION_TYPE=unspecified` while `WAYLAND_DISPLAY` and `DISPLAY` were both
+set, and Chromium picked X11) -- and XWayland drops touchpad pinch gestures, so
+a page never sees a pinch. `browser_launch(wayland_native=...)` makes Chromium a
+native Wayland client with the fixed flags `--ozone-platform=wayland
+--enable-features=WaylandWindowDecorations`.
+
+| `wayland_native` | Behaviour |
+|---|---|
+| unset (auto) | On only for headed Chromium on Linux when `WAYLAND_DISPLAY` names a socket that exists. A failed Wayland launch is retried once with `--ozone-platform=x11` forced (Chromium would otherwise pick Wayland again from `XDG_SESSION_TYPE`) and reported (`wayland_warning`). |
+| `true` | Forced on. Chromium on Linux only (refused otherwise); not applied to headless. A failure is raised, with no X11 fallback. |
+| `false` | Forced off (X11/XWayland). |
+
+`OCTOWRIGHT_WAYLAND_NATIVE=on|off|auto` sets the daemon-wide default; the
+argument wins. Every Chromium launch result carries a `wayland_native` block
+(`requested`, `source`, `effective`, `reason`, and `fallback_reason` after a
+fallback). Launch recordings, handoff and fluid relaunch keep the *request*, so
+auto stays auto and re-detects. Firefox and WebKit are unaffected.
+
 ## Launch mode (headed vs headless)
 
 Mode is environment-driven, with one explicit override:

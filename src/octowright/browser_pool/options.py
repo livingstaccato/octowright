@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Final
 
 from octowright import defaults
+from octowright.browser_pool import wayland
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
 from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
@@ -129,6 +131,17 @@ def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -
     return False, "unprotected"
 
 
+#: ``har_mode`` when none was given.
+_HAR_MODE_DEFAULT = "minimal"
+
+
+def _one_of(value: object, allowed: Collection[str]) -> bool:
+    """Membership that cannot raise: a poisoned recording can carry a list or
+    dict, which ``in`` on a set answers with ``TypeError`` (unhashable) -- a
+    500 instead of the ``InvalidRequestError`` a refused value gets."""
+    return isinstance(value, str) and value in allowed
+
+
 @dataclass(frozen=True)
 class LaunchOptions:
     kind: str = "chromium"
@@ -148,7 +161,7 @@ class LaunchOptions:
     trace: bool = False
     har: bool = False
     har_path: str | None = None
-    har_mode: str = "minimal"
+    har_mode: str = _HAR_MODE_DEFAULT
     har_url_filter: str | None = None
     har_content: str | None = None
     badge: bool = True
@@ -208,6 +221,14 @@ class LaunchOptions:
     #: This changes the browser-exposed ``navigator.webdriver`` signal only; it is
     #: not a promise that the browser is undetectable as automated.
     disable_automation_controlled: bool = False
+    #: Run headed Chromium on Linux as a native Wayland client instead of an
+    #: X11 client under XWayland, which drops touchpad pinch gestures. ``None``
+    #: is AUTO (on only where a Wayland compositor socket exists, falling back
+    #: to X11 if that launch fails); ``True``/``False`` force it. A fixed flag
+    #: set, so no ``OCTOWRIGHT_ALLOW_EXECUTABLE_PATH`` gate -- see
+    #: ``browser_pool/wayland.py``. The REQUEST is what persists across
+    #: relaunch/handoff/recording, so auto stays auto and re-detects.
+    wayland_native: bool | None = None
     #: The URL the session trusts as its own site (``session.launch_url``,
     #: read by the macro credential guards), when it is not ``url``. Handoff and
     #: fluid relaunch open the replacement where the page IS, which a macro may
@@ -276,6 +297,12 @@ class LaunchOptions:
         ``kind``/``badge_position``/``har_mode``/``har_content`` values, and
         the ``har_path`` containment check below blocks write-anywhere.
         """
+        # The writer always records the RESOLVED bool, so anything else is a
+        # corrupt or poisoned file. Read loosely, a null became "auto" (headless
+        # on a display-less host) and the string "false" became headed.
+        headed = record.get("headed", True)
+        if not isinstance(headed, bool):
+            raise InvalidRequestError("headed must be a boolean in a launch record")
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
         har_path = record.get("har_path")
         if har_path is not None:
@@ -298,13 +325,17 @@ class LaunchOptions:
                 "profile": record.get("profile"),
                 "viewport_w": viewport.get("w") if viewport else None,
                 "viewport_h": viewport.get("h") if viewport else None,
-                "headed": record.get("headed", True),
+                "headed": headed,
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
                 "trace": record.get("trace", False),
                 "har": bool(record.get("har")) and har_path is not None,
                 "har_path": har_path,
-                "har_mode": record.get("har_mode", "minimal"),
+                # The writer records har_mode as null for a launch without
+                # HAR, and the default of dict.get does not cover an explicit null.
+                # Null means "not set" here; a non-null junk value still
+                # reaches validate() and is refused.
+                "har_mode": _HAR_MODE_DEFAULT if record.get("har_mode") is None else record["har_mode"],
                 "har_url_filter": record.get("har_url_filter"),
                 "har_content": record.get("har_content"),
                 "badge": record.get("badge", True),
@@ -313,13 +344,14 @@ class LaunchOptions:
                 "ephemeral": record.get("ephemeral", False),
                 "session": record.get("session", False),
                 "disable_automation_controlled": record.get("disable_automation_controlled", False),
+                "wayland_native": record.get("wayland_native"),
             }
         )
 
     def validate(self) -> None:
         if self.kind not in SUPPORTED_KINDS:
             raise InvalidRequestError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
-        if self.badge_position not in _BADGE_POSITIONS:
+        if not _one_of(self.badge_position, _BADGE_POSITIONS):
             raise InvalidRequestError(
                 f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {self.badge_position!r}"
             )
@@ -327,9 +359,9 @@ class LaunchOptions:
             raise InvalidRequestError("ephemeral and session are mutually exclusive")
         if self.profile and self.session:
             raise InvalidRequestError("profile and session are mutually exclusive")
-        if self.har_mode not in {"full", "minimal"}:
+        if not _one_of(self.har_mode, {"full", "minimal"}):
             raise InvalidRequestError("har_mode must be one of ['full', 'minimal']")
-        if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
+        if self.har_content is not None and not _one_of(self.har_content, {"omit", "embed", "attach"}):
             raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
         self._validate_engine_specific_options()
@@ -345,6 +377,23 @@ class LaunchOptions:
             raise InvalidRequestError("disable_automation_controlled must be a boolean")
         if self.disable_automation_controlled and self.kind != "chromium":
             raise InvalidRequestError("disable_automation_controlled is only supported for kind='chromium'")
+        self._validate_wayland_native()
+
+    def _validate_wayland_native(self) -> None:
+        # Strict: a truthy non-bool ("false", 1) must not read as a choice.
+        if self.wayland_native is not None and not isinstance(self.wayland_native, bool):
+            raise InvalidRequestError("wayland_native must be a boolean or null (null = auto)")
+        if not self.wayland_native:
+            return
+        # An explicit True that cannot take effect is refused rather than
+        # dropped -- the caller would otherwise believe it applied. Headless is
+        # the exception, reported instead (see resolve_wayland_native).
+        if self.kind != "chromium":
+            raise InvalidRequestError("wayland_native is only supported for kind='chromium'")
+        if not wayland.host_platform().startswith("linux"):
+            raise InvalidRequestError(
+                f"wayland_native=True is only supported on Linux (this daemon runs on {wayland.host_platform()!r})"
+            )
 
     def _validate_headers(self) -> None:
         """Header checks, split out because ``to_pool_kwargs`` needs them too.

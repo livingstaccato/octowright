@@ -57,6 +57,15 @@ with explicit user authorization under the teardown rules below, then relaunch
 the same profile without this option. Do not use handoff or fluid relaunch to
 turn it off: both preserve the original launch setting by design.
 
+## `wayland_native` (headed Chromium on Linux)
+
+Leave it unset. On a Linux Wayland desktop, auto runs headed Chromium as a
+native Wayland client so trackpad pinch-to-zoom reaches the page (under
+XWayland it never does), and falls back to X11 if that launch fails -- the
+result then carries `wayland_warning`. Pass `wayland_native=false` only when
+the user wants the X11 window back; `true` forces Wayland with no fallback.
+The result's `wayland_native` block says what was used.
+
 ## Teardown Discipline
 
 ### Agent-Internal Launches

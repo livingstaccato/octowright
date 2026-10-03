@@ -154,7 +154,9 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
             trace=spec.get("trace", False),
             har=spec.get("har", False),
             har_path=spec.get("har_path"),
-            har_mode=spec.get("har_mode", "minimal"),
+            # Not the dict.get default: a YAML `har_mode:` is an explicit null. Only
+            # null maps to the default; any other bad value still reaches validate().
+            har_mode="minimal" if spec.get("har_mode") is None else spec["har_mode"],
             har_url_filter=spec.get("har_url_filter"),
             har_content=spec.get("har_content"),
             badge=spec.get("badge", True),

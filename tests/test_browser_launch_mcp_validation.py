@@ -23,6 +23,7 @@ from octowright.server.browser import lifecycle as _lifecycle
 async def _call_browser_launch(
     monkeypatch: pytest.MonkeyPatch,
     value: object,
+    field: str = "disable_automation_controlled",
 ) -> tuple[CallToolResult, AsyncMock]:
     launch = AsyncMock(return_value={"instance_id": "inst-1"})
     monkeypatch.setattr(_lifecycle, "_pool_launch_with_deadline", launch)
@@ -46,7 +47,7 @@ async def _call_browser_launch(
                 {
                     "url": "https://x.com",
                     "ephemeral": True,
-                    "disable_automation_controlled": value,
+                    field: value,
                 },
             )
             return result, launch
@@ -79,3 +80,31 @@ async def test_browser_launch_accepts_boolean_automation_flag_at_mcp_boundary(
     assert result.is_error is False
     launch.assert_awaited_once()
     assert launch.call_args.kwargs["disable_automation_controlled"] is value
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("value", ["true", "false", 0, 1, "auto"])
+async def test_browser_launch_rejects_non_boolean_wayland_native_at_mcp_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    value: object,
+) -> None:
+    result, launch = await _call_browser_launch(monkeypatch, value, field="wayland_native")
+
+    assert result.is_error is True
+    launch.assert_not_awaited()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("value", [True, False, None])
+async def test_browser_launch_accepts_boolean_or_null_wayland_native_at_mcp_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    value: bool | None,
+) -> None:
+    from octowright.browser_pool import wayland
+
+    monkeypatch.setattr(wayland, "host_platform", lambda: "linux")
+    result, launch = await _call_browser_launch(monkeypatch, value, field="wayland_native")
+
+    assert result.is_error is False
+    launch.assert_awaited_once()
+    assert launch.call_args.kwargs["wayland_native"] is value

@@ -237,3 +237,26 @@ async def test_spawn_roster_does_not_throttle_headless_launches(monkeypatch: pyt
     await _roster.spawn_roster(pool, specs)
 
     assert state["max"] == 6, f"headless should be unthrottled, peak was {state['max']}"
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_reads_a_null_har_mode_as_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scenario participant written ``har_mode:`` (YAML null) means "not set".
+
+    ``dict.get``'s default does not cover an explicit null, so it reached
+    ``LaunchOptions.validate()`` as ``None`` and refused the whole roster."""
+    from octowright.browser_pool import roster as _roster
+
+    monkeypatch.setattr(_roster, "enforce_launch_limits", lambda *_a, **_k: None)
+    pool = _make_pool()
+    seen: dict[str, Any] = {}
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return _launch_result(kind=kwargs["kind"])
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+
+    await _roster.spawn_roster(pool, [{"kind": "chromium", "headed": False, "har_mode": None}])
+
+    assert seen["har_mode"] == "minimal"

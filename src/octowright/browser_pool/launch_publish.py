@@ -206,6 +206,7 @@ def _build_session_object(
         trace=launch_options.trace,
         har_path=har_path,
         disable_automation_controlled=launch_options.disable_automation_controlled,
+        wayland_native=launch_options.wayland_native,
         viewport_mode=viewport_info.mode.value,
         viewport_width=viewport_info.width,
         viewport_height=viewport_info.height,
@@ -297,6 +298,7 @@ async def _prepare_session_before_publication(
         ephemeral=launch_options.ephemeral,
         session=session,
         disable_automation_controlled=launch_options.disable_automation_controlled,
+        wayland_native=launch_options.wayland_native,
     )
 
     # NOTE: the BrowserSession local was named ``session`` for years, but

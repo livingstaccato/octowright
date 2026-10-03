@@ -156,6 +156,14 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "navigator.webdriver signal. It is off by default and is not a general stealth "
         "or sign-in guarantee. Firefox and WebKit reject it. The setting is recorded and "
         "preserved by handoff/relaunch. "
+        "wayland_native: leave unset (None = auto) for headed Chromium on a Linux Wayland desktop to "
+        "run as a native Wayland client — needed for trackpad pinch-to-zoom, which XWayland drops. "
+        "Auto turns it on only for headed Chromium on Linux when WAYLAND_DISPLAY names a socket that "
+        "exists, and falls back to X11 if that launch fails (the result then carries 'wayland_warning'). "
+        "True forces it (Chromium on Linux only; no X11 fallback — a failure is raised), False forces "
+        "X11. OCTOWRIGHT_WAYLAND_NATIVE=on/off sets the daemon default; this argument wins. The result's "
+        "'wayland_native' block reports what was used. A fixed flag set, so it needs no "
+        "OCTOWRIGHT_ALLOW_EXECUTABLE_PATH opt-in; preserved by handoff/relaunch. "
         "extra_http_headers sets headers for the WHOLE browser — every page, popup, tab and "
         "subresource, for its entire life — which is the cheapest way to carry an API key or "
         "a test-env header. It is also never restored from a recording (an attacker-supplied "
@@ -198,6 +206,7 @@ async def browser_launch(
     extra_http_headers_urls: list[str] | None = None,
     disable_gpu: bool | None = None,
     disable_automation_controlled: StrictBool = False,
+    wayland_native: StrictBool | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
@@ -252,6 +261,7 @@ async def browser_launch(
         extra_http_headers_urls=extra_http_headers_urls,
         disable_gpu=disable_gpu,
         disable_automation_controlled=disable_automation_controlled,
+        wayland_native=wayland_native,
         channel=channel,
         executable_path=executable_path,
         launch_args=launch_args,
@@ -295,7 +305,9 @@ def browser_suggest_for_url(url: str, kind: str | None = None) -> dict[str, Any]
         "includes a 'nav_warning' key with the error string. Call browser_navigate(instance_id, url) "
         "to retry navigation or go to a different URL without re-launching. "
         "Pass response_mode='outline' to include a compact browser_page_outline in the "
-        "same call when launch produced an instance_id."
+        "same call when launch produced an instance_id. "
+        "wayland_native behaves exactly as on browser_launch (None = auto native Wayland for "
+        "headed Chromium on a Linux Wayland desktop, so trackpad pinch-zoom reaches pages)."
     ),
 )
 async def browser_quick_launch(
@@ -320,6 +332,7 @@ async def browser_quick_launch(
     ephemeral: bool = False,
     session: bool = False,
     protected: bool | None = None,
+    wayland_native: StrictBool | None = None,
     response_mode: str | None = None,
 ) -> dict[str, Any]:
     if not isinstance(url, str) or not url:
@@ -370,6 +383,7 @@ async def browser_quick_launch(
             ephemeral=ephemeral,
             session=session,
             protected=protected,
+            wayland_native=wayland_native,
         )
 
     if profile:
