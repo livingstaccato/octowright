@@ -19,6 +19,7 @@ two probes stay distinguishable without matching on source text.
 
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -45,19 +46,41 @@ def stub_credential_scan(locator: Any, values: list[str] | None = None) -> Any:
     return locator
 
 
+# When the running test began (``time.monotonic()``); set by ``tests/conftest``
+# at the start of every test's setup. Bounds how much of a step's budget the
+# test can have spent before the action under assertion was called.
+_test_started_at: float | None = None
+
+
+def mark_test_start() -> None:
+    global _test_started_at
+    _test_started_at = time.monotonic()
+
+
 class LeftOfBudget:
     """Equals a timeout that is what is left of *budget*: a fill/type step shares one deadline.
 
     Its element's attached-wait gets the whole budget and the action what is
-    left, so the action's timeout is a hair under the budget, never above it.
+    left, so the action's timeout is under the budget, never above it. How far
+    under is wall time the step spent before the action, which a slow runner
+    makes unbounded by any constant (a macOS runner spent 125ms against the
+    100ms this once allowed). The step began after the test did and its action
+    ran before this comparison, so the time since the test started is a bound
+    it cannot exceed; *slack_ms* is the floor when no start was recorded.
     """
 
     def __init__(self, budget: float, slack_ms: float = 100) -> None:
         self.budget = budget
         self.slack_ms = slack_ms
 
+    def _slack(self) -> float:
+        if _test_started_at is None:
+            return self.slack_ms
+        # +1: the product rounds what is left to whole milliseconds.
+        return max(self.slack_ms, (time.monotonic() - _test_started_at) * 1000 + 1)
+
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, (int, float)) and self.budget - self.slack_ms < other <= self.budget
+        return isinstance(other, (int, float)) and self.budget - self._slack() < other <= self.budget
 
     __hash__ = None  # type: ignore[assignment]
 

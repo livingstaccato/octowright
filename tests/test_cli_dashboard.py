@@ -65,6 +65,18 @@ def test_dashboard_rejects_remote_host_without_opt_in(monkeypatch: pytest.Monkey
     assert "remote dashboard access is disabled" in result.output
 
 
+@pytest.mark.parametrize(("raw", "allowed"), [("true", True), (" ON ", True), ("", False), ("maybe", False)])
+def test_dashboard_remote_opt_in_takes_only_an_explicit_yes(
+    raw: str, allowed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", raw)
+    if allowed:
+        assert dash_mod._validated_dashboard_base("10.0.0.5", 6286) == "http://10.0.0.5:6286"
+    else:
+        with pytest.raises(click.ClickException, match="remote dashboard access is disabled"):
+            dash_mod._validated_dashboard_base("10.0.0.5", 6286)
+
+
 def test_dashboard_no_daemon_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("octowright.singleton.read_lock", lambda *a, **k: None)
     result = CliRunner().invoke(dash_mod.dashboard, [])

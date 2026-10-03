@@ -61,16 +61,16 @@ SUPPORTED_CHANNELS = frozenset(
 # OFF by default -- matches the OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS /
 # OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS / OCTOWRIGHT_ALLOW_PY_SCENARIOS
 # precedent for exactly this class of risky-but-legitimate power-user
-# feature. Falsey tokens mirror recorder._PRIVATE_OFF.
+# feature, and like them turns on only for an explicit yes
+# (``defaults.opt_in_enabled``): a typo used to read as ON.
 ALLOW_EXECUTABLE_PATH_ENV = "OCTOWRIGHT_ALLOW_EXECUTABLE_PATH"
-_ALLOW_EXECUTABLE_PATH_TOKENS_OFF = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
 
 
 def _executable_path_allowed() -> bool:
     """Return True iff OCTOWRIGHT_ALLOW_EXECUTABLE_PATH opts into
     executable_path/launch_args on the live browser_launch call path. Read at
     call time (not cached) so tests can monkeypatch the env var freely."""
-    return os.environ.get(ALLOW_EXECUTABLE_PATH_ENV, "").strip().lower() not in _ALLOW_EXECUTABLE_PATH_TOKENS_OFF
+    return defaults.opt_in_enabled(ALLOW_EXECUTABLE_PATH_ENV)
 
 
 # Escape hatch for the recurring headed-Chromium crash characterised on

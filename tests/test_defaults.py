@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -182,3 +184,105 @@ class TestViewportDefaults:
         )
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.split() == ["1280", "800"]
+
+
+def _opt_in_readers() -> list[tuple[str, Callable[[], bool]]]:
+    """Every default-OFF flag that widens what the daemon may do, with its reader."""
+    from octowright import defaults
+    from octowright.browser_pool import options
+    from octowright.http import exposure
+
+    return [
+        ("OCTOWRIGHT_ALLOW_PY_SCENARIOS", defaults.allow_py_scenarios),
+        ("OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS", defaults.allow_shell_cred_cmds),
+        ("OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS", defaults.allow_arbitrary_cred_cmds),
+        ("OCTOWRIGHT_ALLOW_EXECUTABLE_PATH", options._executable_path_allowed),
+        ("OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD", exposure.remote_dashboard_allowed),
+    ]
+
+
+_OPT_IN_IDS = [name for name, _ in _opt_in_readers()]
+
+
+class TestOptInSecurityFlags:
+    """A capability-granting opt-in turns on only for an explicit yes.
+
+    These flags gate code execution, shell/arbitrary credential commands and
+    remote access. They used to turn on for anything not in a falsey set, so an
+    empty value or a typo enabled ``.py`` scenario execution.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _fresh_warn_state(self, monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+        from octowright import defaults
+
+        log = MagicMock()
+        monkeypatch.setattr(defaults, "log", log)
+        monkeypatch.setattr(defaults, "_OPT_IN_WARNED", set())
+        return log
+
+    @pytest.mark.parametrize(("name", "reader"), _opt_in_readers(), ids=_OPT_IN_IDS)
+    @pytest.mark.parametrize("raw", ["1", "true", "yes", "on", "TRUE", "Yes", " on ", "\t1\n"])
+    def test_an_explicit_yes_turns_it_on(
+        self, name: str, reader: Callable[[], bool], raw: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(name, raw)
+        assert reader() is True
+
+    @pytest.mark.parametrize(("name", "reader"), _opt_in_readers(), ids=_OPT_IN_IDS)
+    def test_unset_is_off(self, name: str, reader: Callable[[], bool], monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(name, raising=False)
+        assert reader() is False
+
+    @pytest.mark.parametrize(("name", "reader"), _opt_in_readers(), ids=_OPT_IN_IDS)
+    @pytest.mark.parametrize("raw", ["", "   ", "0", "false", "no", "off", "OFF", "never", "none", "disabled"])
+    def test_an_explicit_no_or_empty_is_off_without_a_warning(
+        self,
+        name: str,
+        reader: Callable[[], bool],
+        raw: str,
+        monkeypatch: pytest.MonkeyPatch,
+        _fresh_warn_state: MagicMock,
+    ) -> None:
+        monkeypatch.setenv(name, raw)
+        assert reader() is False
+        _fresh_warn_state.warning.assert_not_called()
+
+    @pytest.mark.parametrize(("name", "reader"), _opt_in_readers(), ids=_OPT_IN_IDS)
+    @pytest.mark.parametrize("raw", ["maybe", "2", "y", "enabled", "allow", "1 0", "truee"])
+    def test_an_unrecognized_value_is_off_and_warns_once(
+        self,
+        name: str,
+        reader: Callable[[], bool],
+        raw: str,
+        monkeypatch: pytest.MonkeyPatch,
+        _fresh_warn_state: MagicMock,
+    ) -> None:
+        monkeypatch.setenv(name, raw)
+        assert reader() is False
+        assert reader() is False  # re-read on every request for some flags: still one line
+        _fresh_warn_state.warning.assert_called_once()
+        assert _fresh_warn_state.warning.call_args.args[0] == "octowright.defaults.opt_in_unrecognized"
+        assert _fresh_warn_state.warning.call_args.kwargs["name"] == name
+
+    def test_the_shared_parser_reads_the_named_variable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright import defaults
+
+        monkeypatch.setenv("OCTOWRIGHT_TEST_OPT_IN", "yes")
+        assert defaults.opt_in_enabled("OCTOWRIGHT_TEST_OPT_IN") is True
+        monkeypatch.setenv("OCTOWRIGHT_TEST_OPT_IN", "maybe")
+        assert defaults.opt_in_enabled("OCTOWRIGHT_TEST_OPT_IN") is False
+
+
+class TestDefaultOnFlagsUnchanged:
+    """The default-ON knobs keep their semantics: only a falsey token disables them."""
+
+    @pytest.mark.parametrize(("raw", "expected"), [(None, True), ("maybe", True), ("", True), ("off", False)])
+    def test_parse_bool_env_default_on(self, raw: str | None, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+        from octowright import defaults
+
+        if raw is None:
+            monkeypatch.delenv("OCTOWRIGHT_TEST_DEFAULT_ON", raising=False)
+        else:
+            monkeypatch.setenv("OCTOWRIGHT_TEST_DEFAULT_ON", raw)
+        assert defaults._parse_bool_env("OCTOWRIGHT_TEST_DEFAULT_ON", True) is expected

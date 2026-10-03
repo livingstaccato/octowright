@@ -10,7 +10,6 @@ from __future__ import annotations
 import functools
 import ipaddress
 import json
-import os
 from collections.abc import Awaitable, Callable
 from typing import Protocol, TypeVar, cast
 
@@ -19,7 +18,7 @@ from starlette.responses import Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
-from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
+from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV, opt_in_enabled
 from octowright.http.json_response import SafeJSONResponse
 from octowright.http.pairing import (
     dashboard_access_ok,
@@ -61,7 +60,7 @@ def is_loopback_host(host: str | None) -> bool:
 
 
 def remote_dashboard_allowed() -> bool:
-    return os.environ.get(DASHBOARD_REMOTE_ALLOWED_ENV) == "1"
+    return opt_in_enabled(DASHBOARD_REMOTE_ALLOWED_ENV)
 
 
 def _host_without_port(value: str) -> str:

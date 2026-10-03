@@ -284,6 +284,7 @@ class _Session:
         self._exit_verdict: str | None = None
         self._exit_verdict_event = asyncio.Event()
         self._process_crash_incident: dict[str, Any] | None = None
+        self.pages: list[Any] = []
 
 
 @pytest.fixture
@@ -366,6 +367,74 @@ def test_a_renderer_crash_already_on_record_stays_a_crash(tmp_path: Path, publis
     assert process_crash.classify_external_close(session) == "crashed"
     assert session._exit_verdict == "crashed"
     assert published == []  # the renderer path already published its own event
+
+
+class _Impl:
+    def __init__(self, close_was_called: Any) -> None:
+        self._close_was_called = close_was_called
+
+
+class _Page:
+    """A Playwright ``Page`` wrapper: its implementation object holds the flag."""
+
+    def __init__(self, close_was_called: Any) -> None:
+        self._impl_obj = _Impl(close_was_called)
+
+
+def test_a_dead_browser_whose_every_page_the_client_closed_is_a_user_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    """The client asked for every page gone, so the exit that follows is not a crash.
+
+    Headless WebKit quits 2-11 ms after its last page closes; a loop that
+    judges any later sees it gone. Liveness alone calls that a crash.
+    """
+    _dead(tmp_path, monkeypatch)
+    session = _Session(tmp_path, _bp(tmp_path, lock=False))
+    session.pages = [_Page(True), _Page(True)]
+
+    assert process_crash.classify_external_close(session) == "user_close"
+    assert session._crashed is False
+    assert session._exit_verdict == "closed"
+    assert published == []
+    assert incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH) == []
+
+
+@pytest.mark.parametrize("flags", [[True, False], [False], []], ids=["one-not-asked", "none-asked", "no-pages"])
+def test_a_dead_browser_with_a_page_the_client_did_not_close_is_still_a_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object], flags: list[bool]
+) -> None:
+    _dead(tmp_path, monkeypatch)
+    session = _Session(tmp_path, _bp(tmp_path, lock=False))
+    session.pages = [_Page(flag) for flag in flags]
+
+    assert process_crash.classify_external_close(session) == "crashed"
+    assert len(incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)) == 1
+
+
+def test_only_a_real_true_counts_as_the_client_asking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    """A mock's auto-attribute is truthy; it must not turn a crash into a close."""
+    from unittest.mock import MagicMock
+
+    _dead(tmp_path, monkeypatch)
+    session = _Session(tmp_path, _bp(tmp_path, lock=False))
+    session.pages = [MagicMock()]
+
+    assert process_crash.classify_external_close(session) == "crashed"
+
+
+def test_the_lock_still_decides_a_client_closed_headed_chromium(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, published: list[object]
+) -> None:
+    """Lock evidence is timing-independent, so it is not overridden."""
+    session = _Session(tmp_path, _locked_dead(tmp_path, monkeypatch))
+    session.pages = [_Page(True)]
+
+    assert process_crash.classify_external_close(session) == "crashed"
+    (inc,) = incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH)
+    assert inc["evidence"] == "singleton_lock"
 
 
 def _locked_dead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> BrowserProcess:

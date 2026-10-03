@@ -157,6 +157,48 @@ async def test_closing_every_page_of_a_live_browser_is_a_user_close(
         await pool.shutdown()
 
 
+async def test_a_client_close_judged_after_webkit_exited_is_still_a_user_close(
+    tmp_path: Path, events: list[Any]
+) -> None:
+    """Closing WebKit's last page from the client, judged after WebKit has exited.
+
+    Headless WebKit quits as soon as its last page closes: measured on x86-64,
+    MiniBrowser is a zombie 2 ms and its ``pw_run.sh`` wrapper gone 8-11 ms after
+    that page's ``close`` reached Python. A loop that dispatches the ``close``
+    any later than that -- a busy arm64 CI runner did, on 2026-10-02 -- found the
+    process already gone, and liveness called the close a crash. The stall makes
+    that late delivery certain instead of a race: the close is requested, the
+    loop stops turning while WebKit exits, and only then is ``close`` dispatched.
+    """
+    import time
+
+    from octowright.browser_pool import BrowserPool, incidents
+
+    pool = BrowserPool(recordings_dir=tmp_path / "rec")
+    try:
+        session = await _launch(pool, "webkit", headed=False)
+        proc = session._browser_process
+        assert proc is not None
+        (page,) = session.pages
+        pending = asyncio.ensure_future(page.close())
+        # Let the request reach the driver before the loop stops turning.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        time.sleep(_LOOP_STALL_SECONDS)  # the stall: WebKit exits, nothing on the loop runs
+        assert not Path(f"/proc/{proc.pid}").exists(), "WebKit must have exited during the stall"
+        with contextlib.suppress(Exception):
+            await pending
+
+        await _until(lambda: _closed_reasons(events))
+        assert _closed_reasons(events) == ["user_close"]
+        assert _crash_scopes(events) == []
+        await _until(lambda: _close_reason(session) is not None)
+        assert _close_reason(session) == "external"
+        assert incidents.recent(category=incidents.CATEGORY_BROWSER_PROCESS_CRASH) == []
+    finally:
+        await pool.shutdown()
+
+
 _HEADED = pytest.mark.skipif(
     not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"), reason="needs a display"
 )

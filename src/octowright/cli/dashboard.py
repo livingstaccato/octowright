@@ -23,7 +23,6 @@ from __future__ import annotations
 import html
 import ipaddress
 import json
-import os
 import re
 import shutil
 import tempfile
@@ -36,7 +35,7 @@ from time import sleep
 import click
 
 from octowright.cli._root import cli
-from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV
+from octowright.defaults import DASHBOARD_REMOTE_ALLOWED_ENV, opt_in_enabled
 
 _RAW_HOST_RE = re.compile(r"^[^\x00-\x20\x7f/?#@\\]+$")
 _HOSTNAME_RE = re.compile(
@@ -87,7 +86,7 @@ def _validated_dashboard_base(host: str, port: int) -> str:
         raise click.ClickException("invalid dashboard port in the leader lockfile")
     url_host, loopback = _normalized_dashboard_host(host)
 
-    if not loopback and os.environ.get(DASHBOARD_REMOTE_ALLOWED_ENV) != "1":
+    if not loopback and not opt_in_enabled(DASHBOARD_REMOTE_ALLOWED_ENV):
         raise click.ClickException(
             f"remote dashboard access is disabled for {host!r}; set {DASHBOARD_REMOTE_ALLOWED_ENV}=1 to opt in"
         )

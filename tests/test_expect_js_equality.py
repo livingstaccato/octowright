@@ -17,10 +17,12 @@ whichever side a reader assumes.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -62,22 +64,53 @@ _TS_ONLY = re.compile(
 )
 
 
-def _run_ts(tmp_path: Path, source: str) -> Any:
+# The first node start of a run is the only slow one, so it gets the bound.
+# Measured from this test's own timestamps on seven healthy Windows CI legs
+# (amd64 and arm64, 2026-10-02): the first test, which pays the cold start,
+# took 3.0-11.3s for two node starts; the next, two warm starts, 0.2-0.4s. The
+# one leg that blew 30s (2026-09-30) took 5.9s for those two WARM starts --
+# about 20x slow, in the run whose sockets also ran out (ERR_NO_BUFFER_SPACE)
+# -- so the runner was degraded, and no constant here is a fix for that.
+_COLD_NODE_START_S = 30
+
+
+@functools.cache
+def _node_command() -> tuple[tuple[str, ...], str] | None:
+    """How to run the helper: node's own type stripping, or plain node. Probed once a run.
+
+    ``None`` when node is not installed. A probe that times out fails the test
+    saying what was measured, rather than with a bare ``TimeoutExpired``.
+    """
     node = shutil.which("node")
     if node is None:
-        pytest.skip("node is not installed")
-    probe = subprocess.run(
-        [node, "--experimental-strip-types", "--no-warnings", "-e", "const x: number = 1"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+        return None
+    started = time.monotonic()
+    try:
+        probe = subprocess.run(
+            [node, "--experimental-strip-types", "--no-warnings", "-e", "const x: number = 1"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_COLD_NODE_START_S,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            f"node did not start within {_COLD_NODE_START_S}s ({time.monotonic() - started:.1f}s); a cold start "
+            "measured 3-11s on healthy Windows runners, so this runner is degraded -- see _COLD_NODE_START_S"
+        )
     if probe.returncode == 0:
-        script, command = tmp_path / "check.ts", [node, "--experimental-strip-types", "--no-warnings"]
-    else:
+        return (node, "--experimental-strip-types", "--no-warnings"), ".ts"
+    return (node,), ".mjs"
+
+
+def _run_ts(tmp_path: Path, source: str) -> Any:
+    resolved = _node_command()
+    if resolved is None:
+        pytest.skip("node is not installed")
+    command, suffix = resolved
+    if suffix == ".mjs":
         source = _TS_ONLY.sub(lambda m: ")" if m.group(0).startswith(")") else "", source)
-        script, command = tmp_path / "check.mjs", [node]
+    script = tmp_path / f"check{suffix}"
     script.write_text(source, encoding="utf-8")
     out = subprocess.run([*command, str(script)], capture_output=True, text=True, check=True, timeout=60).stdout
     return json.loads(out)

@@ -102,6 +102,11 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "reads context.pages to track tabs the context was handed back holding, before publication",
     ),
     # These return or compare only Octowright-owned cached references.
+    "browser_pool/process_crash.py:_client_closed_every_page": (
+        "cached-property-only",
+        "reads the client-side close flag Playwright set on each cached page; no browser I/O, and it "
+        "runs from the first evicting close event, which cannot wait for a lease",
+    ),
     "session/core.py:BrowserSession.__post_init__": (
         "cached-property-only",
         "initializes the cached page list before the session is published without browser I/O",

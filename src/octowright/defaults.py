@@ -490,6 +490,32 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
+# Opt-in flags that WIDEN what the daemon may do (code execution, shell or
+# arbitrary credential commands, remote access) turn on only for an explicit
+# yes. ``_parse_bool_env`` is right for a default-ON knob, where a typo must not
+# silently remove protection, and wrong here: it read an empty value or a typo
+# as ON, so ``OCTOWRIGHT_ALLOW_PY_SCENARIOS=`` enabled ``.py`` scenario code
+# execution. An explicit no (or empty) is silent; anything else stays OFF with
+# one warning per value, since some of these are re-read on every request.
+_OPT_IN_ON = frozenset({"1", "true", "yes", "on"})
+_OPT_IN_OFF = frozenset({"", "0", "false", "no", "off", "never", "none", "disabled"})
+_OPT_IN_WARNED: set[tuple[str, str]] = set()
+
+
+def opt_in_enabled(name: str) -> bool:
+    """True only when env var *name* is ``1``/``true``/``yes``/``on`` (case-insensitive, stripped)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return False
+    token = raw.strip().lower()
+    if token in _OPT_IN_ON:
+        return True
+    if token not in _OPT_IN_OFF and (name, token) not in _OPT_IN_WARNED:
+        _OPT_IN_WARNED.add((name, token))
+        log.warning("octowright.defaults.opt_in_unrecognized", name=name, hint="not recognized; staying off")
+    return False
+
+
 # Renderer-crash auto-recovery. A Playwright page.on("crash") leaves the browser
 # alive with a dead renderer; reloading the page heals it without losing the
 # session. ENABLED by default (set OCTOWRIGHT_CRASH_RECOVERY=off to disable).
@@ -547,7 +573,7 @@ def allow_py_scenarios() -> bool:
     """Return True iff ``OCTOWRIGHT_ALLOW_PY_SCENARIOS`` opts into ``.py``
     scenario loading. Read at call time so tests can monkeypatch the env
     var without reloading the module."""
-    return _parse_bool_env(ALLOW_PY_SCENARIOS_ENV, False)
+    return opt_in_enabled(ALLOW_PY_SCENARIOS_ENV)
 
 
 # Env var name controlling whether persona credential ``*_cmd`` values may
@@ -563,7 +589,7 @@ def allow_shell_cred_cmds() -> bool:
     """Return True iff ``OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS`` opts into
     ``bash -c`` (and equivalents) for persona credential cmds. Read at call
     time so tests can monkeypatch the env var without reloading the module."""
-    return _parse_bool_env(ALLOW_SHELL_CRED_CMDS_ENV, False)
+    return opt_in_enabled(ALLOW_SHELL_CRED_CMDS_ENV)
 
 
 # Env var name controlling whether persona credential ``*_cmd`` values may
@@ -582,4 +608,4 @@ def allow_arbitrary_cred_cmds() -> bool:
     running argv-form credential cmds whose executable basename is not on
     the static well-known helper allowlist. Read at call time so tests can
     monkeypatch the env var without reloading the module."""
-    return _parse_bool_env(ALLOW_ARBITRARY_CRED_CMDS_ENV, False)
+    return opt_in_enabled(ALLOW_ARBITRARY_CRED_CMDS_ENV)
