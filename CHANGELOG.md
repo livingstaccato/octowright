@@ -12,7 +12,7 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
-## [0.26.0] - 2026-10-02
+## [0.26.0] - 2026-10-03
 
 ### Added
 - **Macros can now assert that a run left the network clean and that a secret

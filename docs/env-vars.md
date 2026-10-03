@@ -172,11 +172,7 @@ knob, an empty value (`OCTOWRIGHT_X=`) also opts in.
 - `OCTOWRIGHT_SESSION_MANIFEST` — live-session manifest used for crash recovery (default `<user state dir>/session-manifest.json`). `defaults.SESSION_MANIFEST_PATH`.
 - `OCTOWRIGHT_BRIDGE_STATE` — where followers write bridge health snapshots for `octowright_status()["bridge"]` (default `<user state dir>/bridge-state.json`). `defaults.BRIDGE_STATE_PATH`.
 
-**Security opt-ins (all OFF by default, bool)**
-
-- `OCTOWRIGHT_ALLOW_PY_SCENARIOS` — allow loading `.py` scenario files, which run arbitrary Python at import. `defaults.allow_py_scenarios`.
-- `OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS` — allow a persona credential `*_cmd` to invoke a shell with `-c` (`bash -c "..."`). `defaults.allow_shell_cred_cmds`.
-- `OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS` — allow a persona credential `*_cmd` whose executable is not on the well-known helper allowlist (`personas._CREDENTIAL_HELPER_ALLOWLIST`). `defaults.allow_arbitrary_cred_cmds`.
+**Security opt-ins** are listed under "Capability opt-ins parse strictly" at the top of this file.
 
 **Browser limits and timeouts**
 
