@@ -170,6 +170,8 @@ the weaker "the round trip is accepted", which is precisely what let `base_url`
 hide. `protected_reason` is the single exclusion on both sides, being an output
 of `resolve_protected`.
 
+**Every boolean option must be a boolean.** `validate()` checks each field annotated `bool` (and `bool | None`, where null means auto/unset) by type, the set derived from the annotations. Truthiness was the trap: only `headed` was strict, so a poisoned launch record's `ephemeral: "false"` relaunched a browser ephemeral, and the same string reached `from_mapping` from an HTTP body or a roster spec. `from_launch_record` checks `har` itself, because it is folded into a derived value before `validate()` sees it.
+
 `_MISLEADING_ALIASES` (one entry, `headless`) is a deliberate special case and
 not the hand-kept-table shape this file warns about elsewhere: a missing entry
 costs a plainer message and a stale one costs a needless hint, so it cannot

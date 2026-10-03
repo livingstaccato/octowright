@@ -142,6 +142,29 @@ def _one_of(value: object, allowed: Collection[str]) -> bool:
     return isinstance(value, str) and value in allowed
 
 
+def _record_bool(record: dict[str, Any], key: str, default: bool) -> bool:
+    """A flag the writer always records as a bool: anything else -- null
+    included -- is a corrupt or poisoned file, refused rather than read by
+    truthiness."""
+    value = record.get(key, default)
+    if not isinstance(value, bool):
+        raise InvalidRequestError(f"{key} must be a boolean in a launch record")
+    return value
+
+
+def _contained_har_path(har_path: Any) -> Any:
+    """HAR writes go under RECORDINGS_DIR by construction in the live launch
+    path. Enforce that on the JSONL replay path too, so a poisoned record can't
+    redirect HAR writes anywhere on disk. Read defaults.RECORDINGS_DIR
+    dynamically so tests that monkeypatch it (or reload defaults after setenv)
+    see the current value, not the import-time snapshot."""
+    if har_path is None:
+        return None
+    from octowright._paths import safe_under
+
+    return har_path if safe_under(Path(har_path), defaults.RECORDINGS_DIR) else None
+
+
 @dataclass(frozen=True)
 class LaunchOptions:
     kind: str = "chromium"
@@ -300,23 +323,12 @@ class LaunchOptions:
         # The writer always records the RESOLVED bool, so anything else is a
         # corrupt or poisoned file. Read loosely, a null became "auto" (headless
         # on a display-less host) and the string "false" became headed.
-        headed = record.get("headed", True)
-        if not isinstance(headed, bool):
-            raise InvalidRequestError("headed must be a boolean in a launch record")
+        headed = _record_bool(record, "headed", True)
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
-        har_path = record.get("har_path")
-        if har_path is not None:
-            # HAR writes go under RECORDINGS_DIR by construction in the live
-            # launch path. Enforce that on the JSONL replay path too, so a
-            # poisoned record can't redirect HAR writes anywhere on disk.
-            # Read defaults.RECORDINGS_DIR dynamically so tests that
-            # monkeypatch it (or reload defaults after setenv) see the
-            # current value, not the import-time snapshot.
-            from octowright import defaults as _defaults
-            from octowright._paths import safe_under
-
-            if not safe_under(Path(har_path), _defaults.RECORDINGS_DIR):
-                har_path = None
+        # Checked here rather than left to validate(): it is folded into a
+        # derived value below, where "false" would read as true.
+        har = _record_bool(record, "har", False)
+        har_path = _contained_har_path(record.get("har_path"))
         return cls.from_mapping(
             {
                 "kind": record.get("kind", "chromium"),
@@ -329,7 +341,7 @@ class LaunchOptions:
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
                 "trace": record.get("trace", False),
-                "har": bool(record.get("har")) and har_path is not None,
+                "har": har and har_path is not None,
                 "har_path": har_path,
                 # The writer records har_mode as null for a launch without
                 # HAR, and the default of dict.get does not cover an explicit null.
@@ -349,6 +361,7 @@ class LaunchOptions:
         )
 
     def validate(self) -> None:
+        self._validate_flags()
         if self.kind not in SUPPORTED_KINDS:
             raise InvalidRequestError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
         if not _one_of(self.badge_position, _BADGE_POSITIONS):
@@ -367,6 +380,20 @@ class LaunchOptions:
         self._validate_engine_specific_options()
         self._validate_headers()
         self._validate_trusted_launch_url()
+
+    def _validate_flags(self) -> None:
+        """Every boolean option must BE a boolean (or null, where null means
+        auto/unset). Truthiness is the trap: a poisoned launch record's
+        ``ephemeral: "false"`` relaunched a browser ephemeral, and the same
+        string reached ``from_mapping`` from an HTTP body or roster spec. The
+        field set is derived from the annotations, so a new flag is covered."""
+        for name in _BOOL_FIELDS:
+            if not isinstance(getattr(self, name), bool):
+                raise InvalidRequestError(f"{name} must be a boolean")
+        for name in _OPTIONAL_BOOL_FIELDS:
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise InvalidRequestError(f"{name} must be a boolean or null")
 
     def _validate_trusted_launch_url(self) -> None:
         if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
@@ -471,3 +498,7 @@ class LaunchOptions:
 #: remembered to update. A module constant rather than a method because
 #: ``from_mapping`` runs on every launch and this value never changes.
 CALLER_SETTABLE_FIELDS: Final = frozenset(f.name for f in fields(LaunchOptions)) - _NOT_CALLER_SETTABLE
+
+#: Options typed ``bool`` / ``bool | None``, checked by ``_validate_flags``.
+_BOOL_FIELDS: Final = tuple(f.name for f in fields(LaunchOptions) if f.type == "bool")
+_OPTIONAL_BOOL_FIELDS: Final = tuple(f.name for f in fields(LaunchOptions) if f.type == "bool | None")

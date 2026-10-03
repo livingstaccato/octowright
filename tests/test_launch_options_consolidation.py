@@ -308,6 +308,27 @@ def test_an_unhashable_poisoned_value_is_refused_not_a_type_error(
         LaunchOptions.from_launch_record(row)
 
 
+_RECORD_BOOLS = ["stabilize", "trace", "har", "badge", "tile", "ephemeral", "session"]
+
+
+@pytest.mark.parametrize("field", _RECORD_BOOLS)
+@pytest.mark.parametrize("value", ["false", 0, 1, None])
+def test_a_non_boolean_flag_in_a_launch_record_is_refused(tmp_path: Path, field: str, value: object) -> None:
+    """The writer records each of these as a bool, so anything else is a corrupt
+    or poisoned file. Read loosely, the string "false" was truthy -- e.g. a
+    poisoned ``ephemeral: "false"`` relaunched a browser ephemeral."""
+    row = _har_less_launch_row(tmp_path)
+    row[field] = value
+    with pytest.raises(InvalidRequestError, match=f"{field} must be a boolean"):
+        LaunchOptions.from_launch_record(row)
+
+
+@pytest.mark.parametrize("field", ["stabilize", "tile", "ephemeral", "badge", "record_video", "protected"])
+def test_a_non_boolean_flag_is_refused_on_every_mapping_path(field: str) -> None:
+    with pytest.raises(InvalidRequestError, match=f"{field} must be a boolean"):
+        LaunchOptions.from_mapping({"kind": "chromium", field: "false"})
+
+
 # ─── with_har_rotated ────────────────────────────────────────────────────────
 
 
