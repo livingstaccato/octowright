@@ -506,6 +506,7 @@ def _record_launch_event(
     ephemeral: bool,
     session: bool,
     disable_automation_controlled: bool,
+    wayland_native: bool | None = None,
 ) -> None:
     """Emit the JSONL `launch` event with all the conditional fields. Pulled
     out of launch() to keep its complexity rank below the gate."""
@@ -534,6 +535,7 @@ def _record_launch_event(
         ephemeral=ephemeral,
         session=session,
         disable_automation_controlled=disable_automation_controlled,
+        wayland_native=wayland_native,
     )
 
 

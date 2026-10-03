@@ -18,6 +18,7 @@ from provide.telemetry import get_logger
 
 from octowright import advisor as _advisor
 from octowright import takeover as _takeover
+from octowright.browser_pool import wayland
 from octowright.defaults import HEADLESS_DEFAULT, IDLE_GRACE_SECONDS
 from octowright.server import plugin_state as _plugin_state
 from octowright.server._state import leader_mode_snapshot, mcp, pool, scenario_pool, upgrade_notice_snapshot
@@ -416,6 +417,10 @@ def octowright_status() -> dict[str, Any]:
             "idle_grace_seconds": IDLE_GRACE_SECONDS,
             "badge_default": True,
             "badge_position_default": "bottom-right",
+            # Whether a headed Chromium launched now would run as a native
+            # Wayland client (trackpad pinch-zoom works) or under XWayland.
+            # setting: OCTOWRIGHT_WAYLAND_NATIVE as read (on/off/auto).
+            "wayland_native": wayland.status_default(),
         },
         "pool": {
             "live_browsers": live_browsers,

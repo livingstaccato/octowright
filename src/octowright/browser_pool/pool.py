@@ -16,7 +16,7 @@ from typing import Any
 from playwright.async_api import Playwright, async_playwright
 from provide.telemetry import get_logger
 
-from octowright.browser_pool import driver_health, driver_relaunch
+from octowright.browser_pool import driver_health, driver_relaunch, wayland
 from octowright.browser_pool._metrics import launch_span
 from octowright.browser_pool.cleanup import cleanup_on_launch_failure
 from octowright.browser_pool.events import SessionCloseReason
@@ -531,6 +531,7 @@ class BrowserPool:
         launch_args: list[str] | None = None,
         disable_gpu: bool | None = None,
         disable_automation_controlled: bool = False,
+        wayland_native: bool = False,
     ) -> dict[str, Any]:
         """Chromium-only window tiling + new-tab-page override extension, plus
         any caller-supplied channel/executable_path/launch_args passthrough.
@@ -555,9 +556,14 @@ class BrowserPool:
             headless=headless,
             disable_gpu=disable_gpu,
             disable_automation_controlled=disable_automation_controlled,
+            wayland_native=wayland_native,
         )
         if launch_args:
             args.extend(launch_args)
+        if wayland_native and kind == "chromium":
+            # Only here: without Wayland octowright adds no --enable-features,
+            # and a caller's own argv is passed exactly as given.
+            args = wayland.merge_enable_features(args)
         out: dict[str, Any] = {}
         if args:
             out["args"] = args
@@ -575,6 +581,7 @@ class BrowserPool:
         headless: bool,
         disable_gpu: bool | None,
         disable_automation_controlled: bool = False,
+        wayland_native: bool = False,
     ) -> list[str]:
         """Chromium-only argv: shm workaround, GPU escape hatch, new-tab
         extension, tiling. EMPTY for every other engine -- Firefox and WebKit
@@ -598,6 +605,10 @@ class BrowserPool:
             args.extend(GPU_DISABLE_ARGS)
         if disable_automation_controlled:
             args.append(AUTOMATION_CONTROLLED_DISABLE_ARG)
+        if wayland_native:
+            # Decided by wayland.resolve_wayland_native (headed Linux only);
+            # applied as given here so the X11 retry can strip it again.
+            args.extend(wayland.WAYLAND_NATIVE_ARGS)
         if not headless:
             args.extend(self._headed_chromium_args())
         if tile and not headless:

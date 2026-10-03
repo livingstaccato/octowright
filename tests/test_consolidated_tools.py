@@ -220,6 +220,24 @@ async def test_browser_launch_forwards_disable_automation_controlled(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("value", [True, False, None])
+async def test_browser_launch_and_quick_launch_forward_wayland_native(
+    _patch_state: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, value: bool | None
+) -> None:
+    from octowright.browser_pool import wayland
+
+    monkeypatch.setattr(wayland, "host_platform", lambda: "linux")
+    pool = _patch_state["pool"]
+    pool.launch = AsyncMock(return_value={"instance_id": "inst-1"})
+
+    await _lifecycle.browser_launch(url="https://x.com", ephemeral=True, wayland_native=value)
+    assert pool.launch.call_args.kwargs["wayland_native"] is value
+
+    await _lifecycle.browser_quick_launch(url="https://x.com", profile="p", wayland_native=value)
+    assert pool.launch.call_args.kwargs["wayland_native"] is value
+
+
+@pytest.mark.anyio
 async def test_browser_capture_and_close(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """browser_capture_and_close now routes through the REAL close
     coordinator (capture runs as a preparation callback inside the

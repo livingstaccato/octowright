@@ -71,6 +71,7 @@ class TestToPoolKwargs:
             extra_http_headers_urls=["**/api/**"],
             disable_gpu=True,
             disable_automation_controlled=True,
+            wayland_native=False,
             base_url="https://dev.test",
             trusted_launch_url="https://origin.test/",
         )
@@ -105,6 +106,7 @@ class TestToPoolKwargs:
             "extra_http_headers_urls": ["**/api/**"],
             "disable_gpu": True,
             "disable_automation_controlled": True,
+            "wayland_native": False,
         }
 
     def test_defaults(self) -> None:

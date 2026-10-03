@@ -10,10 +10,14 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from typing import Any
 
+from provide.telemetry import get_logger
+
 from octowright._tracing import set_attrs
+from octowright.browser_pool import wayland as wayland_mod
 from octowright.browser_pool.errors import maybe_wrap_playwright_error
 from octowright.browser_pool.launch_helpers import (
     _build_viewport_kwargs,
@@ -23,8 +27,12 @@ from octowright.browser_pool.launch_helpers import (
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.options import LaunchOptions, resolve_protected
+from octowright.browser_pool.wayland import WaylandDecision, resolve_wayland_native
 from octowright.defaults import HEADLESS_DEFAULT
 from octowright.recorder import new_log_path
+from octowright.request_errors import InvalidRequestError
+
+log = get_logger(__name__)
 
 
 async def launch_profile_locked(
@@ -66,9 +74,11 @@ async def launch_profile_locked(
         log_path=log_path,
         recordings_dir=pool._recordings_dir,
     )
+    wayland_decision = resolve_wayland_native(launch_options.wayland_native, kind=kind, headless=headless)
     launch_kwargs = await pool._build_launch_kwargs(
         disable_gpu=launch_options.disable_gpu,
         disable_automation_controlled=launch_options.disable_automation_controlled,
+        wayland_native=wayland_decision.effective,
         tile=launch_options.tile,
         kind=kind,
         headless=headless,
@@ -77,13 +87,8 @@ async def launch_profile_locked(
         launch_args=launch_options.launch_args,
     )
 
-    browser: Any | None = None
-    context: Any | None = None
-    page: Any | None = None
-    user_data_dir: str | None = None
-
-    try:
-        browser, context, page, user_data_dir = await _open_browser_context(
+    async def open_context(kwargs: dict[str, Any]) -> tuple[Any, Any, Any, str | None]:
+        return await _open_browser_context(
             browser_type=browser_type,
             kind=kind,
             profile=profile,
@@ -92,36 +97,40 @@ async def launch_profile_locked(
             viewport_kwargs=viewport_kwargs,
             ctx_video_kwargs=ctx_video_kwargs,
             ctx_har_kwargs=ctx_har_kwargs,
-            launch_kwargs=launch_kwargs,
+            launch_kwargs=kwargs,
             base_url=effective_base_url,
             extra_http_headers=launch_options.extra_http_headers,
             extra_http_headers_urls=launch_options.extra_http_headers_urls,
         )
-    except asyncio.CancelledError:
+
+    async def cleanup() -> None:
+        # Nothing was assigned when _open_browser_context raised, so there is
+        # no context or browser to close here -- only the video dir to tidy.
         await cleanup_failed_launch(
             registered=False,
-            context=context,
-            browser=browser,
+            context=None,
+            browser=None,
             video_dir=video_dir,
             recorder=None,
             pre_register=True,
         )
+
+    try:
+        (browser, context, page, user_data_dir), wayland_decision = await open_with_wayland_fallback(
+            decision=wayland_decision,
+            launch_kwargs=launch_kwargs,
+            open_context=open_context,
+            cleanup=cleanup,
+        )
+    except asyncio.CancelledError:
         raise
     except Exception as exc:
-        await cleanup_failed_launch(
-            registered=False,
-            context=context,
-            browser=browser,
-            video_dir=video_dir,
-            recorder=None,
-            pre_register=True,
-        )
         wrapped = maybe_wrap_playwright_error(exc, kind=kind)
         if wrapped is exc:
             raise
         raise wrapped from exc
 
-    return await post_context_setup(
+    result = await post_context_setup(
         pool,
         launch_options=launch_options,
         instance_id=instance_id,
@@ -146,3 +155,66 @@ async def launch_profile_locked(
         user_data_dir=user_data_dir,
         session=session,
     )
+    if kind == "chromium":
+        result["wayland_native"] = wayland_decision.report()
+        if wayland_decision.fallback_reason is not None:
+            result["wayland_warning"] = (
+                "Native Wayland launch failed; this browser runs under XWayland (X11), where "
+                f"touchpad pinch-zoom does not reach pages. Chromium reported: {wayland_decision.fallback_reason}"
+            )
+    return result
+
+
+async def open_with_wayland_fallback(
+    *,
+    decision: WaylandDecision,
+    launch_kwargs: dict[str, Any],
+    open_context: Callable[[dict[str, Any]], Awaitable[Any]],
+    cleanup: Callable[[], Awaitable[None]],
+) -> tuple[Any, WaylandDecision]:
+    """Open the browser; if a native-Wayland launch fails, retry ONCE with X11
+    forced (``wayland.x11_retry_kwargs``).
+
+    Only AUTO falls back. Auto chose Wayland on the caller's behalf from a socket
+    that exists -- which says nothing about whether a compositor answers on it --
+    so its failure must not cost the caller a browser. An explicit request
+    (argument, or ``OCTOWRIGHT_WAYLAND_NATIVE=on``) fails loudly instead: quietly
+    serving the X11 browser it asked not to get is the "option the caller
+    believes took effect" this repository refuses everywhere else.
+
+    The retry is internal to one ``pool.launch``, so engine health and the
+    launch metrics see a single outcome: ``ok`` when the X11 browser opened
+    (Chromium works on this machine), else the X11 attempt's error. The first
+    failure is caught HERE, before ``_launch_with_driver_retry`` sees it --
+    its text matches the dead-driver markers, and a dead-driver verdict stops
+    the shared driver and every live browser with it.
+    """
+    try:
+        return await open_context(launch_kwargs), decision
+    except asyncio.CancelledError:
+        await cleanup()
+        raise
+    except InvalidRequestError:
+        # The caller's own request, refused before any engine ran: retrying on
+        # X11 would be refused identically.
+        await cleanup()
+        raise
+    except Exception as exc:
+        await cleanup()
+        if not decision.effective:
+            raise
+        if decision.source != "auto":
+            if wayland_mod.mentions_wayland(exc):
+                raise wayland_mod.explicit_failure(decision, exc) from exc
+            raise
+        decision = decision.fell_back(exc)
+        log.warning(
+            "octowright.launch.wayland_fallback_x11",
+            reason=decision.fallback_reason,
+            error_type=type(exc).__name__,
+        )
+    try:
+        return await open_context(wayland_mod.x11_retry_kwargs(launch_kwargs)), decision
+    except BaseException:
+        await cleanup()
+        raise

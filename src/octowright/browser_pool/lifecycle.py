@@ -466,6 +466,8 @@ class RelaunchSnapshot:
     # (``substitution.own_site_origins``) must not come to trust a host a macro
     # navigated to just because the browser was relaunched there.
     launch_url: str | None = None
+    # The original launch's wayland_native request (None = auto).
+    wayland_native: bool | None = None
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:

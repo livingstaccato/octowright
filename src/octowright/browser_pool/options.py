@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from octowright import defaults
+from octowright.browser_pool import wayland
 from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT, _BADGE_POSITIONS
 from octowright.defaults import SUPPORTED_KINDS, get_default_url
 from octowright.http_headers import validate_extra_http_header_urls, validate_extra_http_headers
@@ -208,6 +209,14 @@ class LaunchOptions:
     #: This changes the browser-exposed ``navigator.webdriver`` signal only; it is
     #: not a promise that the browser is undetectable as automated.
     disable_automation_controlled: bool = False
+    #: Run headed Chromium on Linux as a native Wayland client instead of an
+    #: X11 client under XWayland, which drops touchpad pinch gestures. ``None``
+    #: is AUTO (on only where a Wayland compositor socket exists, falling back
+    #: to X11 if that launch fails); ``True``/``False`` force it. A fixed flag
+    #: set, so no ``OCTOWRIGHT_ALLOW_EXECUTABLE_PATH`` gate -- see
+    #: ``browser_pool/wayland.py``. The REQUEST is what persists across
+    #: relaunch/handoff/recording, so auto stays auto and re-detects.
+    wayland_native: bool | None = None
     #: The URL the session trusts as its own site (``session.launch_url``,
     #: read by the macro credential guards), when it is not ``url``. Handoff and
     #: fluid relaunch open the replacement where the page IS, which a macro may
@@ -313,6 +322,7 @@ class LaunchOptions:
                 "ephemeral": record.get("ephemeral", False),
                 "session": record.get("session", False),
                 "disable_automation_controlled": record.get("disable_automation_controlled", False),
+                "wayland_native": record.get("wayland_native"),
             }
         )
 
@@ -345,6 +355,23 @@ class LaunchOptions:
             raise InvalidRequestError("disable_automation_controlled must be a boolean")
         if self.disable_automation_controlled and self.kind != "chromium":
             raise InvalidRequestError("disable_automation_controlled is only supported for kind='chromium'")
+        self._validate_wayland_native()
+
+    def _validate_wayland_native(self) -> None:
+        # Strict: a truthy non-bool ("false", 1) must not read as a choice.
+        if self.wayland_native is not None and not isinstance(self.wayland_native, bool):
+            raise InvalidRequestError("wayland_native must be a boolean or null (null = auto)")
+        if not self.wayland_native:
+            return
+        # An explicit True that cannot take effect is refused rather than
+        # dropped -- the caller would otherwise believe it applied. Headless is
+        # the exception, reported instead (see resolve_wayland_native).
+        if self.kind != "chromium":
+            raise InvalidRequestError("wayland_native is only supported for kind='chromium'")
+        if not wayland.host_platform().startswith("linux"):
+            raise InvalidRequestError(
+                f"wayland_native=True is only supported on Linux (this daemon runs on {wayland.host_platform()!r})"
+            )
 
     def _validate_headers(self) -> None:
         """Header checks, split out because ``to_pool_kwargs`` needs them too.
