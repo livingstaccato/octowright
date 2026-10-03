@@ -56,6 +56,9 @@ from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
+#: ``_reset_driver``'s default: reset whatever driver is current.
+_ANY_DRIVER: Any = object()
+
 _safe_cleanup_on_launch_failure = cleanup_on_launch_failure
 
 
@@ -143,19 +146,27 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def _reset_driver(self, *, reason: str | None = None) -> None:
+    async def _reset_driver(self, *, reason: str | None = None, expected: Any = _ANY_DRIVER) -> None:
         """Discard the shared Playwright driver so the next launch rebuilds it.
 
-        Called when a driver-death error is seen (see ``driver_health``). Best-
-        effort ``stop()`` of the dead handle, then clear it under the lock so a
-        concurrent ``_ensure_pw`` starts a fresh driver. Hands off to
+        Called when a driver-death error is seen (see ``driver_health``). Clears
+        the handle under the lock so a concurrent ``_ensure_pw`` starts a fresh
+        driver, then a bounded stop of the dead one. Hands off to
         ``driver_relaunch.on_driver_reset`` which records the restart incident,
         captures/evicts the sessions lost with the dead driver (surfaced in
-        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them."""
+        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them.
+
+        ``expected`` is the handle the caller confirmed dead. If ``_pw`` is no
+        longer that handle, another failure already replaced it, and resetting
+        again would stop the NEW driver and evict every browser a second time:
+        nothing is done."""
         async with self._pw_lock:
+            if expected is not _ANY_DRIVER and self._pw is not expected:
+                log.info("octowright.pool.driver_reset_skipped_already_replaced")
+                return
             old = self._pw
             self._pw = None
-        self._driver_restarts += 1
+            self._driver_restarts += 1
         driver_relaunch.on_driver_reset(self, reason=reason)
         if old is not None:
             # Bounded, killing the process on timeout: an unbounded stop of a
@@ -242,6 +253,9 @@ class BrowserPool:
 
     async def _launch_with_driver_retry(self, options: dict[str, Any], kind_hint: str) -> dict[str, Any]:
         async with launch_span(kind_hint) as sp:
+            # Which driver this attempt ran on: _driver_restarts moves (under
+            # _pw_lock) exactly when the handle is replaced.
+            generation = self._driver_restarts
             try:
                 return await self._launch_impl(options, sp)
             except Exception as exc:
@@ -253,11 +267,20 @@ class BrowserPool:
                 # text, and resetting would evict every live browser for it.
                 if not driver_health.is_driver_dead_error(exc):
                     raise
-                if not await driver_health.driver_confirmed_dead(self._pw):
+                #
+                # Judge the driver THIS attempt used. If a concurrent failure
+                # already replaced it, the death is settled: retry on the new
+                # driver, without probing (or resetting) one this launch never
+                # touched.
+                if self._driver_restarts != generation:
+                    log.info("octowright.pool.driver_already_replaced_retrying", error=repr(exc))
+                    return await self._launch_impl(options, sp)
+                used = self._pw
+                if not await driver_health.driver_confirmed_dead(used):
                     log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))
                     raise
                 log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
-                await self._reset_driver(reason=repr(exc))
+                await self._reset_driver(reason=repr(exc), expected=used)
                 return await self._launch_impl(options, sp)
 
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:

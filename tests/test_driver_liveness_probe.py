@@ -390,3 +390,56 @@ def test_the_probe_imports_no_private_playwright_module() -> None:
     imported = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
     imported += [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
     assert not [m for m in imported if m and m.startswith("playwright._impl")], imported
+
+
+# ─── a reset is tied to the driver the failed launch used ────────────────────
+
+
+@pytest.mark.anyio
+async def test_concurrent_failures_on_one_dead_driver_reset_it_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Several launches failing together on one dead driver: the first to
+    confirm it resets it; the rest must retry on the replacement, not probe
+    and reset whatever ``_pw`` holds by then -- a second reset stopped the new
+    driver and evicted every browser again (afriend part1 c-0003)."""
+    dead, _ = _fake_pw("transport_closed")
+    replacement, _ = _fake_pw("ok")
+    stopped: list[Any] = []
+
+    async def _stop_dead() -> None:
+        stopped.append(dead)
+
+    async def _stop_replacement() -> None:
+        stopped.append(replacement)
+
+    dead.stop = _stop_dead
+    replacement.stop = _stop_replacement
+    pool = BrowserPool()
+    pool._pw = dead
+    evictions = {"n": 0}
+    monkeypatch.setattr(
+        driver_relaunch, "on_driver_reset", lambda *_a, **_k: evictions.__setitem__("n", evictions["n"] + 1)
+    )
+    both_failing = asyncio.Barrier(2)
+    attempts: dict[str, int] = {}
+
+    async def _impl(options: dict[str, Any], _sp: object) -> dict[str, Any]:
+        label = options["label"]
+        attempts[label] = attempts.get(label, 0) + 1
+        if attempts[label] == 1:
+            await both_failing.wait()  # both fail on the dead driver
+            raise RuntimeError("BrowserType.launch: Connection closed")
+        if pool._pw is None:
+            pool._pw = replacement  # what _ensure_pw would build
+        return {"instance_id": label}
+
+    monkeypatch.setattr(pool, "_launch_impl", _impl)
+
+    first, second = await asyncio.gather(
+        pool.launch(kind="chromium", label="a"), pool.launch(kind="chromium", label="b")
+    )
+
+    assert {first["instance_id"], second["instance_id"]} == {"a", "b"}
+    assert pool.driver_restart_count() == 1
+    assert evictions["n"] == 1
+    assert stopped == [dead]
+    assert pool._pw is replacement
