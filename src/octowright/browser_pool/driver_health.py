@@ -37,6 +37,8 @@ from typing import Any, Final
 from playwright.async_api import Error as PlaywrightError
 from provide.telemetry import get_logger
 
+from octowright.browser_pool.wayland import WaylandLaunchError
+
 log = get_logger(__name__)
 
 #: Bound on the liveness round trip. Measured on Playwright 1.63: 0.57ms median,
@@ -65,7 +67,15 @@ _DRIVER_DEAD_MARKERS = (
 
 def is_driver_dead_error(exc: BaseException) -> bool:
     """True when ``exc`` indicates the shared Playwright driver connection died
-    (as opposed to an ordinary per-launch failure)."""
+    (as opposed to an ordinary per-launch failure).
+
+    A ``WaylandLaunchError`` never is, whatever it says: it is raised for one
+    browser that could not reach a compositor, and its message quotes that
+    browser's own log line. Structural rather than textual, so the verdict does
+    not rest on the liveness probe alone -- which falls back to "dead" when it
+    cannot read Playwright's internals."""
+    if isinstance(exc, WaylandLaunchError):
+        return False
     text = str(exc).lower()
     return any(marker in text for marker in _DRIVER_DEAD_MARKERS)
 

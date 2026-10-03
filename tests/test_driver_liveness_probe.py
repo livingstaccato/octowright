@@ -443,3 +443,32 @@ async def test_concurrent_failures_on_one_dead_driver_reset_it_once(monkeypatch:
     assert evictions["n"] == 1
     assert stopped == [dead]
     assert pool._pw is replacement
+
+
+# ─── a Wayland launch error is never driver death ────────────────────────────
+
+
+def test_a_wayland_launch_error_is_never_read_as_driver_death() -> None:
+    """Structural, not textual: its message quotes the browser's own line, and
+    nothing stops that line from carrying a dead-driver marker."""
+    from octowright.browser_pool.wayland import WaylandLaunchError
+
+    error = WaylandLaunchError("Chromium reported: Target page, context or browser has been closed")
+    assert driver_health.is_driver_dead_error(error) is False
+
+
+@pytest.mark.anyio
+async def test_a_wayland_launch_error_does_not_reset_even_when_the_probe_cannot_tell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With unreadable internals the probe falls back to "dead"; a
+    WaylandLaunchError must still never reach it."""
+    from octowright.browser_pool.wayland import WaylandLaunchError
+
+    error = WaylandLaunchError("Chromium reported: Target page, context or browser has been closed")
+    pool, calls = _pool_with_failing_launch(monkeypatch, SimpleNamespace(), error)
+
+    with pytest.raises(WaylandLaunchError):
+        await pool.launch(kind="chromium")
+    assert calls["n"] == 1
+    assert calls["evictions"] == 0

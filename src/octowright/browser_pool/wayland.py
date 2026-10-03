@@ -74,11 +74,11 @@ class WaylandLaunchError(RuntimeError):
     explicitly (argument or env), so octowright did not fall back to X11.
 
     Its message quotes the browser's own complaint about Wayland rather than
-    Playwright's first line; the full original stays on ``__cause__``. That the
-    raw text matches ``driver_health``'s dead-driver markers no longer matters:
-    the pool confirms a dead driver with a liveness probe before resetting it
-    (``driver_health.driver_confirmed_dead``), so one browser's display problem cannot
-    stop the shared driver.
+    Playwright's first line; the full original stays on ``__cause__``. It is
+    never read as a dead shared driver, whatever its text
+    (``driver_health.is_driver_dead_error`` excludes this type), so one
+    browser's display problem cannot stop the driver -- not even when the
+    liveness probe cannot read Playwright's internals and falls back to "dead".
     """
 
 
