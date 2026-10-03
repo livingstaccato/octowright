@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, LiteralString, cast
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, span
-from octowright.browser_pool import close_helpers
+from octowright.browser_pool import close_helpers, driver_health
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.session.operation.gate import (
@@ -486,8 +486,10 @@ async def shutdown_pool(pool: BrowserPool) -> None:
         except Exception as exc:
             log.warning("octowright.pool.shutdown_straggler_close_failed", error=repr(exc))
     if pool._pw is not None:
-        await pool._pw.stop()
-        pool._pw = None
+        pw, pool._pw = pool._pw, None
+        # Bounded, killing the driver on timeout: an unbounded stop of a hung
+        # driver held daemon exit forever (driver_health.stop_driver).
+        await driver_health.stop_driver(pw)
     # Hold ``_sessions_lock`` across the snapshot-and-clear so a concurrent
     # ``_resolve_session_dir`` (which mints tmpdirs under the same lock) can't
     # slip a new entry into the dict between our iteration and ``.clear()``.

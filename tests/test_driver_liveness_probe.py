@@ -301,6 +301,25 @@ async def test_reset_driver_bounds_a_hung_stop_and_kills_the_driver(monkeypatch:
     assert pool._pw is None
 
 
+@pytest.mark.anyio
+async def test_pool_shutdown_bounds_a_hung_stop_and_kills_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shutdown stops the same shared driver a reset does, and a hung one
+    held daemon exit forever: it must go through the same bounded stop."""
+    from octowright.browser_pool.lifecycle import shutdown_pool
+
+    monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.05)
+    pool = BrowserPool()
+    hung = _HungStopDriver()
+    pool._pw = hung  # type: ignore[assignment]
+
+    started = time.monotonic()
+    await asyncio.wait_for(shutdown_pool(pool), timeout=5)
+
+    assert time.monotonic() - started < 1.0
+    assert hung.killed.is_set()
+    assert pool._pw is None
+
+
 # ─── the probe must not misread, or consume, Playwright's own state ──────────
 
 
