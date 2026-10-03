@@ -62,6 +62,14 @@ async def _await_in_flight_close(pool: BrowserPool, instance_id: str) -> None:
         await existing.reservation.wait()
 
 
+def _requested_wayland_native(session: BrowserSession) -> bool | None:
+    """The session's wayland_native request, or auto for anything that is not
+    a real bool -- a duck-typed session must not hand a strictly validated
+    launch a truthy stand-in."""
+    value = getattr(session, "wayland_native", None)
+    return value if isinstance(value, bool) else None
+
+
 def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot:
     return RelaunchSnapshot(
         kind=session.kind,
@@ -74,6 +82,7 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
         protected=getattr(session, "protected", False),
         protected_reason=getattr(session, "protected_reason", "explicit"),
         disable_automation_controlled=getattr(session, "disable_automation_controlled", False),
+        wayland_native=_requested_wayland_native(session),
         target_url=getattr(session.page, "url", None) or session.url,
         launch_url=session.launch_url,
     )
@@ -118,6 +127,7 @@ async def _launch_from_snapshot(
         session=snapshot.profile is None and snapshot.user_data_dir is not None,
         protected=snapshot.protected,
         disable_automation_controlled=snapshot.disable_automation_controlled,
+        wayland_native=snapshot.wayland_native,
         # The replacement opens at the page's current URL but trusts the
         # original's (RelaunchSnapshot.launch_url). Passed in, not assigned
         # afterwards: pool.launch publishes the session before it returns.

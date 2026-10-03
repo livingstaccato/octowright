@@ -117,6 +117,9 @@ class BrowserSession(
     trace: bool = False
     har_path: Path | None = None
     disable_automation_controlled: bool = field(default=False, kw_only=True)
+    # The launch's wayland_native REQUEST (None = auto), kept so a handoff or
+    # fluid relaunch asks for the same thing rather than for what auto chose.
+    wayland_native: bool | None = field(default=None, kw_only=True)
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None
