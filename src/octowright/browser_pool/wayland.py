@@ -44,6 +44,9 @@ WAYLAND_NATIVE_ENV: Final = "OCTOWRIGHT_WAYLAND_NATIVE"
 #: extended from caller input.
 WAYLAND_NATIVE_ARGS: Final = ("--ozone-platform=wayland", "--enable-features=WaylandWindowDecorations")
 _OZONE_ARG: Final = WAYLAND_NATIVE_ARGS[0]
+#: What the auto fallback puts in ``_OZONE_ARG``'s place (see
+#: ``x11_retry_kwargs``). A constant, never caller input.
+X11_RETRY_OZONE_ARG: Final = "--ozone-platform=x11"
 _FEATURES_PREFIX: Final = "--enable-features="
 _WAYLAND_FEATURES: Final = tuple(WAYLAND_NATIVE_ARGS[1].removeprefix(_FEATURES_PREFIX).split(","))
 
@@ -227,21 +230,40 @@ def merge_enable_features(args: list[str]) -> list[str]:
     return out
 
 
-def without_wayland_args(launch_kwargs: dict[str, Any]) -> dict[str, Any]:
-    """The same launch kwargs minus what this module added -- the X11 retry.
+def _without_wayland_features(arg: str) -> str | None:
+    """``arg`` minus this module's features; ``None`` for a switch left empty."""
+    if not arg.startswith(_FEATURES_PREFIX):
+        return arg
+    kept = [f for f in _features_of(arg) if f not in _WAYLAND_FEATURES]
+    return _FEATURES_PREFIX + ",".join(kept) if kept else None
 
-    Stripping rather than rebuilding keeps a fallback from consuming a second
+
+def x11_retry_kwargs(launch_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The same launch kwargs with X11 forced in place of what this module added.
+
+    Dropping the Wayland flag is not enough. With no ``--ozone-platform`` switch
+    Chromium picks the platform itself, from ``XDG_SESSION_TYPE``, and on a
+    Wayland desktop that picks Wayland again: the retry died exactly like the
+    first attempt. So the switch this module added is REPLACED, in place, by the
+    fixed ``X11_RETRY_OZONE_ARG``. Measured on chromium-1243 under ``xvfb-run``
+    with ``XDG_SESSION_TYPE=wayland`` and a dead ``WAYLAND_DISPLAY``: no switch
+    fails, ``--ozone-platform=x11`` launches, and Chromium honours the LAST
+    ``--ozone-platform`` given. No environment variable overrides the switch
+    (``OZONE_PLATFORM=wayland`` made no difference; the binary carries no
+    ``--ozone-platform-hint`` either).
+
+    Only the first ``--ozone-platform=wayland`` is touched -- the one
+    ``_chromium_args`` put before any caller ``launch_args``. A caller's own
+    switch comes later, is left as given, and still wins, which is the ordering
+    rule ``_build_launch_kwargs`` documents. Wayland features are dropped from
+    the merged ``--enable-features`` switch.
+
+    Rewriting rather than rebuilding keeps a fallback from consuming a second
     window-tiling slot (``_chromium_args`` advances the tile counter)."""
-    args: list[str] = []
-    for arg in launch_kwargs.get("args", []):
-        if arg == _OZONE_ARG:
-            continue
-        if arg.startswith(_FEATURES_PREFIX):
-            kept = [f for f in _features_of(arg) if f not in _WAYLAND_FEATURES]
-            if kept:
-                args.append(_FEATURES_PREFIX + ",".join(kept))
-            continue
-        args.append(arg)
+    args = list(launch_kwargs.get("args", []))
+    if _OZONE_ARG in args:
+        args[args.index(_OZONE_ARG)] = X11_RETRY_OZONE_ARG
+    args = [kept for kept in map(_without_wayland_features, args) if kept is not None]
     out = {k: v for k, v in launch_kwargs.items() if k != "args"}
     if args:
         out["args"] = args

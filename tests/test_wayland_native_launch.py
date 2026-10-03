@@ -48,6 +48,8 @@ ON_ARGS = {
     "args": ["--disable-dev-shm-usage", "--ozone-platform=wayland", "--enable-features=WaylandWindowDecorations"]
 }
 OFF_ARGS = {"args": ["--disable-dev-shm-usage"]}
+#: What the X11 retry of ON_ARGS launches with: X11 forced, not merely Wayland dropped.
+RETRY_ARGS = {"args": ["--disable-dev-shm-usage", "--ozone-platform=x11"]}
 
 
 @pytest.fixture
@@ -87,7 +89,7 @@ async def test_auto_failure_retries_once_without_the_flags() -> None:
     assert opened == "opened"
     assert len(opener.calls) == 2
     assert opener.calls[0] == ON_ARGS
-    assert opener.calls[1] == OFF_ARGS
+    assert opener.calls[1] == RETRY_ARGS
     cleanup.assert_awaited_once()
     assert decision.effective is False
     assert decision.reason == "fallback_x11"
@@ -260,6 +262,7 @@ async def test_pool_launch_falls_back_and_counts_engine_health_once(
     assert len(calls) == 2
     assert "--ozone-platform=wayland" in calls[0]["args"]
     assert "--ozone-platform=wayland" not in calls[1]["args"]
+    assert "--ozone-platform=x11" in calls[1]["args"]
     assert result["wayland_native"]["effective"] is False
     assert result["wayland_native"]["reason"] == "fallback_x11"
     assert "Wayland" in result["wayland_warning"]

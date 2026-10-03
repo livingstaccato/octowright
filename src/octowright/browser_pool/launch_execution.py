@@ -172,7 +172,8 @@ async def open_with_wayland_fallback(
     open_context: Callable[[dict[str, Any]], Awaitable[Any]],
     cleanup: Callable[[], Awaitable[None]],
 ) -> tuple[Any, WaylandDecision]:
-    """Open the browser; if a native-Wayland launch fails, retry ONCE on X11.
+    """Open the browser; if a native-Wayland launch fails, retry ONCE with X11
+    forced (``wayland.x11_retry_kwargs``).
 
     Only AUTO falls back. Auto chose Wayland on the caller's behalf from a socket
     that exists -- which says nothing about whether a compositor answers on it --
@@ -213,7 +214,7 @@ async def open_with_wayland_fallback(
             error_type=type(exc).__name__,
         )
     try:
-        return await open_context(wayland_mod.without_wayland_args(launch_kwargs)), decision
+        return await open_context(wayland_mod.x11_retry_kwargs(launch_kwargs)), decision
     except BaseException:
         await cleanup()
         raise

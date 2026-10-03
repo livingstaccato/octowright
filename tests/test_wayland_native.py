@@ -319,7 +319,7 @@ async def test_non_chromium_never_gets_the_flags(kind: str) -> None:
 
 
 @pytest.mark.usefixtures("clean_env")
-def test_without_wayland_args_strips_exactly_what_was_added() -> None:
+def test_x11_retry_replaces_exactly_what_was_added() -> None:
     launch_kwargs = {
         "args": [
             "--disable-dev-shm-usage",
@@ -329,20 +329,37 @@ def test_without_wayland_args_strips_exactly_what_was_added() -> None:
         ],
         "channel": "chrome",
     }
-    stripped = wayland.without_wayland_args(launch_kwargs)
-    assert stripped == {
-        "args": ["--disable-dev-shm-usage", "--user-flag", "--enable-features=CDPScreenshotNewSurface,Foo"],
+    retry = wayland.x11_retry_kwargs(launch_kwargs)
+    assert retry == {
+        "args": [
+            "--disable-dev-shm-usage",
+            "--ozone-platform=x11",
+            "--user-flag",
+            "--enable-features=CDPScreenshotNewSurface,Foo",
+        ],
         "channel": "chrome",
     }
     # Pure: the input is untouched.
     assert "--ozone-platform=wayland" in launch_kwargs["args"]
 
 
-def test_without_wayland_args_drops_a_switch_left_empty() -> None:
-    stripped = wayland.without_wayland_args(
+def test_x11_retry_forces_x11_even_when_nothing_else_is_left() -> None:
+    """Merely dropping the Wayland flag is not enough: with no ozone switch,
+    Chromium picks the platform itself from ``XDG_SESSION_TYPE``, and on a
+    Wayland desktop that is Wayland again -- the retry died the same way."""
+    retry = wayland.x11_retry_kwargs(
         {"args": ["--ozone-platform=wayland", "--enable-features=WaylandWindowDecorations"]}
     )
-    assert stripped == {}
+    assert retry == {"args": ["--ozone-platform=x11"]}
+
+
+def test_x11_retry_leaves_a_callers_own_ozone_switch_alone() -> None:
+    """Only the switch this module added is replaced, in place. A caller's own
+    ``launch_args`` come after octowright's, and Chromium honours the LAST
+    ``--ozone-platform`` (measured), so the caller's choice still wins -- the
+    ordering rule ``_build_launch_kwargs`` documents."""
+    retry = wayland.x11_retry_kwargs({"args": ["--ozone-platform=wayland", "--caller", "--ozone-platform=wayland"]})
+    assert retry == {"args": ["--ozone-platform=x11", "--caller", "--ozone-platform=wayland"]}
 
 
 # ─── report shape ────────────────────────────────────────────────────────────

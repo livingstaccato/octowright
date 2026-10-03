@@ -73,6 +73,10 @@ async def test_auto_falls_back_to_x11_when_the_socket_is_dead(monkeypatch: pytes
     dead.touch()
     monkeypatch.delenv(wayland.WAYLAND_NATIVE_ENV, raising=False)
     monkeypatch.setenv("WAYLAND_DISPLAY", str(dead))
+    # The real-desktop condition: without an ozone switch Chromium picks the
+    # platform from this, so a retry that merely dropped the Wayland flag
+    # chose Wayland again and died the same way.
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     pool = _make_pool(monkeypatch, tmp_path)
     try:
         res = await pool.launch(kind="chromium", url="about:blank", headed=True, ephemeral=True)  # type: ignore[attr-defined]

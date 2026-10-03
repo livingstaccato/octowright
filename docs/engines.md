@@ -81,7 +81,7 @@ native Wayland client with the fixed flags `--ozone-platform=wayland
 
 | `wayland_native` | Behaviour |
 |---|---|
-| unset (auto) | On only for headed Chromium on Linux when `WAYLAND_DISPLAY` names a socket that exists. A failed Wayland launch is retried once on X11 and reported (`wayland_warning`). |
+| unset (auto) | On only for headed Chromium on Linux when `WAYLAND_DISPLAY` names a socket that exists. A failed Wayland launch is retried once with `--ozone-platform=x11` forced (Chromium would otherwise pick Wayland again from `XDG_SESSION_TYPE`) and reported (`wayland_warning`). |
 | `true` | Forced on. Chromium on Linux only (refused otherwise); not applied to headless. A failure is raised, with no X11 fallback. |
 | `false` | Forced off (X11/XWayland). |
 
