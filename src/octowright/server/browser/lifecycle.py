@@ -526,10 +526,11 @@ async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
     structured_output=False,
     description=(
         "Launch several browsers in parallel from a list of launch specs. Each spec "
-        "is a dict accepting any subset of the LaunchOptions fields used by "
-        "browser_launch: kind, url, headed, label, profile, viewport_w, viewport_h, "
-        "stabilize, record_video, trace, har, har_path, har_mode, har_url_filter, "
-        "har_content, badge, badge_position, tile, ephemeral, session, protected. "
+        "is a dict accepting any subset of browser_launch's launch options: kind, url, "
+        "headed, label, profile, viewport_w, viewport_h, stabilize, record_video, trace, "
+        "har, har_path, har_mode, har_url_filter, har_content, badge, badge_position, "
+        "tile, ephemeral, session, protected, and the rest. A null value means unset; "
+        "an unknown key (e.g. headless) fails that spec rather than being ignored. "
         "Set protected=True in a spec to mark that browser as user-owned — "
         "close-capable tools will refuse to close it without force=True. "
         "Returns {launched: [...], errors: [...]}."

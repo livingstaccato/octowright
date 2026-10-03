@@ -180,9 +180,15 @@ typos (`viewport_width`) belong in a generic `difflib` pass; reserve the map for
 inverted or renamed semantics.
 
 Strictness was checked against every caller before adoption rather than after:
-the internal paths (`relaunch`, `roster`, `driver_relaunch`, `scenarios`, the
+the internal paths (`relaunch`, `driver_relaunch`, `scenarios`, the
 recording-replay route) all build explicit dicts, and the `to_pool_kwargs` →
-`from_mapping` round trip is clean. Only `POST /api/sessions` can carry
+`from_mapping` round trip is clean. `spawn_roster` used to build one too, from a hand-kept key list that
+silently dropped the documented `protected` and ignored unknown keys such as
+`headless`; it now goes through `roster.roster_launch_kwargs` --
+`from_mapping(...).to_pool_kwargs()` with explicit nulls dropped, so a YAML
+`key:` means unset for every key -- and refuses `trusted_launch_url`, which
+`browser_launch` does not expose either. An unknown key fails that spec into
+`errors`. Only `POST /api/sessions` can otherwise carry
 arbitrary keys, and its validation runs **inside** the route's `try`, so an
 unrecognised field becomes a **400 naming it** instead of a launch that ignored
 half the body. That placement is load-bearing rather than incidental: called
