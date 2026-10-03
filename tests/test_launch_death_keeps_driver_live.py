@@ -18,7 +18,6 @@ degrading to the old reset-on-text behaviour.
 from __future__ import annotations
 
 import os
-import signal
 from pathlib import Path
 
 import pytest
@@ -86,7 +85,11 @@ async def test_a_genuinely_dead_driver_is_still_reset_and_the_launch_retried(tmp
     try:
         await _launch_healthy(pool)
         assert pool._pw is not None
-        os.kill(pool._pw._impl_obj._connection._transport._proc.pid, signal.SIGKILL)
+        # Process.kill(), not os.kill(pid, SIGKILL): signal.SIGKILL does not
+        # exist on Windows, and the Windows legs run live_browser tests.
+        proc = pool._pw._impl_obj._connection._transport._proc
+        proc.kill()
+        await proc.wait()
 
         result = await pool.launch(kind="chromium", headed=False, ephemeral=True, url=PAGE)
 
@@ -106,7 +109,7 @@ async def test_probe_against_a_real_driver() -> None:
     try:
         assert await driver_health.driver_is_alive(pw) is True
         proc = pw._impl_obj._connection._transport._proc
-        os.kill(proc.pid, signal.SIGKILL)
+        proc.kill()  # portable: SIGKILL on POSIX, TerminateProcess on Windows
         await proc.wait()
         assert await driver_health.driver_is_alive(pw) is False
     finally:
