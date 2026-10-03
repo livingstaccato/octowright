@@ -102,6 +102,27 @@ def _make_redaction_subject(evaluate_return: Any, *, raises: bool = False) -> _P
     return subj
 
 
+# ─── the timeout matcher itself ─────────────────────────────────────────────
+
+
+def test_left_of_budget_allows_for_the_time_the_step_really_took(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A slow runner spends wall time between the step's deadline and its action.
+
+    A macOS runner handed ``fill`` 14875ms of a 15000ms budget: 125ms gone,
+    against a fixed 100ms slack. What a step can have spent is bounded by how
+    long the test has been running, so that is the slack -- and the matcher
+    still refuses a timeout above the budget or one the test could not explain.
+    """
+    import time
+
+    from tests import _aria_stubs
+
+    monkeypatch.setattr(_aria_stubs, "_test_started_at", time.monotonic() - 0.2)
+    assert LeftOfBudget(15000) == 14875
+    assert LeftOfBudget(15000) != 15001
+    assert LeftOfBudget(15000) != 14000
+
+
 # ─── autocomplete-driven redaction of type=text fields ─────────────────────
 
 

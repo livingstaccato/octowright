@@ -40,9 +40,13 @@ from octowright.session.input_redaction import (
 from octowright.session.keyboard_layout import keystroke_for
 from octowright.session.operation.gate import gated_operation
 from octowright.session.screencast import notify_active_page
+from octowright.session.step_phases import StepPhases
 from octowright.session.timeouts import SessionCallTimeoutError, bounded
 
 log = get_logger(__name__)
+
+# The phases a selector fill/type spends its one budget on, before the action.
+_STEP_PHASES = ("attach", "metadata", "redaction")
 
 # Recognised values for the OCTOWRIGHT_REDACT_INPUTS env var. Re-read on
 # every type/fill call so monkeypatched env changes (and operator
@@ -563,22 +567,29 @@ class SessionPageMixin(SessionLike):
         """
         if key_mode not in (None, "text", "keys"):
             raise ValueError(f"key_mode must be 'text' or 'keys', got {key_mode!r}")
-        # One budget for the whole step; see input_redaction.probe_timeout_ms.
-        deadline = time.monotonic() + DEFAULT_ACTION_TIMEOUT_MS / 1000
-        element = self._target().locator(selector).first
-        await element.wait_for(state="attached", timeout=DEFAULT_ACTION_TIMEOUT_MS)
-        meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
-        recorded_text = await self._redacted_or_original(selector, text, timeout_ms=attached_probe_timeout_ms(deadline))
-        check = pending_fill_origin_check()
-        left_ms = probe_timeout_ms(deadline)
-        if check is not None:  # one key at a time, each into a checked document; see credential_input
-            await self._checked_type(
-                element, text, check, delay_ms=delay_ms, keys=key_mode == "keys", timeout_ms=left_ms
+        # One budget for the whole step (see input_redaction.probe_timeout_ms),
+        # whose timeout names the phase that spent it (see step_phases).
+        with StepPhases(DEFAULT_ACTION_TIMEOUT_MS, *_STEP_PHASES, "type") as phases:
+            deadline = phases.deadline
+            element = self._target().locator(selector).first
+            await element.wait_for(state="attached", timeout=DEFAULT_ACTION_TIMEOUT_MS)
+            phases.done()
+            meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
+            phases.done()
+            recorded_text = await self._redacted_or_original(
+                selector, text, timeout_ms=attached_probe_timeout_ms(deadline)
             )
-        elif key_mode == "keys":
-            await self._type_as_keystrokes(selector, text, delay_ms, timeout_ms=left_ms)
-        else:
-            await self._target().type(selector, text, delay=delay_ms or 0, timeout=left_ms)
+            phases.done()
+            check = pending_fill_origin_check()
+            left_ms = probe_timeout_ms(deadline)
+            if check is not None:  # one key at a time, each into a checked document; see credential_input
+                await self._checked_type(
+                    element, text, check, delay_ms=delay_ms, keys=key_mode == "keys", timeout_ms=left_ms
+                )
+            elif key_mode == "keys":
+                await self._type_as_keystrokes(selector, text, delay_ms, timeout_ms=left_ms)
+            else:
+                await self._target().type(selector, text, delay=delay_ms or 0, timeout=left_ms)
         # Only stamped when it was actually asked for, so an ordinary type row
         # stays byte-identical to what every pre-existing recording holds.
         extra = {"key_mode": key_mode} if key_mode else {}
@@ -589,19 +600,24 @@ class SessionPageMixin(SessionLike):
         """Fill a CSS selector, waiting at most ``timeout_ms``. See ``click``
         for why ``None`` resolves to the default instead of being forwarded."""
         budget = timeout_ms or DEFAULT_ACTION_TIMEOUT_MS
-        # One budget for the whole step; see input_redaction.probe_timeout_ms.
-        deadline = time.monotonic() + budget / 1000
-        element = self._target().locator(selector).first
-        await element.wait_for(state="attached", timeout=budget)
-        meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
-        recorded_value = await self._redacted_or_original(
-            selector, value, timeout_ms=attached_probe_timeout_ms(deadline)
-        )
-        check = pending_fill_origin_check()
-        if check is None:
-            await self._target().fill(selector, value, timeout=probe_timeout_ms(deadline))
-        else:  # into a checked document only; see octowright.credential_input
-            await self._checked_fill(element, value, check, probe_timeout_ms(deadline))
+        # One budget for the whole step (see input_redaction.probe_timeout_ms),
+        # whose timeout names the phase that spent it (see step_phases).
+        with StepPhases(budget, *_STEP_PHASES, "fill") as phases:
+            deadline = phases.deadline
+            element = self._target().locator(selector).first
+            await element.wait_for(state="attached", timeout=budget)
+            phases.done()
+            meta = await self._resolve_semantic_metadata(selector, timeout_ms=attached_probe_timeout_ms(deadline))
+            phases.done()
+            recorded_value = await self._redacted_or_original(
+                selector, value, timeout_ms=attached_probe_timeout_ms(deadline)
+            )
+            phases.done()
+            check = pending_fill_origin_check()
+            if check is None:
+                await self._target().fill(selector, value, timeout=probe_timeout_ms(deadline))
+            else:  # into a checked document only; see octowright.credential_input
+                await self._checked_fill(element, value, check, probe_timeout_ms(deadline))
         self.recorder.record("fill", selector=selector, value=recorded_value, **meta)
 
     @gated_operation("macro_credential_fill_origin")

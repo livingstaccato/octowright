@@ -56,7 +56,13 @@ and the ``browser_crash`` row: ``singleton_lock`` or ``liveness``), and the two
 are not trusted equally: either one labels the session crashed, but only a
 ``singleton_lock`` verdict may reopen it under ``OCTOWRIGHT_DRIVER_RELAUNCH``.
 A liveness misread therefore costs a wrong label, never a window brought back
-that the user closed.
+that the user closed. One misread is removed outright: a close the client
+itself requested on every page (Playwright's ``_close_was_called``) is a close
+whatever liveness says. Headless WebKit made it routine -- it quits as soon as
+its last page closes, gone 8-11 ms after that ``close`` reaches Python
+(measured, x86-64), well inside an arm64 CI runner's loop latency. A close by
+the page itself (``window.close()``) or by the user carries no such mark and
+keeps the liveness margin.
 
 **Scope.** Linux (``/proc``), persistent contexts (a ``profile`` or ``session``
 user-data-dir, which is what identifies the process). An ephemeral context and a
@@ -253,6 +259,25 @@ def _evidence(proc: BrowserProcess) -> CrashEvidence:
     return "singleton_lock" if proc.singleton_lock else "liveness"
 
 
+def _client_closed_every_page(session: Any) -> bool:
+    """Whether the client itself asked Playwright to close every page.
+
+    Headless WebKit quits as soon as its last page closes (measured: MiniBrowser
+    gone 2 ms, its wrapper 8-11 ms after that page's ``close`` reached Python),
+    so a loop that dispatches the ``close`` any later finds the process gone and
+    liveness reads the close the client requested as a crash. Playwright marks a
+    page whose ``close()`` the client called (``_close_was_called``, private,
+    hence ``getattr`` and an identity check -- a mock's auto-attribute is not
+    ``True``); a crash in the same instant is then reported as the close it
+    was asked to be. A page closed by the page itself or by the user carries no
+    such mark and stays judged by liveness.
+    """
+    pages = list(getattr(session, "pages", None) or ())
+    if not pages:
+        return False
+    return all(getattr(getattr(page, "_impl_obj", page), "_close_was_called", False) is True for page in pages)
+
+
 def _relaunch_scheduled(session: Any, evidence: CrashEvidence, *, relaunch_allowed: bool) -> bool:
     """Whether this crash is reopened: mode on, lock evidence, nobody closing it.
 
@@ -316,6 +341,21 @@ def _record_process_crash(session: Any, proc: BrowserProcess, *, relaunch_allowe
         log.debug("octowright.browser.process_crash_publish_failed", instance_id=session.instance_id, error=repr(exc))
 
 
+def _judge_exit(session: Any, *, relaunch_allowed: bool) -> ExitVerdict:
+    """Measure the exit and record it if it was a crash; ``closed`` when it cannot tell."""
+    proc = getattr(session, "_browser_process", None)
+    measured = exit_verdict(proc)
+    if measured != "crashed" or proc is None:
+        return measured or "closed"
+    if _evidence(proc) == "liveness" and _client_closed_every_page(session):
+        # The exit followed a close the client asked for; see
+        # _client_closed_every_page for why liveness misreads it.
+        log.debug("octowright.browser.exit_after_client_close", instance_id=session.instance_id, pid=proc.pid)
+        return "closed"
+    _record_process_crash(session, proc, relaunch_allowed=relaunch_allowed)
+    return "crashed"
+
+
 def classify_external_close(session: Any, *, relaunch_allowed: bool = True) -> SessionCloseReason:
     """The close reason for an external close signal on a still-live session.
 
@@ -333,13 +373,7 @@ def classify_external_close(session: Any, *, relaunch_allowed: bool = True) -> S
         if getattr(session, "_exit_verdict", None) == "crashed" or getattr(session, "_crashed", False):
             verdict = "crashed"
         else:
-            proc = getattr(session, "_browser_process", None)
-            measured = exit_verdict(proc)
-            if measured == "crashed" and proc is not None:
-                verdict = "crashed"
-                _record_process_crash(session, proc, relaunch_allowed=relaunch_allowed)
-            elif measured is not None:
-                verdict = measured
+            verdict = _judge_exit(session, relaunch_allowed=relaunch_allowed)
     finally:
         session._exit_verdict = verdict
         event = getattr(session, "_exit_verdict_event", None)
