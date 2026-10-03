@@ -109,6 +109,7 @@ class TestToPoolKwargs:
             "disable_gpu": True,
             "disable_automation_controlled": True,
             "wayland_native": False,
+            "session_key": None,
         }
 
     def test_defaults(self) -> None:

@@ -369,43 +369,25 @@ def test_poisoned_record_value_is_refused(value: object) -> None:
 @pytest.mark.anyio
 @pytest.mark.parametrize("value", [True, False, None])
 async def test_handoff_and_relaunch_carry_the_request(value: bool | None) -> None:
+    """The REQUEST is carried, so auto stays auto and re-detects. It comes
+    from the session's stored launch options, which the launch validated
+    strictly -- a duck-typed session attribute is never read."""
     session = SimpleNamespace(
-        kind="chromium",
-        label="lab",
-        profile="lab",
-        user_data_dir=None,
-        stabilize=False,
-        trace=False,
+        launch_options=LaunchOptions(kind="chromium", label="lab", profile="lab", wayland_native=value),
         har_path=None,
         protected=False,
         protected_reason="explicit",
-        disable_automation_controlled=False,
-        wayland_native=value,
+        user_data_dir=None,
+        wayland_native=object(),
         page=SimpleNamespace(url="https://x.test/now"),
         url="https://x.test/",
         launch_url="https://x.test/",
     )
     snapshot = _relaunch_snapshot_from_session(session)  # type: ignore[arg-type]
-    assert snapshot.wayland_native is value
 
     pool = SimpleNamespace(launch=AsyncMock(return_value={"instance_id": "new"}))
     await _launch_from_snapshot(pool, snapshot, headed=True)  # type: ignore[arg-type]
     assert pool.launch.call_args.kwargs["wayland_native"] is value
-
-
-def test_snapshot_ignores_a_non_boolean_session_attribute() -> None:
-    """A duck-typed session (MagicMock in several tests) must not smuggle a
-    truthy non-bool into a launch that validates strictly."""
-    session = SimpleNamespace(
-        kind="chromium",
-        label=None,
-        profile=None,
-        page=SimpleNamespace(url="https://x.test/"),
-        url="https://x.test/",
-        launch_url="https://x.test/",
-        wayland_native=object(),
-    )
-    assert _relaunch_snapshot_from_session(session).wayland_native is None  # type: ignore[arg-type]
 
 
 # ─── status ──────────────────────────────────────────────────────────────────

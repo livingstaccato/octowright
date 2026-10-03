@@ -27,6 +27,7 @@ from octowright.browser_pool.launch_helpers import (
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.options import LaunchOptions, resolve_protected
+from octowright.browser_pool.replacement import recorded_launch_options
 from octowright.browser_pool.wayland import WaylandDecision, resolve_wayland_native
 from octowright.defaults import HEADLESS_DEFAULT
 from octowright.recorder import new_log_path
@@ -61,7 +62,14 @@ async def launch_profile_locked(
     protected, protected_reason = resolve_protected(
         launch_options.protected, headed=not headless, ephemeral=launch_options.ephemeral
     )
-    launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
+    # What the session keeps, and what a handoff/relaunch rebuilds from: the
+    # request with these launch-time decisions folded in (see replacement).
+    launch_options = recorded_launch_options(
+        replace(launch_options, protected=protected, protected_reason=protected_reason),
+        instance_id=instance_id,
+        profile=profile,
+        headless=headless,
+    )
     log_path = new_log_path(pool._recordings_dir, instance_id, label, kind)
 
     viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(

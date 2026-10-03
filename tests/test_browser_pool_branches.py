@@ -109,6 +109,20 @@ def _fake_session(
     # (session/core.py) so this double exercises the identical call surface.
     session.operation = gate.operation
     session.operation_snapshot = gate.snapshot
+    # What a real launch records (replacement.recorded_launch_options); a
+    # handoff/relaunch builds its replacement from it.
+    scoped = profile is None and user_data_dir is not None
+    session.launch_options = LaunchOptions(
+        kind=kind,
+        label=label,
+        profile=profile,
+        headed=False,
+        stabilize=stabilize,
+        trace=trace,
+        ephemeral=profile is None and not scoped,
+        session=scoped,
+        session_key=(label or instance_id) if scoped else None,
+    )
 
     async def _set_protected_state(protected_value: bool, *, reason: str = "explicit") -> dict[str, object]:
         def _commit() -> dict[str, object]:
@@ -1491,6 +1505,7 @@ def _real_session(*, instance_id: str, tmp_path: Path, protected: bool = False) 
         recorder=MagicMock(),
         log_path=tmp_path / f"{instance_id}.jsonl",
         protected=protected,
+        launch_options=LaunchOptions(ephemeral=True, headed=False),
     )
 
 

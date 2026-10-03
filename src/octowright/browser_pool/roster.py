@@ -129,8 +129,9 @@ async def close_all(
 
 #: Launch options a roster spec may not set, though ``LaunchOptions`` accepts
 #: them: ``trusted_launch_url`` picks the URL the macro credential guards trust,
-#: which only handoff/relaunch may carry -- ``browser_launch`` does not expose it.
-_NOT_ROSTER_SETTABLE = frozenset({"trusted_launch_url"})
+#: and ``session_key`` names another browser's session directory -- both carried
+#: only by handoff/relaunch, and ``browser_launch`` exposes neither.
+_NOT_ROSTER_SETTABLE = frozenset({"trusted_launch_url", "session_key"})
 
 
 def roster_launch_kwargs(spec: dict[str, Any]) -> dict[str, Any]:

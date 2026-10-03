@@ -262,6 +262,13 @@ class LaunchOptions:
     #: recording (see ``from_launch_record``): a poisoned one must not choose
     #: what the guard trusts.
     trusted_launch_url: str | None = None
+    #: The key a ``session=True`` tmpdir is shared under, when it is not the
+    #: label. An anonymous session's directory is keyed by its instance_id, so
+    #: a handoff or relaunch -- which gets a new one -- opened an empty profile
+    #: and lost every cookie; the replacement carries the original's key
+    #: instead. Grants nothing a ``label`` does not, being the same key. NEVER
+    #: read from a JSONL recording (see ``from_launch_record``).
+    session_key: str | None = None
 
     @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
@@ -398,6 +405,8 @@ class LaunchOptions:
     def _validate_trusted_launch_url(self) -> None:
         if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
             raise InvalidRequestError("trusted_launch_url must be a string")
+        if self.session_key is not None and (not isinstance(self.session_key, str) or not self.session):
+            raise InvalidRequestError("session_key must be a string, and only with session=True")
 
     def _validate_engine_specific_options(self) -> None:
         if not isinstance(self.disable_automation_controlled, bool):
@@ -450,7 +459,7 @@ class LaunchOptions:
         return self.profile
 
     def session_name(self, instance_id: str) -> str:
-        return self.label or instance_id
+        return self.session_key or self.label or instance_id
 
     def to_pool_kwargs(self) -> dict[str, Any]:
         """Flatten back to the kwarg dict accepted by ``BrowserPool.launch``.

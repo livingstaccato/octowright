@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 
 from octowright.browser_pool import driver_relaunch, incidents
+from octowright.browser_pool.options import LaunchOptions
 from tests._metric_recorders import RecordingCounter
 
 
@@ -43,6 +44,20 @@ def _session(instance_id: str, **over: Any) -> SimpleNamespace:
         "user_data_dir": None,
     }
     base.update(over)
+    if "launch_options" not in base:
+        # What a real launch records (replacement.recorded_launch_options):
+        # the reopen is built from it, not from the attributes above.
+        scoped = base["profile"] is None and base["user_data_dir"] is not None
+        base["launch_options"] = LaunchOptions(
+            kind=base["kind"],
+            label=base["label"],
+            profile=base["profile"],
+            headed=False,
+            ephemeral=base["profile"] is None and not scoped,
+            session=scoped,
+            session_key=base["label"] if scoped else None,
+            base_url=base.get("base_url"),
+        )
     return SimpleNamespace(**base)
 
 

@@ -27,6 +27,7 @@ from octowright.session.operation.gate import (
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
+    from octowright.browser_pool.replacement import ReplacementSource
     from octowright.session import BrowserSession
 
 log = get_logger(__name__)
@@ -440,34 +441,37 @@ def accept_external_close_nowait(
 
 @dataclass(slots=True, frozen=True)
 class RelaunchSnapshot:
-    """Immutable capture of every field a close-then-relaunch compound
-    (handoff, fluid relaunch) needs to build its replacement launch.
+    """Immutable capture of what a close-then-relaunch compound (handoff,
+    fluid relaunch) builds its replacement from.
 
     Built by ``_relaunch_snapshot_from_session`` and returned from the
     preparation callback the coordinator runs once the close ticket owns the
     gate -- ``target_url`` in particular must reflect the session's FINAL
     navigated URL (``session.page.url``), not a pre-close read that a
-    concurrent navigation could have raced past.
+    concurrent navigation could have raced past. The launch options come
+    from ``source`` (``replacement.ReplacementSource``), the one place that
+    decides what a replacement carries.
     """
 
-    kind: str
-    label: str | None
-    profile: str | None
-    user_data_dir: Any
-    stabilize: bool
-    trace: bool
-    har_path: Any
-    protected: bool
-    protected_reason: str
-    disable_automation_controlled: bool
+    source: ReplacementSource
     target_url: str
-    # Where the operator launched the original, which the replacement keeps:
-    # ``target_url`` is where the page is NOW, and the macro header guard
-    # (``substitution.own_site_origins``) must not come to trust a host a macro
-    # navigated to just because the browser was relaunched there.
-    launch_url: str | None = None
-    # The original launch's wayland_native request (None = auto).
-    wayland_native: bool | None = None
+    user_data_dir: Any = None
+
+    @property
+    def kind(self) -> str:
+        return self.source.kind
+
+    @property
+    def profile(self) -> str | None:
+        return self.source.profile
+
+    @property
+    def protected(self) -> bool:
+        return self.source.protected
+
+    @property
+    def protected_reason(self) -> str:
+        return self.source.protected_reason
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:
