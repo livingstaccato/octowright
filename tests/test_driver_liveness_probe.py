@@ -23,14 +23,20 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from playwright._impl._errors import Error as PlaywrightError
 from playwright._impl._errors import TargetClosedError
+from playwright.async_api import Error as PlaywrightError
 
 from octowright.browser_pool import driver_health, driver_relaunch
 from octowright.browser_pool.pool import BrowserPool
 
 #: What Playwright raises when one chromium exits during launch (measured).
 LAUNCH_DEATH = "BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n<launching> ..."
+
+
+#: How long the fake hung send resists cancellation. A probe that awaited the
+#: cancellation would take at least this long, which the timeout test bounds
+#: below.
+_CANCEL_RESISTANCE_S = 0.3
 
 
 @pytest.fixture
@@ -42,13 +48,20 @@ class _Channel:
     def __init__(self, behaviour: str) -> None:
         self.behaviour = behaviour
         self.calls: list[tuple[str, Any, dict[str, Any]]] = []
+        self.on_error_future: asyncio.Future[None] | None = None
 
     async def send(self, method: str, timeout_calculator: Any, params: dict[str, Any]) -> None:
         self.calls.append((method, timeout_calculator, params))
         if self.behaviour == "ok":
             return None
         if self.behaviour == "transport_closed":
-            raise Exception("Channel.send: Connection closed while reading from the driver")
+            # Playwright fails a send with the transport's error only by way of
+            # on_error_future, so the transport is flagged by then too.
+            error = Exception("Channel.send: Connection closed while reading from the driver")
+            if self.on_error_future is not None and not self.on_error_future.done():
+                self.on_error_future.set_exception(error)
+                self.on_error_future.exception()
+            raise error
         if self.behaviour == "protocol_error":
             raise PlaywrightError("localUtils.traceDiscarded: some protocol-level refusal")
         if self.behaviour == "hang_and_resist_cancel":
@@ -56,11 +69,11 @@ class _Channel:
             # send runs Connection._abort, which waits for the driver to answer
             # the abort. A probe that awaits the cancellation hangs with it.
             # (Finite here only so event-loop teardown, which cancels once,
-            # can finish.)
+            # can finish -- and short, since every test using it pays it.)
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(_CANCEL_RESISTANCE_S)
                 raise
         raise AssertionError(self.behaviour)
 
@@ -78,8 +91,10 @@ def _fake_pw(
         on_error_future.set_exception(Exception("Connection closed while reading from the driver"))
         on_error_future.exception()  # consumed; mirrors Playwright having observed it
     channel = _Channel(behaviour)
+    channel.on_error_future = on_error_future
     transport = SimpleNamespace(on_error_future=on_error_future, _proc=SimpleNamespace(returncode=returncode))
     connection = SimpleNamespace(
+        _error=None,
         _closed_error=closed_error,
         _transport=transport,
         local_utils=SimpleNamespace(_channel=channel),
@@ -152,7 +167,7 @@ async def test_probe_timeout_is_dead_and_bounded_even_when_cancel_hangs() -> Non
     pw, _ = _fake_pw("hang_and_resist_cancel")
     started = time.monotonic()
     assert await driver_health.driver_is_alive(pw, timeout=0.05) is False
-    assert time.monotonic() - started < 1.0
+    assert time.monotonic() - started < _CANCEL_RESISTANCE_S - 0.05
 
 
 @pytest.mark.anyio
@@ -243,3 +258,94 @@ async def test_launch_death_with_a_hung_driver_resets(monkeypatch: pytest.Monkey
     assert out == {"instance_id": "retried"}
     assert calls["n"] == 2
     assert pool.driver_restart_count() == 1
+
+
+# ─── the probe must not misread, or consume, Playwright's own state ──────────
+
+
+class _InnerSendChannel(_Channel):
+    """Mirrors ``Channel._inner_send`` in Playwright 1.63: a listener exception
+    stored on the connection is raised -- and cleared -- by the NEXT send,
+    before anything is sent to the driver."""
+
+    def __init__(self, connection: Any) -> None:
+        super().__init__("ok")
+        self.connection = connection
+
+    async def send(self, method: str, timeout_calculator: Any, params: dict[str, Any]) -> None:
+        if self.connection._error is not None:
+            error, self.connection._error = self.connection._error, None
+            raise error
+        self.calls.append((method, timeout_calculator, params))
+
+
+@pytest.mark.anyio
+async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed() -> None:
+    """Measured on 1.63: a sync ``console`` listener that raises leaves the
+    exception on ``Connection._error`` for the next API call. The probe used to
+    be that call: it reported a healthy driver dead and swallowed the error the
+    caller's next call was meant to see."""
+    pw, _ = _fake_pw("ok")
+    connection = pw._impl_obj._connection
+    stored = ValueError("listener boom")
+    connection._error = stored
+    channel = _InnerSendChannel(connection)
+    connection.local_utils = SimpleNamespace(_channel=channel)
+
+    assert await driver_health.driver_is_alive(pw) is True
+    assert channel.calls, "the round trip must still reach the driver"
+    assert connection._error is stored
+
+
+@pytest.mark.anyio
+async def test_a_probe_task_that_ends_cancelled_does_not_raise() -> None:
+    pw, channel = _fake_pw("ok")
+
+    async def cancelled(*_a: Any) -> None:
+        raise asyncio.CancelledError
+
+    channel.send = cancelled  # type: ignore[method-assign]
+    assert await driver_health.driver_is_alive(pw) is False
+
+
+@pytest.mark.anyio
+async def test_cancelling_the_caller_leaves_no_unretrieved_probe_exception() -> None:
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        pw, channel = _fake_pw("ok")
+        release = asyncio.Event()
+
+        async def fails_later(*_a: Any) -> None:
+            await release.wait()
+            raise Exception("Connection closed while reading from the driver")
+
+        channel.send = fails_later  # type: ignore[method-assign]
+        caller = asyncio.ensure_future(driver_health.driver_is_alive(pw, timeout=30))
+        await asyncio.sleep(0.01)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        release.set()
+        await asyncio.sleep(0.01)
+        import gc
+
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+    assert not [c for c in reported if "never retrieved" in str(c.get("message", ""))], reported
+
+
+def test_the_probe_imports_no_private_playwright_module() -> None:
+    """A Playwright upgrade that moves ``playwright._impl._errors`` must not stop
+    the daemon importing this module; the probe promises a soft fallback."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(driver_health))
+    imported = [node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    imported += [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+    assert not [m for m in imported if m and m.startswith("playwright._impl")], imported

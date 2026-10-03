@@ -12,8 +12,8 @@ error, which would otherwise brick the whole pool until a restart. ``pool.launch
 ``is_driver_dead_error`` to recognise that class of failure, discard the dead
 driver, and rebuild it on retry.
 
-The match is on error *text* (Playwright surfaces these as generic
-``playwright._impl._errors.Error`` / ``ValueError``), kept deliberately narrow so
+The match is on error *text* (Playwright surfaces these as its generic
+``Error`` / ``ValueError``), kept deliberately narrow so
 ordinary per-launch failures (bad URL, missing binary, navigation error) are NOT
 treated as driver death.
 
@@ -34,8 +34,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Final
 
-from playwright._impl._errors import Error as PlaywrightError
-from playwright._impl._errors import TargetClosedError
+from playwright.async_api import Error as PlaywrightError
 from provide.telemetry import get_logger
 
 log = get_logger(__name__)
@@ -97,6 +96,45 @@ def _consume(task: asyncio.Future[Any]) -> None:
         task.exception()
 
 
+def _is_target_closed(error: BaseException) -> bool:
+    """``TargetClosedError`` by class NAME: the class is not exported by
+    ``playwright.async_api``, and importing it from ``playwright._impl`` would
+    turn a Playwright upgrade that moves it into a daemon that cannot start --
+    the opposite of this module's soft fallback."""
+    return any(cls.__name__ == "TargetClosedError" for cls in type(error).__mro__)
+
+
+def _start_probe(connection: Any) -> asyncio.Future[Any]:
+    """Send the no-op round trip WITHOUT consuming a stored listener error.
+
+    ``Channel._inner_send`` raises -- and clears -- ``Connection._error`` (an
+    exception a sync event listener raised, saved "to throw at the next API
+    call") before sending anything. Measured on 1.63: a ``console`` listener
+    raising ``ValueError`` made the probe report a healthy driver dead and
+    swallowed the error the caller's next call was meant to see. So it is
+    lifted off for the send and put back once the send has started (the check
+    is the send's first step, which runs before ``asyncio.wait`` returns)."""
+    stored = getattr(connection, "_error", None)
+    if stored is not None:
+        connection._error = None
+    try:
+        task = asyncio.ensure_future(connection.local_utils._channel.send("traceDiscarded", None, {"stacksId": ""}))
+    except BaseException:
+        _restore_error(connection, stored)
+        raise
+    # Always retrieved, whoever stops waiting first -- a caller cancelled
+    # mid-wait leaves the task running, and asyncio would log its exception.
+    task.add_done_callback(_consume)
+    task.add_done_callback(lambda _t: _restore_error(connection, stored))
+    return task
+
+
+def _restore_error(connection: Any, stored: BaseException | None) -> None:
+    # A newer listener error wins, as it would in Playwright itself.
+    if stored is not None and getattr(connection, "_error", None) is None:
+        connection._error = stored
+
+
 async def driver_is_alive(pw: Any, *, timeout: float | None = None) -> bool:
     """True only when the shared driver demonstrably answers.
 
@@ -107,9 +145,12 @@ async def driver_is_alive(pw: Any, *, timeout: float | None = None) -> bool:
        (``DRIVER_PROBE_TIMEOUT_SECONDS``): ``localUtils.traceDiscarded`` with
        an empty ``stacksId``. The driver returns before any lookup for a falsy
        id, so it cannot touch a real tracing session. An answer -- success, or
-       a protocol error the driver sent back -- is alive. A transport error
-       (``Connection closed while reading from the driver``, measured after
-       SIGKILL, <1ms), ``TargetClosedError``, or no answer in time is dead.
+       a protocol error the driver sent back -- is alive. ``TargetClosedError``,
+       a transport error (``Connection closed while reading from the driver``,
+       measured after SIGKILL, <1ms; it always leaves ``_flagged_dead`` true),
+       or no answer in time is dead. Any other exception is a listener error
+       that reached the send in the window before it started (see
+       ``_start_probe``); it is put back and the round trip tried once more.
 
     The bound uses ``asyncio.wait``, NOT ``asyncio.wait_for``: cancelling a
     Playwright channel send runs ``Connection._abort``, which waits for the
@@ -120,21 +161,27 @@ async def driver_is_alive(pw: Any, *, timeout: float | None = None) -> bool:
     if pw is None:
         return False
     bound = DRIVER_PROBE_TIMEOUT_SECONDS if timeout is None else timeout
-    try:
-        connection = _connection_of(pw)
-        if _flagged_dead(connection):
+    deadline = asyncio.get_running_loop().time() + bound
+    for _attempt in range(2):
+        try:
+            connection = _connection_of(pw)
+            if _flagged_dead(connection):
+                return False
+            task = _start_probe(connection)
+        except Exception as exc:
+            log.warning("octowright.pool.driver_probe_unavailable", error=repr(exc))
             return False
-        channel = connection.local_utils._channel
-        task = asyncio.ensure_future(channel.send("traceDiscarded", None, {"stacksId": ""}))
-    except Exception as exc:
-        log.warning("octowright.pool.driver_probe_unavailable", error=repr(exc))
-        return False
-    done, _ = await asyncio.wait({task}, timeout=bound)
-    if not done:
-        task.add_done_callback(_consume)
-        log.info("octowright.pool.driver_probe_timed_out", timeout_s=bound)
-        return False
-    error = task.exception()
-    if error is None:
-        return True
-    return isinstance(error, PlaywrightError) and not isinstance(error, TargetClosedError)
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        done, _ = await asyncio.wait({task}, timeout=remaining)
+        if not done or task.cancelled():
+            log.info("octowright.pool.driver_probe_timed_out", timeout_s=bound, cancelled=bool(done))
+            return False
+        error = task.exception()
+        if error is None:
+            return True
+        if _is_target_closed(error) or _flagged_dead(connection):
+            return False
+        if isinstance(error, PlaywrightError):
+            return True  # the driver answered, with a refusal
+        connection._error = error  # newest wins, as in Playwright's own handler
+    return False
