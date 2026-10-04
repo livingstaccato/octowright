@@ -12,6 +12,62 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Added
+- **Headed Chromium on Linux runs as a native Wayland client when it can.**
+  On a Wayland desktop it opens with `--ozone-platform=wayland` instead of
+  running through XWayland. It turns on automatically
+  only for headed Chromium on Linux with a live `WAYLAND_DISPLAY` socket, and
+  `wayland_native` (per launch) or `OCTOWRIGHT_WAYLAND_NATIVE` forces it on or
+  off. An automatic launch the browser blames on Wayland retries once on X11
+  and says why in the launch result; an explicit request fails instead.
+  `octowright_status()` reports the effective setting.
+
+### Fixed
+- **A browser dying at launch no longer closes every other browser.** Its
+  error reads like a dead shared Playwright driver, and the pool used to reset
+  the driver on the wording alone. It now confirms the driver is dead first,
+  resets only the driver the failed launch used, and bounds the reset so a
+  hung driver cannot stall it.
+- **Launches no longer leak a running browser** when setup fails or the launch
+  is cancelled after the browser started, which left the profile locked so
+  the next launch of it failed as "in use".
+- **Handoff and every relaunch keep the original browser's options** --
+  launch headers, viewport, `disable_gpu`, HAR settings, `protected`,
+  `disable_automation_controlled` and `wayland_native` were dropped before. A
+  recording made without HAR relaunches again.
+- **Credentials cannot be routed around the macro checks.** A placeholder
+  action name, `prompt_text`, `press_key` and `select_option` no longer carry a
+  credential past them, page code (`evaluate`, `expect_js`, `mock_route`
+  bodies and the like) is refused in a run that uses one, and a macro `try`
+  can no longer swallow a credential, SSRF or screenshot refusal or write the
+  substituted value to the log or recording.
+- **SSRF checks see the host the browser and HTTP client actually use**: web
+  discovery validates and dials the same IDNA name, and `http:127.0.0.1`-style
+  and `ws:`/`wss:` URLs are classified the way a browser parses them.
+- **The daemon and follower bridge hold their invariants under load.**
+  Followers without an identifying header share one rate-limit bucket again,
+  a call in flight when the leader is replaced is not re-sent to the new one,
+  a second leader cannot bind a port already in use, SIGTERM exits with
+  followers attached, and a leader removes the lockfile only while it still
+  names it.
+- **Writes stay under their roots and expensive inputs are bounded.** A
+  symlinked directory cannot redirect a capture or atomic write,
+  `browser_export_script` cannot overwrite a recording, `capture_search`
+  regexes run in a child process that is killed after 5 seconds, URL globs
+  allow at most 2 wildcard groups, and the dashboard frame endpoint validates
+  its timestamp and bounds its cache.
+- `scenario_wait_for_sync` matches its regex while pages are still
+  navigating, and a remapped scenario participant follows its replacement
+  session's log and URL.
+
+### Changed
+- `pool.handoff(headed=None)` keeps the original browser's headed setting, and
+  relaunches keep `badge` and `record_video` instead of resetting them.
+- A call in flight when the leader restarts fails with an "outcome unknown"
+  error instead of being replayed; retry it if it is safe to repeat.
+- WebSocket handshakes to the dashboard require an Origin that matches the
+  page exactly, not any loopback port.
+
 ## [0.26.0] - 2026-10-03
 
 ### Added
