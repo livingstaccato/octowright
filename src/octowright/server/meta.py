@@ -145,9 +145,10 @@ def octowright_dashboard_url(session_id: str | None = None) -> dict[str, Any]:
     live_count = pool.active_count()
     try:
         from octowright.defaults import RECORDINGS_DIR
+        from octowright.http.recording_sidecars import is_session_recording
 
         if RECORDINGS_DIR.exists():
-            closed_count = sum(1 for _ in RECORDINGS_DIR.glob("*.jsonl"))
+            closed_count = sum(1 for p in RECORDINGS_DIR.glob("*.jsonl") if is_session_recording(p.name))
     except Exception:
         closed_count = 0
 

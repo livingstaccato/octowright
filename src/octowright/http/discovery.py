@@ -31,6 +31,7 @@ from octowright.http.artifacts import (
 from octowright.http.artifacts import (
     kind_from_recording_name as _kind_from_recording_name,
 )
+from octowright.http.recording_sidecars import is_session_recording
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.recorder import tail_log
 
@@ -61,7 +62,7 @@ def _read_first_launch(jsonl_path: Path) -> dict[str, Any] | None:
 def _iter_recordings(recordings_dir: Path) -> list[Path]:
     if not recordings_dir.exists():
         return []
-    return sorted(recordings_dir.glob("*.jsonl"))
+    return sorted(p for p in recordings_dir.glob("*.jsonl") if is_session_recording(p.name))
 
 
 def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:

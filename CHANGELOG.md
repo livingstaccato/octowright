@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A recording's websocket sidecar is no longer listed as a session.** The
+  `{stem}.websocket.jsonl` file shares the recording's `.jsonl` suffix, so the
+  dashboard showed it as a phantom closed session, a labelled recording's
+  detail, events, video and delete resolved to the sidecar instead of the
+  recording, and `octowright_dashboard_url` counted it in `closed_sessions`.
 - **Editing or verifying a macro artifact's critical points keeps its
   manifest intact.** `macro_artifact_critical_points_set` and
   `macro_artifact_verify` wrote back the compacted view they had read, which
