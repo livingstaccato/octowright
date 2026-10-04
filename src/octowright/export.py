@@ -404,6 +404,88 @@ def _py_line(entry: dict) -> str | None:
     return handler(entry) if handler else None
 
 
+_CONTROL_ACTIONS = frozenset({"if", "if_not", "while", "while_not"})
+
+
+class _BodyRenderer:
+    """Render recorded rows, inlining ``macro_call`` and nesting control blocks.
+
+    Every way this could produce a broken script is refused with
+    ``ValueError`` before anything is written: a ``macro_call`` that will not
+    load used to be dropped silently (the script simply skipped those steps),
+    a recursive one recursed until Python gave up, and an ``end_block`` with
+    no open block, a block never closed, or a block with no condition rendered
+    source that does not parse.
+    """
+
+    def __init__(self, fmt: str, line_fn: Callable[[dict], str | None], lines: list[str]) -> None:
+        self._fmt = fmt
+        self._line_fn = line_fn
+        self._lines = lines
+        self._depth = 0
+        self._block_empty: list[bool] = []
+        self._macro_stack: list[str] = []
+
+    def render_body(self, entries: list[dict]) -> None:
+        self._walk(entries)
+        if self._depth:
+            raise ValueError(f"export refused: {self._depth} control block(s) never closed by end_block")
+
+    def _walk(self, entries: list[dict]) -> None:
+        for entry in entries:
+            action = entry.get("action")
+            if not action:
+                continue
+            if action == "macro_call":
+                self._inline_macro(entry.get("name"))
+            elif action == "end_block":
+                self._close_block()
+            else:
+                self._emit(entry, action)
+
+    def _inline_macro(self, name: object) -> None:
+        if not isinstance(name, str) or not name:
+            raise ValueError("export refused: macro_call has no macro name")
+        if name in self._macro_stack:
+            raise ValueError(f"export refused: macro_call {name!r} is recursive ({' -> '.join(self._macro_stack)})")
+        try:
+            macro = load_macro(name)
+        except Exception as exc:
+            raise ValueError(f"export refused: macro_call {name!r} could not be loaded: {exc}") from exc
+        self._macro_stack.append(name)
+        try:
+            self._walk(macro.get("actions", []))
+        finally:
+            self._macro_stack.pop()
+
+    def _close_block(self) -> None:
+        if not self._depth:
+            raise ValueError("export refused: end_block with no open control block")
+        if self._block_empty.pop() and self._fmt == "python":
+            self._lines.append("        " + "    " * self._depth + "pass")
+        self._depth -= 1
+        if self._fmt == "ts":
+            self._lines.append(("  " * (1 + self._depth)) + "}")
+
+    def _emit(self, entry: dict, action: str) -> None:
+        rendered = self._line_fn(entry)
+        if rendered is None and action in _CONTROL_ACTIONS:
+            raise ValueError(f"export refused: {action} block has no selector, expression or text condition")
+        if rendered is not None:
+            if self._block_empty:
+                self._block_empty[-1] = False
+            base = "        " if self._fmt == "python" else "  "
+            extra = "    " * self._depth if self._fmt == "python" else "  " * self._depth
+            self._lines.append(
+                "\n".join(
+                    base + extra + line[len(base) :] if line.startswith(base) else line for line in rendered.split("\n")
+                )
+            )
+        if action in _CONTROL_ACTIONS:
+            self._depth += 1
+            self._block_empty.append(True)
+
+
 def export_script(
     log_path: Path, out_path: Path, fmt: str = "python", manifest: dict | None = None, *, root: Path | None = None
 ) -> Path:
@@ -414,50 +496,9 @@ def export_script(
 
     header, footer, line_fn = _renderer(fmt)
     lines: list[str] = [header]
-
-    def process_entries(entries: list[dict], current_indent: int) -> int:
-        for entry in entries:
-            action = entry.get("action")
-            if not action:
-                continue
-
-            if action == "macro_call":
-                name = entry.get("name")
-                if name:
-                    try:
-                        macro = load_macro(name)
-                        current_indent = process_entries(macro.get("actions", []), current_indent)
-                    except Exception:
-                        pass
-                continue
-
-            if action == "end_block":
-                current_indent = max(0, current_indent - 1)
-                if fmt == "ts":
-                    lines.append(("  " * (1 + current_indent)) + "}")
-                continue
-
-            rendered = line_fn(entry)
-            if rendered is not None:
-                base = "        " if fmt == "python" else "  "
-                extra = "    " * current_indent if fmt == "python" else "  " * current_indent
-
-                indented_lines = []
-                for line in rendered.split("\n"):
-                    if line.startswith(base):
-                        indented_lines.append(base + extra + line[len(base) :])
-                    else:
-                        indented_lines.append(line)
-                lines.append("\n".join(indented_lines))
-
-            if action in ("if", "if_not", "while", "while_not"):
-                current_indent += 1
-        return current_indent
-
     with log_path.open("r", encoding="utf-8") as fh:
         raw_entries = [json.loads(line) for line in fh if line.strip()]
-        process_entries(raw_entries, 0)
-
+    _BodyRenderer(fmt, line_fn, lines).render_body(raw_entries)
     lines.append(footer)
 
     if manifest and "critical_points" in manifest:

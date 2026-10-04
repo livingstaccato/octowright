@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`browser_export_script` refuses a recording it cannot render faithfully.**
+  A `macro_call` row whose macro would not load was dropped silently (the
+  script just skipped those steps), a recursive one recursed until Python
+  gave up, and an unbalanced or conditionless control block produced a script
+  that did not parse. Each is now refused before anything is written, and an
+  empty Python block renders as `pass`.
 - **The browser badge's links open the dashboard and the session.** With
   `OCTOWRIGHT_DEFAULT_URL` set, the Alt+click overlay's "dashboard" and
   "recording" links pointed at the operator's app (with the instance id in

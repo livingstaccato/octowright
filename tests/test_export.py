@@ -1326,3 +1326,63 @@ def test_export_normal_recording_still_runs_all_six_guarded_fields(tmp_path: Pat
     assert "page = ctx.pages()[1];" in src_ts
     assert "status: 404" in src_ts
     assert '(dialog as any)["accept"]()' in src_ts
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+def test_export_refuses_a_macro_call_it_cannot_load(tmp_path: Path, monkeypatch, fmt: str) -> None:
+    """A macro_call whose macro will not load was dropped silently, so the
+    exported script just skipped those steps."""
+
+    def fake_load_macro(name):
+        raise FileNotFoundError(name)
+
+    monkeypatch.setattr("octowright.export.load_macro", fake_load_macro)
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "https://x"}, {"action": "macro_call", "name": "gone"}],
+    )
+    with pytest.raises(ValueError, match="macro_call 'gone'"):
+        export_script(log, tmp_path / f"out.{fmt}", fmt=fmt)
+    assert not (tmp_path / f"out.{fmt}").exists()
+
+
+def test_export_refuses_a_recursive_macro_call(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "octowright.export.load_macro", lambda name: {"actions": [{"action": "macro_call", "name": name}]}
+    )
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [{"action": "launch", "kind": "webkit", "url": "https://x"}, {"action": "macro_call", "name": "loop"}],
+    )
+    with pytest.raises(ValueError, match="recursive"):
+        export_script(log, tmp_path / "out.py", fmt="python")
+
+
+@pytest.mark.parametrize("fmt", ["python", "ts"])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"action": "end_block"}],
+        [{"action": "if", "selector": "#a"}, {"action": "click", "selector": "#b"}],
+        [{"action": "if"}, {"action": "click", "selector": "#b"}, {"action": "end_block"}],
+    ],
+    ids=["unopened-end", "unclosed-block", "conditionless-block"],
+)
+def test_export_refuses_unbalanced_control_rows(tmp_path: Path, fmt: str, rows: list) -> None:
+    """These rendered a script that does not parse (IndentationError / a stray brace)."""
+    log = _write_recording(tmp_path / "r.jsonl", [{"action": "launch", "kind": "webkit", "url": "https://x"}, *rows])
+    with pytest.raises(ValueError, match="block"):
+        export_script(log, tmp_path / f"out.{fmt}", fmt=fmt)
+
+
+def test_export_an_empty_python_block_still_compiles(tmp_path: Path) -> None:
+    log = _write_recording(
+        tmp_path / "r.jsonl",
+        [
+            {"action": "launch", "kind": "webkit", "url": "https://x"},
+            {"action": "if", "selector": "#a"},
+            {"action": "end_block"},
+        ],
+    )
+    out = export_script(log, tmp_path / "out.py", fmt="python")
+    compile(out.read_text(), "<exported>", "exec")
