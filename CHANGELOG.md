@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`octowright takeover --apply` keeps the original config's backup.** The
+  backup name has one-second resolution, so disabling two servers in one config
+  replaced the first backup, the only copy of the original, with the already
+  rewritten text. Each backup is now a new file, with a counter added on a
+  clash.
 - **Concurrent video frame requests no longer fail at random.** The cache of
   video durations was shared between worker threads without a lock, so one
   request could evict another's entry before it was read back and answer
