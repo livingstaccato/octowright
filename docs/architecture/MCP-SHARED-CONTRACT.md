@@ -358,8 +358,11 @@ Both endpoints answer ``{<plural>: [...], "cursor": int, "total": int}``;
   the evicted range starts at the oldest retained message. Cursors used to be
   positions in that buffer, so once it filled ``since=1000`` returned nothing
   forever and an eviction skipped messages.
-- ``level=`` (case-sensitive match against ``ConsoleMessage.level``) filters
-  what is returned and **never moves the cursor**, so a filtered poller
+- ``level=`` filters what is returned, matched case-insensitively through the
+  canonical level groups (``console_levels.console_level_matches``): ``warn``
+  and ``warning`` match each other, ``error`` matches ``assert``. It was a raw
+  case-sensitive comparison, so ``level=warn`` matched nothing (every engine
+  reports ``warning``). The filter **never moves the cursor**, so a filtered poller
   resumes where it left off. It used to filter before slicing, which made the
   cursor an index into the filtered list.
 - ``total`` is how many retained messages match the filter.

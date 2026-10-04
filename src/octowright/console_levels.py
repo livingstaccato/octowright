@@ -52,6 +52,29 @@ def console_level(message: Any) -> str:
     return str(message.get("level", "")).lower()
 
 
+def _level_group(level: str) -> str:
+    """The severity group a normalized level belongs to, or the level itself."""
+    if level in ERROR_CONSOLE_LEVELS:
+        return "error"
+    if level in WARNING_CONSOLE_LEVELS:
+        return "warning"
+    return level
+
+
+def console_level_matches(message: Any, requested: str) -> bool:
+    """Whether a console entry matches a caller's requested ``level``.
+
+    Case-insensitive, and through the groups above: ``warn`` matches the
+    ``warning`` every engine emits, and ``error`` matches ``assert`` -- the
+    same grouping the dashboard's console filter applies (``severityForLevel``).
+    An entry with no level never matches.
+    """
+    level = console_level(message)
+    if not level:
+        return False
+    return _level_group(level) == _level_group(str(requested).lower())
+
+
 def is_error_console_message(message: Any) -> bool:
     return console_level(message) in ERROR_CONSOLE_LEVELS
 

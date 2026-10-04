@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from octowright.console_levels import (
+    console_level_matches,
     count_errors,
     count_warnings,
     is_diagnostic_console_message,
@@ -81,3 +82,28 @@ def test_malformed_entries_never_raise(entry: object) -> None:
     """These run while another failure is being reported; they must not add one."""
     assert not is_diagnostic_console_message(entry)
     assert not is_error_console_message(entry)
+
+
+@pytest.mark.parametrize(
+    ("requested", "level", "expected"),
+    [
+        ("warn", "warning", True),
+        ("WARN", "warning", True),
+        ("warning", "Warn", True),
+        ("error", "ERROR", True),
+        ("error", "assert", True),
+        ("log", "LOG", True),
+        ("info", "log", False),
+        ("warn", "error", False),
+        ("error", "warning", False),
+        ("debug", "info", False),
+    ],
+)
+def test_console_level_matches_through_the_canonical_groups(requested: str, level: str, expected: bool) -> None:
+    """A requested level matches case-insensitively and through the severity groups."""
+    assert console_level_matches({"level": level}, requested) is expected
+
+
+def test_console_level_matches_tolerates_a_malformed_entry() -> None:
+    assert console_level_matches("not a dict", "error") is False
+    assert console_level_matches({}, "log") is False

@@ -20,6 +20,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright._json_text import dumps_utf8_safe
+from octowright.console_levels import console_level_matches
 from octowright.dashboard_events import dashboard_events
 from octowright.defaults import (
     DASHBOARD_DISCONNECT_POLL_SECONDS,
@@ -184,7 +185,9 @@ async def session_console(request: Request) -> SafeJSONResponse:
     session, unfiltered: a live session's buffer is bounded, so ``dropped``
     says how many were evicted before the first one still held, and a
     ``since`` inside the evicted range starts at the oldest retained message.
-    ``level=`` (case-sensitive) filters what is returned and never moves the
+    ``level=`` filters what is returned, matched case-insensitively through
+    :func:`octowright.console_levels.console_level_matches` (``warn`` matches
+    the engines' ``warning``, ``error`` matches ``assert``), and never moves the
     cursor, so a filtered poller resumes exactly where it left off. ``total``
     is how many retained messages match the filter.
 
@@ -209,7 +212,7 @@ async def session_console(request: Request) -> SafeJSONResponse:
     level = request.query_params.get("level")
 
     def _matches(message: dict[str, Any]) -> bool:
-        return level is None or message.get("level") == level
+        return level is None or console_level_matches(message, level)
 
     start = min(max(0, since - dropped), len(messages))
     return SafeJSONResponse(

@@ -1350,6 +1350,42 @@ def test_console_level_filter_does_not_move_the_cursor(
     assert body["total"] == 2  # retained messages matching the filter
 
 
+def test_console_level_filter_uses_the_canonical_level_mapping(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """``level=warn`` used to match nothing: every engine reports ``warning``, and the match was raw."""
+    console = [
+        {"level": "warning", "text": "a"},
+        {"level": "log", "text": "b"},
+        {"level": "Warn", "text": "c"},
+        {"level": "assert", "text": "d"},
+    ]
+    _live_console_session(empty_pool, isolated_recordings, "conslevelmap1", console, 4)
+
+    warn = client.get("/api/sessions/conslevelmap1/console?level=warn").json()
+    assert [m["text"] for m in warn["messages"]] == ["a", "c"]
+    assert warn["total"] == 2
+    upper = client.get("/api/sessions/conslevelmap1/console?level=WARNING").json()
+    assert [m["text"] for m in upper["messages"]] == ["a", "c"]
+    errors = client.get("/api/sessions/conslevelmap1/console?level=error").json()
+    assert [m["text"] for m in errors["messages"]] == ["d"]
+
+
+def test_console_level_filter_maps_closed_session_levels(client: TestClient, isolated_recordings: Path) -> None:
+    name = "20260101T000000Z-chromium-conslevelmap2"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "console", "level": "warning", "text": "deprecated API"},
+        {"action": "console", "level": "log", "text": "noise"},
+    ]
+    (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    body = client.get("/api/sessions/conslevelmap2/console?level=warn").json()
+    assert body["total"] == 1
+    assert body["messages"] == [{"level": "warning", "text": "deprecated API"}]
+
+
 def test_console_closed_session_returns_empty(client: TestClient, isolated_recordings: Path) -> None:
     """Closed-session console view is empty when the recording has no console rows."""
     _write_recording(isolated_recordings, "consclosed01x")

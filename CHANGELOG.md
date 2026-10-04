@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
+  engine reports `console.warn` as `warning`, and the filter compared the raw
+  level case-sensitively, so `level=warn` returned nothing. It now matches
+  case-insensitively through the same level groups the dashboard uses:
+  `warn`/`warning` match each other and `error` also returns `assert`.
 - **`GET /api/sessions/{id}/console` keeps its cursor once a live session's
   console fills.** The cursor was a position in the 1000-message buffer, so
   once it filled `since=1000` returned nothing forever and an eviction
