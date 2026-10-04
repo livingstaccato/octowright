@@ -193,7 +193,7 @@ class TestSpawnedDaemonArgv:
                 seen["kwargs"] = kw
 
         monkeypatch.setattr(restart_mod.subprocess, "Popen", _FakePopen)
-        monkeypatch.setattr(restart_mod, "_resolve_octowright_entry", lambda: "/x/bin/octowright")
+        monkeypatch.setattr(daemonize, "_resolve_daemon_entrypoint", lambda: ["/x/bin/octowright"])
         # The shared spawner writes the daemon's stderr to the user state log;
         # keep that in the test's tmp dir.
         monkeypatch.setattr(daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))

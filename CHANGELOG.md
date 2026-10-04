@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`octowright restart` no longer brings the daemon back from another
+  install.** When this environment had no `octowright` console script beside
+  its interpreter, restart started whatever `octowright` came first on `PATH`.
+  That could be a different install and version, and it became the daemon
+  every client then talked to. Restart now resolves the command the way every
+  other daemon start does: the console script beside this interpreter, else
+  `python -m octowright` on it.
 - **A leader that closes its stream cleanly is handled like one that drops
   it.** Only an error ended a session properly. After a clean close (a graceful
   restart, a reaped session) the follower kept handing calls to the closed

@@ -341,8 +341,9 @@ def test_spawn_passes_http_host_and_port_through(
             self.pid = 99999
 
     monkeypatch.setattr(_restart_mod.subprocess, "Popen", _FakePopen)
-    monkeypatch.setattr(_restart_mod, "_resolve_octowright_entry", lambda: "/fake/octowright")
     from octowright import daemonize as _daemonize
+
+    monkeypatch.setattr(_daemonize, "_resolve_daemon_entrypoint", lambda: ["/fake/octowright"])
 
     monkeypatch.setattr(_daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))
     monkeypatch.setattr(
@@ -440,26 +441,34 @@ def test_wait_for_health_follows_lockfile_auto_bumped_port(monkeypatch: pytest.M
     ]
 
 
-def test_resolve_octowright_entry_prefers_venv_neighbour(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
-    """Path(sys.executable).parent / 'octowright[.exe]' must win over PATH discovery.
+def test_spawn_never_takes_a_different_install_from_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """With no console script beside this interpreter, restart fell back to
+    ``octowright`` on PATH -- possibly another install and version, which then
+    became the daemon every follower talks to. It must resolve the entrypoint
+    the way every other spawner does: this interpreter's ``-m octowright``."""
+    from octowright import daemonize as _daemonize
 
-    Named with the real per-platform suffix -- a bare ``octowright`` file here
-    would pass even if the resolver forgot Windows console scripts are always
-    ``<name>.exe``, since ``.exists()`` would still find THIS fabricated file.
-    That exact gap once made venv-neighbour resolution silently never trigger
-    on Windows (always falling through to PATH) despite this test being green.
-    """
     bin_dir = tmp_path / "venv-bin"
     bin_dir.mkdir()
-    suffix = ".exe" if _restart_mod.sys.platform == "win32" else ""
-    fake_python = bin_dir / f"python{suffix}"
-    fake_python.write_text("")
-    fake_octowright = bin_dir / f"octowright{suffix}"
-    fake_octowright.write_text("")
+    fake_python = bin_dir / "python"
+    fake_python.write_text("")  # no octowright console script beside it
+    monkeypatch.setattr(_daemonize.sys, "executable", str(fake_python))
+    monkeypatch.setattr("shutil.which", lambda _name, *a, **k: "/elsewhere/bin/octowright")
+    seen: list[list[str]] = []
 
-    monkeypatch.setattr(_restart_mod.sys, "executable", str(fake_python))
-    resolved = _restart_mod._resolve_octowright_entry()
-    assert resolved == str(fake_octowright)
+    class _FakePopen:
+        pid = 4242
+
+        def __init__(self, args: list[str], **_kw: Any) -> None:
+            seen.append(args)
+
+    monkeypatch.setattr(_daemonize.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(_daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))
+    monkeypatch.setattr(_daemonize, "_detach_candidates", lambda: [{}])
+
+    _restart_mod._spawn_daemon("127.0.0.1", 6286)
+
+    assert seen[0][:3] == [str(fake_python), "-m", "octowright"]
 
 
 def test_kill_followers_flag_is_documented_in_help(runner: CliRunner) -> None:

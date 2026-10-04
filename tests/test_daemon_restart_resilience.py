@@ -72,9 +72,12 @@ def _free_port() -> int:
 
 
 def _octowright_bin() -> str:
-    from octowright.cli.restart import _resolve_octowright_entry
+    from octowright.daemonize import console_script_beside_interpreter
 
-    return _resolve_octowright_entry()
+    neighbour = console_script_beside_interpreter()
+    if neighbour is None:
+        pytest.skip("no octowright console script beside this interpreter")
+    return str(neighbour)
 
 
 def _hermetic_env(tmp_path: Path, port: int) -> dict[str, str]:
