@@ -585,7 +585,13 @@ async def _serve_navigation(route: Any, request: Any, chain: FrameChain | None) 
         _note_served(request, client_redirect=False)
         await route.fulfill(response=response)
         return
-    target = urljoin(request.url, location)
+    try:
+        target = urljoin(request.url, location)
+    except ValueError as exc:
+        # ``http://[::1`` raises here. Let loose it escaped the RedirectBlocked
+        # handler, the outer one swallowed it as a dead route, and the
+        # navigation was never answered -- ``goto`` timed out instead.
+        raise RedirectBlocked(f"redirect to a malformed Location refused ({exc})") from exc
     scheme = target.partition(":")[0].strip().lower()
     if scheme not in _REDIRECT_SCHEMES:
         raise RedirectBlocked(f"redirect to a {scheme!r} URL refused; only http(s) redirects are followed")

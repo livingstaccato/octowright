@@ -386,3 +386,18 @@ async def test_a_request_without_a_frame_is_logged_not_silently_skipped(monkeypa
     # The navigation route path takes the request's record through its own lookup.
     assert ssrf_guard.chain_at_start(_Frameless()) is None
     assert seen == ["octowright.ssrf.request_without_frame"]
+
+
+@pytest.mark.parametrize("location", ["http://[::1", "HTTP://[::1/x", "//[bad"])
+async def test_a_malformed_location_is_refused_not_left_hanging(location: str) -> None:
+    """``urljoin`` raises ValueError on these; it escaped the refusal handler.
+
+    The outer handler then swallowed it as "route already gone" and the
+    intercepted navigation was never answered, so ``goto`` waited out its
+    whole timeout and reported a plain timeout.
+    """
+    request = _Request("https://public.test/")
+    route = _Route({"https://public.test/": _Response(302, location)}, request)
+    await _handle(route, request)
+    assert route.aborted == "blockedbyclient"
+    assert route.fulfilled is None and route.fulfilled_body is None

@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A redirect to a malformed `Location` is refused at once.** Under an SSRF
+  policy, a `302` whose `Location` could not be parsed, such as
+  `http://[::1`, left the navigation unanswered. The tool then waited out its
+  whole timeout and reported a plain timeout. The redirect is now refused like
+  any other the policy blocks, and the error says why.
 - **The SSRF policy refuses a URL it cannot parse.** Under
   `OCTOWRIGHT_SSRF_POLICY=block-private`, a URL Python could not split, such as
   `http://x]@169.254.169.254/`, passed the check as having nothing to check.
