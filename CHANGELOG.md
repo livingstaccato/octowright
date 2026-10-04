@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The dashboard's Live scenarios panel refreshes when a scenario starts.**
+  Dashboard invalidations published back to back were coalesced to the last
+  one, so `scenario_start`'s "scenarios" refresh was replaced by the
+  "sessions" one that followed it. Each distinct scope pending for a
+  dashboard is now delivered.
 - **`octowright scenario start --test` skips a participant that cannot run a
   macro, as `scenario_run_as_test` does.** The CLI kept its own copy of the
   verify loop without the capability check, so with the terminal plugin
