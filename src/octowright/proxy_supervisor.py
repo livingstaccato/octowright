@@ -394,7 +394,8 @@ class BridgeSupervisor:
         await self.local_write.send(message)
 
     def _settle_in_flight(self, request_id: str | int, message: SessionMessage) -> bool:
-        """Close out ``request_id``; return whether ``message`` may be forwarded.
+        """Close out ``request_id`` for the RESPONSE ``message``; return whether
+        it may be forwarded.
 
         Every path that finishes a request early (deadline expiry, connection
         reset, stream close) POPS the entry and sends the client a synthetic
@@ -402,14 +403,14 @@ class BridgeSupervisor:
         that is no longer here has already been answered, and a response for it
         would be a duplicate on the wire.
 
-        The drop is gated on ``is_response``, NOT on "unknown id": the leader
+        Only called for responses (see ``forward_remote_message``): the leader
         also sends the client genuine REQUESTS (sampling/createMessage,
-        elicitation, roots/list) whose ids are its own and were never tracked
-        here. Those must pass through untouched.
+        elicitation, roots/list) whose ids are its own, may equal a pending
+        client id, and must neither settle it nor be dropped.
         """
         in_flight = self._in_flight.pop(request_id, None)
         if in_flight is None:
-            return not is_response(message)
+            return False
         if in_flight.responded:
             return False
         in_flight.responded = True
@@ -431,7 +432,12 @@ class BridgeSupervisor:
         if progress_token is not None:
             await self._forward_progress(message, progress_token)
             return
-        request_id = message_request_id(message)
+        # Only a RESPONSE can answer something this bridge tracks. The leader's
+        # own requests (roots/list, sampling, elicitation) draw ids from its own
+        # counter, which can coincide with a pending client id; letting one
+        # settle that id dropped the client's real response later and disarmed
+        # its deadline. Server requests pass through untouched.
+        request_id = message_request_id(message) if is_response(message) else None
         if request_id is not None and request_id in self._internal_replay_ids:
             # Bridge-internal initialize replay: the local client has already
             # been told the session is initialized; forwarding a second
