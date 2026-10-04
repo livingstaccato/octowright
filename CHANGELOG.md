@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A `session=True` launch works with any label.** The label went into the
+  temporary profile directory's name as-is, so the default `user/repo` label
+  failed the launch with `FileNotFoundError` and a label containing `..` could
+  place the profile outside the temp directory. The directory name now carries
+  a digest of the label; launches sharing a label still share the profile.
 - **A recording whose opening row carries a numeric `ts` no longer breaks the
   dashboard's session list.** The closed-session listing sorted on it and
   raised on the first non-string, so `GET /api/sessions` failed until the file

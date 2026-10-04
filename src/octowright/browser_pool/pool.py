@@ -37,7 +37,7 @@ from octowright.browser_pool.refusals import RefusalTracker
 from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
-from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
+from octowright.browser_pool.session_dirs import session_tmpdir_prefix
 from octowright.browser_pool.visuals import (
     VIEWPORT_TOKEN_ACTIONS,
     _tile_args_for_chromium,
@@ -698,7 +698,7 @@ class BrowserPool:
         async with self._sessions_lock:
             existing = self._session_profile_dirs.get(session_key)
             if existing is None or not existing.exists():
-                tmp = Path(tempfile.mkdtemp(prefix=f"{SESSION_TMPDIR_PREFIX}{session_name}-{kind}-"))
+                tmp = Path(tempfile.mkdtemp(prefix=session_tmpdir_prefix(session_name, kind)))
                 self._session_profile_dirs[session_key] = tmp
                 existing = tmp
         return str(existing)

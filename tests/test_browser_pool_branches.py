@@ -27,6 +27,7 @@ Pins:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -667,8 +668,32 @@ class TestResolveSessionDir:
         monkeypatch.setattr(tempfile, "mkdtemp", fake_mkdtemp)
         out = await pool._resolve_session_dir(True, opts, "instX", "chromium")
         assert out is not None
-        assert "octowright-session-demo-chromium-" in captured[0]
+        digest = hashlib.sha256(b"demo").hexdigest()[:16]
+        assert captured[0] == f"octowright-session-{digest}-chromium-"
         assert pool._session_profile_dirs[("demo", "chromium")] == Path(out)
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize(
+        "label",
+        ["tim/octowright", "q-chromium-AbC123/../../../escaped/x", "..", "a\\b", "C:\\x"],
+    )
+    async def test_label_never_becomes_a_path_component(
+        self, label: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The label is hashed into the prefix, so a ``/`` (the default
+        ``user/repo`` label shape) cannot fail the launch and ``..`` cannot
+        place the profile outside the temp dir."""
+        import tempfile
+
+        real_mkdtemp = tempfile.mkdtemp
+        monkeypatch.setattr(tempfile, "mkdtemp", lambda *, prefix: real_mkdtemp(prefix=prefix, dir=str(tmp_path)))
+        pool = BrowserPool()
+        out = await pool._resolve_session_dir(True, LaunchOptions(session=True, label=label), "instX", "chromium")
+        assert out is not None
+        assert Path(out).parent == tmp_path
+        assert Path(out).name.startswith("octowright-session-")
+        # The readable name stays the reuse key.
+        assert pool._session_profile_dirs[(label, "chromium")] == Path(out)
 
     @pytest.mark.anyio
     async def test_reuses_existing_dir_for_same_key(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
