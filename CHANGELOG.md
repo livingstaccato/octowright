@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The new-tab page's browser count works with dashboard pairing on.** It
+  polled the pairing-gated `/api/sessions` from a browser that holds no
+  bearer, so it always showed 0 browsers and put a failed request in the
+  session's network log every 3 seconds. It now polls `/new-tab/status`,
+  which returns only the count the page already shows.
 - **On an inline leader, `/api/mcp-events` ends when the dashboard bearer
   that opened it expires.** The stream was admitted by dashboard pairing but
   never checked the bearer again, so it kept delivering crash, close and

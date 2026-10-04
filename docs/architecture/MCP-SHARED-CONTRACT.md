@@ -83,12 +83,13 @@ GET    /api/plugins                              → {<kind>: {moduleUrl, ...}} 
                                                  that declare a frontend; a kind without one is absent.
 GET    /plugins/{name}/{path}                    → one static file from an enabled plugin's frontend asset dir.
 GET    /new-tab                                  → HTML landing page for browser_launch with no URL (version, uptime, browser count).
+GET    /new-tab/status                           → {browsers: N} live browser count polled by /new-tab.
 GET    /otto.svg                                 → image/svg+xml logo used by /new-tab.
 ```
 
 The pairing routes are exempt from dashboard pairing (they are its bootstrap) but
 not from the loopback/Host/cross-origin guard; so are `/api/plugins`, `/plugins/{name}/{path}`
-and `/new-tab`, which the dashboard shell needs before pairing completes. `/api/mcp-events`
+and `/new-tab` with its `/new-tab/status` count, which a launched browser (holding no bearer) and the dashboard shell need before pairing completes. `/api/mcp-events`
 is gated by the capability token instead (on a leader that has one). Every other `/api/*`
 route above except `/api/health` answers `401` + `WWW-Authenticate: Bearer` without a
 paired bearer or the capability token while `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is on

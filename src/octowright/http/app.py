@@ -32,7 +32,7 @@ from octowright.http.mcp_session_tracker import (
     McpSessionTrackingMiddleware,
 )
 from octowright.http.routes import all_routes
-from octowright.http.routes.new_tab import new_tab, otto_svg
+from octowright.http.routes.new_tab import new_tab, new_tab_status, otto_svg
 
 log = get_logger(__name__)
 
@@ -230,6 +230,8 @@ def build_app(*, mcp_leader: bool = False, host: str = "127.0.0.1", mcp_token: s
     # gating it would break every browser_launch. It leaks only version/uptime/
     # browser-count — accepted, documented in http/pairing.py.
     routes.append(Route("/new-tab", guard_sensitive_http(new_tab, pairing_exempt=True), methods=["GET"]))
+    # The page's browser count, for the same bearer-less browser. Count only.
+    routes.append(Route("/new-tab/status", guard_sensitive_http(new_tab_status, pairing_exempt=True), methods=["GET"]))
     routes.append(Route("/otto.svg", otto_svg, methods=["GET"]))
     # Plugin assets, before the SPA catchall for the same reason /new-tab is:
     # StaticFiles at "/" would otherwise swallow them.
