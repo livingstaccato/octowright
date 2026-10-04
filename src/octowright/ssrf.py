@@ -325,16 +325,23 @@ def _with_whatwg_authority(url: str) -> str:
 def _policy_host(url: str) -> str | None:
     """The normalized host of ``url`` the active policy has to classify, if any.
 
-    ``None`` when the policy is off, ``url`` does not parse (the downstream
-    navigate will fail anyway; don't mask that with an SSRF error), the scheme
-    is not IP-routable, there is no host, or the host is allowlisted.
+    ``None`` when the policy is off, the scheme is not IP-routable, there is
+    no host, or the host is allowlisted.
+
+    A URL ``urlsplit`` cannot parse is REFUSED, not waved through: Python and
+    the browser disagree about some of them, and ``http://x]@169.254.169.254/``
+    -- which raises here -- is to a browser userinfo ``x]`` on the metadata
+    address. "The navigate will fail anyway" was the old reasoning, and false.
     """
     if _policy() == "off":
         return None
     try:
         parts = urlsplit(_with_whatwg_authority(url))
-    except ValueError:
-        return None
+    except ValueError as exc:
+        raise SsrfRefusal(
+            f"SSRF policy {_policy()} refuses a URL that could not be parsed ({exc}); "
+            "a browser may read it as a different host than any check here would"
+        ) from None
     if parts.scheme.lower() not in _CHECKED_SCHEMES:
         return None
     host = normalize_host_for_policy(parts.hostname or "")

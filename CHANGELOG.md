@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The SSRF policy refuses a URL it cannot parse.** Under
+  `OCTOWRIGHT_SSRF_POLICY=block-private`, a URL Python could not split, such as
+  `http://x]@169.254.169.254/`, passed the check as having nothing to check.
+  A browser reads that example as userinfo `x]` on the metadata address. A
+  persona `default_url` is validated by this check alone. Such URLs are now
+  refused while a policy is on.
 - **`OCTOWRIGHT_REDACT_INPUTS=all` covers the answer given to `prompt()`.**
   The `prompt_text` set with `browser_set_dialog_policy` was written to the
   recording in clear twice, in the policy row and in every `dialog_handled`
