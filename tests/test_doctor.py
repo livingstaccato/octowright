@@ -186,6 +186,7 @@ class TestCoreAudioCheck:
     ) -> None:
         """A SKIP line on every Linux run is noise a reader learns to ignore."""
         monkeypatch.setattr(_doctor.sys, "platform", "linux")
+
         async def _daemon() -> Any:
             return _doctor.Check("x", "ok", "")
 
