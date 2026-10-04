@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A failed driver liveness check no longer breaks the next browser call.**
+  When the check failed for its own reasons, its exception was saved as
+  though a page event listener had raised it. The next unrelated call then
+  failed with it. Only a listener's own error is kept for the next call now,
+  and a check that fails this way counts as "cannot tell".
 - **A redirect to a malformed `Location` is refused at once.** Under an SSRF
   policy, a `302` whose `Location` could not be parsed, such as
   `http://[::1`, left the navigation unanswered. The tool then waited out its

@@ -357,6 +357,45 @@ async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed() 
     assert connection._error is stored
 
 
+class _BrokenInternalsChannel(_Channel):
+    """A send that fails inside the probe itself, not with a listener's error."""
+
+    async def send(self, method: str, timeout_calculator: Any, params: dict[str, Any]) -> None:
+        raise TypeError("send() got an unexpected keyword argument 'title'")
+
+
+@pytest.mark.anyio
+async def test_the_probes_own_failure_is_never_planted_for_the_callers_next_call() -> None:
+    """Only a listener's error belongs on ``Connection._error``.
+
+    Any non-Playwright exception from the send was stored there "as a listener
+    error", so an internals mismatch in the probe surfaced as the exception of
+    the caller's next, unrelated Playwright call. It is the probe being unable
+    to tell, which reads as the pre-probe behaviour (dead), like missing internals.
+    """
+    pw, _ = _fake_pw("ok")
+    connection = pw._impl_obj._connection
+    connection.local_utils = SimpleNamespace(_channel=_BrokenInternalsChannel("ok"))
+
+    assert await driver_health.driver_confirmed_dead(pw) is True
+    assert connection._error is None
+
+
+@pytest.mark.anyio
+async def test_a_listener_error_raised_while_the_probe_is_scheduled_is_kept() -> None:
+    """The window between lifting the stored error off and the send starting."""
+    pw, _ = _fake_pw("ok")
+    connection = pw._impl_obj._connection
+    channel = _InnerSendChannel(connection)
+    connection.local_utils = SimpleNamespace(_channel=channel)
+    late = ValueError("listener boom, late")
+    asyncio.get_running_loop().call_soon(lambda: setattr(connection, "_error", late))
+
+    assert await driver_health.driver_confirmed_dead(pw) is False
+    assert connection._error is late
+    assert channel.calls, "the retry must still reach the driver"
+
+
 @pytest.mark.anyio
 async def test_a_probe_task_that_ends_cancelled_does_not_raise() -> None:
     pw, channel = _fake_pw("ok")
