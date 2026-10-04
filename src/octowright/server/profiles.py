@@ -205,6 +205,11 @@ def plugin_profile_names() -> list[str]:
     return sorted(_PLUGIN_PROFILES)
 
 
+def plugin_profile_tools(name: str) -> frozenset[str]:
+    """The tools a registered plugin profile names (empty when it is not registered)."""
+    return _PLUGIN_PROFILES.get(name, frozenset())
+
+
 def reset_plugin_profiles() -> None:
     """Clear registered plugin profiles. Test seam; the daemon never calls it."""
     _PLUGIN_PROFILES.clear()

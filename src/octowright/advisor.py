@@ -19,16 +19,37 @@ from collections import Counter, defaultdict
 from typing import Any, Literal, TypedDict
 
 from octowright.defaults import ADVISOR_STATE_PATH
+from octowright.server import profiles as _profiles
 from octowright.server.profiles import ALWAYS_ON_TOOLS, PROFILES
 
 SuggestionType = Literal["macro_candidate", "profile_change"]
 Preference = Literal["yes", "no", "automatic"]
 
 _PREFERENCES: tuple[Preference, ...] = ("yes", "no", "automatic")
-_PROFILE_ORDER = ("core", "advanced", "macros", "scenarios", "personas")
 _MAX_TOOL_USAGE = 200
 _MAX_MACRO_OBSERVATIONS = 100
 _PROFILE_TOOL_INDEX = {tool: profile for profile, tools in PROFILES.items() for tool in tools}
+
+
+def _profile_order() -> list[str]:
+    """Every known profile name: core's in table order, then enabled plugins'.
+
+    Derived rather than hand-listed. A hand-kept tuple had already lost
+    ``goldens``, so golden usage under ``core`` recommended ``core`` (no
+    change) and expanding ``core,goldens`` silently dropped ``goldens``.
+    Read per call because plugin profiles register at activation.
+    """
+    return [*PROFILES, *_profiles.plugin_profile_names()]
+
+
+def _profile_for_tool(tool_name: str) -> str | None:
+    profile = _PROFILE_TOOL_INDEX.get(tool_name)
+    if profile is not None:
+        return profile
+    for name in _profiles.plugin_profile_names():
+        if tool_name in _profiles.plugin_profile_tools(name):
+            return name
+    return None
 
 
 class ToolUsageEvent(TypedDict):
@@ -185,7 +206,7 @@ def record_tool_call(tool_name: str) -> None:
         {
             "ts": time.time(),
             "tool": tool_name,
-            "profile": _PROFILE_TOOL_INDEX.get(tool_name),
+            "profile": _profile_for_tool(tool_name),
         }
     )
     state["tool_usage"] = state["tool_usage"][-_MAX_TOOL_USAGE:]
@@ -234,7 +255,8 @@ def _active_profile_names() -> set[str] | None:
     raw = active_profile_raw()
     if not raw or raw.lower() == "all":
         return None
-    return {name.strip() for name in raw.split(",") if name.strip() in PROFILES}
+    known = set(_profile_order())
+    return {name.strip() for name in raw.split(",") if name.strip() in known}
 
 
 def _usage_summary(state: AdvisorState) -> dict[str, Any]:
@@ -282,9 +304,10 @@ def _core_profile_suggestion(mode: str) -> AdvisorSuggestion:
 
 
 def _expanded_profile_suggestion(active: set[str], missing: set[str], mode: str) -> AdvisorSuggestion:
-    target_profiles = [name for name in _PROFILE_ORDER if name in (active | missing)]
+    order = _profile_order()
+    target_profiles = [name for name in order if name in (active | missing)]
     profile_spec = ",".join(target_profiles)
-    missing_label = ", ".join(name for name in _PROFILE_ORDER if name in missing)
+    missing_label = ", ".join(name for name in order if name in missing)
     return {
         "id": f"profile-change-{profile_spec.replace(',', '-')}",
         "type": "profile_change",

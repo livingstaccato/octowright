@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Octowright Advisor's profile suggestions know about `goldens` and plugin
+  profiles.** Its hand-kept profile list had no `goldens`, so golden usage
+  under `core` recommended `OCTOWRIGHT_PROFILE=core` (no change), and
+  expanding `core,goldens` dropped `goldens`. The list is now derived from the
+  profile table plus enabled plugins' profiles.
 - **Terminal plugin: a quoted `"false"` no longer turns SSH host-key
   verification off.** A scenario participant's (or persona `app.ssh` block's)
   `insecure_no_host_check` was coerced with `bool()`, so the string `"false"`
