@@ -452,6 +452,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_rendered_surface.py",
     "tests/test_macro_redaction_text.py",
     "tests/test_launch_page_selection.py",
+    "tests/test_launch_project_persona_lookup.py",
     "tests/test_adopt_untracked_pages.py",
     "tests/artifacts_paths/test_run_id_containment.py",
     "tests/field_diagnostics/test_macro_failure_console.py",
