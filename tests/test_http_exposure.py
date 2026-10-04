@@ -348,28 +348,36 @@ def test_tail_websocket_allows_no_origin_header(
     assert "cross-origin" not in exc.reason
 
 
-def test_tail_websocket_allows_loopback_origin(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """A loopback Origin (e.g. another local dashboard tab on a different
-    port) is allowed even if it doesn't match the request Host."""
-    rec = tmp_path / "recordings"
-    rec.mkdir()
-    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
-    from octowright.http.discovery import invalidate_recording_index
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://127.0.0.1:9999",  # another local server on a different port
+        "http://localhost:3000",  # a dev server rendering untrusted content
+        "http://[::1]:9000",
+        "http://::1",
+        "https://127.0.0.1:8765",  # right host and port, wrong scheme for ws://
+    ],
+)
+def test_tail_websocket_rejects_a_loopback_origin_that_is_not_this_dashboard(origin: str) -> None:
+    """Same-origin means the dashboard's own origin, not "anything on loopback".
 
-    invalidate_recording_index()
+    The HTTP guard demands an exact ``scheme://host`` match, while the WS
+    check accepted any loopback Origin on any port. So any page served from
+    another local port -- a dev server, Jupyter, a preview server -- could
+    open ``/tail`` and the screencast and stream typed input, URLs and
+    frames whenever pairing was off.
+    """
     with (
         TestClient(_http.build_app()) as client,
+        pytest.raises(WebSocketDisconnect) as exc,
         client.websocket_connect(
             "/api/sessions/loopback001/tail",
-            headers={"origin": "http://127.0.0.1:9999", "host": "127.0.0.1:8765"},
-        ) as ws,
+            headers={"origin": origin, "host": "127.0.0.1:8765"},
+        ),
     ):
-        exc = _drain_until_disconnect(ws)
-    assert exc.code == 1008
-    assert "cross-origin" not in exc.reason
+        pass
+    assert exc.value.code == 1008
+    assert exc.value.reason == "cross-origin websocket handshake is blocked"
 
 
 def test_tail_websocket_rejects_malformed_origin(
@@ -396,37 +404,17 @@ def test_tail_websocket_rejects_malformed_origin(
     assert exc.value.reason == "cross-origin websocket handshake is blocked"
 
 
-def test_tail_websocket_allows_loopback_ipv6_origin_with_bracket_and_port(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    """Origin like http://[::1]:9000 must be parsed as IPv6 loopback."""
-    rec = tmp_path / "recordings"
-    rec.mkdir()
-    monkeypatch.setattr(_http_state, "RECORDINGS_DIR", rec)
-    from octowright.http.discovery import invalidate_recording_index
-
-    invalidate_recording_index()
-    with (
-        TestClient(_http.build_app()) as client,
-        client.websocket_connect(
-            "/api/sessions/ipv6brkt001/tail",
-            headers={"origin": "http://[::1]:9000", "host": "127.0.0.1:8765"},
-        ) as ws,
-    ):
-        exc = _drain_until_disconnect(ws)
-    assert exc.code == 1008
-    assert "cross-origin" not in exc.reason
-
-
-def test_websocket_origin_allowed_handles_bare_ipv6_without_brackets() -> None:
-    """Direct unit test for the helper: bare IPv6 (no brackets, no port) loopback path."""
+def test_websocket_origin_allowed_compares_scheme_and_host_exactly() -> None:
     from octowright.http.exposure import websocket_origin_allowed
 
-    fake_ws = types.SimpleNamespace(headers={"origin": "http://::1", "host": "127.0.0.1:8765"})
-    # Bare "::1" with three colons doesn't match the port-stripping heuristic
-    # so it falls through to is_loopback_host("::1") → True.
-    assert websocket_origin_allowed(fake_ws) is True  # type: ignore[arg-type]
+    def ws(origin: str, host: str, scheme: str = "ws") -> Any:
+        return types.SimpleNamespace(headers={"origin": origin, "host": host}, url=types.SimpleNamespace(scheme=scheme))
+
+    assert websocket_origin_allowed(ws("http://localhost:8765", "localhost:8765")) is True
+    assert websocket_origin_allowed(ws("HTTP://LOCALHOST:8765", "localhost:8765")) is True
+    assert websocket_origin_allowed(ws("https://dash.example", "dash.example", scheme="wss")) is True
+    assert websocket_origin_allowed(ws("http://dash.example", "dash.example", scheme="wss")) is False
+    assert websocket_origin_allowed(ws("http://127.0.0.1:8766", "127.0.0.1:8765")) is False
 
 
 def test_health_route_is_unguarded_on_remote_bind(monkeypatch: pytest.MonkeyPatch) -> None:
