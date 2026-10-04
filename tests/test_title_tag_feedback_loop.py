@@ -83,7 +83,10 @@ async def test_title_tag_does_not_wedge_a_page_that_reasserts_its_title() -> Non
         )
         assert "titleloop" in rendered, f"window title lost its tag on a contested page: {rendered!r}"
     finally:
-        await pool.close_all()
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()
 
 
 @pytest.mark.live_browser
@@ -134,4 +137,7 @@ async def test_the_page_is_handed_back_its_own_title_while_the_node_keeps_the_ta
         # And octowright's own reader is unaffected by the masking.
         assert "titlemask" in await page.title()
     finally:
-        await pool.close_all()
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()

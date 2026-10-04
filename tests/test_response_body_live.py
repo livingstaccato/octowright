@@ -78,7 +78,10 @@ async def test_failed_response_bodies_are_captured_from_a_real_browser(server: s
     try:
         rows = await _rows_after_fetches(pool, server)
     finally:
-        await pool.close_all(force=True)
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()
 
     by_path = {row["url"].rsplit("/", 1)[-1]: row for row in rows}
 

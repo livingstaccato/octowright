@@ -108,7 +108,10 @@ async def test_viewport_pill_requires_one_second_alt_hold() -> None:
         assert await page.locator("#__octowright_viewport_modal__").count() == 1
         await page.keyboard.up("Alt")
     finally:
-        await pool.close_all()
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()
 
 
 @pytest.mark.live_browser
@@ -195,7 +198,10 @@ async def test_viewport_pill_is_quiet_bottom_indicator_with_compact_popover() ->
         await page.keyboard.up("Alt")
         assert await popover.count() == 0
     finally:
-        await pool.close_all()
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()
 
 
 @pytest.fixture
