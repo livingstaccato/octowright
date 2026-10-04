@@ -170,19 +170,6 @@ async def _release_shift(keyboard: Any) -> None:
         log.warning("core_page_mixin.shift_release_failed", error=repr(exc))
 
 
-#: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
-#: (they are not encoded, not rejected — deleted), so they can be used to hide
-#: the second slash of an authority from a naive string test.
-_URL_STRIPPED_CONTROLS = {0x09: None, 0x0A: None, 0x0D: None}
-
-#: Every C0 control or space (U+0000-U+0020). The WHATWG parser strips all of
-#: these from both ends BEFORE parsing; ``str.strip()`` removes only Python
-#: whitespace, so ``\x01file:///etc/passwd`` partitioned to a scheme of
-#: ``\x01file`` -- absent from the deny-list -- while Chromium stripped the
-#: control and loaded the file. Confirmed live against headless Chromium.
-_C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
-
-
 def _canonicalize_for_guard(url: str) -> str:
     """Fold a URL into the one spelling the guard's string tests reason about.
 
@@ -194,7 +181,9 @@ def _canonicalize_for_guard(url: str) -> str:
     * ``\\`` is equivalent to ``/`` for a special scheme (http/https), so
       ``/\\evil.test/x`` is an authority — it resolves to host ``evil.test``;
     * tab/LF/CR are deleted before parsing, so ``/<TAB>/evil.test/x`` becomes
-      ``//evil.test/x`` — also host ``evil.test``.
+      ``//evil.test/x`` — also host ``evil.test``; and C0 controls and space
+      are stripped from both ends (``ssrf.whatwg_preclean``, shared with the
+      host policy so the two checks read one spelling).
 
     Both passed a ``startswith("//")`` test while reaching a different host, which
     turned the host-relative relaxation into an SSRF-policy bypass (a poisoned
@@ -205,7 +194,7 @@ def _canonicalize_for_guard(url: str) -> str:
     Note this is used ONLY to classify and check the URL; the original string is
     what gets handed to Playwright, so no caller's URL is rewritten.
     """
-    return url.strip(_C0_OR_SPACE).translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
+    return ssrf.whatwg_preclean(url).replace("\\", "/")
 
 
 def _check_url_shape(url: str) -> str | None:

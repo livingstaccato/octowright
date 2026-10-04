@@ -160,3 +160,19 @@ def test_an_ordinary_url_with_surrounding_whitespace_still_works() -> None:
     from octowright.session.core_page_mixin import _reject_unsafe_url
 
     _reject_unsafe_url("  https://example.com/  ")
+
+
+def test_the_scheme_guard_and_the_host_policy_share_one_whatwg_preclean() -> None:
+    """Two copies of "strip C0/space, delete tab/CR/LF" had to be kept in step by hand.
+
+    The navigation guard (``core_page_mixin``) and the host policy (``ssrf``)
+    each defined their own; a fix to one spelling and not the other is how a
+    URL reads one way to the scheme check and another to the host check.
+    """
+    import octowright.session.core_page_mixin as page_mixin
+    import octowright.ssrf as ssrf
+
+    assert not hasattr(page_mixin, "_C0_OR_SPACE")
+    assert not hasattr(page_mixin, "_URL_STRIPPED_CONTROLS")
+    for url in ["\x01 http://h.test/\t", "\x00htt\tp://h.test/x\r\n", " /\n/h.test/x "]:
+        assert page_mixin._canonicalize_for_guard(url) == ssrf.whatwg_preclean(url).replace("\\", "/")

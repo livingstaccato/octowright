@@ -293,10 +293,24 @@ def normalize_host_for_policy(host: str) -> str:
 #: Schemes the WHATWG URL Standard calls "special". After one of them, every
 #: ``/`` and ``\`` following the colon is skipped before the authority starts.
 _SPECIAL_SCHEMES = frozenset({"http", "https", "ws", "wss", "ftp"})
-#: Stripped from both ends before WHATWG parsing (C0 controls and space).
+#: Every C0 control or space (U+0000-U+0020), stripped from both ends before
+#: WHATWG parsing. ``str.strip()`` removes only Python whitespace, so
+#: ``\x01file:///etc/passwd`` partitioned to a scheme of ``\x01file`` while
+#: Chromium stripped the control and loaded the file (confirmed live).
 _C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
-#: Deleted from anywhere in the URL before WHATWG parsing.
+#: ASCII tab / LF / CR, which WHATWG DELETES from anywhere in a URL (not
+#: encoded, not rejected), so they can hide a scheme or an authority's slash.
 _TAB_AND_NEWLINES = {0x09: None, 0x0A: None, 0x0D: None}
+
+
+def whatwg_preclean(url: str) -> str:
+    """``url`` after the two clean-ups WHATWG makes before it parses anything.
+
+    The one copy: the navigation scheme guard (``core_page_mixin``) and this
+    host policy each kept their own, and two copies drift into a URL that
+    reads one way to the scheme check and another to the host check.
+    """
+    return url.strip(_C0_OR_SPACE).translate(_TAB_AND_NEWLINES)
 
 
 def _with_whatwg_authority(url: str) -> str:
@@ -315,7 +329,7 @@ def _with_whatwg_authority(url: str) -> str:
     scheme, ``http:foo`` is a relative path instead; reading it as a host here
     can only refuse a URL, never admit one.
     """
-    cleaned = url.strip(_C0_OR_SPACE).translate(_TAB_AND_NEWLINES)
+    cleaned = whatwg_preclean(url)
     scheme, sep, rest = cleaned.partition(":")
     if not sep or scheme.lower() not in _SPECIAL_SCHEMES:
         return cleaned
