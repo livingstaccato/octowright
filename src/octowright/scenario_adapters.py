@@ -87,10 +87,14 @@ class BrowserScenarioAdapter:
             await session.wait_for(selector=selector, text=text, timeout_ms=timeout_ms)
         elif url:
             async with session.operation("scenario_wait_for_sync"):
-                # Already-there is a pass, not a wait: re.search against the
-                # live url first, exactly as the inline version did.
-                if not re.search(url, session.page.url):
-                    await session.page.wait_for_url(url, timeout=timeout_ms or _URL_WAIT_DEFAULT_TIMEOUT_MS)
+                # The url is a regex. Already-there is a pass, not a wait, so
+                # it is searched against the live url first; the wait gets the
+                # same compiled pattern, because Playwright reads a plain str
+                # as a glob or an exact URL and a regex handed over as one
+                # never matched -- the sync waited out its whole timeout.
+                pattern = re.compile(url)
+                if not pattern.search(session.page.url):
+                    await session.page.wait_for_url(pattern, timeout=timeout_ms or _URL_WAIT_DEFAULT_TIMEOUT_MS)
         else:
             await session.wait_for(selector=None, text=None, timeout_ms=timeout_ms)
 

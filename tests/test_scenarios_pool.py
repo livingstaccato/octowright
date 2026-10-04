@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -517,11 +518,11 @@ class _UrlGatedSession(OperationAwareFake):
     def __init__(self, instance_id: str, url: str) -> None:
         self.instance_id = instance_id
         super().__init__()
-        self.wait_for_url_calls: list[str] = []
+        self.wait_for_url_calls: list[str] = []  # the waited pattern's source
         self.page = SimpleNamespace(url=url, wait_for_url=self._wait_for_url)
 
-    async def _wait_for_url(self, url: str, *, timeout: int) -> None:
-        self.wait_for_url_calls.append(url)
+    async def _wait_for_url(self, url: re.Pattern[str], *, timeout: int) -> None:
+        self.wait_for_url_calls.append(url.pattern)
 
     async def wait_for(self, selector=None, text=None, timeout_ms=None):
         return None
