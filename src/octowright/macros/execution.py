@@ -14,7 +14,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import failure_context, safe_screenshot, screenshot_refusal, sequence_steps
+from octowright.macros import credential_fill, failure_context, safe_screenshot, screenshot_refusal, sequence_steps
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
@@ -617,6 +617,7 @@ async def _run_admitted(
     actions = substitute(
         macro.get("actions", []), effective_args, trusted_origins=origins, credential_args=credential_args
     )
+    credential_names = credential_fill.credential_run_args(macro.get("actions", []), actions, credential_args)
     start_request_tracking(session, actions, macros)
 
     executed = 0
@@ -630,7 +631,7 @@ async def _run_admitted(
 
     macro_started = time.monotonic()
     completed_ok = False
-    audit, audit_token = begin_fill_audit()
+    audit, audit_token = begin_fill_audit(credential_names)
     assertions, collecting = begin_collecting()
     try:
         for index, action in enumerate(actions):

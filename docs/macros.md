@@ -647,6 +647,19 @@ host and port of the launch URL or persona `base_url` may carry
 `http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
+**A run that types a credential runs no page code.** Page code needs no
+placeholder to read a credential back: a constant `evaluate` that installs an
+`input` listener before a `fill` of `{{password}}` on the session's own origin,
+or a constant `expect_js` that reads the field after it, sends the value
+wherever it likes. So when a run expands a credential-named argument anywhere
+(a typed value, a header, a `macro_call`'s `args`), every `evaluate`,
+`expect_js`, `wait_for` with an `expression`, `a11y_dragdrop` with
+`verify_js`/`grabbed_predicate_js`, and `mock_route` with a `body` in it is
+refused -- before the fill or after it, in a nested body or a called macro --
+naming the step and the argument, never the value. Split such a check into a
+macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+Each `macro_run_sequence` step is its own run.
+
 **Credentials are typed only onto the session's own origin.** A `fill`,
 `fill_by` or `type` whose value comes from a credential-named argument checks,
 immediately before it runs, the origin of the page (or active frame) it would

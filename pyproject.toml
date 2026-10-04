@@ -423,6 +423,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_header_credentials_own_site.py",
     "tests/test_macro_credential_alias_normalization.py",
     "tests/test_macro_credential_fill_origin.py",
+    "tests/test_macro_credential_action_name.py",
+    "tests/test_macro_credential_page_code.py",
     "tests/test_macro_call_credential_taint.py",
     "tests/test_macro_screenshot_refusal_reason.py",
     "tests/test_macro_screenshot_session_ledger.py",

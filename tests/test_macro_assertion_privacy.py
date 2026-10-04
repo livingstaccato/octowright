@@ -148,6 +148,9 @@ async def test_page_errors_in_the_payload_are_bounded_and_scrubbed(
     for i in range(30):
         session._handle_page_error(Exception(f"e{i}"))
     session._handle_page_error(Exception(f"leaked {SECRET}"))
+    # Page code in a run carrying a credential is refused by the sink guard;
+    # this test is about the failure payload's scrubbing, which holds either way.
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
     _load(monkeypatch, {"m": [{"action": "expect_js", "expression": "false", "password": "{{password}}"}]})
     session.page.evaluate = AsyncMock(return_value=False)
     with pytest.raises(RuntimeError) as excinfo:

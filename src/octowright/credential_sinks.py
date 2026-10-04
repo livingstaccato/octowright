@@ -300,6 +300,86 @@ def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in action.items() if key not in guard_only}
 
 
+#: Fields whose value runs as JavaScript in the page: ``evaluate``,
+#: ``expect_js`` and ``wait_for``'s ``expression``, and ``a11y_dragdrop``'s
+#: predicates. A ``mock_route`` ``body`` joins them (`page_code_field`): the
+#: page runs it when it answers a script or document request.
+PAGE_CODE_KEYS = ("expression", "verify_js", "grabbed_predicate_js")
+
+
+def page_code_field(action: dict[str, Any]) -> str | None:
+    """The field through which *action* runs code in the page, or None."""
+    for key in PAGE_CODE_KEYS:
+        if action.get(key):
+            return key
+    if action.get("action") == "mock_route" and action.get("body"):
+        return "body"
+    return None
+
+
+def credential_args_in(
+    actions: Any,
+    *,
+    is_credential: Callable[[str], bool],
+    placeholder: re.Pattern[str] | str,
+    credential_args: frozenset[str] = frozenset(),
+) -> list[str]:
+    """The credential-tier args *actions*, as written, expand anywhere, by name.
+
+    Any field and any depth -- a nested body, a ``macro_call``'s ``args`` --
+    since wherever a credential goes, the page can come to hold it.
+    """
+    compiled = re.compile(placeholder) if isinstance(placeholder, str) else placeholder
+    names: set[str] = set()
+    stack: list[Any] = [actions]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            names.update(compiled.findall(item))
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return sorted(name for name in names if name in credential_args or is_credential(name))
+
+
+def page_code_refusal(action: dict[str, Any], credential_names: list[str] | tuple[str, ...]) -> ValueError | None:
+    """Why *action* may not run in a run that expands *credential_names*, or None.
+
+    The sink guard judges only fields a credential placeholder expands into,
+    and the fill check only where the value lands. Page code needs neither: a
+    constant ``evaluate`` that installs an ``input`` listener before a
+    credential fill on the session's own origin -- or reads the field back
+    after it -- sends the value wherever it likes. So in a run that carries a
+    credential, page code is refused before or after the fill alike. Names
+    the step's field and the args, never a value.
+    """
+    if not credential_names or not credential_sinks_blocked():
+        return None
+    field = page_code_field(action)
+    if field is None:
+        return None
+    names = ", ".join("{{" + str(name) + "}}" for name in credential_names)
+    return ValueError(
+        f"macro {action.get('action')} runs page code ({field}) in a run that types credential arg {names}; "
+        "page code can read a typed credential back and send it anywhere. Run it in a macro that carries "
+        f"no credential, or set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+    )
+
+
+def refuse_page_code(actions: Any, credential_names: list[str] | tuple[str, ...]) -> None:
+    """Raise `page_code_refusal` for the first page-code step in *actions*, at any depth."""
+    stack: list[Any] = [actions]
+    while stack:
+        item = stack.pop(0)
+        if isinstance(item, list):
+            stack[:0] = item
+        elif isinstance(item, dict):
+            if isinstance(item.get("action"), str) and (refusal := page_code_refusal(item, credential_names)):
+                raise refusal
+            stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
+
+
 def _sink_refusal(key: str) -> ValueError:
     return ValueError(
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "

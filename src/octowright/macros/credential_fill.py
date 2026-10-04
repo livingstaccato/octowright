@@ -28,12 +28,16 @@ from provide.telemetry import get_logger
 from octowright.credential_input import CredentialInputStopped
 from octowright.credential_sinks import (
     CREDENTIAL_FILL_MARKER,
+    credential_args_in,
     credential_fill_mode,
     credential_fill_refusal,
     credential_input_stopped,
     offsite_credential_origin,
+    page_code_refusal,
+    refuse_page_code,
 )
-from octowright.macros.substitution import own_site_origins
+from octowright.macros.privacy import PLACEHOLDER_RE
+from octowright.macros.substitution import is_credential_arg, own_site_origins
 from octowright.session.fill_origin import fill_origin_check
 
 if TYPE_CHECKING:
@@ -44,17 +48,40 @@ log = get_logger(__name__)
 
 @dataclass
 class FillAudit:
-    """Which top-level step is running, and the off-site fills warn mode let through."""
+    """Which top-level step is running, and the off-site fills warn mode let through.
+
+    ``credential_args`` names the credential-tier args the run expands
+    anywhere; while it is non-empty, every step that runs page code is
+    refused (``credential_sinks.page_code_refusal``), a called macro's included.
+    """
 
     step: int | None = None
     offsite: list[dict[str, Any]] = field(default_factory=list)
+    credential_args: tuple[str, ...] = ()
 
 
 _AUDIT: ContextVar[FillAudit | None] = ContextVar("octowright_credential_fill_audit", default=None)
 
 
-def begin_fill_audit() -> tuple[FillAudit, Token[FillAudit | None]]:
-    audit = FillAudit()
+def credential_run_args(
+    written: list[dict[str, Any]], actions: list[dict[str, Any]], credential_args: frozenset[str] = frozenset()
+) -> tuple[str, ...]:
+    """The credential-tier args a run expands, refusing its page code up front.
+
+    Judged on the macro as *written*; the expanded *actions* are checked for
+    page code at every depth before any step runs, so a refusal leaves nothing
+    half done. A called macro's page code is refused as it is dispatched
+    (`credential_fill_guard`).
+    """
+    names = credential_args_in(
+        written, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, credential_args=credential_args
+    )
+    refuse_page_code(actions, names)
+    return tuple(names)
+
+
+def begin_fill_audit(credential_args: tuple[str, ...] = ()) -> tuple[FillAudit, Token[FillAudit | None]]:
+    audit = FillAudit(credential_args=credential_args)
     return audit, _AUDIT.set(audit)
 
 
@@ -71,6 +98,9 @@ def offsite_fields(audit: FillAudit) -> dict[str, Any]:
 async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) -> AsyncIterator[None]:
     """Refuse (or, in warn mode, record) a credential typed onto a foreign origin.
 
+    Page code in a run that carries a credential is refused here too, so a
+    called macro's ``evaluate`` is judged by the run it is part of.
+
     Checked twice, by one check. Before dispatch, on the URL read through the
     session's gate from the frame the fill would land in -- not from
     ``session.url``, which is the last URL an octowright navigate wrote and
@@ -82,6 +112,9 @@ async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) ->
     enters a frame, is what moved it. A type the page moved partway through
     on its own origin is stopped there too, and reported naming this step.
     """
+    audit = _AUDIT.get()
+    if audit is not None and (refusal := page_code_refusal(action, audit.credential_args)):
+        raise refusal
     check = _OriginCheck(session, action) if action.get(CREDENTIAL_FILL_MARKER) else None
     if check is not None:
         check(await session.target_url())

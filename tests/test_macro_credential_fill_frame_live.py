@@ -20,11 +20,13 @@ launched on the first, so the second stands in for an attacker's site.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 
@@ -45,6 +47,17 @@ class _Handler(BaseHTTPRequestHandler):
             body = FORM
         elif self.path.startswith("/framed"):
             body = b'<!doctype html><html><body><iframe src="/form"></iframe></body></html>'
+        elif self.path.startswith(("/embed?", "/moves?")):
+            # The page does it, not the macro: a run that types a credential
+            # runs no page code of its own.
+            target = json.dumps(parse_qs(urlsplit(self.path).query)["to"][0])
+            if self.path.startswith("/embed?"):
+                body = f"<!doctype html><html><body><script>document.write('<iframe src=' + {target} + '></iframe>')</script></body></html>".encode()
+            else:
+                body = BLANK.replace(
+                    b"</body>",
+                    f"<script>setTimeout(() => {{ location.href = {target}; }}, 700)</script></body>".encode(),
+                )
         else:
             body = BLANK
         self.send_response(200)
@@ -138,18 +151,18 @@ async def _inject_foreign_frame(session: Any, monkeypatch: pytest.MonkeyPatch, e
     await field.wait_for(state="attached", timeout=FRAME_READY_TIMEOUT_MS)
 
 
-def _move_later(url: str) -> dict[str, Any]:
-    # No placeholder, so the sink guard has nothing to say about it. The delay
-    # outlasts the pre-dispatch read, and the fill's wait outlasts the delay.
-    return {"action": "evaluate", "expression": f"setTimeout(() => {{ location.href = {url!r}; }}, 700)"}
+def _move_later(origin: str, url: str) -> dict[str, Any]:
+    # A page on *origin* that moves itself to *url*. The delay outlasts the
+    # pre-dispatch read, and the fill's wait outlasts the delay.
+    return {"action": "navigate", "url": f"{origin}/moves?to={quote(url, safe='')}"}
 
 
 @pytest.mark.parametrize("kind", ["fill", "fill_by", "type", "type_keys"])
 async def test_a_navigation_during_the_wait_does_not_carry_the_credential(
-    session: Any, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
+    session: Any, trusted: str, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
     with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
-        await _run(session, monkeypatch, [_move_later(evil + "/form"), _typing_step(kind)])
+        await _run(session, monkeypatch, [_move_later(trusted, evil + "/form"), _typing_step(kind)])
     await session.page.wait_for_url(evil + "/form")
     assert SECRET not in await _typed_values(session, evil)
 
@@ -192,8 +205,7 @@ async def test_the_exported_cli_checks_the_frame_it_types_into(trusted: str, evi
     from octowright.artifacts.script_export import render_macro_cli
 
     actions = [
-        {"action": "navigate", "url": trusted + "/"},
-        {"action": "evaluate", "expression": f"document.body.innerHTML = '<iframe src=\"{evil}/form\"></iframe>'"},
+        {"action": "navigate", "url": f"{trusted}/embed?to={quote(evil + '/form', safe='')}"},
         _typing_step("fill", "iframe >> internal:control=enter-frame >> #pw"),
     ]
     namespace: dict[str, Any] = {}
@@ -213,7 +225,7 @@ async def test_the_exported_cli_checks_the_frame_it_types_into(trusted: str, evi
 async def test_the_exported_cli_checks_after_a_navigation_during_the_wait(trusted: str, evil: str) -> None:
     from octowright.artifacts.script_export import render_macro_cli
 
-    actions = [{"action": "navigate", "url": trusted + "/"}, _move_later(evil + "/form"), _typing_step("fill")]
+    actions = [_move_later(trusted, evil + "/form"), _typing_step("fill")]
     namespace: dict[str, Any] = {}
     exec(
         render_macro_cli(name="m", macro={"parameters": ["password"], "actions": actions}, include_evidence=False),

