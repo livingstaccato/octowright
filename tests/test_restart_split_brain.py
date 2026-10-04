@@ -72,6 +72,14 @@ def test_octowright_leader_on_port_ignores_non_octowright_holder(monkeypatch: py
     assert port_owner.octowright_leader_on_port(6286, lambda: procs) is None
 
 
+def test_octowright_leader_on_port_recognises_a_windows_console_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``...\\octowright.EXE" serve`` is how Windows shows the console script; a
+    bare substring check never matched it, so a squatting leader was not reclaimed."""
+    monkeypatch.setattr(port_owner, "_pid_listening_on_port", lambda _port: 444)
+    procs = [(444, '"C:\\venv\\Scripts\\octowright.EXE" serve --daemon-mode')]
+    assert port_owner.octowright_leader_on_port(6286, lambda: procs) == 444
+
+
 def test_octowright_leader_on_port_none_when_port_free(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(port_owner, "_pid_listening_on_port", lambda _port: None)
     assert port_owner.octowright_leader_on_port(6286, _procs) is None

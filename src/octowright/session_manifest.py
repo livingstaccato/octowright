@@ -319,13 +319,14 @@ def _process_identity() -> tuple[frozenset[int], frozenset[int]] | None:
     """
     try:
         from octowright.process_reaper import _list_processes
+        from octowright.serve_command import command_names_octowright_serve
 
         table = _list_processes()
     except Exception:
         return None
     return (
         frozenset(pid for pid, _ppid, _command in table),
-        frozenset(pid for pid, _ppid, command in table if "octowright serve" in command),
+        frozenset(pid for pid, _ppid, command in table if command_names_octowright_serve(command)),
     )
 
 

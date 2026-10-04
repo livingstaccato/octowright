@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **On Windows, a running daemon's session-manifest entries are no longer
+  pruned, and `octowright restart` reclaims a split-brain leader's port.** Both
+  recognised a daemon by the text `octowright serve`, which never matches the
+  Windows console script (`...\octowright.EXE" serve`). The prune took a live
+  daemon for a recycled pid and deleted its entries, and the port reclaim left
+  a second leader holding the canonical port. Every such check now shares the
+  one that already handled Windows.
 - **`octowright takeover --apply` keeps the original config's backup.** The
   backup name has one-second resolution, so disabling two servers in one config
   replaced the first backup, the only copy of the original, with the already

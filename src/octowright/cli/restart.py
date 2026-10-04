@@ -35,7 +35,6 @@ import contextlib
 import csv
 import io
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -51,6 +50,7 @@ from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
 from octowright.process_reaper import browser_pids_owned_by, reap_daemon_browsers
+from octowright.serve_command import command_names_octowright_serve
 
 # Poll interval while waiting for graceful shutdown or health-probe success.
 _POLL_INTERVAL_S = 0.25
@@ -60,21 +60,9 @@ _POLL_INTERVAL_S = 0.25
 # escalation pattern in ``process_reaper.KILL_SIGNAL``.
 _FORCE_KILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
 
-# A bare substring check for "octowright serve" matches the POSIX command
-# line (``octowright serve --daemon-mode``) but NEVER the Windows one: Windows
-# console-script invocation is ``...\octowright.EXE" serve --daemon-mode`` --
-# an extension plus a closing quote sit between the name and "serve". Found
-# live: a genuinely running daemon's lockfile pid was reported as "not an
-# octowright daemon (stale lock or recycled pid)" and left untouched by
-# `restart`, on a process whose command line visibly WAS `octowright.EXE"
-# serve --daemon-mode`. This tolerates an optional `.exe`/`.EXE` and an
-# optional closing quote between the two words, so it matches on both
-# platforms.
-_OCTOWRIGHT_SERVE_RE = re.compile(r"octowright(\.exe)?[\"']?\s+serve", re.IGNORECASE)
-
-
-def _command_names_octowright_serve(command: str) -> bool:
-    return _OCTOWRIGHT_SERVE_RE.search(command) is not None
+# Shared with the manifest prune and the port reclaim; see ``serve_command``
+# for why a bare substring check never matched on Windows.
+_command_names_octowright_serve = command_names_octowright_serve
 
 
 def _resolve_octowright_entry() -> str:
