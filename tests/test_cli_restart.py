@@ -51,7 +51,7 @@ def stub_no_leader(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pretend nothing is running."""
     monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_kw: None)
     monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda _port: [])
-    monkeypatch.setattr(_restart_mod.singleton, "remove_lock", lambda *_a, **_kw: None)
+    monkeypatch.setattr(_restart_mod.singleton, "remove_lock_if_owned", lambda *_a, **_kw: False)
 
 
 def test_help_documents_keep_browsers_and_no_start(runner: CliRunner) -> None:
@@ -120,7 +120,7 @@ def test_stop_escalates_to_sigkill_on_holdouts(
     """If a leader doesn't exit after SIGTERM within timeout, SIGKILL is sent."""
     monkeypatch.setattr(_restart_mod.singleton, "read_lock", lambda *_a, **_kw: None)
     monkeypatch.setattr(_restart_mod, "_leader_pids_from_pgrep", lambda _port: [12345])
-    monkeypatch.setattr(_restart_mod.singleton, "remove_lock", lambda *_a, **_kw: None)
+    monkeypatch.setattr(_restart_mod.singleton, "remove_lock_if_owned", lambda *_a, **_kw: False)
     monkeypatch.setattr(
         _restart_mod,
         "reap_daemon_browsers",

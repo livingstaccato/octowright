@@ -576,7 +576,17 @@ def leader_stubs(monkeypatch: pytest.MonkeyPatch) -> _LeaderStubs:
     from octowright import singleton as _sn
 
     monkeypatch.setattr(_sn, "write_lock", lambda info, **_kw: s.lock_writes.append(info))
-    monkeypatch.setattr(_sn, "remove_lock", lambda **_kw: s.lock_removes.append(True))
+
+    async def _release_own_lock(token: str, **_kw: Any) -> bool:
+        s.lock_removes.append(token)
+        return True
+
+    # The leader removes its lock only while it still describes this process
+    # (singleton.release_own_lock); an unconditional remove_lock would erase a
+    # successor's record. Stubbing remove_lock too keeps a regression from
+    # reaching the developer's real lockfile.
+    monkeypatch.setattr(_sn, "release_own_lock", _release_own_lock)
+    monkeypatch.setattr(_sn, "remove_lock", lambda **_kw: s.lock_removes.append("UNCONDITIONAL"))
 
     return s
 
@@ -658,4 +668,5 @@ class TestRunLeaderBranches:
         leader_stubs.http_done.set()
         await asyncio.wait_for(leader_task, timeout=_LEADER_WAIT_TIMEOUT)
         assert len(leader_stubs.lock_writes) == 1
-        assert len(leader_stubs.lock_removes) == 1
+        # Released by ownership, with the token the leader wrote.
+        assert leader_stubs.lock_removes == [leader_stubs.lock_writes[0].token]

@@ -588,7 +588,10 @@ async def _run_leader(
         await _close_plugin_pools_on_shutdown(_plugin_state.registry(), log=_log)
         await shutdown_browser_pool_on_shutdown(pool, log=_log)
         if not no_singleton:
-            _sn.remove_lock()
+            # Only while the lockfile still describes THIS leader: a successor
+            # may already have replaced it, and erasing its record would make
+            # the next client spawn a third leader beside it.
+            await _sn.release_own_lock(leader_token)
 
 
 async def _close_plugin_pools_on_shutdown(registry: Any, *, log: Any) -> None:

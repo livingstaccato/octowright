@@ -34,7 +34,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Collection, Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -403,3 +403,45 @@ def local_leader_started_monotonic() -> float | None:
     clocks are not comparable.
     """
     return _LOCAL_LEADER_STARTED_MONOTONIC
+
+
+# How long a leader shutting down waits for the election lock before leaving
+# its lockfile alone. Contention means another process is electing right now,
+# and that process decides what the lockfile says next; a lock left naming our
+# dead pid reads as stale to every reader anyway.
+RELEASE_LOCK_TIMEOUT_SECONDS = 2.0
+
+
+def remove_lock_if_owned(owner_pids: Collection[int], *, token: str | None = None, path: Path = LOCK_PATH) -> bool:
+    """Unlink the lockfile only if it still names one of ``owner_pids``.
+
+    The lockfile is the one record of which leader is live, and it is replaced
+    by every new leader. Unlinking it unconditionally let a superseded leader
+    (or ``restart``, after killing one) erase a SUCCESSOR's record: the next
+    client then found no leader and a free canonical port and spawned a third,
+    while the successor kept running invisible to ``restart`` -- split-brain.
+    ``token``, when given, must match as well, so a pid the OS recycled to a
+    successor is not mistaken for the owner. The caller should hold the
+    election lock so the check and the unlink cannot straddle a new write.
+    Returns whether the file was removed.
+    """
+    info = read_lock(path)
+    if info is None or info.pid not in owner_pids:
+        return False
+    if token is not None and info.token != token:
+        return False
+    remove_lock(path)
+    return True
+
+
+async def release_own_lock(
+    token: str, *, path: Path = LOCK_PATH, timeout: float = RELEASE_LOCK_TIMEOUT_SECONDS
+) -> bool:
+    """A leader's shutdown removal of its lockfile: under the election lock, and
+    only while the file still describes this process (pid and token)."""
+    try:
+        async with async_election_lock(path, timeout=timeout):
+            return remove_lock_if_owned({os.getpid()}, token=token, path=path)
+    except TimeoutError:
+        log.warning("singleton.lock_release_skipped", reason="election lock held by another process")
+        return False

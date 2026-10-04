@@ -104,7 +104,11 @@ def isolated_lockfile(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
 
     monkeypatch.setattr(_singleton, "write_lock", lambda info, path=lock: real_write(info, path=path))
     monkeypatch.setattr(_singleton, "read_lock", lambda path=lock: real_read(path=path))
+    real_release = _singleton.release_own_lock
     monkeypatch.setattr(_singleton, "remove_lock", lambda path=lock: real_remove(path=path))
+    monkeypatch.setattr(
+        _singleton, "release_own_lock", lambda token, path=lock, **kw: real_release(token, path=path, **kw)
+    )
     return lock
 
 

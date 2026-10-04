@@ -410,7 +410,10 @@ def _stop_leader(
     for pid in pids:
         _send_signal(pid, signal.SIGTERM)
     survivors = _escalate_survivors(pids, timeout)
-    singleton.remove_lock()
+    # Only a lock naming a process we just stopped: a follower's respawn may
+    # already have written its successor's, and erasing that would hide a live
+    # leader and let the next client spawn another beside it.
+    singleton.remove_lock_if_owned(pids)
     return len(pids) - len(survivors), len(survivors), owned_browsers
 
 
