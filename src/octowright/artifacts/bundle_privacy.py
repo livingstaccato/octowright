@@ -16,10 +16,10 @@ here, after that scrub and before anything is written:
   directory exists -- with key-level redaction (`artifacts.redaction`) applied
   on top, and ``privacy_unresolved: true``.
 - **Tripwire.** Every string, mapping keys included, is searched for each held
-  value in every serialized spelling, ignoring case. The scrub matches case
-  exactly (a page that upper-cases what it echoes slips past it); a match here
-  is removed, case-insensitively, and the whole string is replaced if any of
-  it is still found. ``privacy_tripwire: true`` says it happened.
+  value in every serialized spelling, ignoring case -- the run's values and
+  everything the session ledger holds, though the bundle's own scrub is given
+  only the run's. A match is removed, and the whole string is replaced if any
+  of it is still found. ``privacy_tripwire: true`` says it happened.
 
 Both flags name nothing; neither ever carries a value.
 """

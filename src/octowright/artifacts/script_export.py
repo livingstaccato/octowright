@@ -396,7 +396,8 @@ def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
         for sensitive in sensitive_values:
             variants = _serialized_variants(sensitive)
             for variant in variants:
-                flags = re.IGNORECASE if "%" in variant else 0
+                # Every spelling ignores case, as the live scrub does.
+                flags = re.IGNORECASE
                 if len(sensitive) < 4:
                     redacted = re.sub(
                         rf"(?<![A-Za-z0-9]){{re.escape(variant)}}(?![A-Za-z0-9])",

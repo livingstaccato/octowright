@@ -12,8 +12,10 @@ of what the run's privacy view holds. Two ways that can be quietly wrong:
   scrub set is saturated: the bundle is still written -- nothing raises after
   the run directory exists -- with key-level redaction on top, and says
   ``privacy_unresolved: true``;
-- a value survived the scrub in a spelling it does not cover (another case):
-  the tripwire finds it, removes it, and says ``privacy_tripwire: true``.
+- a value is still there after the scrub -- one the session holds but the
+  bundle's own scrub was not given, or a spelling the scrub does not cover:
+  the tripwire finds it, in any case, removes it, and says
+  ``privacy_tripwire: true``.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from octowright.macros import execution, privacy
 from tests._macro_artifact_fixtures import _FakeSession, _reload, restore_reloaded_defaults
 
 SECRET = "Bundle-Secret-4Wz"  # pragma: allowlist secret
+RUN_VALUE = "Run-Own-Value-1"  # pragma: allowlist secret
 
 
 @pytest.fixture(autouse=True)
@@ -102,7 +105,8 @@ def test_write_run_bundle_writes_the_flags_into_result_json(tmp_path: Path) -> N
         result={"status": "failed", "error": f"boom {SECRET.upper()}", "args_used": {"note": "x"}},
         evidence=[{"type": "log_excerpt", "preview": SECRET.lower()}],
         summary=f"ran {SECRET.swapcase()}",
-        sensitive_values=(SECRET,),
+        # The bundle's own scrub was not given the value; only the guard holds it.
+        sensitive_values=(),
         privacy=guard,
     )
 
@@ -160,11 +164,15 @@ async def test_an_artifact_run_trips_on_a_value_the_scrub_missed(
 ) -> None:
     storage, macro_artifacts = _reload(monkeypatch, tmp_path)
     _write(storage)
-    # The page echoes the password upper-cased; the scrub is case-sensitive.
-    _install(monkeypatch, storage, error=f"page shows {SECRET.upper()}")
+    _install(monkeypatch, storage, error="step failed")
+    session = _FakeSession(tmp_path)
+    # Held by the session from earlier, not by this run: the bundle's scrub
+    # uses the run's values, so only the tripwire stands between the operator's
+    # notes and the summary.
+    privacy.install_sensitive_recorder(session, [SECRET])
 
     result = await macro_artifacts.run_macro_artifact(
-        _FakeSession(tmp_path), "m", {"password": SECRET}, capture=False, verify=False, notes=f"saw {SECRET.lower()}"
+        session, "m", {"password": RUN_VALUE}, capture=False, verify=False, notes=f"saw {SECRET.lower()}"
     )
 
     assert result["ok"] is False

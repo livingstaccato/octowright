@@ -623,6 +623,17 @@ escapes `'` as `\'` and a control character as `\xNN`, which no JSON
 spelling does. Running an exported script against a real browser
 (`tests/test_macro_export_run_privacy_live.py`) is what found it.
 
+Every one of those spellings is matched **ignoring case**, by the live scrub
+and by an exported script alike. A page that echoes a credential upper-,
+lower- or mixed-cased (a header that capitalises a name, a log line that
+shouts) used to put it in a failure payload's `original`, console tail or
+failed requests in the clear, because only percent-encoded spellings were
+case-folded. A typed password is still matched only as a whole identifier,
+now in any case, so `#Admin-menu` survives a typed `admin` and `pw=ADMIN`
+does not. Folding case costs nothing per write: for ASCII text the scrub
+first looks for the lower-cased variants in the lower-cased text, which is
+cheaper than the case-sensitive search it replaces.
+
 A failure payload goes back to the MCP client, and its fields follow two rules.
 The text the page produced -- `original` (the exception), the console tail,
 `failed_requests`, `page_errors`, the `assertions` block, the A11y
@@ -1061,9 +1072,9 @@ arrived, so two checks follow the scrub (`artifacts.bundle_privacy`):
   record on top of the scrub.
 - **`privacy_tripwire: true`** when a value the run or the session holds is
   still found, in any serialized spelling and ignoring case, after the scrub.
-  The scrub matches case exactly, so a page that echoes a password
-  upper-cased slips past it; the tripwire removes such a match (a string that
-  still holds one is replaced whole) and says so. A password the session saw
+  The scrub itself now ignores case, so this is a backstop for a spelling
+  it does not know; the tripwire removes such a match (a string that still
+  holds one is replaced whole) and says so. A password the session saw
   typed is matched only as a whole identifier, as the recording matches it.
 
 Both flags are written into `result.json` and returned on the

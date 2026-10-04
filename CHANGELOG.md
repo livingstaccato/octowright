@@ -86,12 +86,11 @@ a section that is already tagged and on PyPI.
   step ran, after the steps before it had acted on the browser. A sequence
   file with such a name is refused before `octowright test --sequence`
   launches a browser. A name that is merely not saved is still a failed step.
-- **An artifact run bundle can no longer hold a value in another case, and
-  says when its privacy could not be confirmed.** The scrub matches case
-  exactly, so a page that echoed a password upper-cased wrote it into
-  `result.json` or `summary.md`. A last check now finds any value the run or
-  session holds, in any spelling and case, removes it and marks the bundle
-  `privacy_tripwire: true`. A bundle whose privacy view never resolved, was
+- **An artifact run bundle is checked once more before it is written, and
+  says when its privacy could not be confirmed.** A last check finds any value
+  the run or the session holds, in any spelling and case -- including one held
+  from earlier in the session, which the bundle's own scrub was not given --
+  removes it and marks the bundle `privacy_tripwire: true`. A bundle whose privacy view never resolved, was
   not finished, or whose session's scrub set is saturated is still written,
   with key-level redaction added, and marked `privacy_unresolved: true`. Both
   flags also appear on the `macro_artifact_run` result.
@@ -100,6 +99,15 @@ a section that is already tagged and on PyPI.
   no JSON spelling matches, so it reached a macro failure payload's `original`
   and an exported script's `result.json` and error output in the clear. Every
   scrub now also matches the value as `repr` spells it, up to twice over.
+- **Scrubbing ignores case.** Only percent-encoded spellings used to be
+  matched case-insensitively, so a page that echoed a credential upper-, lower-
+  or mixed-cased put it in a macro failure payload's `original`, console tail
+  or failed requests, in recordings, and in an exported script's output, in the
+  clear. Every spelling (raw, JSON-escaped, HTML-escaped, percent-encoded,
+  repr) is now matched in any case, live and in exported scripts. A typed
+  password still matches only as a whole identifier. Each write is cheaper
+  than before, not dearer: about 9 µs instead of 21 µs with 8 held values, and
+  0.44 ms instead of 1.1 ms with 256.
 
 ### Changed
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
