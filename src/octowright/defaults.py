@@ -9,8 +9,10 @@ import getpass
 import os
 import platform
 import subprocess
+from collections.abc import Callable
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from provide.telemetry import get_logger
 
@@ -26,7 +28,33 @@ os.environ.setdefault("PROVIDE_TELEMETRY_SERVICE_NAME", "octowright")
 
 log = get_logger(__name__)
 
-_DEFAULT_PORT = os.environ.get("OCTOWRIGHT_HTTP_PORT", "6286")
+
+def _env_number(name: str, default: Any, parse: Callable[[str], Any]) -> Any:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return parse(raw.strip())
+    except ValueError:
+        log.warning("octowright.defaults.env_invalid", name=name, value=raw, default=default)
+        return default
+
+
+def env_int(name: str, default: int) -> int:
+    """Integer env knob *name*, or *default* with a warning when it does not parse.
+
+    Numeric knobs are read at import, so a bare ``int()`` turned one typo
+    (``30s``) into a traceback from every command, the stdio follower included.
+    """
+    return int(_env_number(name, default, int))
+
+
+def env_float(name: str, default: float) -> float:
+    """Float env knob *name*, or *default* with a warning when it does not parse (see :func:`env_int`)."""
+    return float(_env_number(name, default, float))
+
+
+_DEFAULT_PORT = str(env_int("OCTOWRIGHT_HTTP_PORT", 6286))
 DEFAULT_URL = os.environ.get("OCTOWRIGHT_DEFAULT_URL", f"http://127.0.0.1:{_DEFAULT_PORT}/new-tab")
 
 # Runtime-resolved port — set by the HTTP server once it successfully binds
@@ -164,8 +192,8 @@ PROFILES_DIR = Path(os.environ.get("OCTOWRIGHT_PROFILES_DIR", str(_DEFAULT_PROFI
 SCENARIOS_DIR = Path(os.environ.get("OCTOWRIGHT_SCENARIOS_DIR", str(_DEFAULT_SCENARIOS)))
 SCENARIO_TEMPLATES_DIR = SCENARIOS_DIR / "templates"
 CAPTURES_DIR = Path(os.environ.get("OCTOWRIGHT_CAPTURES_DIR", str(_CACHE_DIR / "captures")))
-CAPTURE_MAX_TOTAL_BYTES = int(os.environ.get("OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES", str(50 * 1024 * 1024)))
-CAPTURE_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_CAPTURE_TTL_SECONDS", str(7 * 86400)))
+CAPTURE_MAX_TOTAL_BYTES = env_int("OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES", 50 * 1024 * 1024)
+CAPTURE_TTL_SECONDS = env_float("OCTOWRIGHT_CAPTURE_TTL_SECONDS", 7 * 86400)
 SESSION_MANIFEST_PATH = Path(os.environ.get("OCTOWRIGHT_SESSION_MANIFEST", str(_STATE_DIR / "session-manifest.json")))
 
 # Macro JSON storage. Default sits next to PROFILES_DIR so the user-config
@@ -244,32 +272,32 @@ HEADLESS_DEFAULT = _detect_headless_default()
 # the browser_launch `protected` parameter.
 PROTECT_BROWSERS_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_BROWSERS", "").strip() == "1"
 PROTECT_HEADED_DEFAULT: bool = os.environ.get("OCTOWRIGHT_PROTECT_HEADED", "1").strip() != "0"  # headed default
-BADGE_OPACITY: float = float(os.environ.get("OCTOWRIGHT_BADGE_OPACITY", "0.35"))
+BADGE_OPACITY: float = env_float("OCTOWRIGHT_BADGE_OPACITY", 0.35)
 
 SUPPORTED_KINDS = ("chromium", "firefox", "webkit")
 
-DEFAULT_NAV_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_NAV_TIMEOUT_MS", "30000"))
-DEFAULT_ACTION_TIMEOUT_MS = int(os.environ.get("OCTOWRIGHT_ACTION_TIMEOUT_MS", "15000"))
+DEFAULT_NAV_TIMEOUT_MS = env_int("OCTOWRIGHT_NAV_TIMEOUT_MS", 30000)
+DEFAULT_ACTION_TIMEOUT_MS = env_int("OCTOWRIGHT_ACTION_TIMEOUT_MS", 15000)
 # Wall-clock budget for one aria-tree snapshot. A heavy DOM can make
 # locator.aria_snapshot() run long enough to blow BRIDGE_REQUEST_TIMEOUT_SECONDS
 # (20s) — which the agent can't distinguish from a disconnect. Capped below it so
 # browser_snapshot degrades to a typed result ("use read_markdown / a scoped
 # selector") instead of hanging until the transport gives up.
-SNAPSHOT_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_SNAPSHOT_TIMEOUT_SECONDS", "12"))
+SNAPSHOT_TIMEOUT_SECONDS = env_float("OCTOWRIGHT_SNAPSHOT_TIMEOUT_SECONDS", 12)
 # Total wall-clock budget for a browser launch MCP tool call. This must stay
 # below common MCP client call deadlines (120s) so a wedged Playwright launch
 # returns a normal tool error instead of making the client report a transport
 # timeout.
-BROWSER_LAUNCH_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS", "90"))
+BROWSER_LAUNCH_TIMEOUT_SECONDS = env_float("OCTOWRIGHT_BROWSER_LAUNCH_TIMEOUT_SECONDS", 90)
 
 # Follower bridge protection. These defaults are intentionally below common MCP
 # client tool-call deadlines so bridge failures return explicit JSON-RPC errors
 # instead of leaving the host to time out at ~120s.
-BRIDGE_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_REQUEST_TIMEOUT_SECONDS", "20"))
-BRIDGE_CONNECT_TIMEOUT_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_CONNECT_TIMEOUT_SECONDS", "10"))
-BRIDGE_RECONNECT_MAX_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_RECONNECT_MAX_SECONDS", "5"))
-BRIDGE_HEALTH_INTERVAL_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_INTERVAL_SECONDS", "2"))
-BRIDGE_HEALTH_MAX_FAILURES = int(os.environ.get("OCTOWRIGHT_BRIDGE_HEALTH_MAX_FAILURES", "2"))
+BRIDGE_REQUEST_TIMEOUT_SECONDS = env_float("OCTOWRIGHT_BRIDGE_REQUEST_TIMEOUT_SECONDS", 20)
+BRIDGE_CONNECT_TIMEOUT_SECONDS = env_float("OCTOWRIGHT_BRIDGE_CONNECT_TIMEOUT_SECONDS", 10)
+BRIDGE_RECONNECT_MAX_SECONDS = env_float("OCTOWRIGHT_BRIDGE_RECONNECT_MAX_SECONDS", 5)
+BRIDGE_HEALTH_INTERVAL_SECONDS = env_float("OCTOWRIGHT_BRIDGE_HEALTH_INTERVAL_SECONDS", 2)
+BRIDGE_HEALTH_MAX_FAILURES = env_int("OCTOWRIGHT_BRIDGE_HEALTH_MAX_FAILURES", 2)
 BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DIR / "bridge-state.json")))
 
 # Per-tool override of the flat BRIDGE_REQUEST_TIMEOUT_SECONDS in-flight deadline,
@@ -282,30 +310,30 @@ BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DI
 # ping (see proxy_supervisor); the floor here covers the pre-first-progress window
 # and tools that emit no progress at all.
 BRIDGE_TOOL_TIMEOUTS: dict[str, float] = {
-    "browser_launch": float(
-        os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_LAUNCH_TIMEOUT_SECONDS", str(BROWSER_LAUNCH_TIMEOUT_SECONDS + 15))
+    "browser_launch": env_float(
+        "OCTOWRIGHT_BRIDGE_BROWSER_LAUNCH_TIMEOUT_SECONDS", BROWSER_LAUNCH_TIMEOUT_SECONDS + 15
     ),
-    "macro_run": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", "120")),
-    "macro_run_sequence": float(os.environ.get("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", "180")),
+    "macro_run": env_float("OCTOWRIGHT_BRIDGE_MACRO_RUN_TIMEOUT_SECONDS", 120),
+    "macro_run_sequence": env_float("OCTOWRIGHT_BRIDGE_MACRO_SEQUENCE_TIMEOUT_SECONDS", 180),
     # evaluate runs arbitrary caller JS with up to ~30s page.evaluate timeout
-    "browser_evaluate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_EVALUATE_TIMEOUT_SECONDS", "60")),
+    "browser_evaluate": env_float("OCTOWRIGHT_BRIDGE_BROWSER_EVALUATE_TIMEOUT_SECONDS", 60),
     # fill/type carry up to 15s Playwright action timeout — 60s leaves 45s bridge margin
-    "browser_fill": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_FILL_TIMEOUT_SECONDS", "60")),
-    "browser_type": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_TYPE_TIMEOUT_SECONDS", "60")),
+    "browser_fill": env_float("OCTOWRIGHT_BRIDGE_BROWSER_FILL_TIMEOUT_SECONDS", 60),
+    "browser_type": env_float("OCTOWRIGHT_BRIDGE_BROWSER_TYPE_TIMEOUT_SECONDS", 60),
     # navigate uses page.goto() with DEFAULT_NAV_TIMEOUT_MS (30s) — 60s keeps parity
-    "browser_navigate": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_NAVIGATE_TIMEOUT_SECONDS", "60")),
+    "browser_navigate": env_float("OCTOWRIGHT_BRIDGE_BROWSER_NAVIGATE_TIMEOUT_SECONDS", 60),
     # click can trigger a navigation, inheriting the 30s nav timeout
-    "browser_click": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_CLICK_TIMEOUT_SECONDS", "45")),
+    "browser_click": env_float("OCTOWRIGHT_BRIDGE_BROWSER_CLICK_TIMEOUT_SECONDS", 45),
     # wait_for is an explicit waiting primitive; 90s accommodates typical settle polls
-    "browser_wait_for": float(os.environ.get("OCTOWRIGHT_BRIDGE_BROWSER_WAIT_FOR_TIMEOUT_SECONDS", "90")),
+    "browser_wait_for": env_float("OCTOWRIGHT_BRIDGE_BROWSER_WAIT_FOR_TIMEOUT_SECONDS", 90),
 }
 
 # Max re-sends of an in-flight request after a reconnect (idempotent resume).
-BRIDGE_RESUME_MAX_ATTEMPTS = int(os.environ.get("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", "3"))
+BRIDGE_RESUME_MAX_ATTEMPTS = env_int("OCTOWRIGHT_BRIDGE_RESUME_MAX_ATTEMPTS", 3)
 
 # Hard-exit grace after stdin EOF: ensures the follower doesn't outlive its client
 # when remote SSE teardown wedges and ignores anyio cancellation.
-FOLLOWER_EXIT_BACKSTOP_SECONDS = float(os.environ.get("OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS", "5"))
+FOLLOWER_EXIT_BACKSTOP_SECONDS = env_float("OCTOWRIGHT_FOLLOWER_EXIT_BACKSTOP_SECONDS", 5)
 
 # Leader-side idempotency cache. The follower injects a stable
 # ``octowrightIdempotencyKey`` into each tools/call's _meta and re-sends it
@@ -318,38 +346,38 @@ IDEMPOTENCY_ENABLED = os.environ.get("OCTOWRIGHT_IDEMPOTENCY", "1").strip().lowe
 #   BRIDGE_RESUME_MAX_ATTEMPTS * (BRIDGE_CONNECT_TIMEOUT_SECONDS + BRIDGE_RECONNECT_MAX_SECONDS)
 #   = 3 * (10 + 5) = 45s.  Default 180s keeps a ~4x margin; keep this invariant if
 # you retune the bridge timeouts above.
-IDEMPOTENCY_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_TTL_SECONDS", "180"))
-IDEMPOTENCY_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES", "256"))
+IDEMPOTENCY_TTL_SECONDS = env_float("OCTOWRIGHT_IDEMPOTENCY_TTL_SECONDS", 180)
+IDEMPOTENCY_MAX_ENTRIES = env_int("OCTOWRIGHT_IDEMPOTENCY_MAX_ENTRIES", 256)
 # Oversize UTF-8 representations leave an authoritative no-rerun terminal marker,
 # bounding retained result memory without repeating a possibly side-effectful tool.
-IDEMPOTENCY_MAX_RESULT_BYTES = int(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES", "1048576"))
+IDEMPOTENCY_MAX_RESULT_BYTES = env_int("OCTOWRIGHT_IDEMPOTENCY_MAX_RESULT_BYTES", 1048576)
 # Resend wait on an in-progress producer before its outcome is called UNKNOWN. MUST
 # exceed the longest call the heartbeat sustains (_heartbeat.HEARTBEAT_MAX_SECONDS).
-IDEMPOTENCY_INPROGRESS_WAIT_SECONDS = float(os.environ.get("OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", "630"))
+IDEMPOTENCY_INPROGRESS_WAIT_SECONDS = env_float("OCTOWRIGHT_IDEMPOTENCY_INPROGRESS_WAIT_SECONDS", 630)
 
 # Per-action delay applied to macros, useful for visually following execution.
 # Sleep happens AFTER pushing status to the pill and BEFORE dispatching the
 # action, so the pill reflects the upcoming action while the user gets time
 # to see it. 0 disables. Override per-call via the `slowmo_ms` arg on
 # run_macro / macro_run / macro_run_sequence.
-MACRO_SLOWMO_MS = int(os.environ.get("OCTOWRIGHT_MACRO_SLOWMO_MS", "0"))
+MACRO_SLOWMO_MS = env_int("OCTOWRIGHT_MACRO_SLOWMO_MS", 0)
 
 # Cap on distinct macro-name label values applied to macro_run_total /
 # macro_run_duration_seconds metrics. Long-lived deployments with programmatic
 # macro generation could grow the per-label timeseries count without bound,
 # blowing up Prometheus storage. Once the cap is exceeded, additional names
 # collapse to a single ``"(overflow)"`` label so cardinality stays bounded.
-METRICS_MACRO_LABEL_CAP = int(os.environ.get("OCTOWRIGHT_METRICS_MACRO_LABEL_CAP", "256"))
+METRICS_MACRO_LABEL_CAP = env_int("OCTOWRIGHT_METRICS_MACRO_LABEL_CAP", 256)
 
 # HTTP debugger / dashboard sidecar — runs alongside the MCP stdio server when
 # `octowright serve` is invoked. Bind defaults to localhost only because the
 # debugger UI exposes raw recordings, video, and trace data.
 HTTP_HOST = os.environ.get("OCTOWRIGHT_HTTP_HOST", "127.0.0.1")
-HTTP_PORT = int(os.environ.get("OCTOWRIGHT_HTTP_PORT", "6286"))
+HTTP_PORT = env_int("OCTOWRIGHT_HTTP_PORT", 6286)
 # When the configured port is in use, try this many higher ports before giving up.
 HTTP_PORT_RETRIES = 5
 DASHBOARD_REMOTE_ALLOWED_ENV = "OCTOWRIGHT_ALLOW_REMOTE_DASHBOARD"
-NETWORK_EVENT_LIMIT = int(os.environ.get("OCTOWRIGHT_NETWORK_EVENT_LIMIT", "5000"))
+NETWORK_EVENT_LIMIT = env_int("OCTOWRIGHT_NETWORK_EVENT_LIMIT", 5000)
 
 
 # Idle-watchdog: when ENABLED, `octowright serve` exits on its own once the pool
@@ -385,7 +413,7 @@ def _parse_idle_grace(raw: str | None) -> float | None:
 
 
 IDLE_GRACE_SECONDS: float | None = _parse_idle_grace(os.environ.get("OCTOWRIGHT_IDLE_GRACE"))
-IDLE_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_IDLE_POLL", "2"))
+IDLE_POLL_SECONDS = env_float("OCTOWRIGHT_IDLE_POLL", 2)
 
 
 # Pool-wide cap on concurrently-open browsers. The pool is shared by EVERY MCP
@@ -430,20 +458,20 @@ HOUSEKEEPING_INTERVAL_SECONDS: float | None = _parse_idle_grace(os.environ.get("
 # Each cache (artifacts, report, console index, downloads index, path-exists)
 # is independently capped at this many entries so the global singleton can't
 # grow indefinitely as more sessions are processed.
-SESSION_ARTIFACT_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", "256"))
+SESSION_ARTIFACT_CACHE_MAX_ENTRIES = env_int("OCTOWRIGHT_SESSION_ARTIFACT_CACHE_MAX_ENTRIES", 256)
 
 # Per-cache LRU bound on the closed-session discovery caches in
 # `octowright.http.discovery` (per-file launch-summary cache + per-dir
 # recording-index cache). Bounds memory growth across long-running daemons
 # that accumulate large recording histories.
-DISCOVERY_CACHE_MAX_ENTRIES = int(os.environ.get("OCTOWRIGHT_DISCOVERY_CACHE_MAX_ENTRIES", "512"))
+DISCOVERY_CACHE_MAX_ENTRIES = env_int("OCTOWRIGHT_DISCOVERY_CACHE_MAX_ENTRIES", 512)
 
 # TTL on the path-exists cache used by /downloads to avoid stat'ing every
 # referenced file on every page load. Sized to dedupe stats within a single
 # paginated request (sub-second) while still refreshing fast enough that a
 # user manually deleting a download sees the UI catch up within a couple
 # refreshes.
-DOWNLOAD_PATH_EXISTS_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_DOWNLOAD_PATH_EXISTS_TTL_SECONDS", "2.0"))
+DOWNLOAD_PATH_EXISTS_TTL_SECONDS = env_float("OCTOWRIGHT_DOWNLOAD_PATH_EXISTS_TTL_SECONDS", 2.0)
 
 # WebSocket /tail (per-session JSONL stream) cadence.
 #
@@ -453,8 +481,8 @@ DOWNLOAD_PATH_EXISTS_TTL_SECONDS = float(os.environ.get("OCTOWRIGHT_DOWNLOAD_PAT
 #   quiet stream. The loop only pushes when there's something new (events
 #   or a live→closed transition), so this bounds how long a quiet
 #   connection can stay silent before the client gets a liveness ping.
-TAIL_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_POLL_SECONDS", "1.0"))
-TAIL_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS", "15.0"))
+TAIL_POLL_SECONDS = env_float("OCTOWRIGHT_TAIL_POLL_SECONDS", 1.0)
+TAIL_HEARTBEAT_SECONDS = env_float("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS", 15.0)
 
 # WebSocket-frame cache flush cadence. Per-frame ``fh.flush()`` would
 # add a syscall per inbound/outbound WS frame — for game servers or
@@ -465,8 +493,8 @@ TAIL_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_TAIL_HEARTBEAT_SECONDS
 # elapsed-time threshold is hit, whichever comes first. Tail polls at
 # 1Hz by default so 250ms flush feels live; 32 frames keeps batches
 # small enough that bursty feeds don't accumulate noticeable lag.
-WEBSOCKET_CACHE_FLUSH_FRAMES = int(os.environ.get("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_FRAMES", "32"))
-WEBSOCKET_CACHE_FLUSH_SECONDS = float(os.environ.get("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_SECONDS", "0.25"))
+WEBSOCKET_CACHE_FLUSH_FRAMES = env_int("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_FRAMES", 32)
+WEBSOCKET_CACHE_FLUSH_SECONDS = env_float("OCTOWRIGHT_WEBSOCKET_CACHE_FLUSH_SECONDS", 0.25)
 
 # SSE /api/dashboard/events cadence.
 #
@@ -476,8 +504,8 @@ WEBSOCKET_CACHE_FLUSH_SECONDS = float(os.environ.get("OCTOWRIGHT_WEBSOCKET_CACHE
 # - DASHBOARD_HEARTBEAT_SECONDS: max silent interval before emitting an SSE
 #   ``: heartbeat`` comment. Under proxy idle-close (typically 60s) so the
 #   stream stays open through reverse proxies.
-DASHBOARD_DISCONNECT_POLL_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS", "0.05"))
-DASHBOARD_HEARTBEAT_SECONDS = float(os.environ.get("OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS", "15.0"))
+DASHBOARD_DISCONNECT_POLL_SECONDS = env_float("OCTOWRIGHT_DASHBOARD_DISCONNECT_POLL_SECONDS", 0.05)
+DASHBOARD_HEARTBEAT_SECONDS = env_float("OCTOWRIGHT_DASHBOARD_HEARTBEAT_SECONDS", 15.0)
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
@@ -523,9 +551,9 @@ def opt_in_enabled(name: str) -> bool:
 # on every reload doesn't loop); the counter resets after RESET_SECONDS of quiet,
 # so occasional crashes over a long session keep recovering.
 CRASH_RECOVERY_ENABLED: bool = _parse_bool_env("OCTOWRIGHT_CRASH_RECOVERY", True)
-CRASH_RECOVERY_MAX = int(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_MAX", "3"))
-CRASH_RECOVERY_RESET_SECONDS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RESET_SECONDS", "60"))
-CRASH_RECOVERY_RELOAD_TIMEOUT_MS = float(os.environ.get("OCTOWRIGHT_CRASH_RECOVERY_RELOAD_TIMEOUT_MS", "15000"))
+CRASH_RECOVERY_MAX = env_int("OCTOWRIGHT_CRASH_RECOVERY_MAX", 3)
+CRASH_RECOVERY_RESET_SECONDS = env_float("OCTOWRIGHT_CRASH_RECOVERY_RESET_SECONDS", 60)
+CRASH_RECOVERY_RELOAD_TIMEOUT_MS = env_float("OCTOWRIGHT_CRASH_RECOVERY_RELOAD_TIMEOUT_MS", 15000)
 
 
 # HTTP RED metrics, recorded through provide.telemetry's TelemetryMiddleware

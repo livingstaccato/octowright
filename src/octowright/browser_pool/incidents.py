@@ -26,11 +26,12 @@ deliberate, not overlooked, the next time it comes up.
 
 from __future__ import annotations
 
-import os
 from collections import deque
 from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
+
+from octowright.defaults import env_int
 
 # Categories recorded today. Kept as plain strings (not an enum) so callers in
 # different modules don't need a shared import beyond this one.
@@ -49,7 +50,7 @@ CATEGORY_UNRESPONSIVE_TARGET = "unresponsive_target"
 # renderer_crash: the context is gone with it, so there is no page to replace.
 CATEGORY_BROWSER_PROCESS_CRASH = "browser_process_crash"
 
-_RING_SIZE = int(os.environ.get("OCTOWRIGHT_INCIDENT_RING_SIZE", "25"))
+_RING_SIZE = env_int("OCTOWRIGHT_INCIDENT_RING_SIZE", 25)
 _RING: deque[dict[str, Any]] = deque(maxlen=_RING_SIZE)
 
 

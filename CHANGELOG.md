@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A malformed numeric setting no longer stops every command.** About fifty
+  numeric `OCTOWRIGHT_*` settings (timeouts, counts, the HTTP port) were read
+  with a bare `int()` or `float()` when Octowright loaded, so one typo such as
+  `OCTOWRIGHT_NAV_TIMEOUT_MS=30s` raised an error from every command. Even the
+  stdio follower failed to start, and the MCP client saw a dead server. Such a
+  value now falls back to its default with a warning.
 - **`octowright doctor` no longer reports a recycled pid as a healthy
   daemon.** Its `daemon` check trusted the lockfile's pid being alive. When a
   killed daemon left its lockfile and the OS gave the pid to another process,

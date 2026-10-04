@@ -4,6 +4,13 @@ Extracted from the root `AGENTS.md`. All defaults live in
 `src/octowright/defaults.py` (several knobs keep their parser elsewhere because
 that module is at its LOC ceiling -- each entry names the parser).
 
+A plain numeric knob (a timeout, a count, a port) that does not parse --
+`OCTOWRIGHT_NAV_TIMEOUT_MS=30s`, a blank value -- falls back to its default with
+one `octowright.defaults.env_invalid` warning instead of raising at import,
+which used to stop every command, the stdio follower included. Parsers:
+`defaults.env_int` / `defaults.env_float`. Knobs listed below with their own
+parser keep that parser's rules.
+
 Key vars (the rest are under [Other knobs](#other-knobs) below):
 - `OCTOWRIGHT_HTTP_PORT` — HTTP dashboard port (default 6286, auto-bumps if busy)
 - `OCTOWRIGHT_HTTP_HOST` — HTTP dashboard bind host (default 127.0.0.1)

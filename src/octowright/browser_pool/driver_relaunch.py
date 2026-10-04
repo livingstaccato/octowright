@@ -38,6 +38,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.replacement import ReplacementSource, launch_replacement
+from octowright.defaults import env_int
 
 log = get_logger(__name__)
 
@@ -55,7 +56,7 @@ _DRIVER_LOST = counter(
 
 # Bounded recent-lost-session ring surfaced in status. Sized like the incident
 # ring; a long-lived daemon can't grow it without bound.
-_LOST_SIZE = int(os.environ.get("OCTOWRIGHT_LOST_SESSION_RING_SIZE", "25"))
+_LOST_SIZE = env_int("OCTOWRIGHT_LOST_SESSION_RING_SIZE", 25)
 _LOST: deque[dict[str, Any]] = deque(maxlen=_LOST_SIZE)
 
 

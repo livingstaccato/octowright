@@ -35,6 +35,7 @@ from octowright.defaults import (
     BRIDGE_REQUEST_TIMEOUT_SECONDS,
     BRIDGE_STATE_PATH,
     FOLLOWER_EXIT_BACKSTOP_SECONDS,
+    env_float,
 )
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
@@ -64,7 +65,7 @@ _LEADER_RECOVERY = counter(
 # spawn + health), so every follower exited at once. 180s outlasts a normal restart,
 # so followers WAIT it out and reconnect (replaying initialize) — sessions survive.
 # Trade: a truly-gone leader takes this long before a follower respawns one; tunable.
-BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", "180"))
+BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS = env_float("OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS", 180)
 
 
 def _within_recovery_window(leader_down_since: float | None, now: float, window: float) -> bool:
@@ -177,7 +178,7 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
 # almost-immediately ended it. Reconnecting a flap with no backoff busy-loops the
 # leader into a create/terminate storm (observed ~300+/sec across followers); a
 # session that lived at least this long reconnects promptly. (defaults.py at LOC ceiling.)
-BRIDGE_MIN_SESSION_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", "2.0"))
+BRIDGE_MIN_SESSION_SECONDS = env_float("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", 2.0)
 
 
 def _post_session_backoff(session_seconds: float, flap_attempt: int) -> tuple[float, int]:

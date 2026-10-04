@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import itertools
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -31,7 +30,7 @@ from octowright._bridge_message_helpers import (
 )
 from octowright._trace_propagation import build_tracing_http_client
 from octowright._tracing import counter, histogram, span
-from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
+from octowright.defaults import BRIDGE_TOOL_TIMEOUTS, env_float
 
 _BRIDGE_RECONNECT = counter(
     "octowright_bridge_reconnect_total",
@@ -60,7 +59,7 @@ _BRIDGE_SUSPENSION = counter(
 # follower — e.g. Codex compaction freezing it), not normal scheduling jitter.
 # The frozen time would otherwise blow monotonic-based in-flight deadlines and
 # strand the now-stale leader session. (defaults.py is at its LOC ceiling.)
-SUSPEND_THRESHOLD_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", "5.0"))
+SUSPEND_THRESHOLD_SECONDS = env_float("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", 5.0)
 
 # Reserved namespace for progressTokens the BRIDGE invents (see _inject_meta).
 # A token bearing it is bridge-internal by construction and must never reach the
