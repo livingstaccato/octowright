@@ -17,10 +17,12 @@ from octowright.http import state
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.json_response import SafeJSONResponse
 from octowright.http.routes._common import _read_json_body
-from octowright.scenarios_pool import ScenarioRoleNotFoundError
 
 
 def _is_scenario_role_not_found_error(exc: BaseException) -> bool:
+    """By name, not identity: tests reload ``scenarios_pool``, which mints a new
+    ``ScenarioRoleNotFoundError`` class that an ``except`` naming the one
+    imported here would not catch."""
     return isinstance(exc, ValueError) and type(exc).__name__ == "ScenarioRoleNotFoundError"
 
 
@@ -155,8 +157,6 @@ async def scenario_run_macro_endpoint(request: Request) -> SafeJSONResponse:
             role=role,
             args=args or {},
         )
-    except ScenarioRoleNotFoundError as e:
-        return SafeJSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         if _is_scenario_role_not_found_error(e):
             return SafeJSONResponse({"error": str(e)}, status_code=400)

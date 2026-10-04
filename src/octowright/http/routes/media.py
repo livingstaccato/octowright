@@ -28,11 +28,6 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.json_response import SafeJSONResponse
-from octowright.http.pairing import (
-    dashboard_pairing_state,
-    pairing_anchor_available,
-    pairing_required,
-)
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
 from octowright.session.operation.gate import (
     SessionBusyTimeoutError,
@@ -225,22 +220,13 @@ async def session_video(request: Request) -> Response:
             {"error": "no video recorded for this session"},
             status_code=404,
         )
-    # Starlette's FileResponse handles HTTP Range automatically. When pairing
-    # is enabled, however, the bytes are authorization-scoped: neither a
-    # browser cache nor an intermediary may reuse one tab's authenticated
-    # 200/206 response for an unpaired caller. Keep pairing-off playback
-    # cacheable for backwards-compatible local performance.
-    headers = None
-    if pairing_required() and pairing_anchor_available(dashboard_pairing_state(request)):
-        headers = {
-            "Cache-Control": "private, no-store",
-            "Vary": "Authorization, X-Octowright-Token",
-        }
+    # Starlette's FileResponse handles HTTP Range automatically. Under
+    # pairing, the guard marks the 200/206 private/no-store and Vary on the
+    # credentials, as for every admitted response -- one policy, not a copy.
     return FileResponse(
         path=str(video_path),
         media_type="video/webm",
         filename=video_path.name,
-        headers=headers,
     )
 
 
