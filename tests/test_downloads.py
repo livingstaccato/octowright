@@ -415,18 +415,18 @@ class BlockingDownload(FakeDownload):
 async def test_a_gate_error_is_recorded_as_a_save_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The lease was entered outside the try, so a gate refusal escaped as an
     unretrieved task exception and nothing was recorded."""
-    from contextlib import asynccontextmanager
-
     from octowright.session import downloads as _downloads
 
     s = _make_session(tmp_path)
 
-    @asynccontextmanager
-    async def _refusing(_name: str, **_kw: Any):
-        raise RuntimeError("Fixture-Gate-Refusal")
-        yield  # pragma: no cover
+    class _Refusing:
+        async def __aenter__(self) -> None:
+            raise RuntimeError("Fixture-Gate-Refusal")
 
-    monkeypatch.setattr(s, "operation", _refusing)
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(s, "operation", lambda _name, **_kw: _Refusing())
     assert await _downloads.save_download(s, FakeDownload()) == {}
     rows = _rows(s, "download_save_error")
     assert rows and "Fixture-Gate-Refusal" in rows[0]["error"]

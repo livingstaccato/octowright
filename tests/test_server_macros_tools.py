@@ -202,9 +202,7 @@ async def test_profile_cleanup_spares_a_profile_a_closing_browser_holds(
     from octowright.browser_pool import BrowserPool
 
     engine_dir = _stale_profile(tmp_path, "cosmo", "chromium")
-    closing = SimpleNamespace(
-        instance_id="closing1", kind="chromium", profile="cosmo", user_data_dir=str(engine_dir)
-    )
+    closing = SimpleNamespace(instance_id="closing1", kind="chromium", profile="cosmo", user_data_dir=str(engine_dir))
     real_pool = BrowserPool()
     real_pool._closing_sessions["closing1"] = SimpleNamespace(session=closing)  # type: ignore[assignment]
     monkeypatch.setattr(_macros, "pool", real_pool)

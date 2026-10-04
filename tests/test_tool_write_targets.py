@@ -58,7 +58,11 @@ def _plant(root: Path, relative: str) -> Path:
 
 def test_helper_compares_suffix_and_directory_casefolded(recordings: Path) -> None:
     ok = checked_write_target(
-        recordings / "shots" / "a.PNG", recordings, label="x", allowed_suffixes=(".png",), forbidden_subdirs=("artifacts",)
+        recordings / "shots" / "a.PNG",
+        recordings,
+        label="x",
+        allowed_suffixes=(".png",),
+        forbidden_subdirs=("artifacts",),
     )
     assert ok == (recordings / "shots" / "a.PNG").resolve()
     with pytest.raises(InvalidRequestError, match="must end in"):
@@ -73,7 +77,11 @@ def test_helper_compares_suffix_and_directory_casefolded(recordings: Path) -> No
         )
     # A FILE named like a forbidden directory at the root is not inside it.
     assert checked_write_target(
-        recordings / "artifacts.png", recordings, label="x", allowed_suffixes=(".png",), forbidden_subdirs=("artifacts",)
+        recordings / "artifacts.png",
+        recordings,
+        label="x",
+        allowed_suffixes=(".png",),
+        forbidden_subdirs=("artifacts",),
     )
 
 

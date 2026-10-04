@@ -407,6 +407,32 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResul
     }
 
 
+async def _delete_unused_profiles(stale: list[Any]) -> tuple[dict[str, Any], int]:
+    """Delete each stale profile no browser holds; ``(summary, skipped)``.
+
+    Decided again under the profile's lifecycle lock, as ``profile_delete``
+    does: a launch still preparing holds that lock before its session is
+    registered, and a browser may have opened the profile since the scan.
+    """
+    import asyncio
+
+    import octowright.profile_cleanup as _pc
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    summary: dict[str, Any] = {"removed_count": 0, "removed_bytes": 0, "errors": []}
+    skipped = 0
+    for entry in stale:
+        async with profile_lifecycle_lock(entry.engine, entry.persona):
+            if pool.profile_users(entry.persona, kind=entry.engine):
+                skipped += 1
+                continue
+            one = await asyncio.to_thread(_pc.cleanup_stale, [entry], dry_run=False)
+        summary["removed_count"] += one["removed_count"]
+        summary["removed_bytes"] += one["removed_bytes"]
+        summary["errors"].extend(one["errors"])
+    return summary, skipped
+
+
 @mcp.tool(
     structured_output=False,
     description=(
@@ -420,12 +446,10 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResul
     ),
 )
 async def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
-    import asyncio
     from pathlib import Path as _Path
 
     import octowright.profile_cleanup as _pc
     from octowright.defaults import PROFILES_DIR
-    from octowright.profile_lifecycle import profile_lifecycle_lock
 
     # Closing sessions count: one has left ``_sessions`` once its close ticket
     # owns the gate, but still holds its profile's database files open.
@@ -439,19 +463,7 @@ async def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupRe
     summary: dict[str, Any] = {"removed_count": 0, "removed_bytes": 0, "errors": []}
     skipped_at_delete = 0
     if not dry_run:
-        for entry in stale:
-            # Decided again under the profile's lifecycle lock, as
-            # profile_delete does: a launch still preparing holds that lock
-            # before its session is registered, and a browser may have opened
-            # the profile since the scan.
-            async with profile_lifecycle_lock(entry.engine, entry.persona):
-                if pool.profile_users(entry.persona, kind=entry.engine):
-                    skipped_at_delete += 1
-                    continue
-                one = await asyncio.to_thread(_pc.cleanup_stale, [entry], dry_run=False)
-            summary["removed_count"] += one["removed_count"]
-            summary["removed_bytes"] += one["removed_bytes"]
-            summary["errors"].extend(one["errors"])
+        summary, skipped_at_delete = await _delete_unused_profiles(stale)
     return {
         "profiles_dir": str(PROFILES_DIR),
         "days": days,
