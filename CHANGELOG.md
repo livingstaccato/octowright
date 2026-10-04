@@ -118,6 +118,12 @@ a section that is already tagged and on PyPI.
   handed it to page JavaScript in the status pill's text when it sat in a field
   the pill does not redact by key. All four are now scrubbed with what the run
   admitted; the manifest withholds parameter values until the replay ends.
+- **`macro_save` no longer saves a scrubbed value as a literal.** A value the
+  session's scrub set replaced -- an OTP typed into an ordinary text field --
+  is recorded as `<redacted>`, and saving wrote that marker into the macro,
+  which replay then typed into the page. It is now handled like a redacted
+  password field: bound to the one credential-named parameter that matched
+  nothing else, or the save is refused naming the field.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

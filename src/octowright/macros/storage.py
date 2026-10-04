@@ -22,7 +22,7 @@ from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
 from octowright.macros.parameter_specs import SPECS_KEY
-from octowright.macros.privacy import assertion_digest_matches, is_credential_key
+from octowright.macros.privacy import REDACTED, assertion_digest_matches, is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -117,8 +117,11 @@ def _value_to_name(param_map: dict[str, str]) -> dict[str, str]:
 
 
 def _redacted_fields(actions: list[dict[str, Any]]) -> list[tuple[int, str]]:
-    marker = defaults.REDACTED_INPUT_PLACEHOLDER
-    return [(i, key) for i, action in enumerate(actions) for key, value in action.items() if value == marker]
+    # The input classification's placeholder, and the scrub marker the session
+    # ledger writes over a classified value typed into an ordinary field (an
+    # OTP in a text box): replay would type either literally.
+    markers = (defaults.REDACTED_INPUT_PLACEHOLDER, REDACTED)
+    return [(i, key) for i, action in enumerate(actions) for key, value in action.items() if value in markers]
 
 
 def _field_label(action: dict[str, Any], index: int) -> str:
@@ -196,8 +199,8 @@ def _bind_assertion(action: dict[str, Any], param_map: dict[str, str]) -> dict[s
 def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:
     lead = (
         f"the recording holds {field_count} input field(s) redacted at record time ({fields}), because "
-        "OCTOWRIGHT_REDACT_INPUTS hid the typed value; saving would write the redaction marker into the "
-        "macro and replay would type it into the page. "
+        "OCTOWRIGHT_REDACT_INPUTS or the session's scrub set hid the typed value; saving would write the "
+        "redaction marker into the macro and replay would type it into the page. "
     )
     if not candidates:
         return lead + (
