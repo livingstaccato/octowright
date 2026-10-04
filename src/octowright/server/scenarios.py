@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-import asyncio as _asyncio
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,10 +30,9 @@ from octowright.mcp_types import (
     ScenarioStopResult,
     ScenarioTailResult,
     ScenarioWaitForSyncResult,
-    TestSuiteCaseResult,
 )
-from octowright.plugins.contract import SupportsMacros
 from octowright.scenario_kinds import adapter_for
+from octowright.scenario_verify import run_verify_cases
 from octowright.server._state import mcp, pool, scenario_pool
 
 
@@ -271,45 +268,7 @@ async def scenario_run_as_test(
     report_path = Path(out_path) if out_path else runner_mod._recordings_report_path()
     report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="scenario report path")
 
-    results: list[TestSuiteCaseResult] = []
-
-    async def _run(p: dict[str, Any]) -> None:
-        # Skip by capability, not by kind name -- mirrors ScenarioPool.run_macro.
-        # A kind with no run_macro (terminal today, any future capability-less
-        # plugin kind) is not a test target at all: skipped cleanly, with no
-        # test case appended, rather than surfacing as a failing case via
-        # pool.get()'s KeyError on an instance id the browser pool never held.
-        adapter = adapter_for(p.get("kind") or "", browser_pool=pool)
-        if not isinstance(adapter, SupportsMacros):
-            return
-        macro = live.spec.verify.get(p["role"])
-        if not macro:
-            results.append(
-                {
-                    "name": f"{p['role']}:{p['persona']}",
-                    "ok": False,
-                    "error": f"no verify macro for role {p['role']!r}",
-                    "duration": 0.0,
-                }
-            )
-            return
-        start = datetime.now(UTC)
-        try:
-            await adapter.run_macro(p["instance_id"], name=macro, args={})
-            ok, err = True, None
-        except Exception as e:
-            ok, err = False, repr(e)
-        duration = (datetime.now(UTC) - start).total_seconds()
-        results.append(
-            {
-                "name": f"{p['role']}:{p['persona']}",
-                "ok": ok,
-                "error": err,
-                "duration": duration,
-            }
-        )
-
-    await _asyncio.gather(*(_run(p) for p in live.participants))
+    results = await run_verify_cases(live, browser_pool=pool)
     passed = sum(1 for r in results if r["ok"])
     runner_mod._write_report(results, report_path, kind="scenario")
     return {

@@ -14,7 +14,6 @@ from provide.telemetry import setup_telemetry, shutdown_telemetry
 
 from octowright.cli._root import cli
 from octowright.cli.watch import _format_watch_event
-from octowright.mcp_types import TestSuiteCaseResult
 
 
 @cli.group()
@@ -220,49 +219,25 @@ def scenario_start_cmd(name: str, test_mode: bool, out_path: str | None, watch: 
 
 
 async def _run_verify_and_report(*, pool: Any, live: Any, out_path: str | None) -> int:
-    """Run each participant's role verify macro, write JUnit XML, return 0/1."""
-    from datetime import UTC, datetime
+    """Run each participant's role verify macro, write JUnit XML, return 0/1.
+
+    The default report lands in the working directory, unlike the MCP tool's
+    (which is confined to the recordings root because its path is
+    caller-supplied): here the operator runs the command in their own shell and
+    the report belongs next to them. Its directory is created if missing.
+    """
     from pathlib import Path
 
-    from octowright import macros as _m
     from octowright import runner as _r
+    from octowright.scenario_verify import run_verify_cases
 
     if not live.spec.verify:
         click.echo(f"scenario {live.name!r} has no verify macros", err=True)
         return 2
 
-    results: list[TestSuiteCaseResult] = []
-    for p in live.participants:
-        macro = live.spec.verify.get(p["role"])
-        if not macro:
-            results.append(
-                {
-                    "name": f"{p['role']}:{p['persona']}",
-                    "ok": False,
-                    "error": f"no verify macro for role {p['role']!r}",
-                    "duration": 0.0,
-                }
-            )
-            continue
-        start = datetime.now(UTC)
-        try:
-            session = pool.get(p["instance_id"])
-            await _m.run_macro(session=session, name=macro, args={})
-            ok, err = True, None
-        except Exception as e:
-            ok, err = False, repr(e)
-        duration = (datetime.now(UTC) - start).total_seconds()
-        results.append(
-            {
-                "name": f"{p['role']}:{p['persona']}",
-                "ok": ok,
-                "error": err,
-                "duration": duration,
-            }
-        )
-
+    results = await run_verify_cases(live, browser_pool=pool)
     target = Path(out_path) if out_path else _r._default_report_path()
-    _r._write_junit(results, target, kind="scenario")
+    _r._write_report(results, target, kind="scenario")
     passed = sum(1 for r in results if r["ok"])
     click.echo(f"\n{passed}/{len(results)} verify passed")
     click.echo(f"report: {target}")

@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`octowright scenario start --test` skips a participant that cannot run a
+  macro, as `scenario_run_as_test` does.** The CLI kept its own copy of the
+  verify loop without the capability check, so with the terminal plugin
+  enabled a terminal participant became a failing browser test case and the
+  command exited 1 where the MCP tool passed. Both now share one loop, and
+  the CLI creates the report's directory when `--out` points somewhere new.
 - **A golden snapshot notices an added or dropped duplicate sibling.** Two
   siblings with the same role and name (two "More" links, say) were both
   compared against the first live match, so removing or adding one produced no
