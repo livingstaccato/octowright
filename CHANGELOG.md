@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`OCTOWRIGHT_REDACT_INPUTS=all` covers the answer given to `prompt()`.**
+  The `prompt_text` set with `browser_set_dialog_policy` was written to the
+  recording in clear twice, in the policy row and in every `dialog_handled`
+  row. That happened even under `all`, which scrubs every other value with no
+  field to classify it. It is now scrubbed there and in the tool's result. The
+  page still receives the real text.
 - **More credential header names are redacted.** A header named `*-key`,
   such as `Ocp-Apim-Subscription-Key` or `X-Functions-Key`, and underscore
   spellings such as `X_API_KEY`, were recorded and listed in `browser_list` in
