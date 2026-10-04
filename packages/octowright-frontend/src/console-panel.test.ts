@@ -106,6 +106,30 @@ describe("renderConsolePanel", () => {
     expect(rows[0]?.textContent).toContain("boom");
   });
 
+  it("keeps the chosen level when re-rendered with new messages", () => {
+    // A live session re-renders the panel on every tail batch; the filter the
+    // reader picked used to snap back to All each time.
+    renderConsolePanel(container, SAMPLE);
+    const select = container.querySelector<HTMLSelectElement>('[data-testid="console-filter"]');
+    if (!select) throw new Error("no select");
+    select.value = "error";
+    select.dispatchEvent(new Event("change"));
+
+    renderConsolePanel(container, [...SAMPLE, { level: "error", text: "boom again", page_index: null }]);
+
+    const after = container.querySelector<HTMLSelectElement>('[data-testid="console-filter"]');
+    expect(after?.value).toBe("error");
+    const rows = container.querySelectorAll("li.console-panel__row");
+    expect(rows.length).toBe(2);
+    expect(container.querySelector('[data-testid="console-count"]')?.textContent).toBe("2 of 5");
+  });
+
+  it("an explicit initialLevel still wins over the previous choice", () => {
+    renderConsolePanel(container, SAMPLE, { initialLevel: "error" });
+    renderConsolePanel(container, SAMPLE, { initialLevel: "info" });
+    expect(container.querySelector<HTMLSelectElement>('[data-testid="console-filter"]')?.value).toBe("info");
+  });
+
   it("respects initialLevel option", () => {
     renderConsolePanel(container, SAMPLE, { initialLevel: "warn" });
     const rows = container.querySelectorAll("li.console-panel__row");

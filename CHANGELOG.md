@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The session page's console filter stays where you put it.** A live
+  session re-renders the console panel on every batch of new events, and each
+  re-render reset the level filter to All, so choosing Error lasted until the
+  next event. The chosen level is now carried across re-renders.
 - **The dashboard refetches after its event stream reconnects.** The server
   does not replay invalidations published while the stream was down, and a
   reconnect inside one poll interval (an `octowright restart`, say) stopped
