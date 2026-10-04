@@ -72,9 +72,7 @@ async def test_engine_send_input_and_snapshot(tmp_path: Path) -> None:
 
 
 async def test_engine_masks_password_source_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from octowright import defaults
-
-    monkeypatch.setattr(defaults, "INPUT_REDACTION_MODE", "passwords")
+    monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
     recorder = Recorder(tmp_path / "t.jsonl")
     engine = TerminalEngine("eng-3", "cat", "pty", {"command": "/bin/cat"}, recorder)
     await engine.start()

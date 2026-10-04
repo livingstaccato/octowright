@@ -580,6 +580,11 @@ HTTP_METRICS_ENABLED = _parse_bool_env("OCTOWRIGHT_HTTP_METRICS", True)
 #   - ``all``       — Redact every typed/filled value regardless of element
 #                     type. Useful for high-sensitivity workflows where any
 #                     user-supplied value may be confidential.
+#
+# An import-time snapshot that nothing in this tree reads any more: core
+# resolves the mode per call (``aria_redaction.resolve_redaction_mode``) and
+# so does the terminal plugin. Kept because terminal plugin releases already
+# on PyPI read it, and removing it would break them on import.
 INPUT_REDACTION_MODE = os.environ.get("OCTOWRIGHT_REDACT_INPUTS", "passwords").strip().lower() or "passwords"
 REDACTED_INPUT_PLACEHOLDER = "<redacted:password>"
 # What a recorded expect_no_text writes in place of its text, which is usually a

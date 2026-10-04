@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Terminal plugin: a change to `OCTOWRIGHT_REDACT_INPUTS` reaches terminal
+  recordings without a restart.** Core reads the policy on every call, but
+  the plugin read a snapshot taken when the daemon started, so a policy
+  change applied to browser recordings and not to terminal ones.
 - **A browser labelled `something.websocket` no longer hides its own
   recording.** The label named the file `...-something.websocket.jsonl`, the
   shape of a WebSocket sidecar, so the dashboard, closed-session discovery and
