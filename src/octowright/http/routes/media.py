@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -80,7 +81,9 @@ FRAME_CACHE_MAX_FILES = 256
 FRAME_EXTRACTION_WORKERS = 2
 _FRAME_EXECUTOR = ThreadPoolExecutor(max_workers=FRAME_EXTRACTION_WORKERS, thread_name_prefix="octowright-frame")
 #: (path, size, mtime_ns) -> duration seconds, or None when ffprobe could not say.
+#: Read and written from executor threads, so every access holds the lock.
 _VIDEO_DURATIONS: dict[tuple[str, int, int], float | None] = {}
+_VIDEO_DURATIONS_LOCK = threading.Lock()
 _VIDEO_DURATIONS_MAX = 64
 
 
@@ -95,20 +98,29 @@ def _parse_frame_time(raw_t: str) -> float | None:
 
 
 def _video_duration(video_path: Path) -> float | None:
-    """The video's duration, probed once per file version; ``None`` if unknown."""
+    """The video's duration, probed once per file version; ``None`` if unknown.
+
+    The probe runs outside the lock (it is a subprocess); the result is
+    returned from the local, not read back from the cache, which another
+    thread's insert may already have evicted it from.
+    """
     st = video_path.stat()
     key = (str(video_path), st.st_size, st.st_mtime_ns)
-    if key not in _VIDEO_DURATIONS:
-        try:
-            duration = float(state._video.probe_video(video_path).get("duration_seconds") or 0.0)
-        except Exception as exc:
-            # No ffprobe, or a file it cannot read: the absolute ceiling still applies.
-            state.log.debug("octowright.http.frame_duration_unknown", path=str(video_path), error=repr(exc))
-            duration = 0.0
-        if len(_VIDEO_DURATIONS) >= _VIDEO_DURATIONS_MAX:
+    with _VIDEO_DURATIONS_LOCK:
+        if key in _VIDEO_DURATIONS:
+            return _VIDEO_DURATIONS[key]
+    try:
+        probed = float(state._video.probe_video(video_path).get("duration_seconds") or 0.0)
+    except Exception as exc:
+        # No ffprobe, or a file it cannot read: the absolute ceiling still applies.
+        state.log.debug("octowright.http.frame_duration_unknown", path=str(video_path), error=repr(exc))
+        probed = 0.0
+    duration = probed if probed > 0 else None
+    with _VIDEO_DURATIONS_LOCK:
+        while _VIDEO_DURATIONS and len(_VIDEO_DURATIONS) >= _VIDEO_DURATIONS_MAX and key not in _VIDEO_DURATIONS:
             _VIDEO_DURATIONS.pop(next(iter(_VIDEO_DURATIONS)))
-        _VIDEO_DURATIONS[key] = duration if duration > 0 else None
-    return _VIDEO_DURATIONS[key]
+        _VIDEO_DURATIONS[key] = duration
+    return duration
 
 
 def _extract_frame(video_path: Path, cache_dir: Path, t: float) -> None:

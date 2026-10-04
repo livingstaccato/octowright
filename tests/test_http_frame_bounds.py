@@ -162,3 +162,38 @@ async def test_waiting_extractions_do_not_occupy_the_default_executor(
         await asyncio.gather(*pending, return_exceptions=True)
         small.shutdown(wait=False)
 
+
+def test_a_duration_evicted_by_another_thread_is_still_returned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``_video_duration`` runs in executor threads. It read its result back
+    from the shared cache, which another thread's insert may already have
+    evicted it from (KeyError); two evictions could also pop the same key."""
+    import threading
+
+    monkeypatch.setattr(media, "_VIDEO_DURATIONS_MAX", 1)
+    media._VIDEO_DURATIONS.clear()
+    first, second = tmp_path / "a.webm", tmp_path / "b.webm"
+    first.write_bytes(b"\x00")
+    second.write_bytes(b"\x00\x00")
+    durations = {first: 3.0, second: 7.0}
+    monkeypatch.setattr(_http_state._video, "probe_video", lambda p: {"duration_seconds": durations[Path(p)]})
+    other_result: list[float | None] = []
+
+    class _Interleaving(dict):
+        """Runs another thread's lookup right after this thread's insert."""
+
+        def __setitem__(self, key: Any, value: Any) -> None:
+            super().__setitem__(key, value)
+            if key[0] == str(first):
+                other = threading.Thread(target=lambda: other_result.append(media._video_duration(second)))
+                other.start()
+                other.join(0.5)
+                self._other = other
+
+    cache = _Interleaving()
+    monkeypatch.setattr(media, "_VIDEO_DURATIONS", cache)
+
+    assert media._video_duration(first) == 3.0
+    cache._other.join(5)
+    assert other_result == [7.0]

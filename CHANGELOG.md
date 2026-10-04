@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Concurrent video frame requests no longer fail at random.** The cache of
+  video durations was shared between worker threads without a lock, so one
+  request could evict another's entry before it was read back and answer
+  `500`.
 - **Scrubbing a session video in the dashboard no longer stalls the daemon's
   other background work.** Frame requests waiting their turn for ffmpeg each
   held one of the shared worker threads that file reads, probes and other
