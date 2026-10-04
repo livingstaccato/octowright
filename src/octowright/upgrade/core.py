@@ -169,6 +169,10 @@ def load_last_seen(path: Path | None = None) -> str | None:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    # Valid JSON that is not an object (null, a list, a bare string) is as
+    # unusable as a corrupt file; ``.get`` on it raised out of leader startup.
+    if not isinstance(data, dict):
+        return None
     version = data.get("last_seen_version")
     return version if isinstance(version, str) else None
 
@@ -259,5 +263,28 @@ def announce_upgrade_if_changed(
         return None
     set_notice(dict(notice))
     echo(render_banner(notice))
-    save_last_seen(cur, path)
+    try:
+        save_last_seen(cur, path)
+    except OSError as exc:
+        # A read-only config dir costs the marker (the notice repeats next
+        # start), never the daemon.
+        log.warning("octowright.upgrade.mark_seen_failed", error=repr(exc))
     return notice
+
+
+def announce_upgrade_safely(
+    *,
+    set_notice: Callable[[dict[str, Any]], None],
+    echo: Callable[[str], None],
+) -> UpgradeNotice | None:
+    """The leader's startup call: :func:`announce_upgrade_if_changed`, never raising.
+
+    It runs before HTTP binds, so anything it raised killed the leader -- and
+    the inline fallback, which makes the same call. A "what's new" banner is
+    not worth a daemon; a failure is logged and the notice skipped.
+    """
+    try:
+        return announce_upgrade_if_changed(set_notice=set_notice, echo=echo)
+    except Exception as exc:
+        log.warning("octowright.upgrade.announce_failed", error=repr(exc))
+        return None

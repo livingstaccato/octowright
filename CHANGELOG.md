@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A bad "what's new" marker no longer stops the daemon from starting.** The
+  leader records the last version it announced in `upgrade.json` before its
+  HTTP server binds, without a guard. A marker holding valid JSON that is not
+  an object (`null`, a list, a bare string) or a read-only config directory
+  raised out of startup, and the inline fallback died the same way. Such a
+  marker now reads as unset, a failed write is logged, and any other failure
+  of the notice is logged and skipped.
 - **The orphan-browser sweep leaves macOS WebKit's helper processes alone.**
   WebKit runs its page, network and GPU work in XPC services that launchd
   starts, so their parent is always pid 1, which the sweep reads as "the
