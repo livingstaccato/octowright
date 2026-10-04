@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from octowright._json_text import dumps_utf8_safe
-from octowright._paths import atomic_write_text
+from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
 from octowright.capture_regex import regex_match_spans
 from octowright.capture_summaries import summarize_capture_payload
@@ -137,7 +137,12 @@ def save_capture(
     host = host_for_url(url)
     capture_id = f"cap_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:10]}"
     path = _capture_path(root, host, instance_id, capture_id)
+    # Contained BEFORE mkdir: a symlinked ``<root>/<host>`` would otherwise
+    # have mkdir, the 0700 chmod and the write all land wherever it points.
+    # Checked again after, for a directory swapped in between.
+    reject_unsafe_path(path.parent, root, label="capture directory")
     path.parent.mkdir(parents=True, exist_ok=True)
+    reject_unsafe_path(path.parent, root, label="capture directory")
     # A capture holds page text, accessibility trees, evaluate results and
     # request headers -- the same class of data the JSONL recording does, and
     # governed by the same knob. The 0700 tree, not the 0600 file, is the
