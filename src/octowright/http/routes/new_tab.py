@@ -19,8 +19,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse
 
+from octowright.http.json_response import SafeJSONResponse
 from octowright.version import VERSION
 
 _OTTO_SVG = Path(__file__).resolve().parent.parent / "otto.svg"
@@ -223,7 +224,7 @@ async def new_tab(_: Request) -> HTMLResponse:
     return HTMLResponse(html)
 
 
-async def new_tab_status(_: Request) -> JSONResponse:
+async def new_tab_status(_: Request) -> SafeJSONResponse:
     """The live browser count for the page's status strip, and nothing else.
 
     The strip used to poll ``/api/sessions``, which is pairing-gated; a
@@ -233,7 +234,7 @@ async def new_tab_status(_: Request) -> JSONResponse:
     """
     from octowright.http import state
 
-    return JSONResponse({"browsers": sum(1 for _ in state.pool.iter_sessions())})
+    return SafeJSONResponse({"browsers": sum(1 for _ in state.pool.iter_sessions())})
 
 
 async def otto_svg(_: Request) -> FileResponse:
