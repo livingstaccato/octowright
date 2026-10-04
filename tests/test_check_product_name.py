@@ -88,9 +88,9 @@ def test_subcommands_match_the_cli() -> None:
     assert set(cli.commands) == checker.SUBCOMMANDS
 
 
-def test_the_changelog_and_symlinks_are_out_of_scope() -> None:
+def test_the_changelog_is_checked_and_symlinks_are_skipped() -> None:
     names = {path.relative_to(checker.ROOT).as_posix() for path in checker.tracked_markdown()}
-    assert "CHANGELOG.md" not in names
+    assert "CHANGELOG.md" in names
     assert "CLAUDE.md" not in names
     assert "AGENTS.md" in names
 

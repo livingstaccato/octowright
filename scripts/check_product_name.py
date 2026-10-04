@@ -18,10 +18,10 @@ prose and skips everything that is code-shaped:
 - the CLI's own command lines (``octowright serve``, ``octowright --help``),
   recognised by the word after it being a subcommand or an option.
 
-Scope is every ``*.md`` file git tracks, except ``CHANGELOG.md``: its old
-release entries record what shipped under the wording of the day, and
-rewriting history to satisfy a newer style rule is the wrong trade. A symlink
-(``CLAUDE.md`` -> ``AGENTS.md``) is skipped, since its target is checked.
+Scope is every ``*.md`` file git tracks, ``CHANGELOG.md`` included: the
+product name is a spelling, not part of what shipped, so older entries are
+held to it too. A symlink (``CLAUDE.md`` -> ``AGENTS.md``) is skipped, since
+its target is checked.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXCLUDED = frozenset({"CHANGELOG.md"})
+EXCLUDED: frozenset[str] = frozenset()
 
 #: ``octowright <subcommand>`` is a command line, not prose. Kept literal so the
 #: guard needs no import of the package; `test_subcommands_match_the_cli` pins it.
