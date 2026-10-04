@@ -1038,6 +1038,28 @@ stay on disk under `RECORDINGS_DIR/artifacts/macros/<macro>/`.
 | `macro_digest` | Return a bounded summary of a macro or recording. |
 | `macro_export_cli` | Export a saved macro as an import-safe Python CLI script. |
 
+**What a run bundle is checked for before it is written.** A
+`macro_artifact_run` bundle is scrubbed of every value the run admitted,
+nested calls included. A green bundle must not mean the privacy policy never
+arrived, so two checks follow the scrub (`artifacts.bundle_privacy`):
+
+- **`privacy_unresolved: true`** when the run's privacy view admitted no
+  macro, was not sealed when the bundle was written (its replay had not
+  finished resolving), or the session's scrub set is saturated
+  (`scrub_saturated`). The bundle is still written -- nothing raises once the
+  run directory exists -- with key-level redaction by name applied to every
+  record on top of the scrub.
+- **`privacy_tripwire: true`** when a value the run or the session holds is
+  still found, in any serialized spelling and ignoring case, after the scrub.
+  The scrub matches case exactly, so a page that echoes a password
+  upper-cased slips past it; the tripwire removes such a match (a string that
+  still holds one is replaced whole) and says so. A password the session saw
+  typed is matched only as a whole identifier, as the recording matches it.
+
+Both flags are written into `result.json` and returned on the
+`macro_artifact_run` result, and are absent when they do not apply. Neither
+names a value.
+
 ## Watching execution
 
 Every page rendered by a launched browser gets a faint **status pill** injected at

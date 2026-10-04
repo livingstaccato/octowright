@@ -86,6 +86,15 @@ a section that is already tagged and on PyPI.
   step ran, after the steps before it had acted on the browser. A sequence
   file with such a name is refused before `octowright test --sequence`
   launches a browser. A name that is merely not saved is still a failed step.
+- **An artifact run bundle can no longer hold a value in another case, and
+  says when its privacy could not be confirmed.** The scrub matches case
+  exactly, so a page that echoed a password upper-cased wrote it into
+  `result.json` or `summary.md`. A last check now finds any value the run or
+  session holds, in any spelling and case, removes it and marks the bundle
+  `privacy_tripwire: true`. A bundle whose privacy view never resolved, was
+  not finished, or whose session's scrub set is saturated is still written,
+  with key-level redaction added, and marked `privacy_unresolved: true`. Both
+  flags also appear on the `macro_artifact_run` result.
 
 ### Changed
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and

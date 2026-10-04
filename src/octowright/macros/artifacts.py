@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 import octowright.macros as macro_mod
 from octowright._json_text import dumps_utf8_safe
 from octowright._tracing import counter, set_attrs, span
+from octowright.artifacts.bundle_privacy import bundle_guard
 from octowright.artifacts.digest import digest_macro, digest_recording_text
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.artifacts.models import new_manifest, new_run_result
@@ -268,6 +269,8 @@ async def run_macro_artifact(
                     preview=traceback.format_exc(limit=8),
                 )
 
+            # The replay is over, pass or fail: no further site joins the view.
+            run_ledger.seal()
             # From here on, everything written scrubs against what the run admitted,
             # nested calls included -- not the pre-run tuple, which never held them.
             sensitive_values = run_ledger.values
@@ -298,25 +301,21 @@ async def run_macro_artifact(
                     sensitive_values,
                 )
             )
+            guard = bundle_guard(session, run_ledger)
             paths = write_run_bundle(
                 run_dir=run_dir,
                 result=run_result,
                 evidence=evidence.records,
                 summary=summary,
                 sensitive_values=sensitive_values,
+                privacy=guard,
             )
 
             manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
             write_artifact_manifest(manifest_path, manifest)
 
-            verification_status = "not_configured"
-            verification_paths = {}
             critical_points = manifest.get("critical_points", [])
-            if verify and critical_points:
-                v_res = macro_artifact_verify(name, run_dir.name)
-                if v_res.get("ok"):
-                    verification_status = v_res.get("status", "unknown")
-                    verification_paths = v_res.get("paths", {})
+            verification_status, verification_paths = _verify_run(name, run_dir.name, verify and bool(critical_points))
 
             with span("octowright.macro.artifact.run") as s:
                 set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
@@ -335,7 +334,7 @@ async def run_macro_artifact(
                 "ok": status == "ok",
                 "macro": name,
                 "run_id": run_dir.name,
-                "summary": summary,
+                "summary": guard.summary if guard.summary is not None else summary,
                 "verification_status": verification_status,
                 "paths": {
                     "run_dir": str(run_dir),
@@ -350,7 +349,19 @@ async def run_macro_artifact(
                 **scrub_saturation_fields(session),
                 # An ignored parameter_specs unmark or a malformed spec, by name.
                 **run_ledger.warning_fields(),
+                # privacy_unresolved / privacy_tripwire, as result.json carries them.
+                **guard.flags,
             }
+
+
+def _verify_run(name: str, run_id: str, enabled: bool) -> tuple[str, dict[str, Any]]:
+    """The run's verification status and paths: ``not_configured`` without critical points."""
+    if not enabled:
+        return "not_configured", {}
+    v_res = macro_artifact_verify(name, run_id)
+    if not v_res.get("ok"):
+        return "not_configured", {}
+    return v_res.get("status", "unknown"), v_res.get("paths", {})
 
 
 async def _capture_screenshot(

@@ -281,6 +281,18 @@ def refuse_if_scrub_set_full(session: Any, admission: ScrubAdmission) -> None:
         ledger.refuse_if_full(admission.persistent)
 
 
+def session_scrub_set(session: Any) -> tuple[frozenset[str], frozenset[str]]:
+    """The session ledger's values: those scrubbed anywhere, and those only as whole identifiers.
+
+    Reads the ledger without creating one; a session without one holds nothing.
+    """
+    ledger = _existing_session_ledger(session)
+    if ledger is None:
+        return frozenset(), frozenset()
+    bounded = ledger.word_bounded
+    return frozenset(ledger.values) - bounded, bounded
+
+
 def scrub_saturation_fields(session: Any) -> dict[str, bool]:
     """``{"scrub_saturated": True}`` for a run result or failure payload; empty otherwise."""
     ledger = _existing_session_ledger(session)
@@ -389,14 +401,18 @@ class RunPrivacyLedger(PrivacyLedger):
         self._scope: object | None = None
         self._exempt: list[dict[str, str]] = []
         self._warnings: list[str] = []
+        self._sites: list[str] = []
+        self._sealed = False
 
     def admit(self, macro: str, admission: ScrubAdmission, *, warnings: Iterable[str] = ()) -> None:
         """Admit one macro's (or nested call's) arguments; *warnings* are its view's, by name only.
 
         The warnings are kept first, so a refused admission still reports why
-        its declarations were ignored.
+        its declarations were ignored. *macro* becomes a resolved site.
         """
         self._warnings.extend(warning for warning in warnings if warning not in self._warnings)
+        if macro not in self._sites:
+            self._sites.append(macro)
         try:
             refuse_if_scrub_set_full(self._session, admission)
         except InvalidRequestError:
@@ -415,6 +431,24 @@ class RunPrivacyLedger(PrivacyLedger):
         self._exempt.extend(
             row for row in (item.as_dict(macro) for item in admission.exempt) if row not in self._exempt
         )
+
+    @property
+    def resolved_sites(self) -> list[str]:
+        """The macros, top-level and called, whose privacy view this run resolved and admitted."""
+        return list(self._sites)
+
+    def seal(self) -> None:
+        """The run is over: no further site will be resolved into this view."""
+        self._sealed = True
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the session's scrub set is full (`scrub_capacity`)."""
+        return bool(scrub_saturation_fields(self._session))
 
     def close(self) -> None:
         if self._session_ledger is not None and self._scope is not None:
