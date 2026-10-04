@@ -519,3 +519,40 @@ def test_reopen_trusts_the_launch_url_not_the_page_it_navigated_to(monkeypatch: 
     assert kw["url"] == "https://elsewhere.example/b"
     assert kw["trusted_launch_url"] == "https://app.example/a"
     assert kw["base_url"] == "https://app.example/"
+
+
+@pytest.mark.parametrize("mode", ["new-id", "keep-id"])
+def test_reopen_keeps_why_the_original_was_protected(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """The reopen carries ``protected`` as an explicit bool, which the launch
+    stamps ``protected_reason="explicit"``. A headed browser protected by
+    default then refused a close with the wrong message. Handoff restored the
+    reason already; a driver relaunch did not."""
+    _set_mode(monkeypatch, mode)
+    pool = _FakePool([_session("a", protected=True, protected_reason="headed_default")])
+    applied: list[tuple[bool, str]] = []
+    real_launch = pool.launch
+
+    async def _launch(**kwargs: Any) -> dict[str, Any]:
+        result = await real_launch(**kwargs)
+        fresh = pool._sessions[result["instance_id"]]
+        fresh.protected, fresh.protected_reason = kwargs["protected"], "explicit"
+
+        async def _set_protected_state(protected: bool, *, reason: str = "explicit") -> dict[str, object]:
+            applied.append((protected, reason))
+            fresh.protected, fresh.protected_reason = protected, reason
+            return {}
+
+        fresh.set_protected_state = _set_protected_state
+        return result
+
+    pool.launch = _launch  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        task = driver_relaunch.on_driver_reset(pool, reason="driver died")
+        assert task is not None
+        await task
+
+    asyncio.run(_run())
+    fresh_id = "a" if mode == "keep-id" else "new1"
+    assert applied == [(True, "headed_default")]
+    assert pool._sessions[fresh_id].protected_reason == "headed_default"

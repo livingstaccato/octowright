@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A browser reopened after a driver death or browser crash keeps its close
+  protection reason.** A headed browser protected by default came back marked
+  as explicitly protected, so `browser_close` refused it with the wrong
+  explanation. The reopen now keeps the original reason, as a handoff already
+  did.
 - **A failed driver liveness check no longer breaks the next browser call.**
   When the check failed for its own reasons, its exception was saved as
   though a page event listener had raised it. The next unrelated call then

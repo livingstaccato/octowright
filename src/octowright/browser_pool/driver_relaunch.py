@@ -351,6 +351,13 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     if fresh is None:
         raise RuntimeError(f"replacement session {final_id!r} closed before relaunch completed")
     fresh._auto_relaunched = True
+    # The reopen passes ``protected`` as an explicit bool, which the launch
+    # stamps reason "explicit"; put back why the original was protected
+    # ("headed_default" ...), which the close-refusal message keys off --
+    # through the gate, as the handoff path (relaunch.py) does.
+    set_protected_state = getattr(fresh, "set_protected_state", None)
+    if set_protected_state is not None:
+        await set_protected_state(source.protected, reason=source.protected_reason)
     desc["lost_record"]["relaunched_to"] = final_id
     crash_incident = desc.get("crash_incident")
     if crash_incident is not None:
