@@ -29,11 +29,14 @@ from urllib.parse import urlsplit
 
 from provide.telemetry import get_logger
 
+# The module, not the name: ssrf_guard imports session.timeouts, which loads
+# this package, so a name imported out of a half-initialised ssrf_guard is a
+# circular ImportError whenever the guard is imported first.
+from octowright import ssrf_guard
 from octowright.http_headers import redact_header_values
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.input_redaction import live_scrubbed
-from octowright.ssrf_guard import client_redirect_of
 
 log = get_logger(__name__)
 
@@ -239,7 +242,7 @@ class SessionNetworkMixin(SessionLike):
             "status_text": response.status_text,
             "headers": _recorded_headers(request),
         }
-        redirect = client_redirect_of(request)
+        redirect = ssrf_guard.client_redirect_of(request)
         if redirect is not None:
             # The browser saw the SSRF guard's client-redirect document; the
             # server answered a 3xx, and that is what the chain should show.

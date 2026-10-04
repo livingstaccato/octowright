@@ -201,3 +201,18 @@ async def test_guarded_navigation_passes_a_browser_error_the_guard_did_not_cause
 
     with pytest.raises(RuntimeError, match="Timeout"):
         await ssrf_guard.guarded_navigation(frame, goto())
+
+
+def test_ssrf_guard_imports_first_in_a_fresh_interpreter() -> None:
+    """``import octowright.ssrf_guard`` before ``octowright.session`` was a circular ImportError.
+
+    The guard imports ``session.timeouts``, which loads the session package,
+    whose network mixin imported a name back out of the half-initialised guard.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "import octowright.ssrf_guard"], capture_output=True, text=True, timeout=120, check=False
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
