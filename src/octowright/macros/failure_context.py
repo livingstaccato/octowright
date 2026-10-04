@@ -98,8 +98,10 @@ def register_written_steps(
     """Let a ``try``/``try_each`` that suppresses a step of *expanded* report it as written.
 
     The `written_actions` form, so the record gets the payload's redactions too.
+    Skipped for a macro with no ``try``: nothing would ever look its steps up.
     """
-    conditional.register_written_steps(written_actions(actions, privacy_for), expanded)
+    if conditional.has_try(actions):
+        conditional.register_written_steps(written_actions(actions, privacy_for), expanded)
 
 
 def tracking_substitute(substitute: Any, privacy_for: Callable[[Any], MacroArgPrivacy]) -> Any:

@@ -100,6 +100,24 @@ def register_written_steps(written: Any, expanded: Any) -> None:
         _pair(written, expanded, registry)
 
 
+def has_try(actions: Any) -> bool:
+    """Whether *actions* holds a ``try`` at any container depth: the only reader of `written_step`.
+
+    `do_try` looks up its own direct steps, which sit in the same macro as the
+    ``try``; a called macro's steps are registered when it is expanded.
+    """
+    stack: list[Any] = [actions]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, dict):
+            if item.get("action") == "try":
+                return True
+            stack.extend(item.get(key) for key in _CONTAINER_KEYS)
+    return False
+
+
 def _pair(written: Any, expanded: Any, registry: dict[int, tuple[Any, Any]]) -> None:
     if isinstance(expanded, list) and isinstance(written, list) and len(expanded) == len(written):
         for written_item, expanded_item in zip(written, expanded, strict=True):
