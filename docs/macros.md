@@ -759,7 +759,11 @@ wherever it likes. So when a run expands a credential-named argument anywhere
 refused -- before the fill or after it, in a nested body or a called macro --
 naming the step and the argument, never the value. Split such a check into a
 macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
-Each `macro_run_sequence` step is its own run.
+A `macro_run_sequence` is judged as one run: the credential arguments any of
+its steps types, read from every step's macro before the first runs, refuse
+page code in every step, since a step's page code can read back what an
+earlier step typed or install the listener a later step types into. A
+separate `macro_run` on the same session afterwards is not held to it.
 
 **Credentials are typed only onto the session's own origin.** A `fill`,
 `fill_by` or `type` whose value comes from a credential-named argument checks,

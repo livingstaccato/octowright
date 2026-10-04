@@ -697,36 +697,55 @@ async def run_sequence(
             names_count=len(names),
             stop_on_failure=stop_on_failure,
         ) as sp:
-            steps: list[MacroSequenceStep] = []
-            stopped_at: int | None = None
             # One read of each macro for the whole sequence: a failed step's
             # args_used below is classified from the copy its run loaded.
             macros = RunMacros(load_macro)
-            for index, (name, step_args) in enumerate(zip(names, resolved_args, strict=True)):
-                ledgers: list[RunPrivacyLedger] = []
-                try:
-                    outcome = await run_macro(
-                        session=session,
-                        name=name,
-                        args=step_args,
-                        slowmo_ms=slowmo_ms,
-                        ctx=ctx,
-                        _macros=macros,
-                        _ledgers=ledgers,
-                    )
-                    steps.append({**outcome, "ok": True})
-                except sequence_steps.GATE_ERRORS:
-                    raise
-                except Exception as exc:
-                    used = sequence_steps.step_args_used(macros, name, step_args)
-                    for ledger in ledgers:  # what the step's called macros classified (#248)
-                        used = ledger.scrub(used)
-                    steps.append(sequence_steps.failed_step(name, exc, used))
-                    if stop_on_failure:
-                        stopped_at = index
-                        break
+            # Every step is held to the page-code refusal of the credentials any step types.
+            carried = sequence_steps.sequence_credential_args(macros, names)
+            with credential_fill.sequence_credentials(carried):
+                steps, stopped_at = await _run_sequence_steps(
+                    session, names, resolved_args, macros, stop_on_failure=stop_on_failure, slowmo_ms=slowmo_ms, ctx=ctx
+                )
 
             all_ok = all(step["ok"] for step in steps)
             failed = sum(1 for step in steps if not step["ok"])
             sequence_steps.mark_sequence_span(sp, ok=all_ok, stopped_at=stopped_at, failed_steps=failed)
             return {"sequence": names, "steps": steps, "ok": all_ok, "stopped_at": stopped_at}
+
+
+async def _run_sequence_steps(
+    session: SessionLike,
+    names: list[str],
+    resolved_args: list[dict[str, Any]],
+    macros: RunMacros,
+    *,
+    stop_on_failure: bool,
+    slowmo_ms: int | None,
+    ctx: Any | None,
+) -> tuple[list[MacroSequenceStep], int | None]:
+    steps: list[MacroSequenceStep] = []
+    stopped_at: int | None = None
+    for index, (name, step_args) in enumerate(zip(names, resolved_args, strict=True)):
+        ledgers: list[RunPrivacyLedger] = []
+        try:
+            outcome = await run_macro(
+                session=session,
+                name=name,
+                args=step_args,
+                slowmo_ms=slowmo_ms,
+                ctx=ctx,
+                _macros=macros,
+                _ledgers=ledgers,
+            )
+            steps.append({**outcome, "ok": True})
+        except sequence_steps.GATE_ERRORS:
+            raise
+        except Exception as exc:
+            used = sequence_steps.step_args_used(macros, name, step_args)
+            for ledger in ledgers:  # what the step's called macros classified (#248)
+                used = ledger.scrub(used)
+            steps.append(sequence_steps.failed_step(name, exc, used))
+            if stop_on_failure:
+                stopped_at = index
+                break
+    return steps, stopped_at

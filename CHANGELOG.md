@@ -144,6 +144,11 @@ a section that is already tagged and on PyPI.
   the semantic path's error text verbatim, which can quote the label or value
   it was given; it is now scrubbed of the session's privacy ledger and carries
   the error type.
+- **Page code in any step of a credential-typing `macro_run_sequence` is
+  refused.** The refusal judged each step as its own run, so a later step's
+  constant `evaluate` could read back a password an earlier step typed, and an
+  earlier step could install the listener a later one typed into. The
+  credential arguments every step types now apply to every step.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

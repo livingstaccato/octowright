@@ -52,6 +52,29 @@ GATE_ERRORS: tuple[type[Exception], ...] = (
 log = get_logger(__name__)
 
 
+def sequence_credential_args(macros: MacroLoader, names: list[str]) -> frozenset[str]:
+    """The credential-tier args any step of the sequence types, for every step's page-code refusal.
+
+    Read before the first step runs, from the dicts the steps will run, with
+    each macro's ``parameter_specs``: a step's page code may run before the
+    step that types the credential (a listener) as well as after it. A step
+    whose macro cannot be loaded or classified adds nothing here; it fails at
+    its turn, as it always did.
+    """
+    from octowright.macros.credential_fill import written_credential_args
+    from octowright.macros.parameter_specs import resolve_macro_privacy
+
+    found: set[str] = set()
+    for name in dict.fromkeys(names):
+        try:
+            macro = macros(name)
+            view = resolve_macro_privacy(macro)
+            found.update(written_credential_args(macro.get("actions", []), view.credential_args))
+        except Exception as exc:
+            log.debug("octowright.macro.sequence_credentials_unavailable", macro=name, error_type=type(exc).__name__)
+    return frozenset(found)
+
+
 def resolve_sequence_args(names: Any, args_list: Any) -> list[dict[str, Any]]:
     """Each step's arguments, or ``ValueError`` before anything runs.
 
