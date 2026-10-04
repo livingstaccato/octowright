@@ -86,6 +86,11 @@ def _classify(path: Path, recordings_dir: Path) -> str:
 #:
 #: ``.frame-cache`` is deliberately NOT listed: it is a regenerable cache and
 #: sweeping it is the point.
+#:
+#: Neither is ``session-artifacts``: a plugin's committed artifact is a session
+#: byproduct (a terminal's transcript is a browser's video), and its only index
+#: is the ``artifact_registered`` row in the session's JSONL, which ages out on
+#: this same rule. Kept past that row, it would be referenced by nothing.
 PRESERVED_SUBDIRS = ("artifacts",)
 
 

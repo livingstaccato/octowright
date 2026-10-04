@@ -438,3 +438,20 @@ def test_a_directory_merely_named_artifacts_deeper_down_is_not_protected(
     nested = _touch(root / "session-1" / "artifacts" / "blob.bin", age_days=90)
 
     assert [s.path for s in rc.find_stale_files(root, days=30)] == [nested]
+
+
+def test_plugin_session_artifacts_age_out_with_their_recording(tmp_path: Path) -> None:
+    """`session-artifacts/` is a session byproduct, so it is swept like one.
+
+    "Committed" there means registered, not person-authored: a plugin's
+    transcript is the terminal's counterpart of a browser's video or HAR. Its
+    only index is the ``artifact_registered`` row in the session's own JSONL,
+    which ages out on the same rule -- preserving the files would leave them
+    referenced by nothing, invisible to the dashboard, and never reclaimed.
+    Pinned so preserving them has to argue with this test.
+    """
+    root = tmp_path / "recordings"
+    recording = _touch(root / "20260101T000000Z-terminal-refsess01.jsonl", age_days=90)
+    transcript = _touch(root / "session-artifacts" / "refsess01" / "transcript.txt", age_days=90)
+
+    assert {s.path for s in rc.find_stale_files(root, days=30)} == {recording, transcript}
