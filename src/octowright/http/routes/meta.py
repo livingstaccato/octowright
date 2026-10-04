@@ -119,12 +119,24 @@ def _validation_body(macro: dict[str, Any], previous: dict[str, Any] | None = No
     }
 
 
+def _macro_error(exc: Exception) -> SafeJSONResponse:
+    """A macro read or write the caller can act on, instead of a bare 500.
+
+    ``TimeoutError`` rather than ``MacroWriteLockTimeout`` (its subclass) so a
+    test that reloads the storage module does not change what is caught.
+    """
+    status = 503 if isinstance(exc, TimeoutError) else 400
+    return SafeJSONResponse({"error": str(exc)}, status_code=status)
+
+
 async def macro_detail_endpoint(request: Request) -> SafeJSONResponse:
     name = request.path_params["name"]
     try:
         macro = state._macros.load_macro(name)
     except FileNotFoundError:
         return SafeJSONResponse({"error": f"macro {name!r} not found"}, status_code=404)
+    except ValueError as exc:  # a name outside the macros dir, an unreadable file
+        return _macro_error(exc)
     return SafeJSONResponse(macro)
 
 
@@ -154,8 +166,11 @@ async def macro_update_endpoint(request: Request) -> SafeJSONResponse:
         return SafeJSONResponse({"error": "macro validation failed", **validation}, status_code=400)
 
     # Off the event loop: the write waits on the macro write lock and does file I/O.
-    path = await asyncio.to_thread(state._macros.write_macro, name=name, macro=macro)
-    saved = await asyncio.to_thread(state._macros.load_macro, name)
+    try:
+        path = await asyncio.to_thread(state._macros.write_macro, name=name, macro=macro)
+        saved = await asyncio.to_thread(state._macros.load_macro, name)
+    except (ValueError, TimeoutError) as exc:  # a refused name or collision; the write lock held too long
+        return _macro_error(exc)
     await publish_dashboard_invalidation("macros")
     return SafeJSONResponse({"ok": True, "name": name, "path": str(path), "macro": saved})
 
