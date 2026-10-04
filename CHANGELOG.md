@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A leader stopped by `octowright restart` exits about 2 seconds sooner.**
+  On its way out a leader waited up to 2 seconds for the election lock to
+  remove its lockfile, but restart holds that lock for the whole stop and
+  removes the lockfile itself, so the wait always ran out. It also pushed a
+  short `--timeout` into a SIGKILL. The wait is now a quarter of a second.
 - **`octowright restart` no longer brings the daemon back from another
   install.** When this environment had no `octowright` console script beside
   its interpreter, restart started whatever `octowright` came first on `PATH`.

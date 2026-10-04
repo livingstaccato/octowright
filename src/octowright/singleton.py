@@ -408,8 +408,12 @@ def local_leader_started_monotonic() -> float | None:
 # How long a leader shutting down waits for the election lock before leaving
 # its lockfile alone. Contention means another process is electing right now,
 # and that process decides what the lockfile says next; a lock left naming our
-# dead pid reads as stale to every reader anyway.
-RELEASE_LOCK_TIMEOUT_SECONDS = 2.0
+# dead pid reads as stale to every reader anyway. Short on purpose: the usual
+# holder is ``octowright restart``, which keeps the lock across the whole kill
+# and removes a lockfile naming a pid it stopped itself, so a longer wait only
+# delayed every restarted leader's exit (2s, which a short ``--timeout`` turned
+# into a SIGKILL). This much rides out a follower's brief probe-and-release.
+RELEASE_LOCK_TIMEOUT_SECONDS = 0.25
 
 
 def remove_lock_if_owned(owner_pids: Collection[int], *, token: str | None = None, path: Path = LOCK_PATH) -> bool:

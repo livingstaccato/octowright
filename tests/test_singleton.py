@@ -364,3 +364,20 @@ async def test_release_own_lock_gives_up_rather_than_hang_on_a_held_election_loc
     with singleton.election_lock(path=lock):
         assert await singleton.release_own_lock("ours", path=lock, timeout=0.1) is False
     assert lock.exists(), "whoever holds the election lock owns what the lockfile says next"
+
+
+@pytest.mark.anyio
+async def test_release_own_lock_does_not_hold_up_exit_behind_restart(tmp_path: Path) -> None:
+    """``octowright restart`` holds the election lock across the whole kill, so
+    the leader it SIGTERMs always finds it held. Waiting the old 2s for it
+    delayed every restarted leader's exit by 2s (and pushed a short --timeout
+    to SIGKILL) for nothing: restart removes a lockfile naming a pid it stopped
+    itself."""
+    import time
+
+    lock = tmp_path / "octowright.lock"
+    _lock_for(os.getpid(), token="ours", path=lock)
+    with singleton.election_lock(path=lock):
+        started = time.monotonic()
+        assert await singleton.release_own_lock("ours", path=lock) is False
+        assert time.monotonic() - started < 1.0
