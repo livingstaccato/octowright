@@ -14,6 +14,7 @@ from provide.telemetry import get_logger
 
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
+from octowright.credential_sinks import CREDENTIAL_CALL_MARKER
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
 from octowright.macros import credential_fill, failure_context, safe_screenshot, screenshot_refusal, sequence_steps
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
@@ -28,8 +29,9 @@ from octowright.macros.calls import (
 )
 from octowright.macros.credential_fill import begin_fill_audit, credential_fill_guard, end_fill_audit, offsite_fields
 from octowright.macros.descriptions import describe_action
-from octowright.macros.failure_context import _truncate_bundle_console
+from octowright.macros.failure_context import MACRO_FAILURE_CONSOLE_TAIL as MACRO_FAILURE_CONSOLE_TAIL
 from octowright.macros.nesting import RunMacros
+from octowright.macros.parameter_specs import ResolvedPrivacy, resolve_macro_privacy
 from octowright.macros.privacy import (
     MacroArgPrivacy,
     PrivacyLedger,
@@ -87,18 +89,22 @@ def _redact_args_for_response(args: dict[str, Any], privacy: MacroArgPrivacy) ->
     return privacy.redact(args, marker=_REDACTED_MACRO_VALUE)
 
 
-def _macro_privacy(macros: RunMacros, name: Any) -> MacroArgPrivacy:
-    """How macro *name* classifies its arguments, or by name alone if it cannot be read.
+def _macro_view(macros: RunMacros, name: Any, credential_args: frozenset[str] = frozenset()) -> ResolvedPrivacy:
+    """How macro *name* classifies its arguments, its ``parameter_specs`` included, or by name alone.
 
     A macro that cannot be loaded never substituted anything, so nothing is
     lost by it. Read through the run's *macros*, so the dispatch that follows
     does not read the file again.
     """
     try:
-        return MacroArgPrivacy.for_macro(macros(str(name)).get("actions", []))
+        return resolve_macro_privacy(macros(str(name)), credential_args=credential_args)
     except Exception as exc:
         log.debug("octowright.macro.assertion_args_unavailable", macro=str(name), error=repr(exc))
-        return MacroArgPrivacy()
+        return ResolvedPrivacy(MacroArgPrivacy(credential_args=credential_args), credential_args)
+
+
+def _macro_privacy(macros: RunMacros, name: Any) -> MacroArgPrivacy:
+    return _macro_view(macros, name).privacy
 
 
 _MACRO_RUN = counter(
@@ -118,11 +124,6 @@ _MACRO_RUN_DURATION = histogram(
 _MACRO_LABEL_SEEN: set[str] = set()
 _MACRO_LABEL_OVERFLOW = "(overflow)"
 
-# Console messages attached to a macro failure payload. Half the window is
-# kept for the plain tail and the rest goes to the newest diagnostic-level
-# messages (see ``_select_console_tail``), so a chatty page cannot flush the
-# useful line out of it.
-MACRO_FAILURE_CONSOLE_TAIL = 10
 # Running count of macro-name lookups that collapsed to the overflow bucket
 # because the cap was already saturated. Surfaces in ``octowright_status``
 # so an operator can see when dynamic macro names are filling the cap with
@@ -257,7 +258,12 @@ def _collect_nested_call_privacy(
     if not isinstance(call_args, dict):
         return
     name = action.get("name")
-    admit_call_privacy(session, run_ledger, str(name), _macro_privacy(macros, name).admission(call_args))
+    # A caller's credential passed under another name stays one in the callee,
+    # whatever the callee's own parameter_specs say of that name.
+    marked = action.get(CREDENTIAL_CALL_MARKER)
+    tainted = frozenset(str(item) for item in marked) if isinstance(marked, list) else frozenset()
+    view = _macro_view(macros, name, tainted)
+    admit_call_privacy(session, run_ledger, str(name), view.privacy.admission(call_args), warnings=view.warnings)
 
 
 async def _dispatch_nested_call(
@@ -399,18 +405,22 @@ async def run_macro(
     credential_args: frozenset[str] = frozenset(),
     _macros: RunMacros | None = None,
     _run_ledger: RunPrivacyLedger | None = None,
+    _privacy: ResolvedPrivacy | None = None,
 ) -> MacroRunResult:
     """Run macro *name* on *session*.
 
     *credential_args* name args that hold a credential whatever they are called
     (a sequence's ``{"credential": ...}``): scrubbed, redacted and sink-guarded
     as a ``macro_call`` keeps a caller's credential passed under another name.
+    The macro's own ``parameter_specs`` add to them, and cannot take one away
+    (`parameter_specs`).
 
     ``_macros`` is for `run_sequence`, whose members share one `RunMacros`,
     and `run_macro_artifact`, which loads the macro through the one it passes;
-    any other caller leaves it out and the run gets its own. ``_run_ledger`` is
-    `run_macro_artifact`'s: a ledger that has ALREADY admitted this run's own
-    arguments (from the same `RunMacros`), and whose scope the caller closes.
+    any other caller leaves it out and the run gets its own. ``_run_ledger``
+    and ``_privacy`` are `run_macro_artifact`'s: a ledger that has ALREADY
+    admitted this run's own arguments, and the view it admitted them under,
+    resolved from the same `RunMacros` dict; the caller closes the ledger.
     """
     async with session.operation("macro_run"):
         with span(
@@ -431,89 +441,8 @@ async def run_macro(
                 macros=macros,
                 credential_args=credential_args,
                 run_ledger=_run_ledger,
+                resolved=_privacy,
             )
-
-
-async def _build_failure_payload(
-    session: SessionLike,
-    *,
-    name: str,
-    index: int,
-    written: list[dict[str, Any]],
-    macros: RunMacros,
-    executed: int,
-    safe_original: str,
-    sensitive_values: tuple[str, ...],
-) -> dict[str, Any]:
-    """Assemble the failure payload from three independently-fallible producers.
-
-    Each producer is tried separately so one failing does not cost the caller
-    the other two: its own error is recorded IN the payload rather than raised
-    over the dispatch failure the payload exists to explain. *written* is the
-    macro's steps before substitution: the fields echoing them are not
-    scrubbed of *sensitive_values*, the page-derived ones are (see
-    `failure_context`).
-    """
-    if sensitive_values:
-        # The generic diagnostic producer persists raw HTML and a raw
-        # screenshot. The page may render a value this run or the session
-        # ledger holds (a classified argument, a password typed earlier) into
-        # either, so do not invoke it. Composition roots can retain their own
-        # explicitly safe evidence at the authorized screenshot boundary.
-        bundle: dict[str, Any] = {"diagnostic_suppressed": "classified macro arguments"}
-    else:
-        try:
-            bundle = _truncate_bundle_console(await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL))
-        except Exception as secondary:
-            bundle = {"diagnostic_error": repr(secondary)}
-
-    shown = failure_context.written_actions(written[: index + 1], lambda called: _macro_privacy(macros, called))
-    try:
-        fix_suggestion = await _suggest_fix(
-            session, shown[index], scrub_page=lambda text: _scrub_sensitive_values(text, sensitive_values)
-        )
-    except Exception as secondary:
-        fix_suggestion = None
-        bundle["healing_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
-    try:
-        failed_requests = _scrub_sensitive_values(failure_context.failed_requests_tail(session), sensitive_values)
-        page_errors = _scrub_sensitive_values(failure_context.page_errors_tail(session), sensitive_values)
-    except Exception as secondary:  # defensive around injected session implementations
-        failed_requests, page_errors = [], []
-        bundle["network_error"] = _scrub_sensitive_values(repr(secondary), sensitive_values)
-
-    payload: dict[str, Any] = {
-        "macro": name,
-        "failed_at_step": index,
-        # Partial-state signal: a multi-step macro that fails midway has
-        # already applied steps 0..index-1 to the live browser. Surface both
-        # the count and the steps that landed, as the macro wrote them, so the
-        # agent can reason about the half-applied state instead of seeing an
-        # opaque error.
-        "executed": executed,
-        "executed_actions": shown[:index],
-        "failed_action": shown[index],
-        "original": safe_original,
-        "bundle": bundle,
-        # The console tail and final URL were already in `bundle`; the failing
-        # requests were not, so a payload could report "timed out waiting for
-        # #foo" while the 409 that explains it sat unread. Carries the response
-        # body for a failed same-origin request (see
-        # session/core_network_mixin), which is usually the whole diagnosis --
-        # a status code alone is not actionable.
-        #
-        # A sibling of `bundle` rather than a key inside it: `bundle` is what
-        # diagnostic_bundle() returned, and folding another producer's data into
-        # it makes that claim false for every reader (a whole-record assertion
-        # caught exactly this).
-        "failed_requests": failed_requests,
-        # What an ``N page error(s)`` failure counted: uncaught exceptions are
-        # not console messages, so the console tail never shows them.
-        "page_errors": page_errors,
-    }
-    if fix_suggestion:
-        payload["healing_suggestion"] = fix_suggestion
-    return payload
 
 
 async def _finish_macro_run(
@@ -563,6 +492,7 @@ async def _run_macro_impl(
     run_ledger: RunPrivacyLedger | None = None,
     macros: RunMacros | None = None,
     credential_args: frozenset[str] = frozenset(),
+    resolved: ResolvedPrivacy | None = None,
     **kwargs: Any,
 ) -> MacroRunResult:
     """One run, its session privacy scope closed however it ends.
@@ -574,27 +504,30 @@ async def _run_macro_impl(
     admitted = run_ledger is not None
     with run_privacy_ledger(session, run_ledger) as run_ledger, conditional.written_steps_scope():
         macro = macros(name)
-        # An argument that IS the forbidden text is sensitive whatever it is named;
-        # the exported CLI reads the same set (privacy.assertion_text_args).
-        privacy = MacroArgPrivacy.for_macro(macro.get("actions", []), credential_args=credential_args)
+        # Name, position (an expect_no_text text), the caller's credential
+        # origin and the macro's own parameter_specs, resolved from the dict
+        # that executes; the exported CLI resolves the same view.
+        view = resolved if resolved is not None else resolve_macro_privacy(macro, credential_args=credential_args)
         if not admitted:
             # What THIS run has admitted for blind scrubbing: its own arguments plus
             # every nested call's, appended as they execute. Failure payloads and
             # screenshot privacy read it; the recorder reads the session ledger.
-            run_ledger.admit(name, privacy.admission(args or {}))
+            run_ledger.admit(name, view.privacy.admission(args or {}), warnings=view.warnings)
         result = await _run_admitted(
             session,
             name,
             args,
             macro=macro,
-            privacy=privacy,
+            privacy=view.privacy,
             macros=macros,
             run_ledger=run_ledger,
-            credential_args=credential_args,
+            credential_args=view.credential_args,
             **kwargs,
         )
     if exempt := run_ledger.exempt_args:  # what the #247 floor/list left visible
         result["scrub_exempt_args"] = exempt
+    if warnings := run_ledger.warnings:  # an ignored parameter_specs unmark, a malformed spec
+        result["warnings"] = warnings
     if scrub_saturation_fields(session):  # the session's scrub set is full (#248)
         result["scrub_saturated"] = True
     return result
@@ -664,18 +597,20 @@ async def _run_admitted(
                 # producer to run. If one of those producers fails, its error
                 # is represented in the payload; it never escapes while the
                 # credential-bearing dispatch exception is active context.
-                payload = await _build_failure_payload(
+                payload = await failure_context.build_failure_payload(
                     session,
                     name=name,
                     index=index,
                     written=macro.get("actions", []),
-                    macros=macros,
+                    privacy_for=partial(_macro_privacy, macros),
                     executed=executed,
                     safe_original=safe_original,
                     sensitive_values=run_values,
+                    suggest_fix=_suggest_fix,
                 )
                 payload.update(assertions.fields(run_values))
                 payload.update(run_ledger.exempt_fields())
+                payload.update(run_ledger.warning_fields())
                 payload.update(offsite_fields(audit))
                 payload.update(scrub_saturation_fields(session))
                 payload.update(refused)  # why a classified screenshot was refused, never the value

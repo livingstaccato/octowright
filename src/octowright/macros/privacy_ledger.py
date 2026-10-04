@@ -388,8 +388,15 @@ class RunPrivacyLedger(PrivacyLedger):
         self._session_ledger: SessionPrivacyLedger | None = None
         self._scope: object | None = None
         self._exempt: list[dict[str, str]] = []
+        self._warnings: list[str] = []
 
-    def admit(self, macro: str, admission: ScrubAdmission) -> None:
+    def admit(self, macro: str, admission: ScrubAdmission, *, warnings: Iterable[str] = ()) -> None:
+        """Admit one macro's (or nested call's) arguments; *warnings* are its view's, by name only.
+
+        The warnings are kept first, so a refused admission still reports why
+        its declarations were ignored.
+        """
+        self._warnings.extend(warning for warning in warnings if warning not in self._warnings)
         try:
             refuse_if_scrub_set_full(self._session, admission)
         except InvalidRequestError:
@@ -423,6 +430,15 @@ class RunPrivacyLedger(PrivacyLedger):
         """`exempt_args` for a failure payload: absent when nothing was exempt."""
         return {"scrub_exempt_args": self.exempt_args} if self._exempt else {}
 
+    @property
+    def warnings(self) -> list[str]:
+        """What the run's privacy views reported (an ignored ``parameter_specs`` unmark, a malformed spec)."""
+        return list(self._warnings)
+
+    def warning_fields(self) -> dict[str, list[str]]:
+        """``{"warnings": [...]}`` for a run result or failure payload; absent when there are none."""
+        return {"warnings": self.warnings} if self._warnings else {}
+
 
 @contextmanager
 def run_privacy_ledger(session: Any, supplied: RunPrivacyLedger | None = None) -> Iterator[RunPrivacyLedger]:
@@ -441,14 +457,17 @@ def run_privacy_ledger(session: Any, supplied: RunPrivacyLedger | None = None) -
         ledger.close()
 
 
-def admit_call_privacy(session: Any, run_ledger: PrivacyLedger, macro: str, admission: ScrubAdmission) -> None:
+def admit_call_privacy(
+    session: Any, run_ledger: PrivacyLedger, macro: str, admission: ScrubAdmission, *, warnings: Iterable[str] = ()
+) -> None:
     """A nested ``macro_call``'s admission, scoped to the run it executes in.
 
     With no run to scope to -- a call dispatched outside `run_privacy_ledger`
-    -- every admitted value joins the session ledger, the side that scrubs more.
+    -- every admitted value joins the session ledger, the side that scrubs
+    more, and there is no run result for *warnings* to reach.
     """
     if isinstance(run_ledger, RunPrivacyLedger):
-        run_ledger.admit(macro, admission)
+        run_ledger.admit(macro, admission, warnings=warnings)
         return
     run_ledger.add(admission.values)
     refuse_if_scrub_set_full(session, admission)

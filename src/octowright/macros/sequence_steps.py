@@ -25,6 +25,7 @@ from provide.telemetry import get_logger
 from octowright._tracing import set_attrs
 from octowright.macros._redact import _REDACTED_MACRO_VALUE
 from octowright.macros.nesting import MacroLoader
+from octowright.macros.parameter_specs import macro_privacy
 from octowright.macros.privacy import MacroArgPrivacy
 from octowright.macros.storage import macro_path
 from octowright.mcp_types import MacroSequenceStep
@@ -109,11 +110,14 @@ def macro_failure_details(exc: BaseException) -> dict[str, Any] | None:
 def step_args_used(macros: MacroLoader, name: str, step_args: dict[str, Any]) -> dict[str, Any]:
     """A failed step's ``args_used``, redacted as the macro its run loaded classifies them.
 
-    A macro that never loaded (missing, unreadable, an unsafe name -- what
-    *macros* raises) substituted nothing, so redacting by name alone loses
-    nothing. A macro that DID load but cannot be classified may have
-    substituted anything, so every value is redacted: failing open there would
-    show an argument its own view would have hidden.
+    Resolved inside the step, from the dict its run loaded, ``parameter_specs``
+    included (`parameter_specs.resolve_macro_privacy`); a malformed spec falls
+    back to the name heuristic there rather than here. A macro that never
+    loaded (missing, unreadable, invalid JSON -- what *macros* raises)
+    substituted nothing, so redacting by name alone loses nothing. A macro
+    that DID load but cannot be classified may have substituted anything, so
+    every value is redacted: failing open there would show an argument its own
+    view would have hidden.
     """
     try:
         macro = macros(name)
@@ -121,7 +125,7 @@ def step_args_used(macros: MacroLoader, name: str, step_args: dict[str, Any]) ->
         log.debug("octowright.macro.assertion_args_unavailable", macro=name, error=repr(exc))
         return MacroArgPrivacy().redact(step_args, marker=_REDACTED_MACRO_VALUE)
     try:
-        return MacroArgPrivacy.for_macro(macro.get("actions", [])).redact(step_args, marker=_REDACTED_MACRO_VALUE)
+        return macro_privacy(macro).redact(step_args, marker=_REDACTED_MACRO_VALUE)
     except Exception as exc:
         log.debug("octowright.macro.assertion_args_unclassifiable", macro=name, error=repr(exc))
         return dict.fromkeys(step_args, _REDACTED_MACRO_VALUE)
@@ -133,6 +137,9 @@ def failed_step(name: str, exc: Exception, args_used: dict[str, Any]) -> MacroSe
     step: MacroSequenceStep = {"macro": name, "ok": False, "error": error, "args_used": args_used}
     if details is not None:
         step["failure"] = details
+        warnings = details.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            step["warnings"] = [str(warning) for warning in warnings]
     return step
 
 

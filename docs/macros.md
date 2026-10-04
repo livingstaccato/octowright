@@ -499,9 +499,53 @@ and the payload carries
 The refusal is correct by design: the page drew the value, so the pixels would
 hold it. The ways out are to keep the value off the screen (sign in as a user whose
 name the page does not show, or screenshot a page without it) or to stop
-classifying it. Declaring an argument not sensitive is not available yet: that is
-the open Part B (`parameter_specs`) of #248, and this reporting adds no
-declassify mechanism of its own.
+classifying it: declare the parameter `"sensitive": false` in the macro's
+`parameter_specs` (below) and pass it as a plain value, not as
+`{"credential": ...}`, which stays credential-tier whatever the macro declares.
+
+**Declaring sensitivity: `parameter_specs`.** A name says too little in both
+directions -- `display` holding a national id is not recognised, and
+`username`, which an application's header draws on every page, cannot be
+shown. A macro can say so per top-level parameter:
+
+```json
+{"parameters": ["email", "password", "display", "username"],
+ "parameter_specs": {"display": {"sensitive": true}, "username": {"sensitive": false}}}
+```
+
+- Resolution, per top-level argument: `parameter_specs[name].sensitive` when it
+  is present and a real `true`/`false`, otherwise the name classification
+  above. Only top-level parameters are declared; a nested key inherits its
+  branch, and a key under a public parameter (`{"username": {"password": ...}}`)
+  is still classified by its own name.
+- `"sensitive": true` makes the parameter **credential-tier**, exactly as a
+  `{"credential": ...}` sequence argument is: redacted from `args_used` and
+  every record of the arguments, scrubbed session-wide, never baked into an
+  exported script's defaults, held to the credential sink guards and the
+  fill-origin check, and a run that types it runs no page code. It applies in a
+  called macro too: a `macro_call` callee's own declarations hold there.
+- `"sensitive": false` unmarks an identity or contextual name (`username`,
+  `email`, `session` and the like): it is not redacted from the run result's
+  `args_used`, not blind-scrubbed, and not counted by a screenshot. It has a
+  floor it cannot go below. A name that reads as a credential (`password`,
+  `api_key`, `authToken`...), a value the caller passed as a credential
+  (`{"credential": ...}`, or a caller's credential handed to a `macro_call`),
+  and an argument an `expect_no_text` checks for all stay credential-tier. So
+  `sensitive: false` never loosens a sink guard; only
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` does. Artifact bundles on disk keep
+  their key-level redaction by name, so a public `username` is still
+  `<redacted>` in `result.json` and `artifact.json`.
+- An ignored unmark, and a spec that is not shaped as above (a non-object
+  `parameter_specs`, a spec that is not an object, a `sensitive` that is not a
+  boolean), never stop a run: the parameter keeps its name classification and
+  the run says why in `warnings` -- on the `macro_run` result, each
+  `macro_run_sequence` step, a `macro_artifact_run` result, and a failure
+  payload -- naming the macro and the parameter, never a value. `macro_lint`
+  reports the same (`ignored_public_declaration`, `bad_parameter_specs`), and
+  `unknown_parameter_spec` for a spec naming no parameter.
+- A `macro_run_sequence` resolves each step from the macro that step loaded;
+  a step whose macro is missing or not valid JSON is still a failed step with
+  name-only redaction.
 
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped
@@ -761,7 +805,8 @@ on an origin passed as `--trusted-origin` (or listed in the step's
 the same source.
 
 **Exported scripts** carry their own copy of the classifier, stamped
-`_ARG_PRIVACY_CLASSIFIER_VERSION = 6`, and resolve the same blind-scrub policy,
+`_ARG_PRIVACY_CLASSIFIER_VERSION = 7` (7: the macro's `parameter_specs`,
+resolved at export with the floor applied), and resolve the same blind-scrub policy,
 length floor and common-value list when they run (a script is one run, so run
 scoping does not arise there). A script exported by an older Octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
@@ -799,6 +844,10 @@ The linter catches:
   wildcard, path or `{{placeholder}}` instead of an exact origin.
 - An `expect_no_text` whose text is still the recording's redaction marker
   (`redacted_assertion_text`), which replay refuses.
+- `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):
+  a malformed spec (`bad_parameter_specs`), a `"sensitive": false` the floor
+  ignores (`ignored_public_declaration`), and a spec naming no parameter
+  (`unknown_parameter_spec`).
 
 ## Test suite mode
 

@@ -26,6 +26,7 @@ from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
 from octowright.macros.nesting import RunMacros
+from octowright.macros.parameter_specs import macro_privacy, resolve_macro_privacy
 from octowright.macros.privacy import (
     MacroArgPrivacy,
     run_privacy_ledger,
@@ -201,13 +202,16 @@ async def run_macro_artifact(
             macros = RunMacros(load_macro)
             macro = macros(name)
             args_used = dict(args or {})
-            # The view macro_run builds: an expect_no_text argument is secret
-            # whatever it is named, so every record below uses it, not the name alone.
-            privacy = _privacy(macro)
+            # The view macro_run uses -- passed to it below, not rebuilt: an
+            # expect_no_text argument is secret whatever it is named, and the
+            # macro's parameter_specs say what else is, so every record below
+            # uses it, not the name alone.
+            view = resolve_macro_privacy(macro)
+            privacy = view.privacy
             # Admitted into the one ledger the replay also uses, before the manifest
             # or run dir is written: a run that would add to a full scrub set is
             # refused with nothing on disk (#248). The replay does not admit it again.
-            run_ledger.admit(name, privacy.admission(args_used))
+            run_ledger.admit(name, privacy.admission(args_used), warnings=view.warnings)
             store = ArtifactStore()
             artifact_dir = store.macro_dir(name)
             runs_dir = artifact_dir / "runs"
@@ -250,6 +254,7 @@ async def run_macro_artifact(
                     slowmo_ms=slowmo_ms,
                     _macros=macros,
                     _run_ledger=run_ledger,
+                    _privacy=view,
                 )
                 if isinstance(replay, dict):
                     executed = int(replay.get("executed", 0))
@@ -343,6 +348,8 @@ async def run_macro_artifact(
                 # What the #247 floor/list left visible, nested calls included.
                 **run_ledger.exempt_fields(),
                 **scrub_saturation_fields(session),
+                # An ignored parameter_specs unmark or a malformed spec, by name.
+                **run_ledger.warning_fields(),
             }
 
 
@@ -492,7 +499,8 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
 
 
 def _privacy(macro: dict[str, Any]) -> MacroArgPrivacy:
-    return MacroArgPrivacy.for_macro(macro.get("actions", []))
+    """The macro's own view, ``parameter_specs`` included, as macro_run resolves it."""
+    return macro_privacy(macro)
 
 
 def _listing_privacy(name: Any) -> MacroArgPrivacy:

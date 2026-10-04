@@ -35,6 +35,7 @@ from .lint_credentials import (
     _looks_like_password,
 )
 from .lint_fields import ambiguous_rename_fields, unknown_fields
+from .lint_specs import lint_parameter_specs
 from .lint_urls import code_carries_credential, url_carries_credential
 from .runtime import _ACTION_MAP
 from .substitution import SEMANTIC_FINDER_KEYS
@@ -652,4 +653,8 @@ def lint_macro(macro: dict) -> list[Issue]:
     for i, action in enumerate(actions):
         _lint_action(action, i, issues)
 
+    issues.extend(
+        Issue(severity="warning", code=code, message=message, action_index=None)
+        for code, message in lint_parameter_specs(macro)
+    )
     return issues

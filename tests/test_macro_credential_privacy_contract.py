@@ -403,7 +403,7 @@ async def test_exported_classified_macro_refuses_raw_screenshot(
 
 
 def test_versioned_classifier_covers_the_real_social_map_and_export_vocabulary() -> None:
-    assert ARG_PRIVACY_CLASSIFIER_VERSION == 6  # 6: the exported blind scrub applies the #247 floor and list
+    assert ARG_PRIVACY_CLASSIFIER_VERSION == 7  # 7: the exported script resolves the macro's parameter_specs
     for key in (*SOCIAL_ARGS, "auth", "credential", "api_key", "apikey", "access_key", "passphrase"):
         assert is_sensitive_arg_key(key), key
     assert not is_sensitive_arg_key("author")

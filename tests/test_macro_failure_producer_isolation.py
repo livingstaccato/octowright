@@ -5,7 +5,7 @@
 
 """One failing diagnostic producer must not cost the caller the other two.
 
-``_build_failure_payload`` asks three independently-fallible producers for
+``failure_context.build_failure_payload`` asks three independently-fallible producers for
 evidence about a macro step that already failed: the diagnostic bundle, the
 healing suggestion, and the failed-request tail. Each is wrapped separately so
 its own failure is recorded IN the payload rather than raised over the dispatch

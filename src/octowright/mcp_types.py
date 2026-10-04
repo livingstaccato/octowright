@@ -83,6 +83,9 @@ class MacroRunResult(TypedDict):
     # Present (True) only once the session's scrub set reached
     # OCTOWRIGHT_MACRO_SCRUB_MAX_VALUES (#248); sticky for the session.
     scrub_saturated: NotRequired[bool]
+    # Present only when a privacy view reported something: a parameter_specs
+    # unmark the floor ignored, or a malformed spec (#248). Names, never values.
+    warnings: NotRequired[list[str]]
 
 
 class MacroSequenceStep(TypedDict, total=False):
@@ -101,6 +104,7 @@ class MacroSequenceStep(TypedDict, total=False):
     assertions: list[dict[str, Any]]
     scrub_exempt_args: list[dict[str, str]]
     scrub_saturated: bool
+    warnings: list[str]  # see MacroRunResult
 
 
 class MacroSequenceResult(TypedDict):

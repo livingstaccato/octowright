@@ -21,6 +21,19 @@ a section that is already tagged and on PyPI.
   off. An automatic launch the browser blames on Wayland retries once on X11
   and says why in the launch result; an explicit request fails instead.
   `octowright_status()` reports the effective setting.
+- **A macro can declare which parameters are sensitive.** `parameter_specs`
+  maps a top-level parameter to `{"sensitive": true}` or `{"sensitive":
+  false}`. `true` makes a parameter a credential whatever it is called:
+  redacted, scrubbed for the session and held to the credential checks.
+  `false` lets an identity or contextual parameter such as `username` be shown
+  and screenshotted. A credential-like name, a value passed as
+  `{"credential": ...}` and the text an `expect_no_text` checks for cannot be
+  declared not sensitive. An ignored declaration or a malformed spec never
+  stops a run: the parameter is classified by its name, and run results,
+  sequence steps, artifact run results and failure payloads report it in a new
+  `warnings` field, as `macro_lint` does. Exported scripts resolve the same
+  declarations and are stamped classifier version 7; regenerate one to pick
+  them up.
 
 ### Fixed
 - **A browser dying at launch no longer closes every other browser.** Its

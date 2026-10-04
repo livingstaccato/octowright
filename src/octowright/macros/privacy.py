@@ -60,7 +60,7 @@ from octowright.macros.scrub_engine import sensitive_value_variants as sensitive
 from octowright.placeholders import PLACEHOLDER_PATTERN as PLACEHOLDER_PATTERN
 from octowright.placeholders import PLACEHOLDER_RE as PLACEHOLDER_RE
 
-ARG_PRIVACY_CLASSIFIER_VERSION = 6
+ARG_PRIVACY_CLASSIFIER_VERSION = 7
 BLIND_SCRUB_POLICY_ENV = "OCTOWRIGHT_MACRO_BLIND_SCRUB_POLICY"
 
 BlindScrubPolicy = Literal["credentials", "all", "reject"]
@@ -472,20 +472,34 @@ class MacroArgPrivacy:
     """
 
     assertion_args: frozenset[str] = frozenset()
-    #: Args the CALLER says hold a credential, whatever they are named: a
-    #: sequence's ``{"credential": ...}`` arguments (``run_macro``'s
-    #: *credential_args*). Name classification alone cannot see them.
+    #: Args that hold a credential whatever they are named: a sequence's
+    #: ``{"credential": ...}`` arguments (``run_macro``'s *credential_args*),
+    #: and the ones the macro's own ``parameter_specs`` declare sensitive.
+    #: Name classification alone cannot see them.
     credential_args: frozenset[str] = frozenset()
+    #: Top-level args the macro's ``parameter_specs`` declare not sensitive,
+    #: already held to the floor (`parameter_specs.resolve_macro_privacy`): an
+    #: identity or contextual name the macro says is meant to be shown. Never
+    #: a credential-named, credential-origin or positional one. Keys nested
+    #: under it are still classified by their own names.
+    public_args: frozenset[str] = frozenset()
 
     @classmethod
     def for_macro(cls, actions: Any, *, credential_args: frozenset[str] = frozenset()) -> MacroArgPrivacy:
+        """By name and position only; `parameter_specs.resolve_macro_privacy` adds the macro's declarations."""
         return cls(assertion_text_args(actions), frozenset(credential_args))
 
     def _positional(self, key: object) -> bool:
         return key in self.assertion_args or key in self.credential_args
 
+    def _public(self, key: object) -> bool:
+        # The floor again, so a view built by hand cannot unmark a credential either.
+        return key in self.public_args and not self._positional(key) and not is_credential_key(key)
+
     def _tier(self, key: object) -> PrivacyTier | None:
-        return "credential" if self._positional(key) else _privacy_tier(key)
+        if self._positional(key):
+            return "credential"
+        return None if self._public(key) else _privacy_tier(key)
 
     def classified(self, args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
         """Classified leaves with their effective tier and value-free-safe path."""
@@ -513,7 +527,7 @@ class MacroArgPrivacy:
         """*args* for a response or a log: sensitive keys replaced, admitted values scrubbed."""
         redacted = {
             str(key): marker
-            if is_sensitive_arg_key(key) or self._positional(key)
+            if (is_sensitive_arg_key(key) and not self._public(key)) or self._positional(key)
             else _redact_nested_args(value, marker)
             for key, value in args.items()
         }

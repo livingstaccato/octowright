@@ -169,7 +169,10 @@ def macro_export_cli(
         "expect_no_text: what each saw, with a `warning` on a pass that judged less than asked "
         "(requests still in flight, a selector that matched nothing). A step can set "
         "`require_settled: true` (expect_network_clean) or `require_match: true` "
-        "(expect_no_text) to fail on that caveat instead."
+        "(expect_no_text) to fail on that caveat instead. A macro's parameter_specs "
+        '({"name": {"sensitive": true|false}}) declare which parameters are sensitive; '
+        "`warnings` names any declaration that was ignored (a credential-like name cannot be "
+        "declared not sensitive)."
     ),
 )
 async def macro_run(
@@ -235,8 +238,9 @@ async def macro_run_sequence(
     description=(
         "Static-analysis pass on a saved macro. Catches missing required fields, unknown "
         "action types, lifecycle actions that don't belong in macros, empty conditional "
-        "branches, and string literals that look like credentials (email/password patterns) "
-        "but aren't parameterized. Returns errors + warnings with per-action indices. Run "
+        "branches, string literals that look like credentials (email/password patterns) "
+        "but aren't parameterized, and parameter_specs that are malformed or ignored. Returns "
+        "errors + warnings with per-action indices. Run "
         "this whenever you hand-edit a macro JSON file."
     ),
 )
