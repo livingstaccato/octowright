@@ -137,6 +137,9 @@ def save_capture(
     host = host_for_url(url)
     capture_id = f"cap_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:10]}"
     path = _capture_path(root, host, instance_id, capture_id)
+    # Pruned BEFORE the directory is made: the cleanup removes a directory it
+    # empties, and the one it empties can be this capture's own.
+    cleanup_captures(root=root, ttl_seconds=ttl_seconds, max_total_bytes=max_total_bytes, apply=True)
     # Contained BEFORE mkdir: a symlinked ``<root>/<host>`` would otherwise
     # have mkdir, the 0700 chmod and the write all land wherever it points.
     # Checked again after, for a directory swapped in between.
@@ -149,7 +152,6 @@ def save_capture(
     # control: see private_paths.secure_artifact_tree.
     secure_artifact_tree(path.parent, root)
     created_at = time.time()
-    cleanup_captures(root=root, ttl_seconds=ttl_seconds, max_total_bytes=max_total_bytes, apply=True)
     payload = {
         "capture_id": capture_id,
         "created_at": created_at,

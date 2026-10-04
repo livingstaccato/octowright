@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Saving a capture no longer fails when an expired capture was the only one
+  in its directory.** The cleanup that runs first deleted the expired file and
+  the directory it emptied, which was the one the new capture was about to be
+  written into, so `capture_create` and `browser_read_markdown` with
+  `response_mode='summary'` raised `FileNotFoundError`.
 - **A `session=True` launch works with any label.** The label went into the
   temporary profile directory's name as-is, so the default `user/repo` label
   failed the launch with `FileNotFoundError` and a label containing `..` could
