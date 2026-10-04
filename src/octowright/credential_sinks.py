@@ -51,13 +51,17 @@ from urllib.parse import urlsplit
 # "https://attacker.test/**"`` delivered the password to that host. mock_route's
 # ``body`` is served to the page -- for a script request it is code the page
 # runs. An upload's ``paths`` entry becomes the filename the server receives.
+# ``set_dialog_policy``'s ``prompt_text`` is ``prompt()``'s return value for
+# whichever page next calls it, on any origin, and the policy outlives the step
+# and the run: arming it with ``{{password}}`` and then navigating handed the
+# password to that page.
 # Audited against every action in ``runtime._ACTION_MAP``: the remaining string
 # fields (selectors, locator text, ``pattern`` match strings, ``expect_*``
 # needles, ``value``/``text`` typed into the page, the screenshot ``path``
 # contained under RECORDINGS_DIR) are matched locally or ARE the intended
 # destination of a credential.
 CREDENTIAL_UNSAFE_KEYS = frozenset(
-    {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths"}
+    {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths", "prompt_text"}
 )
 
 CREDENTIAL_SINKS_ENV = "OCTOWRIGHT_MACRO_CREDENTIAL_SINKS"

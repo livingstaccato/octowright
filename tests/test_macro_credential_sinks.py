@@ -156,3 +156,47 @@ def test_non_credential_arg_in_a_header_still_works() -> None:
         {"tenant_id": "acme"},
     )
     assert out[0]["headers"] == {"X-Tenant": "acme"}
+
+
+_PROMPT_SECRET = "Hunter2-Prompt"  # pragma: allowlist secret (synthetic fixture)
+
+
+def test_credential_into_a_dialog_prompt_answer_is_refused() -> None:
+    """``prompt_text`` is handed to whichever page next calls ``prompt()``.
+
+    The policy outlives the step (and the run), so ``set_dialog_policy
+    accept prompt_text={{password}}`` followed by a navigation gave the
+    password to that page as ``prompt()``'s return value (afriend part4
+    c-0002). It is a sink like ``expression``.
+    """
+    actions = [{"action": "set_dialog_policy", "policy": "accept", "prompt_text": "{{password}}"}]
+    with pytest.raises(ValueError, match=r"\{\{password\}\}") as caught:
+        substitute(actions, {"password": _PROMPT_SECRET})
+    for spelling in (_PROMPT_SECRET, _PROMPT_SECRET.lower(), _PROMPT_SECRET.upper()):
+        assert spelling not in str(caught.value)
+
+
+def test_non_credential_prompt_answer_still_works() -> None:
+    actions = [{"action": "set_dialog_policy", "policy": "accept", "prompt_text": "{{answer}}"}]
+    assert substitute(actions, {"answer": "yes"})[0]["prompt_text"] == "yes"
+
+
+@pytest.mark.anyio
+async def test_a_macro_cannot_arm_a_credential_prompt_answer(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from octowright.macros import execution
+    from tests.test_macro_credential_fill_origin import _session
+
+    session = _session(tmp_path, launch="https://app.example.test/", current="https://app.example.test/")
+    session.set_dialog_policy = AsyncMock()  # type: ignore[method-assign]
+    actions = [
+        {"action": "set_dialog_policy", "policy": "accept", "prompt_text": "{{password}}"},
+        {"action": "navigate", "url": "https://evil.test/"},
+    ]
+    monkeypatch.setattr(execution, "load_macro", lambda name: {"name": name, "actions": actions})
+    with pytest.raises(Exception) as caught:
+        await execution.run_macro(session, "m", {"password": _PROMPT_SECRET})
+    session.set_dialog_policy.assert_not_awaited()
+    for text in (str(caught.value), repr(session.recorder.mock_calls)):
+        assert _PROMPT_SECRET.lower() not in text.lower()

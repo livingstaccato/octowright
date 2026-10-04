@@ -637,8 +637,9 @@ carry `scrub_saturated: true` on a saturated session, and omit it otherwise.
 
 **Credential-named arguments in URLs, code and outbound fields.** A
 credential-named argument expanded into `url`, `expression`, `verify_js`,
-`grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
-`paths` entry is refused by default. The one exemption is a header sent to the
+`grabbed_predicate_js`, a `headers` value, a mock_route `body`, an upload
+`paths` entry or a `set_dialog_policy` `prompt_text` (the answer every later
+`prompt()` gets, on whatever page asks) is refused by default. The one exemption is a header sent to the
 session's own origin: `inject_headers` whose `pattern` spells out the scheme,
 host and port of the launch URL or persona `base_url` may carry
 `Bearer {{token}}` (`https://app.example.test/**` for a launch at
