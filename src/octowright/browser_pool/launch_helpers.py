@@ -429,6 +429,51 @@ async def _prepare_persistent_user_data_dir(
     return str(pdir), {**launch_kwargs, **trust_kwargs}
 
 
+#: Closes of launches whose caller was cancelled before the handle arrived,
+#: held so a pending close is not garbage-collected partway.
+_ORPHAN_CLOSES: set[asyncio.Future[None]] = set()
+
+
+async def _launch_unorphaned(launch: Any, *, persistent: bool) -> Any:
+    """Await an engine *launch* so a cancellation cannot orphan what it launched.
+
+    Playwright answers a cancelled launch by sending the driver ``__abort__``,
+    which kills a browser still starting. But a cancel that lands after the
+    driver finished and before Python took the reply discards the handle with
+    the browser running -- measured on Chromium, persistent and headless: 2 of
+    24 cancels swept across the ~0.1s launch left its process up, unowned, and
+    on a persistent profile holding the ``SingletonLock``. The handle cannot be
+    recovered once Playwright drops it, so the launch is shielded instead: the
+    caller's cancellation returns at once, and the launch's handle is closed
+    when it lands. The cost is that a cancelled launch now runs to completion,
+    or to Playwright's own launch timeout, before it is closed.
+    """
+    task = asyncio.ensure_future(launch)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        task.add_done_callback(lambda done: _close_orphaned_launch(done, persistent=persistent))
+        raise
+
+
+def _close_orphaned_launch(task: asyncio.Future[Any], *, persistent: bool) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.debug("octowright.launch.orphaned_launch_failed", error=repr(exc))
+        return
+    handle = task.result()
+    log.info("octowright.launch.orphaned_launch_closing", persistent=persistent)
+    closing = asyncio.ensure_future(
+        cleanup_on_launch_failure(
+            context=handle if persistent else None, browser=None if persistent else handle, video_dir=None
+        )
+    )
+    _ORPHAN_CLOSES.add(closing)
+    closing.add_done_callback(_ORPHAN_CLOSES.discard)
+
+
 async def _open_browser_context(
     *,
     browser_type: Any,
@@ -471,12 +516,17 @@ async def _open_browser_context(
     context: Any = None
     try:
         if persistent:
-            context = await browser_type.launch_persistent_context(
-                user_data_dir, headless=headless, accept_downloads=True, **ctx_kwargs, **launch_kwargs
+            context = await _launch_unorphaned(
+                browser_type.launch_persistent_context(
+                    user_data_dir, headless=headless, accept_downloads=True, **ctx_kwargs, **launch_kwargs
+                ),
+                persistent=True,
             )
             page = await select_launch_page(context)
         else:
-            browser = await browser_type.launch(headless=headless, **launch_kwargs)
+            browser = await _launch_unorphaned(
+                browser_type.launch(headless=headless, **launch_kwargs), persistent=False
+            )
             context = await browser.new_context(accept_downloads=True, **ctx_kwargs)
             page = await context.new_page()
         # Pre-flight SSRF checks only see the URL that was asked for; a redirect

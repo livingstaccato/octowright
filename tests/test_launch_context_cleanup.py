@@ -159,6 +159,112 @@ async def test_a_cancelled_setup_step_closes_what_was_launched(
     assert script.closed == _expected_closed(persistent, step)
 
 
+class _SlowLaunchBrowserType(_FakeBrowserType):
+    """An engine launch that is still in flight when the caller is cancelled.
+
+    Playwright's own behaviour, measured on real Chromium (persistent, headless):
+    cancelling the awaiting task sends the driver ``__abort__``, which kills a
+    launch still starting -- but a cancel that lands after the driver finished
+    and before Python took the reply discards the handle with the browser still
+    running (2 of 24 cancels swept across the ~0.1s launch). So the launch is
+    never cancelled from outside; its handle is closed once it arrives.
+    """
+
+    def __init__(self, script: _Script) -> None:
+        super().__init__(script)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def _slow(self, handle: Any) -> Any:
+        self.started.set()
+        await self.release.wait()
+        return handle
+
+    async def launch_persistent_context(self, user_data_dir: str, **_: Any) -> _FakeContext:
+        return await self._slow(_FakeContext(self._script))
+
+    async def launch(self, **_: Any) -> _FakeBrowser:
+        return await self._slow(_FakeBrowser(self._script))
+
+
+@pytest.mark.parametrize("persistent", [True, False])
+async def test_a_launch_cancelled_in_flight_is_closed_when_it_lands(tmp_path: Path, persistent: bool) -> None:
+    script = _Script("none", "raise")
+    browser_type = _SlowLaunchBrowserType(script)
+    task = asyncio.ensure_future(
+        launch_helpers._open_browser_context(
+            browser_type=browser_type,
+            kind="firefox",
+            profile=None,
+            session_user_data_dir=str(tmp_path) if persistent else None,
+            headless=True,
+            viewport_kwargs={},
+            ctx_video_kwargs={},
+            ctx_har_kwargs={},
+            launch_kwargs={},
+        )
+    )
+    await asyncio.wait_for(browser_type.started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=5)
+    # The caller's cancellation returned at once; the launch is still running.
+    assert script.closed == []
+
+    browser_type.release.set()
+    for _ in range(50):
+        if script.closed:
+            break
+        await asyncio.sleep(0.01)
+    assert script.closed == (["context"] if persistent else ["browser"])
+
+
+async def test_a_launch_cancelled_in_flight_that_fails_is_retrieved(tmp_path: Path) -> None:
+    """A failed orphaned launch has nothing to close and must not log 'never retrieved'."""
+    script = _Script("none", "raise")
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class _Failing(_FakeBrowserType):
+        async def launch(self, **_: Any) -> _FakeBrowser:
+            started.set()
+            await release.wait()
+            raise RuntimeError("engine failed")
+
+    loop = asyncio.get_running_loop()
+    unretrieved: list[Any] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, ctx: unretrieved.append(ctx))
+    try:
+        task = asyncio.ensure_future(
+            launch_helpers._open_browser_context(
+                browser_type=_Failing(script),
+                kind="firefox",
+                profile=None,
+                session_user_data_dir=None,
+                headless=True,
+                viewport_kwargs={},
+                ctx_video_kwargs={},
+                ctx_har_kwargs={},
+                launch_kwargs={},
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        release.set()
+        await asyncio.sleep(0.05)
+        import gc
+
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+    assert script.closed == []
+    assert unretrieved == []
+
+
 async def test_a_successful_open_closes_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     script = _Script("none", "raise")
     _install_route_steps(monkeypatch, script)
