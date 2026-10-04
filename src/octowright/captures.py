@@ -292,7 +292,7 @@ def search_capture(
         iterator = re.finditer(query, content, flags=re.IGNORECASE | re.MULTILINE)
     else:
         iterator = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
-    for match in iterator:
+    for match in iterator if capped_limit else ():
         start = max(0, match.start() - capped_context)
         end = min(len(content), match.end() + capped_context)
         matches.append(

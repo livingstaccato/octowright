@@ -492,3 +492,12 @@ def test_save_capture_does_not_follow_symlink_at_target(monkeypatch, tmp_path: P
     assert sentinel.read_text(encoding="utf-8") == "KEEP"  # outside file untouched
     assert not target.is_symlink()  # symlink replaced by a real file
     assert _json.loads(target.read_text(encoding="utf-8"))["content"] == "hello"
+
+
+def test_search_with_a_limit_of_zero_or_less_returns_no_matches(tmp_path: Path) -> None:
+    """The cap was applied after appending, so ``limit=0`` still returned one match."""
+    saved = captures.save_capture(kind="text", content="alpha beta alpha", root=tmp_path)
+    for regex in (False, True):
+        for limit in (0, -3):
+            found = captures.search_capture(saved["capture_id"], "alpha", regex=regex, limit=limit, root=tmp_path)
+            assert (found["count"], found["matches"], found["limit"]) == (0, [], 0)
