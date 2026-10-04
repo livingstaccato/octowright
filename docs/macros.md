@@ -553,10 +553,13 @@ shown. A macro can say so per top-level parameter:
   write (`macro_compile` with `write`, the dashboard editor, `macro_repair_apply`)
   and delete in the daemon is serialised by one lock, and one that waits more
   than 10 seconds for it fails with `MacroWriteLockTimeout` rather than
-  hanging. A write that replaces the whole macro (the dashboard editor,
-  `macro_compile`) replaces its specs too; the dashboard's validation warns
-  with `sensitive_parameters_shrank` when the new version makes a parameter it
-  still takes less sensitive than the saved one.
+  hanging. The dashboard editor replaces the whole macro, specs included; its
+  validation warns with `sensitive_parameters_shrank` when the new version
+  makes a parameter it still takes less sensitive than the saved one.
+  `macro_compile` with `write` keeps the saved version's `created_at`, and its
+  `parameter_specs` unless the YAML declares a `parameter_specs` of its own;
+  when the write makes a parameter less sensitive, the result carries the same
+  finding in `warnings`.
 
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped

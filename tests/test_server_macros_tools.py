@@ -123,13 +123,14 @@ def test_macro_compile_can_write_compiled_macro(
 
     compiled = {"name": "demo", "actions": [{"action": "press_key", "key": "Escape"}]}
     monkeypatch.setattr(dsl_mod, "compile_macro_yaml", MagicMock(return_value=compiled))
-    _patch_deps["macros"].write_macro.return_value = Path("/tmp/demo.json")
+    _patch_deps["macros"].write_compiled_macro.return_value = (Path("/tmp/demo.json"), [])
 
     out = _macros.macro_compile("name: demo\nactions: []\n", write=True)
 
     assert out["written"] is True
     assert out["path"] == str(Path("/tmp/demo.json"))
-    _patch_deps["macros"].write_macro.assert_called_once_with(name="demo", macro=compiled)
+    assert "warnings" not in out
+    _patch_deps["macros"].write_compiled_macro.assert_called_once_with(name="demo", macro=compiled)
 
 
 @pytest.mark.anyio

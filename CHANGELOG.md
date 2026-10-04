@@ -41,7 +41,10 @@ a section that is already tagged and on PyPI.
   `MacroWriteLockTimeout` instead of hanging. The dashboard's macro validation
   warns (`sensitive_parameters_shrank`) when an edit makes a parameter less
   sensitive than the saved version, and the macro detail it loads carries
-  `parameter_specs`.
+  `parameter_specs`. `macro_compile` with `write` keeps the saved version's
+  `parameter_specs` (unless the YAML declares its own) and `created_at`, and
+  returns `warnings` when the write makes a parameter less sensitive; the YAML
+  DSL accepts `parameter_specs`.
 
 ### Fixed
 - **A browser dying at launch no longer closes every other browser.** Its

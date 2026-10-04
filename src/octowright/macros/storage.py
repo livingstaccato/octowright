@@ -319,21 +319,48 @@ def load_macro(name: str) -> dict[str, Any]:
 
 
 def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
+    """Replace macro *name* with *macro* exactly, specs included: its caller passes the macro it means."""
+    return _write(name, macro, keep_existing=False)[0]
+
+
+def write_compiled_macro(*, name: str, macro: dict[str, Any]) -> tuple[Path, list[tuple[str, str]]]:
+    """Write a macro compiled from the YAML DSL, keeping what the version on disk declared.
+
+    A compiled document carries no ``created_at``, and ``parameter_specs``
+    only when the YAML declares them, so writing it as-is reset the creation
+    time and silently dropped the sensitivity the author had declared (#248).
+    Both are carried over from the version on disk -- the specs only when the
+    document declares none -- in the same step as the write, under
+    `macro_write_lock`. Returns the path and the `lint_sensitivity_shrink`
+    findings against that version, as ``(code, message)`` pairs.
+    """
+    return _write(name, macro, keep_existing=True)
+
+
+def _write(name: str, macro: dict[str, Any], *, keep_existing: bool) -> tuple[Path, list[tuple[str, str]]]:
+    from octowright.macros.lint_specs import lint_sensitivity_shrink
+
     now = now_iso()
     to_write = copy.deepcopy(macro)
     to_write["name"] = name
-    to_write.setdefault("created_at", now)
     to_write["updated_at"] = now
     dest = macro_path(name)
+    findings: list[tuple[str, str]] = []
     with macro_write_lock():
-        # Same collision guard as save_macro (_existing_macro). A write replaces
-        # the whole macro, specs included: its caller passes the macro it means.
-        _existing_macro(dest, name)
+        # Same collision guard as save_macro (_existing_macro).
+        existing = _existing_macro(dest, name)
+        if keep_existing and existing is not None:
+            if "created_at" in existing:
+                to_write["created_at"] = existing["created_at"]
+            if SPECS_KEY not in to_write and SPECS_KEY in existing:
+                to_write[SPECS_KEY] = copy.deepcopy(existing[SPECS_KEY])
+            findings = lint_sensitivity_shrink(to_write, existing)
+        to_write.setdefault("created_at", now)
         dest.parent.mkdir(parents=True, exist_ok=True)
         secure_artifact_tree(dest.parent, MACROS_DIR)
         atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8", root=MACROS_DIR)
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
-    return dest
+    return dest, findings
 
 
 def delete_macro(name: str) -> Path:

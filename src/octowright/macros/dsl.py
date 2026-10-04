@@ -16,6 +16,8 @@ from typing import Any
 
 import yaml
 
+from octowright.macros.parameter_specs import SPECS_KEY
+
 _SIMPLE_REQUIRED_FIELDS = {
     "navigate": ("url",),
     "click": ("selector",),
@@ -263,9 +265,15 @@ def compile_macro_document(
             raise ValueError("macro is missing required field 'actions'")
         raw_actions = []
 
-    return {
+    compiled: dict[str, Any] = {
         "name": str(raw_name),
         "description": doc.get("description"),
         "parameters": _coerce_parameters(doc.get("parameters"), strict=strict),
         "actions": _as_list_of_actions(raw_actions, "actions", strict=strict),
     }
+    # Passed through as written: a malformed spec never stops a run, and
+    # macro_lint reports it. Omitted, a write keeps the saved version's
+    # (storage.write_compiled_macro).
+    if SPECS_KEY in doc:
+        compiled[SPECS_KEY] = doc[SPECS_KEY]
+    return compiled

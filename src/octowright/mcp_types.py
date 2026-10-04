@@ -47,6 +47,7 @@ class MacroCompileResult(TypedDict, total=False):
     compiled: dict[str, Any]
     written: bool
     path: str
+    warnings: list[str]
 
 
 class MacroListEntry(TypedDict):

@@ -298,7 +298,10 @@ def macro_repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
     description=(
         "Compile a friendly YAML macro DSL document into canonical macro JSON. "
         "By default this is a dry-run preview. Pass write=True to save the compiled "
-        "macro to the normal macro JSON location. The runtime still uses JSON macros."
+        "macro to the normal macro JSON location; a write keeps the saved version's "
+        "created_at, and its parameter_specs unless the YAML declares its own, and "
+        "returns `warnings` when the write makes a parameter less sensitive. "
+        "The runtime still uses JSON macros."
     ),
 )
 def macro_compile(
@@ -312,10 +315,12 @@ def macro_compile(
     compiled = macro_dsl.compile_macro_yaml(yaml_text, name=name, strict=strict)
     result: MacroCompileResult = {"compiled": compiled, "written": False}
     if write:
-        path = macro_mod.write_macro(name=compiled["name"], macro=compiled)
+        path, findings = macro_mod.write_compiled_macro(name=compiled["name"], macro=compiled)
         publish_dashboard_invalidation_nowait("macros")
         result["written"] = True
         result["path"] = str(path)
+        if findings:
+            result["warnings"] = [message for _code, message in findings]
     return result
 
 
