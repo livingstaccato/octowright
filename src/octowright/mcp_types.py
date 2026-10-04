@@ -335,6 +335,7 @@ class BrowserConsoleMessagesResult(TypedDict):
     messages: list[ConsoleMessage]
     next_cursor: int
     total: int
+    dropped: int
 
 
 class BrowserOkResult(TypedDict, total=False):

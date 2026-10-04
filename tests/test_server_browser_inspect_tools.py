@@ -192,6 +192,51 @@ def test_console_messages_filter_and_cursor(_patch_pool: MagicMock) -> None:
     assert len(out["messages"]) == 1
 
 
+def _evicting_console_session(total: int, maxlen: int) -> MagicMock:
+    """A session whose bounded console has evicted ``total - maxlen`` messages."""
+    from collections import deque
+
+    s = _session()
+    s.console = deque(({"level": "info", "text": f"m{i}"} for i in range(total)), maxlen=maxlen)
+    s.console_count = total
+    return s
+
+
+def test_console_cursor_survives_eviction(_patch_pool: MagicMock) -> None:
+    """Cursors are absolute message counts, not positions in the bounded deque.
+
+    Positional cursors stalled once the deque filled (``since=maxlen`` returned
+    nothing forever) and skipped messages after eviction.
+    """
+    s = _evicting_console_session(total=5, maxlen=3)
+    _patch_pool.get.return_value = s
+    first = _inspect.browser_console_messages("i", since=3)
+    assert first["next_cursor"] == 5
+    assert [m["text"] for m in first["messages"]] == ["m3", "m4"]
+    assert first["dropped"] == 2
+
+    s.console.extend({"level": "info", "text": f"m{i}"} for i in (5, 6))
+    s.console_count = 7
+    nxt = _inspect.browser_console_messages("i", since=first["next_cursor"])
+    assert [m["text"] for m in nxt["messages"]] == ["m5", "m6"]
+    assert nxt["next_cursor"] == 7
+    # A cursor older than the retained window returns what is still held.
+    stale = _inspect.browser_console_messages("i", since=0)
+    assert [m["text"] for m in stale["messages"]] == ["m4", "m5", "m6"]
+
+
+def test_console_summary_cursor_survives_eviction(_patch_pool: MagicMock) -> None:
+    s = _evicting_console_session(total=5, maxlen=3)
+    s.console[-1]["level"] = "error"
+    _patch_pool.get.return_value = s
+    out = _inspect.browser_console_summary("i", since=4)
+    assert out["count"] == 1
+    assert out["next_cursor"] == 5
+    assert out["recent"][0]["index"] == 4
+    assert out["recent"][0]["action"]["args"]["since"] == 4
+    assert out["dropped"] == 2
+
+
 def test_console_messages_summary_mode_returns_compact_summary(_patch_pool: MagicMock) -> None:
     s = _session()
     s.console = [

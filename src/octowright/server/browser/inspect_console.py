@@ -21,7 +21,9 @@ from octowright.server.profiles import annotate_next_actions_for_profile
     description=(
         "Return console messages from an instance. Optionally filter by level "
         "(e.g. 'error', 'warning') and pass `since` (a cursor returned from a "
-        "previous call) for incremental reads. Pass response_mode='summary' to "
+        "previous call) for incremental reads. Cursors count every message the "
+        "session has seen, so they stay valid after the oldest are evicted "
+        "(`dropped` says how many). Pass response_mode='summary' to "
         "return browser_console_summary with the same filters instead of raw rows."
     ),
 )
@@ -35,15 +37,35 @@ def browser_console_messages(
     # raw-rows result — declared honestly so callers/type-checkers see both.
     if response_mode == "summary":
         return browser_console_summary(instance_id, since=since, level=level)
-    msgs = list(pool.get(instance_id).console)
-    start = since or 0
-    sliced = msgs[start:]
+    msgs, base = _console_window(pool.get(instance_id))
+    sliced = msgs[_retained_start(since, base) :]
     filtered = [m for m in sliced if m.get("level") == level] if level else sliced
     return {
         "messages": cast("list[ConsoleMessage]", filtered),
-        "next_cursor": len(msgs),
+        "next_cursor": base + len(msgs),
         "total": len(msgs),
+        "dropped": base,
     }
+
+
+def _console_window(session: Any) -> tuple[list[dict[str, Any]], int]:
+    """The retained console messages and how many were evicted before them.
+
+    ``session.console`` is a bounded deque (1000), so a cursor that is a
+    position in it stalls once it fills -- ``since=1000`` returned nothing
+    forever -- and skips messages after an eviction. Cursors are therefore
+    absolute message counts, as the network buffer's are: ``console_count``
+    counts every message ever appended, and the difference is what fell off.
+    """
+    msgs = list(session.console)
+    count = getattr(session, "console_count", None)
+    base = count - len(msgs) if isinstance(count, int) and count > len(msgs) else 0
+    return msgs, base
+
+
+def _retained_start(since: int | None, base: int) -> int:
+    """Index into the retained window for an absolute cursor; an evicted cursor starts at its head."""
+    return max(0, (since or 0) - base)
 
 
 def _count_items(counter: Counter[str]) -> list[dict[str, Any]]:
@@ -86,11 +108,11 @@ def _filter_console_messages(
 
 
 def _important_console_messages(
-    msgs: list[dict[str, Any]], *, start: int, level_filter: str | None
+    msgs: list[dict[str, Any]], *, start: int, base: int, level_filter: str | None
 ) -> list[tuple[int, dict[str, Any]]]:
     return [
         (index, msg)
-        for index, msg in enumerate(msgs[start:], start=start)
+        for index, msg in enumerate(msgs[start:], start=base + start)
         if (level_filter is None or str(msg.get("level") or "").lower() == level_filter)
         and is_diagnostic_console_message(msg)
     ]
@@ -124,22 +146,23 @@ def browser_console_summary(
     recent_limit: int = 8,
     text_chars: int = 240,
 ) -> dict[str, Any]:
-    msgs = list(pool.get(instance_id).console)
-    start = max(0, since or 0)
+    msgs, base = _console_window(pool.get(instance_id))
+    start = _retained_start(since, base)
     level_filter = str(level).lower() if level else None
     sliced = _filter_console_messages(msgs, start=start, level_filter=level_filter)
     capped_recent = max(0, min(int(recent_limit), 25))
     capped_text = max(0, min(int(text_chars), 1_000))
-    important = _important_console_messages(msgs, start=start, level_filter=level_filter)
+    important = _important_console_messages(msgs, start=start, base=base, level_filter=level_filter)
     recent = important[-capped_recent:] if capped_recent else []
     return {
         "total": len(msgs),
         "count": len(sliced),
-        "next_cursor": len(msgs),
+        "next_cursor": base + len(msgs),
+        "dropped": base,
         "by_level": _count_items(Counter(str(msg.get("level") or "unknown") for msg in sliced)),
         "error_count": count_errors(sliced),
         "warning_count": count_warnings(sliced),
         "recent": _console_recent_rows(instance_id, recent, capped_text),
         "recent_limit": capped_recent,
-        "next_actions": _console_summary_next_actions(instance_id, len(msgs)),
+        "next_actions": _console_summary_next_actions(instance_id, base + len(msgs)),
     }

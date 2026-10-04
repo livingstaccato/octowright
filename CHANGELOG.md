@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Console cursors keep working after 1,000 messages.** `browser_console_messages`
+  and `browser_console_summary` cursors were positions in the session's
+  bounded console buffer, so once it filled, `since=1000` returned nothing
+  forever and an older cursor skipped messages. Cursors now count every
+  message the session has seen, as network cursors do, and the result carries
+  `dropped`.
 - **Cancelling `scenario_start` while its participants launch closes the ones
   already open.** The rollback covered only fixtures and startup macros, so a
   client that timed out or cancelled during a slow plugin launch left the
