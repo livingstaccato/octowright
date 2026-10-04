@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from octowright import captures as _captures
-from octowright._paths import reject_unsafe_path
 from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
 from octowright.export import checked_export_target
 from octowright.export import export_script as _export_script
@@ -53,6 +52,7 @@ from octowright.session import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.timeouts import SessionCallTimeoutError, bounded
+from octowright.write_targets import checked_screenshot_target
 
 # Module-level alias so tests can monkeypatch the snapshot timeout cheaply.
 SNAPSHOT_TIMEOUT_S = SNAPSHOT_TIMEOUT_SECONDS
@@ -134,7 +134,7 @@ async def browser_screenshot(instance_id: str, path: str | None = None) -> Brows
     async with browser_operation(pool, instance_id, "browser_screenshot") as session:
         target = Path(path) if path else session.log_path.with_suffix(".png")
         # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
-        target = reject_unsafe_path(target, RECORDINGS_DIR, label="screenshot path")
+        target = checked_screenshot_target(target, RECORDINGS_DIR)
         out = await session.screenshot(target)
         return {"path": str(out)}
 

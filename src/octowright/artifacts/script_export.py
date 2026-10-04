@@ -637,12 +637,16 @@ def write_macro_cli(
     macro: dict[str, Any],
     args: dict[str, Any] | None = None,
     include_evidence: bool = True,
+    root: Path | None = None,
 ) -> Path:
+    """Write the macro's CLI script; ``root`` is the containment root ``path``
+    was validated against, so the write re-walks it without following symlinks."""
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         path,
         render_macro_cli(name=name, macro=macro, args=args, include_evidence=include_evidence),
         encoding="utf-8",
+        root=root,
     )
     return path
 

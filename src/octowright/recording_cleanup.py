@@ -93,6 +93,12 @@ def _classify(path: Path, recordings_dir: Path) -> str:
 #: this same rule. Kept past that row, it would be referenced by nothing.
 PRESERVED_SUBDIRS = ("artifacts",)
 
+#: Recordings-root subdirectories a tool-chosen write path (a screenshot, a
+#: script export) may never land in: macro artifacts, which are
+#: person-authored, and plugins' committed per-session artifacts. Consumed by
+#: ``_paths.checked_write_target``'s callers.
+TOOL_WRITE_FORBIDDEN_SUBDIRS = (*PRESERVED_SUBDIRS, "session-artifacts")
+
 
 def find_stale_files(
     recordings_dir: Path,

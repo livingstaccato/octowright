@@ -49,6 +49,16 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A screenshot or macro CLI export can no longer overwrite a recording or a
+  macro artifact.** `browser_screenshot`, `browser_capture_and_close` and
+  `macro_export_cli` only checked that their path stayed under the recordings
+  root, so one could replace another session's `.jsonl` or HAR, or a macro's
+  `artifact.json`, with PNG bytes or generated Python. A screenshot path must
+  now end in `.png`, `.jpg` or `.jpeg` and stay out of `artifacts/` and
+  `session-artifacts/`; a macro export must end in `.py` and stay out of
+  `session-artifacts/`. `browser_export_script` already had these rules but
+  compared the directory case-sensitively, which a case-insensitive filesystem
+  (macOS, Windows) let a differently-cased `Artifacts/` slip past.
 - **A capture larger than the whole capture budget is refused instead of
   reported as saved.** The cleanup after the write deleted it at once, while
   the tool returned its `capture_id`, so the next `capture_get` failed. It now

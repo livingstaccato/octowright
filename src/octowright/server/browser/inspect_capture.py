@@ -23,7 +23,6 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-from octowright._paths import reject_unsafe_path
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.lifecycle import close_with_preparation
 from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
@@ -33,6 +32,7 @@ from octowright.server.profiles import annotate_next_actions_for_profile
 from octowright.session import DEFAULT_PREVIEW_CHARS
 from octowright.session.aria_redaction import aria_snapshot as redacted_aria_snapshot
 from octowright.session.timeouts import bounded
+from octowright.write_targets import checked_screenshot_target
 
 if TYPE_CHECKING:
     from octowright.session import BrowserSession
@@ -125,7 +125,7 @@ async def browser_capture_and_close(
     # Pure path parsing/containment -- no lease needed, so it runs before any
     # reservation and a rejected path never touches the browser.
     target = Path(screenshot_path) if screenshot_path else session.log_path.with_suffix(".png")
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label="screenshot path")
+    target = checked_screenshot_target(target, RECORDINGS_DIR)
 
     async def _prepare(prep_session: BrowserSession) -> dict[str, Any]:
         return await _capture_before_close(prep_session, instance_id=instance_id, target=target, snapshot=snapshot)

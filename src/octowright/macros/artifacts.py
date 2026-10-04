@@ -134,7 +134,14 @@ def export_macro_cli(
     privacy.blind_scrub(args_used)
     store = ArtifactStore()
     target = store.resolve_macro_export_path(name, out_path)
-    write_macro_cli(path=target, name=name, macro=macro, args=args_used, include_evidence=include_evidence)
+    write_macro_cli(
+        path=target,
+        name=name,
+        macro=macro,
+        args=args_used,
+        include_evidence=include_evidence,
+        root=store.recordings_dir,
+    )
 
     manifest_path = store.macro_manifest_path(name)
     artifact_dir = manifest_path.parent
