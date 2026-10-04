@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The dashboard's screenshot file route serves only that session's PNGs.**
+  For a recording at the top of the recordings directory it served any file
+  there, so a paired caller could fetch another session's HAR, with its
+  cookies and authorization headers, or its raw JSONL, labelled as an image.
+  It now answers `400` for anything the screenshot listing would not offer.
 - **A download no longer blocks the browser while it transfers, and no longer
   overwrites an earlier one.** Saving held the session for the whole transfer,
   so a large download stalled every other tool call on that browser until it

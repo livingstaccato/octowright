@@ -950,7 +950,7 @@ def test_screenshots_listing(client: TestClient, isolated_recordings: Path) -> N
 
 def test_screenshot_file_404(client: TestClient, isolated_recordings: Path) -> None:
     _write_recording(isolated_recordings, "screenshot02")
-    r = client.get("/api/sessions/screenshot02/screenshots/missing.png")
+    r = client.get("/api/sessions/screenshot02/screenshots/screenshot02-missing.png")
     assert r.status_code == 404
 
 

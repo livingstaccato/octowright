@@ -410,6 +410,11 @@ async def session_screenshots(request: Request) -> SafeJSONResponse:
     return SafeJSONResponse({"screenshots": out})
 
 
+def _is_session_screenshot_name(filename: str, sid: str) -> bool:
+    """A single basename the screenshot listing would offer for ``sid``."""
+    return "/" not in filename and "\\" not in filename and sid in filename and filename.endswith(".png")
+
+
 async def session_screenshot_file(request: Request) -> Response:
     sid = request.path_params["id"]
     filename = request.path_params["filename"]
@@ -418,6 +423,11 @@ async def session_screenshot_file(request: Request) -> Response:
     sdir = _screenshot_dir_for(sid)
     if sdir is None:
         return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
+    # Only what the listing offers (``*{sid}*.png``): for a root-level
+    # recording ``sdir`` IS the recordings root, so without this the route
+    # served another session's HAR or JSONL, labelled ``image/png``.
+    if not _is_session_screenshot_name(filename, sid):
+        return SafeJSONResponse({"error": "invalid filename"}, status_code=400)
     target = sdir / filename
     # Defence-in-depth: the resolved file AND its parent dir must both live
     # under RECORDINGS_DIR. Symlink-resolving only the file isn't enough — a
