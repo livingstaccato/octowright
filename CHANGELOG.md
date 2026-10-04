@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A host-relative `browser_navigate` records where the page landed.** After
+  `browser_navigate("/orders")` the browser's URL stayed `/orders`, which
+  `browser_list` showed. Because that is not an origin, the response body of a
+  failed same-origin request was never captured. The session now keeps the
+  page's resolved URL. The recording still holds `/orders`, so a replay
+  resolves it against each persona.
 - **Switching or closing the active page leaves the iframe it was in.** An
   iframe chosen with `browser_switch_frame` stayed the target after
   `page_switch`, so a later `browser_fill` or `browser_click` landed in the

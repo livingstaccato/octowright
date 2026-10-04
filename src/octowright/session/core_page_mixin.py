@@ -403,7 +403,12 @@ class SessionPageMixin(SessionLike):
                 self._last_mcp_navigation = prior_mcp_navigation
                 raise
             title = await bounded(self.page.title(), operation="browser_navigate")
-            self.url = url
+            # Where the page IS, not the caller's string: a host-relative
+            # "/orders" (resolved against the persona's base_url) stored raw
+            # made every same-origin comparison against session.url fail.
+            # The recording below keeps the caller's form, which replays per persona.
+            landed = self.page.url
+            self.url = landed if isinstance(landed, str) and landed else url
             self._schedule_markdown_capture()
             self.recorder.record("navigate", url=url)
             _NAVIGATE_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind or "unknown"})

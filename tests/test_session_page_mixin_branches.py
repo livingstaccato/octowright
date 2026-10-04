@@ -55,7 +55,11 @@ def _make_subject(tmp_path: Path) -> _CombinedMixin:
     subj._last_mcp_navigation = None
     page = MagicMock()
     page.url = "https://octowright.com"
-    page.goto = AsyncMock()
+
+    async def _goto(url: str, **_kw: Any) -> None:
+        page.url = url  # a real goto lands the page there
+
+    page.goto = AsyncMock(side_effect=_goto)
     page.title = AsyncMock(return_value="Example")
     page.content = AsyncMock(return_value="<html></html>")
     page.screenshot = AsyncMock()
@@ -109,6 +113,25 @@ class TestNavigate:
         subj.page.title = AsyncMock(return_value="Target")
         result = await subj.navigate("https://target.com")
         assert result == {"url": "https://target.com", "title": "Target"}
+
+    @pytest.mark.anyio
+    async def test_a_host_relative_navigate_stores_the_resolved_url(self, tmp_path: Path) -> None:
+        """``navigate("/orders")`` resolves against the persona's base_url.
+
+        Storing the caller's string left ``session.url == "/orders"``, which
+        browser_list showed and the failed-response body capture compared
+        origins against -- so no body was ever captured. The recording keeps
+        the caller's form, which is what replays per persona.
+        """
+        subj = _make_subject(tmp_path)
+
+        async def _goto(*_args: Any, **_kw: Any) -> None:
+            subj.page.url = "https://app.example.test/orders"
+
+        subj.page.goto = AsyncMock(side_effect=_goto)
+        await subj.navigate("/orders")
+        assert subj.url == "https://app.example.test/orders"
+        subj.recorder.record.assert_any_call("navigate", url="/orders")
 
     @pytest.mark.anyio
     async def test_records_navigate_event(self, tmp_path: Path) -> None:
