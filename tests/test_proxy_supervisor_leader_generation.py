@@ -87,6 +87,31 @@ async def test_a_call_is_resent_to_the_same_leader() -> None:
         out_recv.receive_nowait()
 
 
+@pytest.mark.anyio
+async def test_a_call_that_never_reached_the_old_leader_is_sent_to_the_new_one() -> None:
+    """The unknown-outcome answer is for a call the old leader may have run. One
+    whose send failed never left the follower, so the replacement leader cannot
+    run it twice: it is sent there, not failed as "may already have taken effect"."""
+    from tests._proxy_supervisor_helpers import FailingRemoteWrite
+
+    bridge, out_recv = _bridge()
+    remote2_send, remote2_recv = anyio.create_memory_object_stream[SessionMessage](10)
+
+    bridge.leader_generation = "leader-A"
+    await bridge.forward_one_local_message(
+        _tools_call("persona_create", "p1"), supervisor._RemoteWriteSlot(FailingRemoteWrite())
+    )
+    assert "p1" in bridge._in_flight, "a resumable call survives the failed send"
+
+    bridge.leader_generation = "leader-B"
+    await bridge.resume_in_flight(remote2_send)
+
+    assert remote2_recv.receive_nowait().message.id == "p1"
+    with pytest.raises(anyio.WouldBlock):
+        out_recv.receive_nowait()
+    assert bridge._in_flight["p1"].leader_generation == "leader-B"
+
+
 def test_generation_comes_from_the_live_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = tmp_path / "octowright.lock"
     info = singleton.make_leader_info("127.0.0.1", 6299, token="t")

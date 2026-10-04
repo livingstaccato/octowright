@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A call the old leader never received is sent to its replacement instead
+  of failing.** When the leader is replaced, a call it might have run is
+  answered "outcome unknown" rather than run a second time on the new leader.
+  That answer also went to a call whose send had failed. Such a call never
+  left the follower, so it could not have run anywhere. It is now sent to the
+  new leader.
 - **A malformed numeric setting no longer stops every command.** About fifty
   numeric `OCTOWRIGHT_*` settings (timeouts, counts, the HTTP port) were read
   with a bare `int()` or `float()` when Octowright loaded, so one typo such as
