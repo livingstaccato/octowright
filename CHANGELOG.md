@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`macro_artifact_plan` withholds every argument of a macro that calls
+  another.** A plan has no run to learn what a called macro classifies, so an
+  argument the parent treats as plain but the called macro treats as secret
+  was written to `artifact.json` and returned in `args_used` in the clear.
+  With a `macro_call` anywhere, every value is now withheld until a run.
 - **The new-tab page's browser count works with dashboard pairing on.** It
   polled the pairing-gated `/api/sessions` from a browser that holds no
   bearer, so it always showed 0 browsers and put a failed request in the

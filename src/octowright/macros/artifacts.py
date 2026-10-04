@@ -26,7 +26,7 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.nesting import RunMacros
+from octowright.macros.nesting import RunMacros, iter_nested_actions
 from octowright.macros.parameter_specs import macro_privacy, resolve_macro_privacy
 from octowright.macros.privacy import (
     REDACTED,
@@ -71,13 +71,18 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
     existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
     if existing_manifest_path is not None:
         manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+    # A plan has no run to learn what a called macro classifies (a run's
+    # ledger does), so with a macro_call anywhere every value is withheld.
+    calls = any(a.get("action") == "macro_call" for a in iter_nested_actions(macro.get("actions", [])))
+    shown = dict.fromkeys(args_used, REDACTED) if calls else privacy.redact(args_used)
+    manifest["parameters"] = shown
     write_artifact_manifest(manifest_path, manifest)
 
     return {
         "ok": not missing_args,
         "macro": name,
         "missing_args": missing_args,
-        "args_used": privacy.redact(args_used),
+        "args_used": shown,
         "paths": {
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),

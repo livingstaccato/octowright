@@ -119,3 +119,54 @@ def test_the_compact_listing_redacts_an_assertion_arg_left_by_an_older_manifest(
 
     listed = macro_artifacts.list_macro_artifacts("checkout")
     assert CARD not in json.dumps(listed)
+
+
+def test_plan_withholds_a_value_a_called_macro_classifies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The parent's own view shows ``code`` as plain, but the macro it calls
+    asserts it never appears (credential tier). A plan has no run to learn
+    that, so with a ``macro_call`` anywhere every value is withheld."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="inner",
+        macro={
+            "name": "inner",
+            "parameters": ["card"],
+            "actions": [{"action": "expect_no_text", "text": "{{card}}"}],
+        },
+    )
+    storage.write_macro(
+        name="outer",
+        macro={
+            "name": "outer",
+            "parameters": ["code"],
+            "actions": [
+                {"action": "navigate", "url": "https://shop.example.test/done"},
+                {
+                    "action": "if_selector",
+                    "selector": "#x",
+                    "then": [
+                        {"action": "macro_call", "name": "inner", "args": {"card": "{{code}}"}},
+                    ],
+                },
+            ],
+        },
+    )
+    result = macro_artifacts.plan_macro_artifact("outer", {"code": CARD})
+    assert result["args_used"]["code"] != CARD
+    manifest = json.loads(Path(result["paths"]["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["parameters"]["code"] != CARD
+    assert CARD.encode() not in _tree_bytes(tmp_path / "recordings")
+
+
+def test_plan_without_a_call_still_shows_a_plain_value(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    storage.write_macro(
+        name="plain",
+        macro={
+            "name": "plain",
+            "parameters": ["order_id"],
+            "actions": [{"action": "navigate", "url": "https://shop.example.test/{{order_id}}"}],
+        },
+    )
+    result = macro_artifacts.plan_macro_artifact("plain", {"order_id": "A-100"})
+    assert result["args_used"]["order_id"] == "A-100"
