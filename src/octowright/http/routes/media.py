@@ -137,6 +137,29 @@ def _frame_cache_path(session_id: str, t: float) -> Path:
     return cache_dir / f"{t:.3f}.png"
 
 
+async def _extract_into_cache(video_path: Path, cached: Path, t: float) -> SafeJSONResponse | None:
+    """Extract the frame at ``t`` into ``cached``; an error response, or ``None`` on success."""
+    # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _extract_frame_bounded, video_path, cached.parent, t)
+    except Exception as e:
+        return SafeJSONResponse(
+            {"error": f"frame extraction failed: {e}"},
+            status_code=500,
+        )
+    # `extract_frames` writes `frame-000-t<t>.png`; rename to the cache key.
+    produced = cached.parent / f"frame-000-t{t:.3f}.png"
+    if produced.exists() and produced != cached:
+        produced.replace(cached)
+    elif not cached.exists():
+        return SafeJSONResponse(
+            {"error": "frame extraction produced no file"},
+            status_code=500,
+        )
+    _prune_frame_cache(cached.parent, keep=cached)
+    return None
+
+
 async def session_frame(request: Request) -> Response:
     sid = request.path_params["id"]
     if not _valid_session_id(sid):
@@ -166,24 +189,9 @@ async def session_frame(request: Request) -> Response:
 
     cached = _frame_cache_path(sid, t)
     if not cached.exists():
-        # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
-        try:
-            await loop.run_in_executor(None, _extract_frame_bounded, video_path, cached.parent, t)
-        except Exception as e:
-            return SafeJSONResponse(
-                {"error": f"frame extraction failed: {e}"},
-                status_code=500,
-            )
-        # `extract_frames` writes `frame-000-t<t>.png`; rename to the cache key.
-        produced = cached.parent / f"frame-000-t{t:.3f}.png"
-        if produced.exists() and produced != cached:
-            produced.replace(cached)
-        elif not cached.exists():
-            return SafeJSONResponse(
-                {"error": "frame extraction produced no file"},
-                status_code=500,
-            )
-        _prune_frame_cache(cached.parent, keep=cached)
+        failure = await _extract_into_cache(video_path, cached, t)
+        if failure is not None:
+            return failure
 
     # FileResponse streams from disk via sendfile() instead of reading the
     # full PNG into Python memory each request — frame scrubbing in the
