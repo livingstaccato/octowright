@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The session page shows a large recording's whole timeline.** One
+  `/events` answer is bounded (8 MiB of JSONL by default) and says so with
+  `complete: false`, but the session page and the plugin session view fetched
+  it once and rendered that first page as the whole history, so a large
+  closed recording's timeline (and a terminal replay) stopped partway with
+  nothing saying it had. Both now follow the cursor to the end.
 - **The session page's console filter stays where you put it.** A live
   session re-renders the console panel on every batch of new events, and each
   re-render reset the level filter to All, so choosing Error lasted until the

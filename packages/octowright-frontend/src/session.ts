@@ -1,7 +1,6 @@
 import {
   getConsole,
   getDownloads,
-  getEvents,
   getScreenshots,
   getSession,
   markdownUrl,
@@ -21,6 +20,7 @@ import {
 } from "./dashboard-auth.js";
 import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboard-media-auth.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
+import { getAllEvents } from "./events-pager.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
 import { renderPairingGate } from "./pairing-gate.js";
@@ -814,7 +814,9 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     if (videoEl) videoEl.currentTime = seconds;
   };
 
-  const initial = await getEvents(sessionId, 0);
+  // Every page: one /events answer is bounded, and a large closed recording
+  // rendered only its first page as the whole timeline.
+  const initial = await getAllEvents(sessionId, 0);
   let baseIso = initial.events[0]?.ts ?? new Date().toISOString();
   renderTimeline(refs.timeline, initial.events, { onSeek: seek });
 

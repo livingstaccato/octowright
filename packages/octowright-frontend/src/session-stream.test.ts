@@ -185,6 +185,32 @@ describe("bootStreamSession", () => {
     ]);
   });
 
+  it("feeds a recording larger than one /events page in full", async () => {
+    // The server bounds an /events answer and marks it complete:false; the
+    // first page used to be fed as the whole history.
+    const { getEvents } = await import("./api.js");
+    vi.mocked(getEvents)
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-08-24T00:00:00Z", action: "first_page" }],
+        cursor: 10,
+        total_bytes: 20,
+        complete: false,
+      })
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-08-24T00:00:01Z", action: "second_page" }],
+        cursor: 20,
+        total_bytes: 20,
+        complete: true,
+      });
+
+    const root = document.createElement("div");
+    const { mount, fed } = recordingMount();
+    await bootStreamSession(root, "s1", detail, mount);
+
+    expect(fed[0]?.map((e) => (e as { action: string }).action)).toEqual(["first_page", "second_page"]);
+    expect(vi.mocked(getEvents)).toHaveBeenLastCalledWith("s1", 10);
+  });
+
   it("does not open a tail for a closed (non-live) session", async () => {
     const root = document.createElement("div");
     const { mount } = recordingMount();

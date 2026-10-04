@@ -8,14 +8,15 @@
  *
  * Core builds the header/slot/timeline/footer layout and handles eight
  * things -- renderHeader, renderFooter, installDashboardAuthRequiredNotice,
- * renderTimeline, appendTimelineEvents, openTail, getEvents,
+ * renderTimeline, appendTimelineEvents, openTail, getAllEvents,
  * tailWebSocketUrl -- and the plugin does exactly one (`mountStream`),
  * mounting the view and feeding it events. This is how every non-core-
  * reserved session kind renders, terminal included now that it is an
  * external plugin rather than a special case core carries directly.
  */
 
-import { getEvents, tailWebSocketUrl } from "./api.js";
+import { tailWebSocketUrl } from "./api.js";
+import { getAllEvents } from "./events-pager.js";
 import type { MountStream, StreamContext, StreamHandle } from "./plugin-contract.js";
 import { mountFallbackStream, type FallbackReason } from "./session-fallback.js";
 import { installDashboardAuthRequiredNotice, renderFooter, renderHeader } from "./session.js";
@@ -162,7 +163,7 @@ export async function bootStreamSession(
 
   // Replay the full recorded history into the plugin, then render the
   // timeline. History is always fed before any live event.
-  const initial = await getEvents(sessionId, 0);
+  const initial = await getAllEvents(sessionId, 0);
   let baseIso = initial.events[0]?.ts ?? new Date().toISOString();
   renderTimeline(refs.timeline, initial.events);
   feed(initial.events);

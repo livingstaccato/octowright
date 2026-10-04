@@ -316,6 +316,33 @@ describe("bootSession — closed session", () => {
     expect(root.querySelector("[data-testid='session-footer']")).not.toBeNull();
   });
 
+  it("renders a recording larger than one /events page in full", async () => {
+    // The server bounds an /events answer and marks it complete:false; the
+    // first page used to be rendered as the whole timeline.
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail());
+    const api = await import("./api.js");
+    (api.getEvents as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-04-24T12:00:00Z", action: "first_page" }],
+        cursor: 10,
+        total_bytes: 20,
+        complete: false,
+      })
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-04-24T12:00:01Z", action: "second_page" }],
+        cursor: 20,
+        total_bytes: 20,
+        complete: true,
+      });
+    const { renderTimeline } = await import("./timeline.js");
+
+    await bootSession(root, "sess-big");
+
+    const rendered = (renderTimeline as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as RecordingEvent[];
+    expect(rendered.map((e) => e.action)).toEqual(["first_page", "second_page"]);
+  });
+
   it("builds the full tab strip", async () => {
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail());
