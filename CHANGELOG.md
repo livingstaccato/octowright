@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Launch-failure hints name only tools that exist.** A missing engine
+  pointed the agent at `browser_engine_status` and `browser_engine_reinstall`,
+  and a closed browser at `browser_handoff`. No tool by any of those names was
+  ever registered. The hints now say `octowright doctor`,
+  `playwright install --force <engine>` and `browser_launch` with the same
+  profile. The unused engine-status and engine-install helpers behind the
+  first two names are removed.
 - **A host-relative `browser_navigate` records where the page landed.** After
   `browser_navigate("/orders")` the browser's URL stayed `/orders`, which
   `browser_list` showed. Because that is not an origin, the response body of a

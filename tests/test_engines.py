@@ -14,78 +14,25 @@ from octowright import engines
 from octowright.browser_pool import BrowserPool
 
 
-@pytest.mark.anyio
-async def test_run_playwright_cli_decodes_stdout_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _FakeProc:
-        returncode = 0
+def test_every_tool_a_hint_names_is_registered() -> None:
+    """A launch-failure hint that names a tool the agent cannot call is worse than none.
 
-        async def communicate(self) -> tuple[bytes, bytes]:
-            return (b"ok-out", b"ok-err")
+    The hints named ``browser_engine_status``, ``browser_engine_reinstall`` and
+    ``browser_handoff``, none of which was ever registered.
+    """
+    import inspect
+    import re
 
-    async def _fake_create_subprocess_exec(*cmd: str, **_: Any) -> _FakeProc:
-        assert cmd[0] == "playwright"
-        return _FakeProc()
+    from octowright.server import registered_tool_names
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
-    result = await engines._run_playwright_cli("install", "--list")
-    assert result.returncode == 0
-    assert result.stdout == "ok-out"
-    assert result.stderr == "ok-err"
-    assert result.command == ["playwright", "install", "--list"]
+    named = set(re.findall(r"`((?:browser|page|macro|octowright|persona|scenario)_[a-z_]+)`", inspect.getsource(engines)))
+    assert named, "the scan found no tool names at all"
+    assert named - set(registered_tool_names()) == set()
 
 
-@pytest.mark.anyio
-async def test_engine_status_parses_current_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_cli(*args: str) -> engines.CliResult:
-        assert args == ("install", "--list")
-        output = """
-Playwright version: 1.59.0
-  Browsers:
-    /tmp/ms-playwright/chromium-1234
-    /tmp/ms-playwright/firefox-1500
-  References:
-    /tmp/ref
-"""
-        return engines.CliResult(returncode=0, stdout=output, stderr="", command=["playwright", *args])
-
-    monkeypatch.setattr(engines.importlib.metadata, "version", lambda _: "1.59.0")
-    monkeypatch.setattr(engines, "_run_playwright_cli", _fake_cli)
-
-    status = await engines.engine_status()
-    assert status["ok"] is False
-    assert status["engines"]["chromium"]["installed"] is True
-    assert status["engines"]["firefox"]["installed"] is True
-    assert status["engines"]["webkit"]["installed"] is False
-    assert status["missing"] == ["webkit"]
-
-
-@pytest.mark.anyio
-async def test_engine_status_rejects_invalid_kind() -> None:
-    with pytest.raises(ValueError):
-        await engines.engine_status(["not-an-engine"])
-
-
-@pytest.mark.anyio
-async def test_engine_install_rejects_invalid_kind() -> None:
-    with pytest.raises(ValueError):
-        await engines.engine_install(["not-an-engine"])
-
-
-@pytest.mark.anyio
-async def test_engine_install_reports_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _fake_cli(*args: str) -> engines.CliResult:
-        return engines.CliResult(returncode=0, stdout="ok", stderr="", command=["playwright", *args])
-
-    async def _fake_status(kinds: list[str] | None = None) -> dict[str, Any]:
-        assert kinds == ["webkit"]
-        return {"ok": True, "missing": [], "engines": {"webkit": {"installed": True}}}
-
-    monkeypatch.setattr(engines, "_run_playwright_cli", _fake_cli)
-    monkeypatch.setattr(engines, "engine_status", _fake_status)
-    result = await engines.engine_install(["webkit"], with_deps=True)
-    assert result["ok"] is True
-    assert result["returncode"] == 0
-    assert result["status"]["ok"] is True
+def test_the_unwired_engine_cli_helpers_are_gone() -> None:
+    for name in ("engine_status", "engine_install", "_run_playwright_cli", "CliResult"):
+        assert not hasattr(engines, name), name
 
 
 def test_playwright_failure_sanity_detects_missing_binaries() -> None:

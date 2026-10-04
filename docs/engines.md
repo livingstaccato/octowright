@@ -132,9 +132,9 @@ The persona/profile preserves practical continuity (cookies, localStorage,
 service workers) without requiring Octowright to mutate a running Playwright
 process.
 
-The `browser_handoff` behavior is implemented through close/relaunch semantics:
-preserve state by reusing the same profile between launches instead of mutating
-an existing Playwright process.
+Moving a browser between modes is close/relaunch, not a live switch: preserve
+state by reusing the same profile between launches instead of mutating an
+existing Playwright process.
 
 ## Safari caveat
 
