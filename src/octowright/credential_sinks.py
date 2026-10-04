@@ -336,16 +336,40 @@ class _Expander:
 
         return self.placeholder.sub(replacer, value)
 
+    def action_name(self, written: Any) -> Any:
+        """The action a step will dispatch as: its ``action`` field, expanded.
+
+        Resolved before anything else about the step is judged. Classifying
+        the name as written made ``{"action": "{{kind}}", "value":
+        "{{password}}"}`` an unknown action -- no credential marker, so no
+        origin check -- that then dispatched as a ``fill``; a ``{{call}}``
+        resolving to ``macro_call`` lost its taint the same way. A
+        credential-tier arg is refused as a name whatever the sink setting:
+        it has no use there, and an unknown-action error would carry it.
+        """
+        if not isinstance(written, str):
+            return written
+        for key in self.placeholder.findall(written):
+            if self.is_credential(key):
+                raise ValueError(
+                    f"macro uses credential arg {{{{{key}}}}} as an action name; an action name must "
+                    "be written literally or come from a non-credential arg"
+                )
+        return self.text(written, unsafe_sink=False)
+
     def action(self, node: dict[str, Any]) -> dict[str, Any]:
-        kind = str(node.get("action"))
-        node = canonical_aliases(kind, node)
+        resolved = self.action_name(node.get("action"))
+        kind = str(resolved)
+        node = canonical_aliases(kind, {**node, "action": resolved})
         node.pop(CREDENTIAL_FILL_MARKER, None)
         node.pop(CREDENTIAL_CALL_MARKER, None)
         credentials = self._typed_credentials(kind, node)
         tainted = self._tainted_call_args(node) if kind == "macro_call" else []
         headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
         expanded = {
-            key: self.value(
+            key: item
+            if key == "action"
+            else self.value(
                 item,
                 unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS and not (headers_exempt and key == "headers"),
             )

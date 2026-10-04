@@ -142,6 +142,17 @@ def test_a_credential_fill_on_a_foreign_origin_is_refused(monkeypatch: pytest.Mo
         _run(monkeypatch, _login("https://evil.example"), {"password": SECRET}, trusted=("https://app.example.test",))
 
 
+def test_a_parameterized_action_name_is_judged_as_what_it_resolves_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``{"action": "{{kind}}"}`` resolving to ``fill`` is checked as a fill (afriend part4 c-0001)."""
+    actions = [
+        {"action": "navigate", "url": "https://evil.example/login"},
+        {"action": "{{kind}}", "selector": "#pw", "value": "{{password}}"},
+    ]
+    with pytest.raises(RuntimeError, match=r"https://evil\.example") as caught:
+        _run(monkeypatch, actions, {"password": SECRET, "kind": "fill"}, trusted=("https://app.example.test",))
+    assert SECRET.lower() not in str(caught.value).lower()
+
+
 def test_a_credential_fill_on_the_trusted_origin_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     _result, rec = _run(
         monkeypatch, _login("https://app.example.test"), {"password": SECRET}, trusted=("https://app.example.test",)

@@ -734,6 +734,11 @@ names no `timeout_ms`: Playwright's own 30s default.
 A credential passed to a called macro under another name
 (`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
 
+A step whose `action` is itself a placeholder (`"action": "{{kind}}"`) is
+judged as the action it expands to, so `kind=fill` is checked as a credential
+fill and `"{{call}}"` resolving to `macro_call` keeps its credential taint. A
+credential-named argument is refused as an action name.
+
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`
 refuses a credential in a URL, code or outbound field, types a credential only
 on an origin passed as `--trusted-origin` (or listed in the step's
