@@ -39,7 +39,13 @@ def _split(kind: str, first: str, second: str) -> dict[str, Any]:
         "pattern": first,
         "url_pattern": second,
         "headers": {"X-Leak": "{{password}}"},
+        **_opt_in(kind, "X-Leak"),
     }
+
+
+def _opt_in(kind: str, header: str) -> dict[str, Any]:
+    """inject_headers needs the per-header redirect opt-in to carry a credential to the own site."""
+    return {"forward_on_redirect": {header: True}} if kind == "inject_headers" else {}
 
 
 @pytest.mark.parametrize("kind", ["inject_headers", "mock_route"])
@@ -58,7 +64,14 @@ def test_two_spellings_that_disagree_are_refused(kind: str, first: str, second: 
 @pytest.mark.parametrize("kind", ["inject_headers", "mock_route"])
 def test_the_substituted_action_carries_only_the_spelling_replay_uses(kind: str) -> None:
     [action] = substitute(
-        [{"action": kind, "pattern": "https://app.example.test/**", "headers": {"A": "Bearer {{password}}"}}],
+        [
+            {
+                "action": kind,
+                "pattern": "https://app.example.test/**",
+                "headers": {"A": "Bearer {{password}}"},
+                **_opt_in(kind, "A"),
+            }
+        ],
         SECRET,
         trusted_origins=OWN,
     )

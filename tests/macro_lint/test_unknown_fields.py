@@ -135,3 +135,30 @@ def test_every_dispatchable_action_has_a_derived_allowed_set() -> None:
     for kind in _ACTION_MAP:
         allowed = allowed_fields_for(kind)
         assert allowed, f"no allowed-field set derived for {kind!r}"
+
+
+def test_inject_headers_accepts_the_redirect_opt_in() -> None:
+    action = {
+        "action": "inject_headers",
+        "pattern": "https://app.example.test/**",
+        "headers": {"Authorization": "Bearer {{token}}"},
+        "forward_on_redirect": {"Authorization": True},
+    }
+    assert "unknown_field" not in _codes(action)
+    assert "bad_forward_on_redirect" not in _codes(action)
+
+
+@pytest.mark.parametrize("opt_in", [{"Authorization": "true"}, True, {"X-Other": True}])
+def test_a_malformed_redirect_opt_in_is_a_save_time_error(opt_in: object) -> None:
+    action = {
+        "action": "inject_headers",
+        "pattern": "https://app.example.test/**",
+        "headers": {"Authorization": "Bearer {{token}}"},
+        "forward_on_redirect": opt_in,
+    }
+    assert "bad_forward_on_redirect" in _codes(action)
+
+
+def test_the_redirect_opt_in_belongs_to_inject_headers_only() -> None:
+    action = {"action": "mock_route", "pattern": "https://app.example.test/**", "forward_on_redirect": {"A": True}}
+    assert "unknown_field" in _codes(action)

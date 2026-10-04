@@ -25,7 +25,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from octowright.credential_sinks import ALLOWED_ORIGINS_KEY, CREDENTIAL_FILL_FIELDS, parse_allowed_origins
+from octowright.credential_sinks import (
+    ALLOWED_ORIGINS_KEY,
+    CREDENTIAL_FILL_FIELDS,
+    FORWARD_ON_REDIRECT_KEY,
+    REDIRECT_FORWARDED_HEADER_ACTIONS,
+    parse_allowed_origins,
+    parse_forward_on_redirect,
+)
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 
 from .lint_credentials import (
@@ -235,6 +242,18 @@ def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, i
                 ),
                 action_index=outer_index,
             )
+        )
+
+
+def _check_forward_on_redirect(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Report a ``forward_on_redirect`` that replay would refuse, at save time rather than mid-run."""
+    if kind not in REDIRECT_FORWARDED_HEADER_ACTIONS or FORWARD_ON_REDIRECT_KEY not in action:
+        return
+    try:
+        parse_forward_on_redirect(action)
+    except ValueError as exc:
+        issues.append(
+            Issue(severity="error", code="bad_forward_on_redirect", message=str(exc), action_index=outer_index)
         )
 
 
@@ -591,6 +610,7 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     _check_unknown_fields(action, kind, outer_index, issues)
     _check_ambiguous_fields(action, kind, outer_index, issues)
     _check_allowed_origins(action, kind, outer_index, issues)
+    _check_forward_on_redirect(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)

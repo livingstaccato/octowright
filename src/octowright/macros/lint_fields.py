@@ -51,7 +51,12 @@ from __future__ import annotations
 
 import inspect
 
-from octowright.credential_sinks import ALLOWED_ORIGINS_KEY, CREDENTIAL_FILL_FIELDS
+from octowright.credential_sinks import (
+    ALLOWED_ORIGINS_KEY,
+    CREDENTIAL_FILL_FIELDS,
+    FORWARD_ON_REDIRECT_KEY,
+    REDIRECT_FORWARDED_HEADER_ACTIONS,
+)
 from octowright.macros.substitution import (
     _SEMANTIC_ACTIONS,
     NON_ARIA_NOISE_KEYS,
@@ -185,6 +190,9 @@ def allowed_fields_for(kind: str) -> frozenset[str]:
     # it (``credential_sinks.dispatch_fields``) before the session call.
     if kind in CREDENTIAL_FILL_FIELDS:
         allowed.add(ALLOWED_ORIGINS_KEY)
+    # The credential-sink guard's per-header redirect opt-in, stripped the same way.
+    if kind in REDIRECT_FORWARDED_HEADER_ACTIONS:
+        allowed.add(FORWARD_ON_REDIRECT_KEY)
     return frozenset(allowed | _UNIVERSAL_FIELDS)
 
 

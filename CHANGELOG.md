@@ -366,6 +366,23 @@ a section that is already tagged and on PyPI.
   0.44 ms instead of 1.1 ms with 256.
 
 ### Changed
+- **Behaviour change: a macro credential in an `inject_headers` header now
+  needs `forward_on_redirect`, even to the session's own origin.** The
+  pattern scopes only the first request. The browser re-sends an injected
+  header on every redirect that request follows, so an own-site URL answering
+  `302` to another host received the token there. This was measured on
+  Chromium and Firefox for every header name; WebKit drops only
+  `Authorization`. A step such as `{"Authorization": "Bearer {{token}}"}` to
+  `https://app.example.test/**` is now refused unless it also carries
+  `"forward_on_redirect": {"Authorization": true}`, and the refusal names
+  that field. The opt-in is per header and must be a literal `true` or
+  `false`. It must name a header the step sends, and it waives nothing else:
+  the pattern must still spell out the own origin. `macro_lint` reports a
+  malformed one as `bad_forward_on_redirect`. `mock_route` headers are a
+  response served to the page and need no opt-in.
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` still turns the whole check off.
+  Launch-time `extra_http_headers_urls` and `browser_inject_headers` are
+  documented as scoping the first request only.
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
   relaunches keep `badge` and `record_video` instead of resetting them.
 - **Handoff and relaunch keep the browser `channel`.** A browser launched on

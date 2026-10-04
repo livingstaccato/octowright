@@ -745,7 +745,25 @@ session's own origin: `inject_headers` whose `pattern` spells out the scheme,
 host and port of the launch URL or persona `base_url` may carry
 `Bearer {{token}}` (`https://app.example.test/**` for a launch at
 `https://app.example.test`, but not `http://localhost:45678/**` for a launch at
-`http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+`http://localhost:3000`) -- but only for a header the step also names in
+`forward_on_redirect`:
+
+```json
+{"action": "inject_headers", "pattern": "https://app.example.test/**",
+ "headers": {"Authorization": "Bearer {{token}}"},
+ "forward_on_redirect": {"Authorization": true}}
+```
+
+The pattern scopes only the first request. The browser re-sends an injected
+header on every redirect that request follows, so an own-site URL that answers
+`302` to another host hands it the token (measured on Chromium and Firefox for
+every header; WebKit drops only `Authorization`). `forward_on_redirect` is
+the step's statement that the site will not redirect that header anywhere it
+should not go. It waives nothing else: the pattern must still name the own
+origin, each value must be a literal `true` or `false`, and the name must be
+one of the step's `headers` (any case). Without it the step is refused with a
+message naming the field. `mock_route` headers are a response served to the
+page, so they need no opt-in. See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
 **A run that types a credential runs no page code.** Page code needs no
@@ -904,6 +922,9 @@ The linter catches:
 - Empty conditional branches that would silently no-op.
 - An `allowed_origins` entry replay would refuse (`bad_allowed_origins`): a
   wildcard, path or `{{placeholder}}` instead of an exact origin.
+- An `inject_headers` `forward_on_redirect` replay would refuse
+  (`bad_forward_on_redirect`): a value that is not a literal `true`/`false`,
+  or a header name the step does not send.
 - An `expect_no_text` whose text is still the recording's redaction marker
   (`redacted_assertion_text`), which replay refuses.
 - `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):

@@ -105,12 +105,15 @@ def test_sinks_allow_turns_the_guard_off(monkeypatch: pytest.MonkeyPatch) -> Non
     assert rec.args_for("goto") == ("https://api.test/?k=k1",)
 
 
-def test_a_header_to_a_trusted_origin_is_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
-    action = {
+def test_a_header_to_a_trusted_origin_is_exempt_with_the_redirect_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    action: dict[str, Any] = {
         "action": "inject_headers",
         "pattern": "https://app.example.test/**",
         "headers": {"A": "Bearer {{token}}"},
     }
+    with pytest.raises(ValueError, match="forward_on_redirect"):
+        _run(monkeypatch, [action], {"token": SECRET}, trusted=("https://app.example.test",))
+    action["forward_on_redirect"] = {"a": True}
     with pytest.raises(ValueError, match="credential arg"):
         _run(monkeypatch, [action], {"token": SECRET})
     _result, rec = _run(monkeypatch, [action], {"token": SECRET}, trusted=("https://app.example.test",))
