@@ -31,7 +31,7 @@ _port_is_free = port_is_free
 # to SIGKILL, and pool/plugin teardown and the leader's lock removal were
 # skipped. Ordinary requests finish well inside this; past it the remaining
 # connection tasks are cancelled and the followers reconnect to the next leader.
-HTTP_GRACEFUL_SHUTDOWN_SECONDS = 2.0
+HTTP_GRACEFUL_SHUTDOWN_SECONDS = 2  # uvicorn types this as int
 
 
 def _bind_server_socket(host: str, port: int) -> socket.socket:
