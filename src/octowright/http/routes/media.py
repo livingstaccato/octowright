@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import math
 import re
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -72,9 +72,13 @@ def _valid_session_id(sid: str) -> bool:
 FRAME_TIME_MAX_SECONDS = 24 * 3600.0
 FRAME_TIME_STEP_SECONDS = 0.1
 FRAME_CACHE_MAX_FILES = 256
-#: ffmpeg runs at once across every session; a thread semaphore because the
-#: extraction runs in executor threads, and an asyncio one binds to one loop.
-_FRAME_EXTRACTIONS = threading.BoundedSemaphore(2)
+#: ffmpeg runs at once across every session. A dedicated two-thread executor,
+#: not a semaphore inside the default one: a request queued behind the bound
+#: then waits in this executor's queue, not in a default-executor thread that
+#: every other ``to_thread`` in the daemon needs. Not loop-bound, unlike an
+#: asyncio semaphore, so it survives the test suite's many loops.
+FRAME_EXTRACTION_WORKERS = 2
+_FRAME_EXECUTOR = ThreadPoolExecutor(max_workers=FRAME_EXTRACTION_WORKERS, thread_name_prefix="octowright-frame")
 #: (path, size, mtime_ns) -> duration seconds, or None when ffprobe could not say.
 _VIDEO_DURATIONS: dict[tuple[str, int, int], float | None] = {}
 _VIDEO_DURATIONS_MAX = 64
@@ -107,9 +111,8 @@ def _video_duration(video_path: Path) -> float | None:
     return _VIDEO_DURATIONS[key]
 
 
-def _extract_frame_bounded(video_path: Path, cache_dir: Path, t: float) -> None:
-    with _FRAME_EXTRACTIONS:
-        state._video.extract_frames(video_path, cache_dir, at_times=[t])
+def _extract_frame(video_path: Path, cache_dir: Path, t: float) -> None:
+    state._video.extract_frames(video_path, cache_dir, at_times=[t])
 
 
 def _prune_frame_cache(cache_dir: Path, keep: Path) -> None:
@@ -141,7 +144,7 @@ async def _extract_into_cache(video_path: Path, cached: Path, t: float) -> SafeJ
     """Extract the frame at ``t`` into ``cached``; an error response, or ``None`` on success."""
     # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
     try:
-        await asyncio.get_running_loop().run_in_executor(None, _extract_frame_bounded, video_path, cached.parent, t)
+        await asyncio.get_running_loop().run_in_executor(_FRAME_EXECUTOR, _extract_frame, video_path, cached.parent, t)
     except Exception as e:
         return SafeJSONResponse(
             {"error": f"frame extraction failed: {e}"},

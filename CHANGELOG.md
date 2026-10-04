@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Scrubbing a session video in the dashboard no longer stalls the daemon's
+  other background work.** Frame requests waiting their turn for ffmpeg each
+  held one of the shared worker threads that file reads, probes and other
+  tool calls also use. They now wait in a pool of their own.
 - **The dashboard's screenshot file route serves only that session's PNGs.**
   For a recording at the top of the recordings directory it served any file
   there, so a paired caller could fetch another session's HAR, with its
