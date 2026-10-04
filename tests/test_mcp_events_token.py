@@ -104,3 +104,57 @@ def test_inline_leader_refuses_an_unauthenticated_subscriber(monkeypatch: pytest
     response = client.get("/api/mcp-events")
     assert response.status_code == 401
     assert client.get("/api/mcp-events", headers={"x-octowright-token": ""}).status_code == 401
+
+
+@pytest.mark.anyio
+async def test_inline_stream_stops_when_the_admitting_bearer_expires(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On an inline leader the stream is admitted by a dashboard bearer, and
+    must end when that bearer expires -- as the dashboard SSE does -- rather
+    than keep delivering notifications indefinitely."""
+    import asyncio
+    from collections.abc import AsyncGenerator
+    from typing import cast
+
+    from starlette.applications import Starlette
+
+    from octowright.browser_pool.events import SessionClosedEvent
+    from octowright.browser_pool.session_event_bus import SessionEventBus
+    from octowright.http.pairing import DASHBOARD_STATE_ATTR, DashboardPairingState, dashboard_access_ok
+    from octowright.http.routes import mcp_events as mcp_event_routes
+
+    monkeypatch.setenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", "1")
+    bus = SessionEventBus()
+    monkeypatch.setattr(mcp_event_routes, "session_event_bus", bus)
+    now = [1000.0]
+    state = DashboardPairingState(expected_token="token", monotonic_clock=lambda: now[0], session_ttl=5.0)
+    grant = state.redeem_code(state.mint_code())
+    assert grant is not None
+    app = Starlette()
+    setattr(app.state, DASHBOARD_STATE_ATTR, state)
+    scope: dict[str, Any] = {
+        "type": "http",
+        "method": "GET",
+        "headers": [(b"authorization", f"Bearer {grant.bearer}".encode())],
+        "query_string": b"",
+        "path": "/api/mcp-events",
+        "app": app,
+    }
+
+    async def receive() -> dict[str, Any]:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    request = Request(scope, receive)
+    assert dashboard_access_ok(request)
+    response = await mcp_event_routes.mcp_events_endpoint(request)
+    body = cast(AsyncGenerator[bytes, None], response.body_iterator)
+    assert (await anext(body)).startswith(b": ready")
+
+    now[0] += 6.0
+    bus.publish_nowait(
+        SessionClosedEvent(
+            instance_id="x1", kind="chromium", label=None, profile=None, reason="agent_close", log_path="/tmp/x.jsonl"
+        )
+    )
+    with pytest.raises(StopAsyncIteration):
+        await asyncio.wait_for(anext(body), timeout=0.5)

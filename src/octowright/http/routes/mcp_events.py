@@ -42,6 +42,7 @@ from octowright.defaults import DASHBOARD_DISCONNECT_POLL_SECONDS, DASHBOARD_HEA
 from octowright.http.bridge_auth import header_token_ok, require_token_enabled
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.json_response import SafeJSONResponse
+from octowright.http.pairing import dashboard_stream_lease
 from octowright.server.mcp_notifications import notification_payload
 
 
@@ -65,10 +66,23 @@ async def mcp_events_endpoint(request: Request) -> StreamingResponse:
     watcher, emitting a heartbeat comment during quiet periods so the follower
     can detect a dead connection. The initial ``: ready`` comment lets the
     follower confirm the stream opened before the first real event.
+
+    On an inline leader the route is admitted by dashboard pairing, which
+    attaches a lease; it is revalidated before every frame, so the stream ends
+    when the bearer that opened it expires or is evicted, as the dashboard SSE
+    does. Under the capability token the route is pairing-exempt and no lease
+    is attached: the token is checked at admission and stays valid for the
+    leader's lifetime.
     """
+    lease = dashboard_stream_lease(request)
+
+    def admitted() -> bool:
+        return lease is None or lease.valid()
 
     async def stream() -> Any:
         async with session_event_bus.subscribe() as subscription:
+            if not admitted():
+                return
             yield b": ready\n\n"
             disconnect_task = asyncio.create_task(_wait_for_disconnect(request))
             event_task: asyncio.Task[Any] | None = None
@@ -86,11 +100,15 @@ async def mcp_events_endpoint(request: Request) -> StreamingResponse:
                             await event_task
                         break
                     if event_task in done:
+                        if not admitted():
+                            break
                         yield _sse_data(notification_payload(event_task.result()))
                         continue
                     event_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await event_task
+                    if not admitted():
+                        break
                     yield b": heartbeat\n\n"
             finally:
                 if event_task is not None and not event_task.done():

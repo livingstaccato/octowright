@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **On an inline leader, `/api/mcp-events` ends when the dashboard bearer
+  that opened it expires.** The stream was admitted by dashboard pairing but
+  never checked the bearer again, so it kept delivering crash, close and
+  driver notifications after the bearer expired or was evicted. It now
+  revalidates before every frame, as the dashboard event stream does.
 - **`browser_export_script` refuses a recording it cannot render faithfully.**
   A `macro_call` row whose macro would not load was dropped silently (the
   script just skipped those steps), a recursive one recursed until Python
