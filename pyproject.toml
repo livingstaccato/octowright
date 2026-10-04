@@ -436,6 +436,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_diagnostics_split.py",
     "tests/test_macro_bundle_privacy.py",
     "tests/test_macro_scrub_repr_spelling.py",
+    "tests/test_macro_artifact_entry_points.py",
     "tests/test_macro_screenshot_session_ledger.py",
     "tests/test_privacy_ledger_scrub_cache.py",
     "tests/test_macro_artifact_positional_privacy.py",
