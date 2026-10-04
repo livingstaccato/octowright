@@ -21,6 +21,7 @@ something drifted silently once:
 | `check_js_typecheck_coverage.py` | an injected browser asset under `browser_pool/_assets/` is not matched by `ci/js-typecheck/tsconfig.json`, so `tsc` would pass having checked nothing. |
 | `check_operation_gate_architecture.py` | Playwright is reached outside the session operation gate. |
 | `check_agent_docs_sync.py` | `CLAUDE.md` is no longer a symlink to `AGENTS.md` (a copy crept back). |
+| `check_product_name.py` | a git-tracked Markdown file (except `CHANGELOG.md`, whose old entries stay as shipped) spells the product `octowright` in prose rather than `Octowright`. Code-shaped uses pass: fenced blocks, inline code, links and URLs, paths and identifiers (`octowright-terminal`, `octowright.cli`, `.octowright/`), and `octowright <subcommand>` command lines. |
 | `github_release_notes.py check-local` | the changelog or versioned highlights are empty, a highlight document or entry is malformed or empty, or a release-note source includes an issue-number reference. |
 | `check_telemetry_docs.py` | an emitted metric or MCP notification is documented in neither `AGENTS.md` nor `docs/telemetry.md`. |
 | `check_tool_inventory_docs.py` | a tool count or list in `docs/architecture/mcp-tool-inventory.md`, its PlantUML diagram, `README.md` or `docs/getting-started.md` disagrees with the live registry. |

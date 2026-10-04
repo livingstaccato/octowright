@@ -6,6 +6,8 @@ This file provides guidance to coding agents when working with code in this repo
 
 **Octowright** is an MCP (Model Context Protocol) server that lets agentic coding clients drive multiple parallel Playwright browsers (Chromium, Firefox, WebKit) simultaneously. It records every browser action to JSONL, supports persistent browser profiles with saved login state, and includes a web dashboard for debugging/monitoring.
 
+**Naming:** "Octowright" (capital O) in prose; in code, the identifier convention -- `octowright serve`, `octowright.browser_pool`, lowercase paths/URLs/entry points, `OCTOWRIGHT_*` env vars, `OctowrightError`. Enforced on Markdown by `scripts/check_product_name.py`.
+
 ## Commands
 
 ```bash
