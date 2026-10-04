@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`recordings_cleanup` spares a live terminal session's recording.** The
+  sweep skipped files belonging to live and closing browsers but never asked
+  the plugin pools, so an idle terminal session's recording older than
+  `days` could be deleted while it was still being written.
 - **`macro_artifact_plan` withholds every argument of a macro that calls
   another.** A plan has no run to learn what a called macro classifies, so an
   argument the parent treats as plain but the called macro treats as secret

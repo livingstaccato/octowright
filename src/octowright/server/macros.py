@@ -369,6 +369,20 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
     return macro_artifacts.delete_macro_artifact(name)
 
 
+def _live_plugin_sessions() -> list[Any]:
+    """Every live session of every enabled plugin pool.
+
+    Not guarded per pool, unlike the dashboard listing: a pool that cannot
+    say which sessions it holds would let the sweep delete a live recording,
+    so its error fails the cleanup instead.
+    """
+    from octowright.server import plugin_state
+
+    return [
+        session for plugin_pool in plugin_state.registry().pools().values() for session in plugin_pool.iter_sessions()
+    ]
+
+
 @mcp.tool(
     structured_output=False,
     description=(
@@ -379,16 +393,18 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
         "artifacts (manifests, critical points, run bundles, exports) live under the "
         "same root but are never swept -- they are curated, not incidental, so age "
         "does not make them disposable. Use macro_artifact_* tools to manage those. "
-        "Files belonging to a live or closing browser are skipped whatever their age."
+        "Files belonging to a live or closing browser, or a live plugin session such as "
+        "a terminal, are skipped whatever their age."
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
     import octowright.recording_cleanup as _rc
     from octowright.defaults import RECORDINGS_DIR
 
-    # Files a live or closing browser still writes are never swept, however
-    # old their mtime: an idle browser's recording stops changing.
-    in_use = _rc.session_file_matcher(pool.iter_sessions_including_closing())
+    # Files a live or closing browser -- or a live plugin session, such as a
+    # terminal -- still writes are never swept, however old their mtime: an
+    # idle session's recording stops changing.
+    in_use = _rc.session_file_matcher([*pool.iter_sessions_including_closing(), *_live_plugin_sessions()])
     stale = [entry for entry in _rc.find_stale_files(RECORDINGS_DIR, days) if not in_use(entry.path)]
     summary = _rc.cleanup_stale(stale, dry_run=dry_run)
     return {

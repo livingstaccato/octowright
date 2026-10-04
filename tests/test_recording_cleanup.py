@@ -502,3 +502,53 @@ def test_mcp_recordings_cleanup_spares_live_and_closing_sessions(
     assert result["removed"] == 1
     assert not dead.exists()
     assert [p for p in live_files if not p.exists()] == []
+
+
+def test_mcp_recordings_cleanup_spares_live_plugin_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A live terminal (or any plugin-kind) session's recording is as idle as
+    a browser's between commands; the sweep only asked the browser pool."""
+    from types import SimpleNamespace
+
+    from octowright import defaults as _defaults
+    from octowright.browser_pool import BrowserPool
+    from octowright.plugins.registry import PluginRegistry
+    from octowright.server import macros as server_macros
+    from octowright.server import plugin_state
+
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    term_log = rec / "20260101T000000Z-terminal-termidabcdef.jsonl"
+    _touch(term_log, age_days=10)
+    dead = rec / "20260101T000000Z-chromium-deadidabcdef.jsonl"
+    _touch(dead, age_days=10)
+
+    class _Pool:
+        def iter_sessions(self) -> Any:
+            return iter([SimpleNamespace(instance_id="termidabcdef", log_path=term_log)])
+
+    class _Registry(PluginRegistry):
+        def pools(self) -> dict[str, Any]:
+            return {"terminal": _Pool()}
+
+    original = plugin_state.registry()
+    plugin_state.set_registry(_Registry())
+    try:
+        monkeypatch.setattr(server_macros, "pool", BrowserPool())
+        monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
+        result = server_macros.recordings_cleanup(days=1.0, dry_run=False)
+    finally:
+        plugin_state.set_registry(original)
+
+    assert result["removed"] == 1
+    assert not dead.exists()
+    assert term_log.exists()
+
+
+def test_recordings_cleanup_is_the_registered_tool_not_its_helper() -> None:
+    """A helper placed between ``@mcp.tool`` and the tool function becomes the tool."""
+    from octowright.server import macros as server_macros  # noqa: F401  (registers the tools)
+    from octowright.server.registry import registered_tool_names
+
+    names = registered_tool_names()
+    assert "recordings_cleanup" in names
+    assert "_live_plugin_sessions" not in names
