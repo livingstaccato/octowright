@@ -681,6 +681,8 @@ def test_session_frame_extracts_via_video_module(
         return [produced]
 
     monkeypatch.setattr(_http_state._video, "extract_frames", fake_extract)
+    # The 1-byte stub is not a video: never let the duration probe reach ffprobe.
+    monkeypatch.setattr(_http_state._video, "probe_video", lambda _p: {"duration_seconds": 10.0})
     r = client.get("/api/sessions/framewithv01/frame?t=1.5")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "image/png"
