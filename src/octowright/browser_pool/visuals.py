@@ -13,7 +13,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright.defaults import BADGE_OPACITY, get_default_url
+from octowright.defaults import BADGE_OPACITY, get_default_url, new_tab_url
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -352,7 +352,10 @@ async def wire_init_scripts(
         # of the same persona share one color. Engine emoji handles engine
         # differentiation.
         color_seed = profile or label or instance_id[:6]
-        dashboard_url = get_default_url().removesuffix("/new-tab")
+        # The daemon's own origin, never get_default_url(): with
+        # OCTOWRIGHT_DEFAULT_URL set that is the operator's app, and the
+        # badge linked it -- carrying the instance id -- instead of the dashboard.
+        dashboard_url = new_tab_url().removesuffix("/new-tab")
         badge_script = (
             _badge_script()
             .replace("__TAG__", _json.dumps(badge_text))

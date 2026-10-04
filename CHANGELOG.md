@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The browser badge's links open the dashboard and the session.** With
+  `OCTOWRIGHT_DEFAULT_URL` set, the Alt+click overlay's "dashboard" and
+  "recording" links pointed at the operator's app (with the instance id in
+  the URL) instead of the daemon; and "recording" used an unrouted
+  `#session/<id>` fragment that opened the dashboard home. They now use the
+  daemon's own origin and `/sessions/<id>`.
 - **A mistyped `OCTOWRIGHT_PROFILE` warns once, not on every result.** Each
   compact-discovery result re-parsed the profile spec to annotate its
   `next_actions`, logging the unknown-profile warning hundreds of times per

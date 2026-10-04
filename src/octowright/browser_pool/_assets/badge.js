@@ -84,7 +84,7 @@
 
         const links = document.createElement("div");
         Object.assign(links.style, { display: "flex", gap: "8px", marginTop: "10px", paddingTop: "8px", borderTop: "1px solid rgba(255,255,255,0.1)" });
-        [[DASHBOARD_URL, "dashboard ↗"], [DASHBOARD_URL + "#session/" + INSTANCE_ID, "recording ↗"]].forEach(([href, text]) => {
+        [[DASHBOARD_URL + "/", "dashboard ↗"], [DASHBOARD_URL + "/sessions/" + encodeURIComponent(INSTANCE_ID), "recording ↗"]].forEach(([href, text]) => {
             const a = document.createElement("a");
             a.href = href; a.textContent = text; a.target = "_blank"; a.rel = "noopener";
             Object.assign(a.style, { flex: "1", textAlign: "center", color: "#7c9ef5", fontSize: "10px", padding: "4px", borderRadius: "4px", border: "1px solid rgba(124,158,245,0.3)", textDecoration: "none" });
