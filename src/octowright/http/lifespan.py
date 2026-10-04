@@ -52,6 +52,16 @@ def _port_is_free(host: str, port: int) -> bool:
     return checked
 
 
+# Bound on uvicorn's graceful shutdown. Its default waits with no limit for
+# every open connection to finish, and every connected follower holds a
+# never-ending SSE stream (/api/mcp-events, the /mcp GET stream) -- so a leader
+# with any client attached never left serve() on SIGTERM, the sender escalated
+# to SIGKILL, and pool/plugin teardown and the leader's lock removal were
+# skipped. Ordinary requests finish well inside this; past it the remaining
+# connection tasks are cancelled and the followers reconnect to the next leader.
+HTTP_GRACEFUL_SHUTDOWN_SECONDS = 2.0
+
+
 def _pick_port(host: str, preferred: int, retries: int) -> int | None:
     """Try preferred port; fall back to next ``retries`` ports. Returns None on failure."""
     for offset in range(retries + 1):
@@ -122,6 +132,7 @@ async def serve_app(
         log_level="warning",
         access_log=False,
         loop="asyncio",
+        timeout_graceful_shutdown=HTTP_GRACEFUL_SHUTDOWN_SECONDS,
     )
     server = uvicorn.Server(config)
     state._RUNTIME_HOST = host
