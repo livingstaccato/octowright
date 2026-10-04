@@ -252,7 +252,15 @@ async def monitor_leader_health(
 
     ``health_url`` may be a callable, read before every probe, so the monitor
     follows the leader the bridge is currently connected to."""
-    current_url = health_url if callable(health_url) else (lambda: health_url)
+    current_url: Callable[[], str]
+    if isinstance(health_url, str):
+        fixed_url = health_url
+
+        def current_url() -> str:
+            return fixed_url
+
+    else:
+        current_url = health_url
     failures = 0
     async with httpx2.AsyncClient(timeout=5.0) as client:
         while True:
