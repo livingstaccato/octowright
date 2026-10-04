@@ -428,6 +428,8 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_call_credential_taint.py",
     "tests/test_macro_credential_unchecked_input.py",
     "tests/test_macro_credential_refusal_not_catchable.py",
+    "tests/test_macro_safety_stop_not_catchable.py",
+    "tests/test_macro_try_suppression_privacy.py",
     "tests/test_macro_screenshot_refusal_reason.py",
     "tests/test_macro_screenshot_session_ledger.py",
     "tests/test_privacy_ledger_scrub_cache.py",
