@@ -984,10 +984,11 @@ def test_cleans_up_temp_file_on_write_failure(tmp_path: Path, monkeypatch: pytes
 
     real_replace = _os.replace
 
-    def _boom(src: str, dst: str) -> None:
+    def _boom(src: str, dst: str, **_dir_fds: object) -> None:
         # Verify the stager actually created the temp file before failing,
-        # otherwise this test couldn't observe whether the cleanup ran.
-        assert Path(src).exists(), "exporter should stage temp file before os.replace"
+        # otherwise this test couldn't observe whether the cleanup ran. With
+        # directory descriptors ``src`` is a bare name in out_path's directory.
+        assert (out_path.parent / src).exists(), "exporter should stage temp file before os.replace"
         raise OSError("simulated replace failure")
 
     monkeypatch.setattr("octowright._paths.os.replace", _boom)

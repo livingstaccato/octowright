@@ -275,7 +275,7 @@ def browser_export_script(
     target = Path(out_path) if out_path else session.log_path.with_suffix(suffix)
     # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
     target = reject_unsafe_path(target, RECORDINGS_DIR, label="export_script out_path")
-    result = _export_script(session.log_path, target, fmt=format)
+    result = _export_script(session.log_path, target, fmt=format, root=RECORDINGS_DIR)
     return {"path": str(result)}
 
 

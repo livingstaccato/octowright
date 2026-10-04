@@ -31,7 +31,7 @@ def test_save_macro_uses_atomic_write_text(monkeypatch: pytest.MonkeyPatch, tmp_
     rec = _write_recording(tmp_path)
     calls: list[tuple[Path, str]] = []
 
-    def fake_atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None:
+    def fake_atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8", root: Path | None = None) -> None:
         calls.append((path, encoding))
         path.write_text(body, encoding=encoding)
 
@@ -47,7 +47,7 @@ def test_write_macro_uses_atomic_write_text(monkeypatch: pytest.MonkeyPatch, tmp
     storage = _import_storage(monkeypatch, tmp_path)
     calls: list[tuple[Path, str]] = []
 
-    def fake_atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None:
+    def fake_atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8", root: Path | None = None) -> None:
         calls.append((path, encoding))
         path.write_text(body, encoding=encoding)
 

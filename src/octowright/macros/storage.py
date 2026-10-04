@@ -222,7 +222,7 @@ def save_macro(
 
     MACROS_DIR.mkdir(parents=True, exist_ok=True)
     secure_artifact_tree(MACROS_DIR, MACROS_DIR)
-    atomic_write_text(dest, dumps_utf8_safe(macro, indent=2), encoding="utf-8")
+    atomic_write_text(dest, dumps_utf8_safe(macro, indent=2), encoding="utf-8", root=MACROS_DIR)
     log.info("octowright.macro.saved", name=name, path=str(dest), action_count=len(actions))
     return dest
 
@@ -288,7 +288,7 @@ def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
                 )
     dest.parent.mkdir(parents=True, exist_ok=True)
     secure_artifact_tree(dest.parent, MACROS_DIR)
-    atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8")
+    atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8", root=MACROS_DIR)
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
     return dest
 

@@ -403,7 +403,10 @@ def _py_line(entry: dict) -> str | None:
     return handler(entry) if handler else None
 
 
-def export_script(log_path: Path, out_path: Path, fmt: str = "python", manifest: dict | None = None) -> Path:
+def export_script(
+    log_path: Path, out_path: Path, fmt: str = "python", manifest: dict | None = None, *, root: Path | None = None
+) -> Path:
+    """Render ``log_path`` as a script at ``out_path``; ``root`` is the containment root it was checked against."""
 
     if fmt not in ("python", "ts"):
         raise ValueError(f"fmt must be 'python' or 'ts', got {fmt!r}")
@@ -466,7 +469,7 @@ def export_script(log_path: Path, out_path: Path, fmt: str = "python", manifest:
             lines.append(f"{comment_prefix} - {' '.join(str(cp).splitlines())}")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(out_path, "\n".join(lines) + "\n")
+    atomic_write_text(out_path, "\n".join(lines) + "\n", root=root)
     return out_path
 
 

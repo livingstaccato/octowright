@@ -163,7 +163,7 @@ def save_capture(
     }
     # Atomic temp-sibling + os.replace so a symlink swapped in at the
     # destination is replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, dumps_utf8_safe(payload, indent=2))
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2), root=root)
     stat = path.stat()
     cleanup_captures(
         root=root,

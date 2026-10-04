@@ -75,7 +75,7 @@ def save_golden(
     # Atomic temp-sibling + os.replace: a same-user attacker who swaps the
     # destination for a symlink in the resolve()->write() window gets the
     # symlink replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, dumps_utf8_safe(payload, indent=2))
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2), root=GOLDENS_DIR)
     return path
 
 

@@ -186,7 +186,7 @@ async def _copy_into(source: Path, directory: Path, wanted: str, names: VideoNam
         async def write(tmp: Path) -> None:
             await asyncio.to_thread(shutil.copyfile, source, tmp)
 
-        await atomic_write_via_writer(target, write)
+        await atomic_write_via_writer(target, write, root=defaults.RECORDINGS_DIR)
     except Exception as exc:
         log.warning("octowright.runner.video_copy_failed", source=str(source), error=repr(exc))
         if target is not None:
