@@ -24,6 +24,15 @@ from octowright.request_errors import InvalidRequestError
 #: decision that has not been made yet.
 _NOT_CALLER_SETTABLE: Final = frozenset({"protected_reason"})
 
+#: Fields only the pool's own handoff/relaunch may set: ``trusted_launch_url``
+#: picks the URL the macro credential guards trust, and ``session_key`` names
+#: another browser's ``session=True`` directory. ``from_mapping`` accepts them
+#: because ``pool.launch`` must; every entry point that builds options from a
+#: CALLER's mapping goes through ``from_external_mapping``, which refuses them.
+#: ``tests/test_internal_launch_options_closed.py`` enumerates those entry
+#: points, so a new one cannot bypass this by calling ``from_mapping``.
+INTERNAL_ONLY_LAUNCH_FIELDS: Final = frozenset({"trusted_launch_url", "session_key"})
+
 #: Names a caller plausibly reaches for that mean something else here, mapped to
 #: what they should have written. ``headless`` is Playwright's OWN parameter
 #: name and therefore the natural guess -- it is the one that actually bit:
@@ -308,6 +317,18 @@ class LaunchOptions:
         launch_options = cls(**options)
         launch_options.validate()
         return launch_options
+
+    @classmethod
+    def from_external_mapping(cls, options: dict[str, Any], *, source: str) -> LaunchOptions:
+        """:meth:`from_mapping` for a mapping a caller supplied, refusing internal-only fields.
+
+        ``source`` names the entry point for the message (``"in a roster
+        spec"``), so the refusal points at what to edit.
+        """
+        refused = sorted(INTERNAL_ONLY_LAUNCH_FIELDS & set(options))
+        if refused:
+            raise InvalidRequestError(f"launch option(s) not accepted {source}: {', '.join(map(repr, refused))}")
+        return cls.from_mapping(options)
 
     @classmethod
     def from_launch_record(cls, record: dict[str, Any]) -> LaunchOptions:

@@ -80,7 +80,7 @@ Handoff, fluid relaunch and the driver-death / process-crash reopen each launch 
 
 The session now keeps the options it was launched with (`BrowserSession.launch_options`, written by `replacement.recorded_launch_options` with the resolved `headed`, the promoted profile and a session launch's directory key folded in), and `replacement.ReplacementSource` derives every replacement from them. A field is carried unless it is named, with its reason, in `NOT_CARRIED` (`channel`, `executable_path`, `launch_args`: chosen per launch, never implied -- the `browser_launch` description already promises this) or `SET_BY_REPLACEMENT` (`url`, `trusted_launch_url`, `protected` from the session's current state, a rotated `har_path`). A new `LaunchOptions` field is therefore carried by construction; `tests/test_relaunch_carries_launch_options.py` fails on one that is neither carried nor named. Deliberate departures stay explicit at the call site: handoff's `headed` (`None` now keeps the original's rather than re-defaulting), and fluid relaunch's `FLUID_OVERRIDES` (headed, and no pinned viewport -- fluid exists so the viewport follows the window).
 
-`session_key` is the internal option that carries a session directory across: `session_name` prefers it over the label, it grants nothing a label does not, and like `trusted_launch_url` it is never read from a JSONL recording and refused in a roster spec. The driver path reads the replacement source at capture and keeps it out of the `pool.lost_sessions` record, which status serialises and which must not carry launch headers.
+`session_key` is the internal option that carries a session directory across: `session_name` prefers it over the label, it grants nothing a label does not, and like `trusted_launch_url` it is never read from a JSONL recording and refused at every external entry point (`LaunchOptions.from_external_mapping`). The driver path reads the replacement source at capture and keeps it out of the `pool.lost_sessions` record, which status serialises and which must not carry launch headers.
 
 ### A launch failure that only reads like driver death
 
@@ -195,9 +195,13 @@ recording-replay route) all build explicit dicts, and the `to_pool_kwargs` →
 `from_mapping` round trip is clean. `spawn_roster` used to build one too, from a hand-kept key list that
 silently dropped the documented `protected` and ignored unknown keys such as
 `headless`; it now goes through `roster.roster_launch_kwargs` --
-`from_mapping(...).to_pool_kwargs()` with explicit nulls dropped, so a YAML
-`key:` means unset for every key -- and refuses `trusted_launch_url`, which
-`browser_launch` does not expose either. An unknown key fails that spec into
+`from_external_mapping(...).to_pool_kwargs()` with explicit nulls dropped, so a YAML
+`key:` means unset for every key. `from_external_mapping` is `from_mapping` minus
+`INTERNAL_ONLY_LAUNCH_FIELDS` (`trusted_launch_url`, `session_key`, which only
+handoff/relaunch set and `browser_launch` does not expose); `POST /api/sessions`
+goes through it too, after it was found accepting both, and
+`tests/test_internal_launch_options_closed.py` fails on any module outside the
+pool that builds options from a mapping without it. An unknown key fails that spec into
 `errors`. Only `POST /api/sessions` can otherwise carry
 arbitrary keys, and its validation runs **inside** the route's `try`, so an
 unrecognised field becomes a **400 naming it** instead of a launch that ignored

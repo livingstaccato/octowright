@@ -17,7 +17,6 @@ from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.lifecycle import CloseCoordinatorOutcome, reserve_close_browser
 from octowright.browser_pool.limits import enforce_launch_limits, headed_launch_concurrency
 from octowright.browser_pool.options import LaunchOptions
-from octowright.request_errors import InvalidRequestError
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -127,13 +126,6 @@ async def close_all(
     return body
 
 
-#: Launch options a roster spec may not set, though ``LaunchOptions`` accepts
-#: them: ``trusted_launch_url`` picks the URL the macro credential guards trust,
-#: and ``session_key`` names another browser's session directory -- both carried
-#: only by handoff/relaunch, and ``browser_launch`` exposes neither.
-_NOT_ROSTER_SETTABLE = frozenset({"trusted_launch_url", "session_key"})
-
-
 def roster_launch_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
     """``pool.launch`` kwargs for one roster spec, through ``LaunchOptions``.
 
@@ -143,11 +135,11 @@ def roster_launch_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
     refuses an unknown key with the same message every other launch path gives.
     An explicit null (a YAML ``key:``) means unset for EVERY key, so it is
     dropped and the dataclass default applies; for ``headed`` that default is
-    ``None`` (auto), the same as the null."""
-    refused = sorted(_NOT_ROSTER_SETTABLE & set(spec))
-    if refused:
-        raise InvalidRequestError(f"launch option(s) not accepted in a roster spec: {', '.join(map(repr, refused))}")
-    return LaunchOptions.from_mapping({k: v for k, v in spec.items() if v is not None}).to_pool_kwargs()
+    ``None`` (auto), the same as the null. Internal-only options
+    (``INTERNAL_ONLY_LAUNCH_FIELDS``) are refused, as at every external entry."""
+    return LaunchOptions.from_external_mapping(
+        {k: v for k, v in spec.items() if v is not None}, source="in a roster spec"
+    ).to_pool_kwargs()
 
 
 async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[str, Any]:
