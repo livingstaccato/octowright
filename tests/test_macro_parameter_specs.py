@@ -440,3 +440,41 @@ async def test_an_artifact_run_resolves_its_view_once_and_the_replay_uses_it(
     )
 
     assert calls == ["m"]
+
+
+@pytest.mark.asyncio
+async def test_a_sequence_step_with_a_malformed_spec_runs_on_the_name_heuristic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only a spec-shape problem falls back to heuristic-only; the step still runs."""
+    _install(monkeypatch, {"m": _macro(["display"])})
+
+    result = await execution.run_sequence(
+        session=_session(), names=["m"], args_list=[{"password": PW_FIXTURE, "display": DISPLAY}]
+    )
+
+    (step,) = result["steps"]
+    assert step["ok"] is True
+    assert step["args_used"] == {"password": "<redacted>", "display": DISPLAY}
+    assert "must be an object mapping" in step["warnings"][0]
+
+
+@pytest.mark.asyncio
+async def test_a_sequence_step_whose_macro_is_not_valid_json_is_a_recorded_failed_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(monkeypatch, {"good": _macro({}, name="good")})
+
+    def load(name: str) -> dict[str, Any]:
+        if name == "broken":
+            raise json.JSONDecodeError("Expecting value", "", 0)
+        return _macro({}, name="good")
+
+    monkeypatch.setattr(execution, "load_macro", load)
+
+    result = await execution.run_sequence(
+        session=_session(), names=["good", "broken"], args_list=[{}, {"password": PW_FIXTURE}], stop_on_failure=False
+    )
+
+    assert [step["ok"] for step in result["steps"]] == [True, False]
+    assert result["steps"][1]["args_used"] == {"password": "<redacted>"}
