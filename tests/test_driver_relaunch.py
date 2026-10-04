@@ -321,7 +321,7 @@ def test_relaunch_failure_is_swallowed_per_session(monkeypatch: pytest.MonkeyPat
     assert calls["n"] == 2
 
 
-def test_already_relaunched_sessions_are_not_recaptured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_already_relaunched_sessions_are_evicted_but_not_reopened(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_mode(monkeypatch, "new-id")
     tagged = _session("a")
     tagged._auto_relaunched = True
@@ -331,11 +331,35 @@ def test_already_relaunched_sessions_are_not_recaptured(monkeypatch: pytest.Monk
         await driver_relaunch.on_driver_reset(pool, reason="x")
 
     asyncio.run(_run())
-    # "a" was an auto-relaunched session; it is skipped (loop guard), only "b"
-    # is captured and relaunched.
-    lost_ids = {r["instance_id"] for r in driver_relaunch.recent_lost()}
-    assert lost_ids == {"b"}
-    assert tagged.instance_id == "a"  # untouched
+    # "a" was an auto-relaunched session: the loop guard stops a SECOND reopen,
+    # but it died with the driver all the same, so it is still recorded lost
+    # and evicted -- a dead handle left in the pool would list as live and
+    # fail every call. Only "b" is reopened.
+    lost = {r["instance_id"]: r for r in driver_relaunch.recent_lost()}
+    assert set(lost) == {"a", "b"}
+    assert lost["a"]["relaunched_to"] is None
+    assert lost["a"]["relaunch_skipped"] == "already_relaunched"
+    assert "a" not in pool._sessions
+    assert len(pool.launched) == 1
+    assert pool.launched[0]["label"] == "label-b"
+    lost_incidents = [i for i in incidents.recent() if i.get("category") == incidents.CATEGORY_DRIVER_LOST]
+    assert {i["instance_id"] for i in lost_incidents if i.get("outcome") == "lost"} == {"a", "b"}
+
+
+def test_only_already_relaunched_sessions_lost_still_publishes_and_evicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_mode(monkeypatch, "new-id")
+    tagged = _session("a")
+    tagged._auto_relaunched = True
+    pool = _FakePool([tagged])
+    published: list[Any] = []
+    monkeypatch.setattr(driver_relaunch, "_publish_driver_died", lambda _p, descs, _m: published.extend(descs))
+
+    task = driver_relaunch.on_driver_reset(pool, reason="x")
+
+    assert task is None  # nothing to reopen
+    assert pool._sessions == {}
+    assert [d["instance_id"] for d in published] == ["a"]
+    assert pool.launched == []
 
 
 def test_finalize_id_keep_id_missing_session_returns_new_id() -> None:

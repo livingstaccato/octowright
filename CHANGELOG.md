@@ -49,6 +49,14 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A browser reopened after a driver death is evicted when a later driver
+  dies too.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a reopened session that
+  died with the next driver was skipped entirely, not only kept from reopening
+  a second time. It stayed in the pool as a dead handle: `browser_list` showed
+  it live, every call to it failed, and it was missing from `lost_sessions`
+  and the `driver_died` notification. It is now recorded lost and evicted like
+  any other session, with `relaunch_skipped: already_relaunched` on its lost
+  record, and still not reopened.
 - **A leader stopped by `octowright restart` exits about 2 seconds sooner.**
   On its way out a leader waited up to 2 seconds for the election lock to
   remove its lockfile, but restart holds that lock for the whole stop and

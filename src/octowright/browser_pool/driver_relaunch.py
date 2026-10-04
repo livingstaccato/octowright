@@ -116,8 +116,12 @@ def _descriptor(session: Any) -> dict[str, Any]:
 
 
 def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
-    """Capture + record + evict the sessions lost with the dead driver. Sessions
-    this module previously relaunched are skipped (loop guard).
+    """Capture + record + evict the sessions lost with the dead driver.
+
+    A session this module previously relaunched is captured and evicted like
+    any other -- it died with the driver too, and left in the pool it would
+    list as live and fail every call -- but its descriptor carries
+    ``reopen=False``: the loop guard stops a second reopen, never the eviction.
 
     Routes eviction through the same synchronous acceptance seam
     (``pool._accept_external_close_nowait``, reason ``external_disconnect``)
@@ -127,8 +131,7 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
     identity's profile."""
     descriptors: list[dict[str, Any]] = []
     for session in pool.iter_sessions():
-        if getattr(session, "_auto_relaunched", False):
-            continue
+        reopen = not getattr(session, "_auto_relaunched", False)
         desc = _descriptor(session)
         inc = incidents.record(
             incidents.CATEGORY_DRIVER_LOST,
@@ -139,12 +142,22 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
             outcome="lost",
         )
         record = {"ts": inc["ts"], "reason": reason, **desc, "relaunched_to": None}
+        if not reopen:
+            record["relaunch_skipped"] = "already_relaunched"
         _LOST.append(record)
         _DRIVER_LOST.add(1, attributes={"outcome": "surfaced", "kind": desc["kind"]})
         closing = pool._accept_external_close_nowait(
             desc["instance_id"], expected_session=session, reason="external_disconnect"
         )
-        descriptors.append({**desc, "lost_record": record, "closing": closing, "replacement": _replacement_of(session)})
+        descriptors.append(
+            {
+                **desc,
+                "lost_record": record,
+                "closing": closing,
+                "replacement": _replacement_of(session) if reopen else None,
+                "reopen": reopen,
+            }
+        )
     return descriptors
 
 
@@ -178,9 +191,10 @@ def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | No
     mode = _mode()
     if descriptors:
         _publish_driver_died(pool, descriptors, mode)
-    if not descriptors or mode == "off":
+    to_reopen = [d for d in descriptors if d["reopen"]]
+    if not to_reopen or mode == "off":
         return None
-    return _schedule_relaunch(pool, descriptors, mode)
+    return _schedule_relaunch(pool, to_reopen, mode)
 
 
 def relaunch_planned(session: Any) -> bool:
