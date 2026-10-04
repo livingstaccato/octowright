@@ -233,7 +233,7 @@ class Recorder:
 #: A recording may legitimately reach its 512 MiB ceiling
 #: (``OCTOWRIGHT_RECORDING_MAX_BYTES``), or have none, so that does not bound it. Every caller already loops on the returned
 #: cursor, so a window costs an extra round trip, not correctness. 8 MiB is
-#: ~40k typical events per call. (defaults.py is at its LOC ceiling.)
+#: ~40k typical events per call.
 _TAIL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024
 _TAIL_DISABLE_TOKENS = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
 

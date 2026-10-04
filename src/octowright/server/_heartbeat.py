@@ -54,7 +54,7 @@ log = get_logger(__name__)
 # Cadence of the keepalive pings. MUST be below the follower's flattest in-flight
 # budget (``BRIDGE_REQUEST_TIMEOUT_SECONDS``, default 20s) so the first ping re-arms
 # the deadline before it expires — that is what covers tools with no per-tool
-# override. Lives here, not defaults.py (at its LOC ceiling), mirroring how
+# override. Lives here, beside its consumer, mirroring how
 # proxy_supervisor keeps its own SUSPEND_THRESHOLD_SECONDS const.
 HEARTBEAT_INTERVAL_SECONDS = env_float("OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS", 8)
 # Absolute ceiling on how long the heartbeat keeps one call alive. Past this the

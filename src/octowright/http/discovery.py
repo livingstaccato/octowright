@@ -186,7 +186,7 @@ def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
 _SummaryEntry = tuple[tuple[int, int], dict[str, Any]]
 
 #: Recordings past which the assembled listing is not snapshotted.
-#: Lives here rather than in defaults.py, which is at its LOC ceiling.
+#: Lives here, beside its only reader.
 SESSION_LIST_SNAPSHOT_MAX = 50_000
 
 # Guards ``_closed_list_cache`` and ``_recording_index`` against concurrent

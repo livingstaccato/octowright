@@ -55,7 +55,7 @@ _DAEMON_LOG_TAIL_LINES = 20
 # How long to wait for a spawned daemon to bind and answer HTTP. The default
 # suits a warm dev machine; a cold container running ``uv run octowright serve``
 # routinely needs longer, and exceeding it silently degrades to fragile inline
-# mode. ``defaults.py`` is at its LOC ceiling, so the knob lives here (matching
+# mode. The knob lives beside its consumer (matching
 # how ``incidents``/``health`` keep their own OCTOWRIGHT_* vars).
 DAEMON_READY_TIMEOUT_ENV = "OCTOWRIGHT_DAEMON_READY_TIMEOUT"
 DAEMON_READY_TIMEOUT_SECONDS = 10.0

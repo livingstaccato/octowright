@@ -74,7 +74,7 @@ def parse_mode(raw: str | None) -> str:
 # reopening changes instance_ids and silently re-runs navigation across every
 # connected client, so it's a deliberate opt-in. Lost sessions are ALWAYS
 # captured + surfaced (status.pool.lost_sessions) regardless of this mode. Read
-# here (not defaults.py, which is at its LOC ceiling), mirroring incidents/health.
+# here, beside its consumer, mirroring incidents/health.
 DRIVER_RELAUNCH_MODE = parse_mode(os.environ.get("OCTOWRIGHT_DRIVER_RELAUNCH"))
 
 # Live relaunch tasks, kept referenced so they aren't GC'd mid-flight (RUF006).

@@ -58,7 +58,7 @@ _BRIDGE_SUSPENSION = counter(
 # more than this is a process *suspension* (the MCP client SIGSTOPped the
 # follower — e.g. Codex compaction freezing it), not normal scheduling jitter.
 # The frozen time would otherwise blow monotonic-based in-flight deadlines and
-# strand the now-stale leader session. (defaults.py is at its LOC ceiling.)
+# strand the now-stale leader session.
 SUSPEND_THRESHOLD_SECONDS = env_float("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", 5.0)
 
 # Reserved namespace for progressTokens the BRIDGE invents (see _inject_meta).

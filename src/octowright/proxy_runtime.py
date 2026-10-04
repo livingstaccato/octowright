@@ -177,7 +177,7 @@ def reconnect_delay(attempt: int, *, max_delay: float) -> float:
 # A session that lived shorter than this is a "flap": the leader accepted then
 # almost-immediately ended it. Reconnecting a flap with no backoff busy-loops the
 # leader into a create/terminate storm (observed ~300+/sec across followers); a
-# session that lived at least this long reconnects promptly. (defaults.py at LOC ceiling.)
+# session that lived at least this long reconnects promptly.
 BRIDGE_MIN_SESSION_SECONDS = env_float("OCTOWRIGHT_BRIDGE_MIN_SESSION_SECONDS", 2.0)
 
 
