@@ -216,8 +216,12 @@ export interface ConsoleMessage {
 
 export interface ConsoleListResponse {
   messages: ConsoleMessage[];
+  /** Absolute: messages appended since the session began, ignoring `level`. */
   cursor: number;
+  /** Retained messages matching the `level` filter. */
   total: number;
+  /** Live sessions: messages evicted from the bounded buffer before the first retained one. */
+  dropped?: number;
 }
 
 export interface DownloadEntry {

@@ -34,6 +34,7 @@ import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
   CacheComponent,
   CacheComponentList,
+  ConsoleListResponse,
   ConsoleMessage,
   DownloadEntry,
   RecordingEvent,
@@ -626,17 +627,48 @@ interface BootOptions {
 
 interface PanelData {
   console: ConsoleMessage[];
+  /** The absolute console cursor already shown; null until the first load. */
+  consoleCursor: number | null;
   downloads: DownloadEntry[];
   screenshots: ScreenshotEntry[];
 }
 
-async function loadConsole(sessionId: string): Promise<ConsoleMessage[]> {
+/**
+ * The most console messages a live session keeps (`BrowserSession.console`'s
+ * bound). Appending past it would show more history than the server holds.
+ */
+const LIVE_CONSOLE_RETAINED = 1000;
+
+/**
+ * Bring `data.console` up to date from the server's absolute cursor.
+ *
+ * Every live-tail batch used to refetch the whole console from `since=0`.
+ * The cursor counts messages from the start of the session, so it stays
+ * valid after the server's bounded buffer evicts; only what arrived since
+ * the last poll is fetched and appended. A cursor that went backwards means
+ * the server is describing a different console (a relaunch under the same
+ * id), so the panel starts over. Returns whether anything changed.
+ */
+async function loadConsole(sessionId: string, data: PanelData): Promise<boolean> {
+  const since = data.consoleCursor ?? 0;
+  let res: ConsoleListResponse;
   try {
-    const res = await getConsole(sessionId);
-    return res.messages;
+    res = await getConsole(sessionId, since);
+    if (res.cursor < since) {
+      res = await getConsole(sessionId, 0);
+      data.console = [];
+    }
   } catch {
-    return [];
+    if (data.consoleCursor !== null) return false;
+    data.console = [];
+    return true;
   }
+  const first = data.consoleCursor === null;
+  data.consoleCursor = res.cursor;
+  if (!first && res.messages.length === 0 && data.console.length > 0) return false;
+  const merged = first ? res.messages : [...data.console, ...res.messages];
+  data.console = !first && merged.length > LIVE_CONSOLE_RETAINED ? merged.slice(-LIVE_CONSOLE_RETAINED) : merged;
+  return true;
 }
 
 async function loadDownloads(sessionId: string): Promise<DownloadEntry[]> {
@@ -666,10 +698,10 @@ async function refreshPanels(
   const tasks: Array<Promise<void>> = [];
   if (which.includes("console")) {
     tasks.push(
-      loadConsole(sessionId).then((msgs) => {
-        data.console = msgs;
-        renderConsolePanel(refs.consolePanel, msgs);
-        setTabCount(refs.consoleTabBtn, msgs.length);
+      loadConsole(sessionId, data).then((changed) => {
+        if (!changed) return;
+        renderConsolePanel(refs.consolePanel, data.console);
+        setTabCount(refs.consoleTabBtn, data.console.length);
       }),
     );
   }
@@ -790,7 +822,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     disposeScreenshotsPanel(refs.screenshotsPanel);
   });
 
-  const data: PanelData = { console: [], downloads: [], screenshots: [] };
+  const data: PanelData = { console: [], consoleCursor: null, downloads: [], screenshots: [] };
 
   // initial empty renders so counts/labels appear immediately
   renderConsolePanel(refs.consolePanel, data.console);

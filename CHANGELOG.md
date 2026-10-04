@@ -49,6 +49,15 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`GET /api/sessions/{id}/console` keeps its cursor once a live session's
+  console fills.** The cursor was a position in the 1000-message buffer, so
+  once it filled `since=1000` returned nothing forever and an eviction
+  skipped messages; and `level=` filtered before slicing, so the cursor
+  indexed the filtered list. `since`/`cursor` now count messages from the
+  start of the session, ignoring `level`, a new `dropped` field says how many
+  the buffer evicted, and `total` is the retained count matching the filter.
+  The session page polls from that cursor and appends, instead of
+  refetching the whole console on every batch of live events.
 - **A dropped live tail reconnects instead of freezing the session page.**
   The tail WebSocket had no close handling beyond re-pairing, so a drop for
   any other reason (a network blip, a server error) stopped the timeline

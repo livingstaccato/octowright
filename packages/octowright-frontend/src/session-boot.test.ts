@@ -725,6 +725,68 @@ describe("bootSession — live session", () => {
     expect(root.querySelector("[data-testid='session-footer']")?.textContent).toContain("closed");
   });
 
+  it("polls the console from its cursor and appends, instead of refetching from zero", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const loaders = await getMockedPanelLoaders();
+    loaders.getConsole
+      .mockResolvedValueOnce({ messages: [{ level: "log", text: "a", page_index: null }], cursor: 1201, total: 1 })
+      .mockResolvedValueOnce({ messages: [{ level: "error", text: "b", page_index: null }], cursor: 1202, total: 1 });
+    const { openTail } = await import("./tail.js");
+    const panels = await import("./console-panel.js");
+    let captured: TailOptions | null = null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce((_url: string, opts: TailOptions) => {
+      captured = opts;
+      return { close: vi.fn() };
+    });
+
+    await bootSession(root, "sess-console-cursor", {});
+    (captured as TailOptions | null)?.onMessage({ events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }], cursor: 5 });
+
+    await vi.waitFor(() => expect(loaders.getConsole).toHaveBeenLastCalledWith("sess-console-cursor", 1201));
+    await vi.waitFor(() => {
+      const last = (panels.renderConsolePanel as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as Array<{
+        text: string;
+      }>;
+      expect(last.map((m) => m.text)).toEqual(["a", "b"]);
+    });
+  });
+
+  it("starts the console over when the server's cursor goes backwards", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const loaders = await getMockedPanelLoaders();
+    loaders.getConsole
+      .mockResolvedValueOnce({ messages: [{ level: "log", text: "old", page_index: null }], cursor: 50, total: 1 })
+      .mockResolvedValueOnce({ messages: [], cursor: 2, total: 0 })
+      .mockResolvedValueOnce({
+        messages: [
+          { level: "log", text: "new1", page_index: null },
+          { level: "log", text: "new2", page_index: null },
+        ],
+        cursor: 2,
+        total: 2,
+      });
+    const { openTail } = await import("./tail.js");
+    const panels = await import("./console-panel.js");
+    let captured: TailOptions | null = null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce((_url: string, opts: TailOptions) => {
+      captured = opts;
+      return { close: vi.fn() };
+    });
+
+    await bootSession(root, "sess-console-reset", {});
+    (captured as TailOptions | null)?.onMessage({ events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }], cursor: 5 });
+
+    await vi.waitFor(() => expect(loaders.getConsole).toHaveBeenLastCalledWith("sess-console-reset", 0));
+    await vi.waitFor(() => {
+      const last = (panels.renderConsolePanel as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as Array<{
+        text: string;
+      }>;
+      expect(last.map((m) => m.text)).toEqual(["new1", "new2"]);
+    });
+  });
+
   it("logs and swallows cheap panel refresh errors from tail messages", async () => {
     const getSession = await getMockedGetSession();
     getSession.mockResolvedValueOnce(makeDetail({ live: true }));

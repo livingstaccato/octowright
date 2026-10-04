@@ -39,7 +39,7 @@ POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (2
 POST   /api/sessions/{id}/selector/validate      → {"ok": true, "count": int} (200) — CSS selector match count against the live page, bounded by OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS. 400 if selector missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past the dashboard timeout
 POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record, or one the launch options refuse (the error names the field).
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
-GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
+GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int, "dropped": int}
 GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
 WS     /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
 WS     /api/sessions/{id}/screencast?fps=N       → binary JPEG frames for LIVE browser sessions. Requested fps is clamped to the configured backend cap; closed/unknown sessions are rejected at connect time (see WS semantics below)
@@ -343,16 +343,37 @@ DownloadRecord = {
 
 ## `/console` and `/downloads` cursor semantics
 
-Both endpoints share the same shape: ``{<plural>: [...], "cursor": int, "total": int}``.
+Both endpoints answer ``{<plural>: [...], "cursor": int, "total": int}``;
+``/console`` adds ``"dropped": int``.
 
-- ``since`` is an optional 0-based index into the messages/downloads list.
-  Items at index ``>= since`` are returned. Out-of-range values are clamped
-  into ``[0, total]``.
-- ``cursor`` returned is always the new ``total`` so callers can pass it back
-  on the next poll without tracking offsets manually.
-- ``/console`` accepts an optional ``level=`` filter (case-sensitive match
-  against ``ConsoleMessage.level``) — the filter applies BEFORE the ``since``
-  slice, so the ``cursor``/``total`` values reflect only the filtered view.
+`/console`:
+
+- ``since`` and the returned ``cursor`` are **absolute**: they count console
+  messages from the start of the session, before any ``level`` filter. Pass
+  the returned ``cursor`` back as ``since`` to get exactly the messages
+  appended after it.
+- A live session's console is a bounded buffer (1000 messages). ``dropped``
+  is how many were evicted before the oldest one still held (always ``0`` for
+  a closed session, whose rows come from the recording). A ``since`` inside
+  the evicted range starts at the oldest retained message. Cursors used to be
+  positions in that buffer, so once it filled ``since=1000`` returned nothing
+  forever and an eviction skipped messages.
+- ``level=`` (case-sensitive match against ``ConsoleMessage.level``) filters
+  what is returned and **never moves the cursor**, so a filtered poller
+  resumes where it left off. It used to filter before slicing, which made the
+  cursor an index into the filtered list.
+- ``total`` is how many retained messages match the filter.
+- A returned ``cursor`` lower than the ``since`` sent means the id now names a
+  different console (a relaunch under the same id); start over from ``0``.
+
+`/downloads`:
+
+- ``since`` is a 0-based index into the downloads list. Items at index
+  ``>= since`` are returned; out-of-range values are clamped into
+  ``[0, total]``, and ``cursor`` is the new ``total``.
+
+Both:
+
 - For LIVE sessions the data is read directly off the in-memory session
   (``BrowserSession.console`` and ``BrowserSession.list_downloads()``).
 - For CLOSED sessions the data is reconstructed by scanning the JSONL
