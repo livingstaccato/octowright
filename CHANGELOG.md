@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Switching or closing the active page leaves the iframe it was in.** An
+  iframe chosen with `browser_switch_frame` stayed the target after
+  `page_switch`, so a later `browser_fill` or `browser_click` landed in the
+  previous page's iframe. After closing that page, or a crash recovery that
+  replaced it, every element action failed with `Frame was detached`. Any
+  change of the active page now returns to its top-level page.
 - **A browser reopened after a driver death is evicted when a later driver
   dies too.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a reopened session that
   died with the next driver was skipped entirely, not only kept from reopening

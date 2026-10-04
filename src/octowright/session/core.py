@@ -325,6 +325,16 @@ class BrowserSession(
 
             self.started_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A frame is a child of ONE page. Every path that changes the active
+        # page -- page_switch, close_page, crash recovery, the screencast
+        # rebind -- assigns ``page``, so the frame is dropped here once rather
+        # than at each of them: kept, element actions landed in the old page's
+        # iframe, or failed with "Frame was detached" after a close or crash.
+        if name == "page" and self.__dict__.get("page", value) is not value:
+            object.__setattr__(self, "active_frame", None)
+        object.__setattr__(self, name, value)
+
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page
 
