@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text
 from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
+from octowright.capture_regex import regex_match_spans
 from octowright.capture_summaries import summarize_capture_payload
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
 from octowright.private_paths import secure_artifact_tree
@@ -289,16 +290,19 @@ def search_capture(
     capped_context = max(0, min(context_chars, MAX_SEARCH_CONTEXT_CHARS))
     capped_limit = max(0, min(limit, MAX_SEARCH_MATCHES))
     if regex:
-        iterator = re.finditer(query, content, flags=re.IGNORECASE | re.MULTILINE)
+        # A caller's pattern can backtrack catastrophically; it runs in a
+        # child process with a hard time bound (see capture_regex).
+        spans = regex_match_spans(query, content, limit=capped_limit)
     else:
-        iterator = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
-    for match in iterator if capped_limit else ():
-        start = max(0, match.start() - capped_context)
-        end = min(len(content), match.end() + capped_context)
+        literal = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
+        spans = [m.span() for _, m in zip(range(capped_limit), literal, strict=False)]
+    for match_start, match_end in spans:
+        start = max(0, match_start - capped_context)
+        end = min(len(content), match_end + capped_context)
         matches.append(
             {
-                "start": match.start(),
-                "end": match.end(),
+                "start": match_start,
+                "end": match_end,
                 "context_start": start,
                 "context_end": end,
                 "context": content[start:end],
@@ -312,8 +316,6 @@ def search_capture(
                 },
             }
         )
-        if len(matches) >= capped_limit:
-            break
     return {
         "capture_id": capture_id,
         "query": query,
