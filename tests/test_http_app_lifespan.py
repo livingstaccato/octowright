@@ -113,9 +113,10 @@ def test_port_is_free_supports_ipv6_loopback() -> None:
     busy = int(s.getsockname()[1])
     try:
         assert _http_lifespan._port_is_free("::1", busy) is False
-        chosen = _http_lifespan._pick_port("::1", busy, retries=20)
-        assert chosen is not None
-        assert chosen > busy
+        claimed = _http_lifespan._claim_port("::1", busy, retries=20)
+        assert claimed is not None
+        claimed[0].close()
+        assert claimed[1] > busy
     finally:
         s.close()
 
@@ -155,6 +156,11 @@ def test_port_is_free_requires_all_resolved_addresses_to_bind(monkeypatch: pytes
     ]
 
 
+class _FakeListener:
+    def close(self) -> None:
+        return None
+
+
 @pytest.mark.asyncio
 async def test_serve_app_sets_runtime_and_calls_on_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     bound_calls: list[tuple[str, int]] = []
@@ -173,8 +179,7 @@ async def test_serve_app_sets_runtime_and_calls_on_bound(monkeypatch: pytest.Mon
 
     fake_uvicorn = types.SimpleNamespace(Config=_FakeConfig, Server=_FakeServer)
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
-    monkeypatch.setattr(_http_lifespan, "_pick_port", lambda *_args, **_kwargs: 8123)
-    monkeypatch.setattr(_http_lifespan, "_bind_server_socket", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(_http_lifespan, "_claim_port", lambda *_args, **_kwargs: (_FakeListener(), 8123))
 
     def _on_bound(host: str, port: int) -> None:
         bound_calls.append((host, port))
@@ -189,7 +194,7 @@ async def test_serve_app_sets_runtime_and_calls_on_bound(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_serve_app_sets_runtime_error_when_no_port(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(_http_lifespan, "_pick_port", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(_http_lifespan, "_claim_port", lambda *_args, **_kwargs: None)
 
     await _http_lifespan.serve_app(host="127.0.0.1", port=8900, retries=2)
 
@@ -211,8 +216,7 @@ async def test_serve_app_cleans_runtime_state_on_server_error(monkeypatch: pytes
 
     fake_uvicorn = types.SimpleNamespace(Config=_FakeConfig, Server=_FakeServer)
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", fake_uvicorn)
-    monkeypatch.setattr(_http_lifespan, "_pick_port", lambda *_args, **_kwargs: 9001)
-    monkeypatch.setattr(_http_lifespan, "_bind_server_socket", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(_http_lifespan, "_claim_port", lambda *_args, **_kwargs: (_FakeListener(), 9001))
 
     with pytest.raises(RuntimeError, match="serve failed"):
         await _http_lifespan.serve_app(host="127.0.0.1", port=9000, retries=0)

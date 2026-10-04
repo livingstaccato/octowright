@@ -566,7 +566,7 @@ def test_kill_followers_flag_sweeps_follower_pids(
 def test_port_is_free_sets_reuseaddr_so_time_wait_does_not_block(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pre-flight check must set SO_REUSEADDR so a TIME_WAIT socket from the
     just-stopped daemon reads as free — matching what the new daemon (which also
-    sets SO_REUSEADDR/SO_REUSEPORT) can actually bind. Without it, restart sits
+    sets SO_REUSEADDR on POSIX) can actually bind. Without it, restart sits
     through the full TIME_WAIT timeout for nothing."""
     import socket as _socket
 
@@ -585,8 +585,9 @@ def test_port_is_free_sets_reuseaddr_so_time_wait_does_not_block(monkeypatch: py
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(_restart_mod.socket, "getaddrinfo", lambda *_a, **_k: [(2, 1, 6, "", ("127.0.0.1", 6286))])
-    monkeypatch.setattr(_restart_mod.socket, "socket", _FakeSocket)
+    monkeypatch.setattr(_socket, "getaddrinfo", lambda *_a, **_k: [(2, 1, 6, "", ("127.0.0.1", 6286))])
+    monkeypatch.setattr(_socket, "socket", _FakeSocket)
+    monkeypatch.setattr("octowright._port_probe.os.name", "posix")
 
     assert _restart_mod._port_is_free("127.0.0.1", 6286) is True
     assert (_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1) in opts

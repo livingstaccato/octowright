@@ -37,7 +37,6 @@ import io
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -47,6 +46,7 @@ from pathlib import Path
 import click
 
 from octowright import singleton
+from octowright._port_probe import port_is_free
 from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
@@ -272,39 +272,11 @@ def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
     return not singleton.pid_is_alive(pid)
 
 
-def _port_is_free(host: str, port: int) -> bool:
-    try:
-        addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return False
-    if not addrinfos:
-        return False
-    checked = False
-    seen: set[tuple[int, int, int, object]] = set()
-    for family, socktype, proto, _canonname, sockaddr in addrinfos:
-        key = (family, socktype, proto, sockaddr)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            sock = socket.socket(family, socktype, proto)
-        except OSError:
-            continue
-        try:
-            # Match the daemon's bind options so this pre-flight check agrees
-            # with what the new daemon can actually do: SO_REUSEADDR lets a
-            # TIME_WAIT socket (from the daemon we just stopped) read as free,
-            # so restart doesn't sit through the full TIME_WAIT timeout. An
-            # actively-listening socket still blocks the bind, so a not-yet-dead
-            # daemon is still correctly reported busy.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(sockaddr)
-            checked = True
-        except OSError:
-            return False
-        finally:
-            sock.close()
-    return checked
+# The daemon's own probe, so this pre-flight wait agrees with what the new
+# daemon can actually bind: SO_REUSEADDR (POSIX) lets the just-stopped
+# daemon's TIME_WAIT socket read as free, while a still-listening daemon reads
+# busy on every platform (see _port_probe for why Windows differs).
+_port_is_free = port_is_free
 
 
 def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
