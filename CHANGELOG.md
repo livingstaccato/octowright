@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A launch caught by daemon shutdown no longer starts a new Playwright
+  driver.** A launch that failed because shutdown had just stopped the driver
+  read as a dead driver. The pool then "healed" it: it recorded a driver
+  restart and retried on a newly started driver that nothing would stop. The
+  original error is now raised.
 - **A browser reopened after a driver death or browser crash keeps its close
   protection reason.** A headed browser protected by default came back marked
   as explicitly protected, so `browser_close` refused it with the wrong

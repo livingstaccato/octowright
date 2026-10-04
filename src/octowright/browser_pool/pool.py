@@ -85,6 +85,9 @@ class BrowserPool:
         # re-reading the env var at construction time.
         self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(operation_queue_timeout_seconds)
         self._pw: Playwright | None = None
+        #: Set by ``lifecycle.shutdown_pool`` as it stops the driver, so a
+        #: launch failing because of that stop is not "healed" with a new one.
+        self._driver_shut_down = False
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
         self._driver_restarts: int = 0
@@ -276,6 +279,13 @@ class BrowserPool:
                 if self._driver_restarts != generation:
                     log.info("octowright.pool.driver_already_replaced_retrying", error=repr(exc))
                     return await self._launch_impl(options, sp)
+                if self._driver_shut_down:
+                    # Shutdown stopped the driver and cleared the handle
+                    # without a new generation. The probe would read "no
+                    # handle" as dead, and the retry would start a fresh driver
+                    # on a pool that has shut down.
+                    log.info("octowright.pool.driver_cleared_by_shutdown", error=repr(exc))
+                    raise
                 used = self._pw
                 if not await driver_health.driver_confirmed_dead(used):
                     log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))

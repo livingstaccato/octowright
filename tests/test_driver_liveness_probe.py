@@ -268,6 +268,46 @@ async def test_launch_death_with_an_unanswering_driver_does_not_reset(monkeypatc
     assert pool._pw is pw
 
 
+@pytest.mark.anyio
+async def test_launch_death_after_shutdown_cleared_the_driver_does_not_restart_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Shutdown clears the handle WITHOUT a new generation (a reset bumps it
+    under the same lock). A launch still in flight then saw no handle, which
+    the probe reads as dead: it "reset" a driver that was already gone, and
+    its retry started a brand-new driver on a pool that had shut down."""
+    pw, _ = _fake_pw("ok")
+    error = TargetClosedError(LAUNCH_DEATH)
+    pool, calls = _pool_with_failing_launch(monkeypatch, pw, error)
+    real_impl = pool._launch_impl
+
+    async def _impl_then_shutdown(options: dict[str, Any], sp: object) -> dict[str, Any]:
+        # What lifecycle.shutdown_pool does while the launch is in flight.
+        pool._driver_shut_down = True
+        pool._pw = None
+        return await real_impl(options, sp)
+
+    monkeypatch.setattr(pool, "_launch_impl", _impl_then_shutdown)
+
+    with pytest.raises(TargetClosedError) as excinfo:
+        await pool.launch(kind="chromium")
+
+    assert excinfo.value is error
+    assert calls["n"] == 1  # no retry, so no new driver
+    assert calls["evictions"] == 0
+    assert pool.driver_restart_count() == 0
+
+
+@pytest.mark.anyio
+async def test_pool_shutdown_marks_the_driver_shut_down() -> None:
+    from octowright.browser_pool.lifecycle import shutdown_pool
+
+    pool = BrowserPool()
+    assert pool._driver_shut_down is False
+    await shutdown_pool(pool)
+    assert pool._driver_shut_down is True
+
+
 class _HungStopDriver:
     """A driver whose ``stop()`` never returns until its process is killed --
     measured against a SIGSTOPped driver: ``stop()`` pending after 3s, done
