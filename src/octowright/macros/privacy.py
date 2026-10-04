@@ -366,7 +366,10 @@ def _collect_classified_values(
         return _collect_classified_sequence(value, inherited=inherited, path=path)
     if isinstance(value, (set, frozenset)):
         return _collect_classified_sequence(sorted(value, key=repr), inherited=inherited, path=path)
-    if inherited is not None and value not in (None, ""):
+    # A boolean carries no secret, and ``str(True)`` in a case-insensitive
+    # ledger would rewrite every true/false on the session. A number stays:
+    # ``{{otp}}`` expands to its digits. The key still redacts it structurally.
+    if inherited is not None and value not in (None, "") and not isinstance(value, bool):
         return {ClassifiedArgValue(str(value), path, inherited)}
     return set()
 

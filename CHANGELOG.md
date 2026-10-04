@@ -101,6 +101,13 @@ a section that is already tagged and on PyPI.
   scrub now also matches the value as `repr` spells it, up to twice over,
   including the `repr` of its JSON-escaped spelling, which is what a locator
   error quoting the value produces inside `repr(exc)`.
+- **A true/false macro argument no longer redacts every true and false.** A
+  boolean under a credential-like name (`accept_cookies: true`) was admitted to
+  the session's scrub ledger as `True`, and since scrubbing ignores case every
+  `true`/`false` in later rows, selectors and payloads became `<redacted>`. A
+  boolean is now left out of the ledger, live and in exported scripts; it is
+  still redacted by name in `args_used`. A numeric credential (`otp: 482193`)
+  is still scrubbed.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

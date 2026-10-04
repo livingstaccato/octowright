@@ -310,7 +310,7 @@ def _collect_classified_values(
                     path=f"{{path}}[{{index}}]",
                 )
             )
-    elif inherited is not None and value not in (None, ""):
+    elif inherited is not None and value not in (None, "") and not isinstance(value, bool):
         values.add((str(value), path, inherited))
     return values
 
