@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The dashboard refetches after its event stream reconnects.** The server
+  does not replay invalidations published while the stream was down, and a
+  reconnect inside one poll interval (an `octowright restart`, say) stopped
+  polling without fetching, so the panels kept listing pre-restart browsers
+  as live. Any open that follows a polling spell now reloads every panel.
 - **The `driver_died` notification says which lost sessions will not be
   reopened.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a session that was itself
   an auto-reopen is not reopened a second time, but the notification gave one
