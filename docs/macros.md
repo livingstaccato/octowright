@@ -546,6 +546,17 @@ shown. A macro can say so per top-level parameter:
 - A `macro_run_sequence` resolves each step from the macro that step loaded;
   a step whose macro is missing or not valid JSON is still a failed step with
   name-only redaction.
+- **Kept across a re-save.** `macro_save` composes a macro afresh from the
+  recording, but keeps the `parameter_specs` of the version it replaces, so
+  re-recording a flow does not quietly loosen what its author declared. The
+  read of the saved version and the write are one step: every macro save,
+  write (`macro_compile` with `write`, the dashboard editor, `macro_repair_apply`)
+  and delete in the daemon is serialised by one lock, and one that waits more
+  than 10 seconds for it fails with `MacroWriteLockTimeout` rather than
+  hanging. A write that replaces the whole macro (the dashboard editor,
+  `macro_compile`) replaces its specs too; the dashboard's validation warns
+  with `sensitive_parameters_shrank` when the new version makes a parameter it
+  still takes less sensitive than the saved one.
 
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped
@@ -847,7 +858,9 @@ The linter catches:
 - `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):
   a malformed spec (`bad_parameter_specs`), a `"sensitive": false` the floor
   ignores (`ignored_public_declaration`), and a spec naming no parameter
-  (`unknown_parameter_spec`).
+  (`unknown_parameter_spec`). Linted against the saved version (the
+  dashboard's validation does this), a parameter the new version makes less
+  sensitive is `sensitive_parameters_shrank`.
 
 ## Test suite mode
 

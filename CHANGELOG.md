@@ -34,6 +34,14 @@ a section that is already tagged and on PyPI.
   `warnings` field, as `macro_lint` does. Exported scripts resolve the same
   declarations and are stamped classifier version 7; regenerate one to pick
   them up.
+- **Re-saving a macro keeps its `parameter_specs`.** `macro_save` rebuilds a
+  macro from the recording but now carries over the declarations of the
+  version it replaces. Macro saves, writes and deletes in the daemon are
+  serialised, and one that waits more than 10 seconds fails with
+  `MacroWriteLockTimeout` instead of hanging. The dashboard's macro validation
+  warns (`sensitive_parameters_shrank`) when an edit makes a parameter less
+  sensitive than the saved version, and the macro detail it loads carries
+  `parameter_specs`.
 
 ### Fixed
 - **A browser dying at launch no longer closes every other browser.** Its

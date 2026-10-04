@@ -48,7 +48,7 @@ from octowright.macros.repair import repair_apply as repair_apply_impl
 from octowright.macros.repair import repair_preview as repair_preview_impl
 from octowright.macros.repair import suggest_fix as _suggest_fix
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
-from octowright.macros.storage import load_macro, write_macro
+from octowright.macros.storage import load_macro, macro_write_lock, write_macro
 from octowright.macros.substitution import (
     SEMANTIC_LOCATOR_KEYS,
     action_kwargs,
@@ -386,13 +386,15 @@ def repair_preview(name: str) -> MacroRepairPreviewResult:
 
 
 def repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
-    return repair_apply_impl(
-        name,
-        action_index,
-        load_macro=load_macro,
-        write_macro=write_macro,
-        semantic_keys=SEMANTIC_LOCATOR_KEYS,
-    )
+    # A read-modify-write: held across both, so a concurrent save is not lost.
+    with macro_write_lock():
+        return repair_apply_impl(
+            name,
+            action_index,
+            load_macro=load_macro,
+            write_macro=write_macro,
+            semantic_keys=SEMANTIC_LOCATOR_KEYS,
+        )
 
 
 async def run_macro(

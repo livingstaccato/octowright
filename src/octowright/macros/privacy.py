@@ -501,6 +501,10 @@ class MacroArgPrivacy:
             return "credential"
         return None if self._public(key) else _privacy_tier(key)
 
+    def tier_of(self, key: object) -> PrivacyTier | None:
+        """The tier a top-level argument named *key* resolves to here; ``None`` when it is not classified."""
+        return self._tier(key)
+
     def classified(self, args: Mapping[str, Any]) -> tuple[ClassifiedArgValue, ...]:
         """Classified leaves with their effective tier and value-free-safe path."""
         values: set[ClassifiedArgValue] = set()

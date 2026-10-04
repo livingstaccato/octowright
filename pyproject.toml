@@ -432,6 +432,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_try_suppression_privacy.py",
     "tests/test_macro_screenshot_refusal_reason.py",
     "tests/test_macro_parameter_specs.py",
+    "tests/test_macro_parameter_specs_storage.py",
     "tests/test_macro_screenshot_session_ledger.py",
     "tests/test_privacy_ledger_scrub_cache.py",
     "tests/test_macro_artifact_positional_privacy.py",

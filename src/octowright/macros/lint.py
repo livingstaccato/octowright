@@ -35,7 +35,7 @@ from .lint_credentials import (
     _looks_like_password,
 )
 from .lint_fields import ambiguous_rename_fields, unknown_fields
-from .lint_specs import lint_parameter_specs
+from .lint_specs import lint_parameter_specs, lint_sensitivity_shrink
 from .lint_urls import code_carries_credential, url_carries_credential
 from .runtime import _ACTION_MAP
 from .substitution import SEMANTIC_FINDER_KEYS
@@ -618,12 +618,14 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def lint_macro(macro: dict) -> list[Issue]:
+def lint_macro(macro: dict, *, previous: dict | None = None) -> list[Issue]:
     """Return zero or more Issues. Pure — no I/O.
 
     Whole-macro issues use ``action_index=None``; per-action issues use the
     index into the top-level ``actions`` list. Issues found inside nested
     conditional branches are still reported under the OUTER action's index.
+    *previous* is the version on disk, when *macro* is about to replace it:
+    a parameter it makes less sensitive is reported.
     """
     issues: list[Issue] = []
 
@@ -655,6 +657,6 @@ def lint_macro(macro: dict) -> list[Issue]:
 
     issues.extend(
         Issue(severity="warning", code=code, message=message, action_index=None)
-        for code, message in lint_parameter_specs(macro)
+        for code, message in (*lint_parameter_specs(macro), *lint_sensitivity_shrink(macro, previous))
     )
     return issues

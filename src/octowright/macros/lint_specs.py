@@ -44,3 +44,34 @@ def lint_parameter_specs(macro: dict[str, Any]) -> list[tuple[str, str]]:
                 )
             )
     return findings
+
+
+def sensitive_parameters(macro: dict[str, Any]) -> frozenset[str]:
+    """The top-level parameters *macro* resolves as sensitive: by name, position or declaration."""
+    privacy = resolve_macro_privacy(macro).privacy
+    declared = declared_sensitivity(macro)
+    names = (_parameter_names(macro) or set()) | declared.sensitive | declared.public
+    return frozenset(name for name in names if privacy.tier_of(name) is not None)
+
+
+def lint_sensitivity_shrink(macro: dict[str, Any], previous: dict[str, Any] | None) -> list[tuple[str, str]]:
+    """Warn when *macro* makes a parameter it still takes less sensitive than *previous* (the version on disk).
+
+    A parameter the new version no longer takes receives no value, so dropping
+    it shrinks nothing.
+    """
+    if not isinstance(previous, dict):
+        return []
+    kept = _parameter_names(macro) or set()
+    shrank = sorted((sensitive_parameters(previous) - sensitive_parameters(macro)) & kept)
+    if not shrank:
+        return []
+    names = ", ".join(repr(name) for name in shrank)
+    return [
+        (
+            "sensitive_parameters_shrank",
+            f"parameter(s) {names} were sensitive in the saved version and are not in this one, so their "
+            "values will be shown in run results and left out of the scrub set; declare them "
+            f'{{"sensitive": true}} in {SPECS_KEY} if that is not intended',
+        )
+    ]

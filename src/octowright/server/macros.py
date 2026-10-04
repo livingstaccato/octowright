@@ -37,7 +37,8 @@ from octowright.server._state import mcp, pool
         "`parameters` is a dict mapping parameter NAME to its literal VALUE in this "
         "recording — those values get replaced by {{name}} placeholders in the saved "
         'macro. Example: parameters={"email":"me@octowright.test","password":"hunter2"}. '
-        "Drops launch/close/snapshot entries by default. Returns the saved macro path."
+        "Drops launch/close/snapshot entries by default. Re-saving over an existing macro keeps "
+        "its parameter_specs. Returns the saved macro path."
     ),
 )
 def macro_save(

@@ -89,12 +89,21 @@ async def macro_repair_preview_endpoint(request: Request) -> SafeJSONResponse:
     return SafeJSONResponse(preview)
 
 
-def _issue_payload(macro: dict[str, Any]) -> list[dict[str, Any]]:
-    return [asdict(issue) for issue in lint_macro(macro)]
+def _issue_payload(macro: dict[str, Any], previous: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    return [asdict(issue) for issue in lint_macro(macro, previous=previous)]
 
 
-def _validation_body(macro: dict[str, Any]) -> dict[str, Any]:
-    issues = _issue_payload(macro)
+def _saved_version(name: str) -> dict[str, Any] | None:
+    """The macro *name* on disk, for the sensitivity-shrink check; ``None`` if there is none to compare."""
+    try:
+        saved = state._macros.load_macro(name)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+    return saved if isinstance(saved, dict) else None
+
+
+def _validation_body(macro: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    issues = _issue_payload(macro, previous)
     error_count = sum(1 for issue in issues if issue["severity"] == "error")
     # Non-error issues are surfaced separately so the dashboard can render
     # warnings without recomputing the split client-side; the MCP-SHARED
@@ -126,7 +135,8 @@ async def macro_validate_endpoint(request: Request) -> SafeJSONResponse:
     macro = payload.get("macro") if isinstance(payload, dict) else None
     if not isinstance(macro, dict):
         return SafeJSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
-    return SafeJSONResponse(_validation_body(macro))
+    previous = await asyncio.to_thread(_saved_version, request.path_params["name"])
+    return SafeJSONResponse(_validation_body(macro, previous))
 
 
 async def macro_update_endpoint(request: Request) -> SafeJSONResponse:
@@ -138,12 +148,14 @@ async def macro_update_endpoint(request: Request) -> SafeJSONResponse:
     if not isinstance(macro, dict):
         return SafeJSONResponse({"error": "'macro' must be a JSON object"}, status_code=400)
 
-    validation = _validation_body(macro)
+    previous = await asyncio.to_thread(_saved_version, name)
+    validation = _validation_body(macro, previous)
     if validation["error_count"]:
         return SafeJSONResponse({"error": "macro validation failed", **validation}, status_code=400)
 
-    path = state._macros.write_macro(name=name, macro=macro)
-    saved = state._macros.load_macro(name)
+    # Off the event loop: the write waits on the macro write lock and does file I/O.
+    path = await asyncio.to_thread(state._macros.write_macro, name=name, macro=macro)
+    saved = await asyncio.to_thread(state._macros.load_macro, name)
     await publish_dashboard_invalidation("macros")
     return SafeJSONResponse({"ok": True, "name": name, "path": str(path), "macro": saved})
 

@@ -59,10 +59,10 @@ GET    /api/personas/sizes                       → {<persona_name>: <bytes>, .
 GET    /api/personas/{name}                      → PersonaDetail; 404 if no `profile.yaml` for that persona
 PUT    /api/personas/{name}                      → {"ok": true, "name": str} (200); 400 if `yaml` field missing/non-string or fails `yaml.safe_load`; 404 if persona not found
 GET    /api/macros                               → [MacroSummary, ...]
-GET    /api/macros/{name:path}                   → MacroDetail (the full macro JSON: name, description, parameters, actions, created_at, updated_at). 404 if not found.
+GET    /api/macros/{name:path}                   → MacroDetail (the full macro JSON: name, description, parameters, actions, created_at, updated_at, and `parameter_specs` when the macro declares any). 404 if not found.
 PUT    /api/macros/{name:path}                   → {"ok": true, "name": str} (200) on save. 400 if `macro` field missing/non-object or fails validation (response includes the validation issue list); 404 if not found.
 GET    /api/macros/{name:path}/repair_preview    → {"original": [...], "repaired": [...], "diff": [...]} preview of auto-repair suggestions without applying them. 404 if not found.
-POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body. 400 if `macro` field missing/non-object.
+POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body; when a macro of that name is saved, `sensitive_parameters_shrank` warns about a parameter the body makes less sensitive than the saved version. 400 if `macro` field missing/non-object.
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str,
                                                     "installed_version"?: str}
