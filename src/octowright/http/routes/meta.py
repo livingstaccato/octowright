@@ -192,6 +192,19 @@ async def persona_sizes_endpoint(_request: Request) -> SafeJSONResponse:
         return SafeJSONResponse({})
 
 
+def _persona_engine_bytes(persona_dir: Path) -> dict[str, int]:
+    """Bytes on disk per engine profile under ``persona_dir``. Blocking."""
+    engine_bytes: dict[str, int] = {}
+    for kind in SUPPORTED_KINDS:
+        kind_dir = persona_dir / kind
+        if kind_dir.exists():
+            try:
+                engine_bytes[kind] = sum(f.stat().st_size for f in kind_dir.rglob("*") if f.is_file())
+            except OSError:
+                pass  # a file vanished mid-walk (a live browser's cache); size is best-effort
+    return engine_bytes
+
+
 async def persona_detail_endpoint(request: Request) -> SafeJSONResponse:
     """GET /api/personas/{name} — YAML content + per-engine disk usage."""
     name = request.path_params["name"]
@@ -204,14 +217,10 @@ async def persona_detail_endpoint(request: Request) -> SafeJSONResponse:
 
     yaml_text = yaml_path.read_text(encoding="utf-8")
 
-    engine_bytes: dict[str, int] = {}
-    for kind in SUPPORTED_KINDS:
-        kind_dir = resolved / kind
-        if kind_dir.exists():
-            try:
-                engine_bytes[kind] = sum(f.stat().st_size for f in kind_dir.rglob("*") if f.is_file())
-            except OSError:
-                pass
+    # A persistent profile can hold tens of thousands of cache files: walk it
+    # in a worker thread, as persona_sizes_endpoint runs du, or every MCP call
+    # and dashboard stream on the leader stalls for the length of the walk.
+    engine_bytes = await asyncio.to_thread(_persona_engine_bytes, resolved)
 
     profile_bytes = yaml_path.stat().st_size
     total_bytes = profile_bytes + sum(engine_bytes.values())

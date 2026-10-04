@@ -236,3 +236,34 @@ def test_macro_update_endpoint_writes_macro_and_invalidates(
     assert saved.exists()
     assert '"press_key"' in saved.read_text(encoding="utf-8")
     assert published == ["macros"]
+
+
+def test_persona_detail_sizes_the_profile_tree_off_the_event_loop(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent profile holds tens of thousands of cache files; walking
+    them on the loop stalled every MCP call, SSE heartbeat and WS tail."""
+    import asyncio
+
+    pdir = _meta_routes.PROFILES_DIR / "crumpet-cosmo"
+    (pdir / "chromium" / "Cache").mkdir(parents=True)
+    (pdir / "chromium" / "Cache" / "f0").write_bytes(b"x" * 10)
+    (pdir / "profile.yaml").write_text("name: crumpet-cosmo\n", encoding="utf-8")
+    on_loop: list[bool] = []
+    real = _meta_routes._persona_engine_bytes
+
+    def spy(persona_dir: Path) -> dict[str, int]:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(persona_dir)
+
+    monkeypatch.setattr(_meta_routes, "_persona_engine_bytes", spy)
+
+    r = client.get("/api/personas/crumpet-cosmo")
+
+    assert r.status_code == 200
+    assert r.json()["engine_bytes"] == {"chromium": 10}
+    assert on_loop == [False]
