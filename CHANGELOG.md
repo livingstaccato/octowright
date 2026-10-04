@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A golden snapshot notices an added or dropped duplicate sibling.** Two
+  siblings with the same role and name (two "More" links, say) were both
+  compared against the first live match, so removing or adding one produced no
+  diff and `golden_assert` passed. Duplicates are now matched by occurrence.
 - **A launch caught by daemon shutdown no longer starts a new Playwright
   driver.** A launch that failed because shutdown had just stopped the driver
   read as a dead driver. The pool then "healed" it: it recorded a driver

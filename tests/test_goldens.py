@@ -262,6 +262,38 @@ def test_diff_trees_removed_middle_child(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert diffs[0]["expected"] == {"role": "link", "name": "About"}
 
 
+def test_diff_trees_duplicate_sibling_removed_is_reported(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Dropping one of two identical role+name siblings is a ``removed`` diff, not silence."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [
+            {"role": "link", "name": "More"},
+            {"role": "link", "name": "More"},
+            {"role": "heading", "name": "H"},
+        ],
+    }
+    actual = {"children": [{"role": "link", "name": "More"}, {"role": "heading", "name": "H"}]}
+    diffs = g.diff_trees(expected, actual)
+    assert [d["op"] for d in diffs] == ["removed"]
+    assert diffs[0]["expected"] == {"role": "link", "name": "More"}
+    reverse = g.diff_trees(actual, expected)
+    assert [d["op"] for d in reverse] == ["added"]
+    assert reverse[0]["actual"] == {"role": "link", "name": "More"}
+
+
+def test_diff_trees_duplicate_siblings_matched_by_occurrence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The second duplicate is compared with the second live duplicate, not the first."""
+    g = _import_goldens(monkeypatch, tmp_path)
+    expected = {
+        "children": [{"role": "link", "name": "More", "url": "/a"}, {"role": "link", "name": "More", "url": "/b"}]
+    }
+    actual = {
+        "children": [{"role": "link", "name": "More", "url": "/a"}, {"role": "link", "name": "More", "url": "/c"}]
+    }
+    diffs = g.diff_trees(expected, actual)
+    assert diffs == [{"path": "root/children/1/url", "op": "changed", "expected": "/b", "actual": "/c"}]
+
+
 def test_diff_trees_changed_within_matched_child(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A field change on a node matched by (role, name) surfaces as
     ``changed``, not as a remove+add pair."""

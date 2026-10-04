@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -187,10 +188,17 @@ def _diff_unkeyed_lists(exp_list: list[Any], act_list: list[Any], path: str, dif
             _diff_nodes(exp_list[i], act_list[i], child_path, diffs)
 
 
-def _first_index_by_key(keys: list[tuple[Any, ...]]) -> dict[tuple[Any, ...], int]:
-    out: dict[tuple[Any, ...], int] = {}
+def _indices_by_key(keys: list[tuple[Any, ...]]) -> dict[tuple[Any, ...], deque[int]]:
+    """Queue every index per identity key, in order.
+
+    Duplicate role+name siblings are matched by occurrence: the n-th expected
+    ``link "More"`` pairs with the n-th live one. A first-match map paired every
+    duplicate with the first live sibling, so adding or dropping a duplicate
+    produced no diff at all.
+    """
+    out: dict[tuple[Any, ...], deque[int]] = {}
     for i, k in enumerate(keys):
-        out.setdefault(k, i)
+        out.setdefault(k, deque()).append(i)
     return out
 
 
@@ -198,17 +206,18 @@ def _diff_matched_pairs(
     exp_list: list[Any],
     act_list: list[Any],
     exp_keys: list[tuple[Any, ...]],
-    act_idx_by_key: dict[tuple[Any, ...], int],
+    act_queue_by_key: dict[tuple[Any, ...], deque[int]],
     path: str,
     diffs: list[dict[str, Any]],
 ) -> set[int]:
     matched_act: set[int] = set()
     for i, key in enumerate(exp_keys):
         child_path = f"{path}/{i}"
-        j = act_idx_by_key.get(key)
-        if j is None:
+        queue = act_queue_by_key.get(key)
+        if not queue:
             diffs.append({"path": child_path, "op": "removed", "expected": exp_list[i], "actual": None})
         else:
+            j = queue.popleft()
             matched_act.add(j)
             _diff_nodes(exp_list[i], act_list[j], child_path, diffs)
     return matched_act
@@ -230,16 +239,13 @@ def _diff_child_lists(
         _diff_unkeyed_lists(exp_list, act_list, path, diffs)
         return
 
-    act_idx_by_key = _first_index_by_key(act_keys)
-    exp_idx_by_key = _first_index_by_key(exp_keys)
-    matched_act = _diff_matched_pairs(exp_list, act_list, exp_keys, act_idx_by_key, path, diffs)
+    matched_act = _diff_matched_pairs(exp_list, act_list, exp_keys, _indices_by_key(act_keys), path, diffs)
 
-    for j, key in enumerate(act_keys):
-        # Skip matched indices and keys already accounted for on the expected
-        # side (avoids double-reporting a duplicate-key collision).
-        if j in matched_act or key in exp_idx_by_key:
-            continue
-        diffs.append({"path": f"{path}/{j}", "op": "added", "expected": None, "actual": act_list[j]})
+    # Every live child left unmatched once the expected side has claimed its
+    # occurrences is an addition -- including a surplus duplicate.
+    for j in range(len(act_list)):
+        if j not in matched_act:
+            diffs.append({"path": f"{path}/{j}", "op": "added", "expected": None, "actual": act_list[j]})
 
 
 def _diff_nodes(
