@@ -197,6 +197,33 @@ def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
     return bundle
 
 
+async def _diagnostic_bundle(session: SessionLike, sensitive_values: tuple[str, ...]) -> dict[str, Any]:
+    """The diagnostic producer's bundle, split by sink kind (#248).
+
+    The page may render a value this run or the session ledger holds (a
+    classified argument, a password typed earlier). Text can be scrubbed and
+    pixels cannot: with any value held, the producer writes its HTML file and
+    returns its console tail scrubbed of them all, and takes no screenshot.
+    Composition roots can retain their own explicitly safe evidence at the
+    authorized screenshot boundary. The returned bundle is scrubbed once more
+    here, for a producer that did not apply the scrub, and then cut to size --
+    in that order, so a cut cannot leave the start of a value behind.
+    """
+    try:
+        if sensitive_values:
+            raw = await session.diagnostic_bundle(
+                console_tail=MACRO_FAILURE_CONSOLE_TAIL,
+                scrub=lambda value: _scrubbed(value, sensitive_values),
+                screenshot=False,
+            )
+        else:
+            raw = await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
+    except Exception as secondary:
+        return {"diagnostic_error": _scrubbed(repr(secondary), sensitive_values)}
+    bundle = _scrubbed(raw, sensitive_values) if isinstance(raw, dict) else {}
+    return _truncate_bundle_console(bundle)
+
+
 def _scrubbed(value: Any, sensitive_values: tuple[str, ...]) -> Any:
     """*value* scrubbed of every one of *sensitive_values*, anywhere, flat: see `failure_scrub_values`."""
     return scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
@@ -222,18 +249,7 @@ async def build_failure_payload(
     macro's steps before substitution: the fields echoing them are not
     scrubbed of *sensitive_values*, the page-derived ones are.
     """
-    if sensitive_values:
-        # The generic diagnostic producer persists raw HTML and a raw
-        # screenshot. The page may render a value this run or the session
-        # ledger holds (a classified argument, a password typed earlier) into
-        # either, so do not invoke it. Composition roots can retain their own
-        # explicitly safe evidence at the authorized screenshot boundary.
-        bundle: dict[str, Any] = {"diagnostic_suppressed": "classified macro arguments"}
-    else:
-        try:
-            bundle = _truncate_bundle_console(await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL))
-        except Exception as secondary:
-            bundle = {"diagnostic_error": repr(secondary)}
+    bundle = await _diagnostic_bundle(session, sensitive_values)
 
     shown = written_actions(written[: index + 1], privacy_for)
     try:

@@ -100,6 +100,13 @@ a section that is already tagged and on PyPI.
   error instead of being replayed; retry it if it is safe to repeat.
 - WebSocket handshakes to the dashboard require an Origin that matches the
   page exactly, not any loopback port.
+- **A failed macro run that holds a credential keeps its diagnostics, scrubbed.**
+  Its failure payload used to carry no diagnostic bundle at all
+  (`diagnostic_suppressed`), losing the console tail with it. Now only the
+  screenshot is skipped (`screenshot_suppressed: true`); the page HTML file,
+  console tail, URL and title are produced with every value the run and the
+  session hold scrubbed out before anything is written. This applies to every
+  later run on a session that holds a value, too.
 
 ## [0.26.0] - 2026-10-03
 

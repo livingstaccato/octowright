@@ -561,10 +561,27 @@ shown. A macro can say so per top-level parameter:
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped
 policy value suppresses them rather than failing the artifact run. When one is not
-taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for a failed run
-when the run or the session ledger (below) holds any value; the payload records
-`diagnostic_suppressed` instead.
+taken, the evidence manifest records `screenshot_suppressed`. That decision is
+made per run, from the run's own values.
+
+**A failed run's diagnostics are split by sink kind.** The generic diagnostic
+producer saves the page's HTML beside the recording and, normally, a
+screenshot. When the run or the session ledger (below) holds any value -- the
+run's own arguments, or a value an earlier run or a typed password left in the
+session -- text and pixels are treated differently, because text can be
+scrubbed and pixels cannot:
+
+- no diagnostic screenshot is taken, and the payload's `bundle` says
+  `screenshot_suppressed: true`;
+- the HTML file is still written, and its preview, hash and size, the console
+  tail, the page URL and title are still reported, every one scrubbed of all
+  of those values (each anywhere, in every spelling the scrub knows) before it
+  is written or returned. The console tail is scrubbed before each message is
+  cut to size, so a cut cannot leave the start of a value behind.
+
+A run on a session that holds nothing gets the producer's output unchanged,
+screenshot included. Before this, a run holding values got no bundle at all
+(`diagnostic_suppressed`), so its failure lost its console tail too.
 
 **Screenshots outside a protected run.** Once the session ledger holds a value, every
 other screenshot of that session -- `browser_screenshot`, `browser_each`,
@@ -826,8 +843,9 @@ default.
 **Not covered.** These writers are not scrubbed:
 
 - the page HTML and screenshot the generic diagnostic producer saves when a run
-  fails while neither it nor the session ledger holds a value -- which can still
-  show a secret the ledger never learned, such as one typed with
+  fails while neither it nor the session ledger holds a value, and the HTML it
+  saves (scrubbed of what they do hold) otherwise -- either can still show a
+  secret the ledger never learned, such as one typed with
   `OCTOWRIGHT_REDACT_INPUTS=off` or into a field not classified as a password;
 - a HAR file, when HAR recording is enabled at launch;
 - a Playwright trace, when `browser_launch` is called with `trace=true`, saved

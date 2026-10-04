@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,10 @@ log = get_logger(__name__)
 # sync with the canonical value in ``session.core`` (both were 4000 but the
 # duplication was an accident waiting to happen).
 __all__ = ["DEFAULT_PREVIEW_CHARS", "SessionOpsMixin"]
+
+
+def _unchanged(value: Any) -> Any:
+    return value
 
 
 def _timestamp() -> str:
@@ -122,6 +127,8 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         console_tail: int = 0,
         html_preview_chars: int = 0,
         html_full: bool = False,
+        scrub: Callable[[Any], Any] | None = None,
+        screenshot: bool = True,
     ) -> dict[str, Any]:
         """Capture a screenshot + last N console messages + page HTML metadata.
 
@@ -130,9 +137,16 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         fields are opt-in: console_tail=N includes the last N console messages,
         html_preview_chars=N includes the first N HTML chars, and html_full=True
         includes the full HTML inline (rarely needed; mostly for tests).
+
+        Split by sink kind for a caller holding classified values (#248):
+        *scrub* is applied to the HTML before it is written, hashed or
+        previewed, and to the console tail, URL and title; ``screenshot=False``
+        takes none, because pixels cannot be scrubbed, and says so with
+        ``screenshot_suppressed``.
         """
+        clean: Callable[[Any], Any] = scrub if scrub is not None else _unchanged
         bundle: dict[str, Any] = {
-            "console_tail": _select_console_tail(list(self.console), console_tail),
+            "console_tail": clean(_select_console_tail(list(self.console), console_tail)),
             "url": None,
             "title": None,
             "html_path": None,
@@ -144,13 +158,18 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         if html_full:
             bundle["html"] = None
         await self._capture_diagnostic_page_meta(bundle)
+        bundle["url"], bundle["title"] = clean(bundle["url"]), clean(bundle["title"])
         await self._capture_diagnostic_html(
             bundle,
             screenshot_dir=screenshot_dir,
             html_preview_chars=html_preview_chars,
             html_full=html_full,
+            scrub=clean,
         )
-        await self._capture_diagnostic_screenshot(bundle, screenshot_dir=screenshot_dir)
+        if screenshot:
+            await self._capture_diagnostic_screenshot(bundle, screenshot_dir=screenshot_dir)
+        else:
+            bundle["screenshot_suppressed"] = True
         return bundle
 
     @gated_operation("browser_diagnostic_bundle")
@@ -172,11 +191,12 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
         screenshot_dir: Path | None,
         html_preview_chars: int,
         html_full: bool,
+        scrub: Callable[[Any], Any],
     ) -> None:
         import hashlib
 
         try:
-            html = await bounded(self.page.content(), operation="browser_diagnostic_bundle")
+            html = str(scrub(await bounded(self.page.content(), operation="browser_diagnostic_bundle")))
             h_dir = screenshot_dir or self.log_path.parent
             h_dir.mkdir(parents=True, exist_ok=True)
             h_path = h_dir / f"{self.instance_id}-fail-{_timestamp()}.html"
@@ -188,7 +208,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
             if html_full:
                 bundle["html"] = html
         except Exception as e:
-            bundle["html_error"] = repr(e)
+            bundle["html_error"] = scrub(repr(e))
 
     @gated_operation("browser_diagnostic_bundle")
     async def _capture_diagnostic_screenshot(

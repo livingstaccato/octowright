@@ -672,7 +672,10 @@ async def test_classified_explicit_screenshot_requires_privacy_handler(
     session = _session()
     session.screenshot = AsyncMock()
 
-    async def unsafe_diagnostic(**_kwargs: Any) -> dict[str, Any]:
+    async def unsafe_diagnostic(*, screenshot: bool = True, **_kwargs: Any) -> dict[str, Any]:
+        # A producer that takes a raw screenshot whenever it is asked for one.
+        if not screenshot:
+            return {"screenshot": None, "screenshot_suppressed": True}
         leaked = tmp_path / "diagnostic.png"
         leaked.write_bytes(PASSWORD.encode())
         return {"screenshot": str(leaked)}
@@ -689,7 +692,7 @@ async def test_classified_explicit_screenshot_requires_privacy_handler(
         await execution._run_macro_impl(session, "private", {"password": PASSWORD}, slowmo_ms=0)
 
     session.screenshot.assert_not_awaited()
-    session.diagnostic_bundle.assert_not_awaited()
+    assert session.diagnostic_bundle.await_args.kwargs["screenshot"] is False
     assert list(tmp_path.rglob("*.png")) == []
     assert "privacy handler" in str(caught.value)
 
