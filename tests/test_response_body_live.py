@@ -59,7 +59,11 @@ def server():  # type: ignore[no-untyped-def]
     try:
         yield f"http://127.0.0.1:{srv.server_address[1]}"
     finally:
+        # shutdown only stops serve_forever; server_close releases the
+        # listening socket, which otherwise surfaces as an unclosed-socket
+        # ResourceWarning when the fixture frame is collected.
         srv.shutdown()
+        srv.server_close()
 
 
 async def _rows_after_fetches(pool: BrowserPool, server: str) -> list[dict[str, Any]]:
