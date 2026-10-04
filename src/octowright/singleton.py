@@ -76,13 +76,30 @@ class LeaderInfo:
 
 
 def read_lock(path: Path = LOCK_PATH) -> LeaderInfo | None:
-    """Return the parsed lockfile, or None if it doesn't exist or is corrupt."""
-    if not path.exists():
+    """Return the parsed lockfile, or None if it is absent, unreadable or corrupt.
+
+    Never raises for a bad lockfile: this is called on every boot and every
+    follower reconnect, and the file is same-user-writable and replaced or
+    unlinked by other processes at any moment. There is no existence check
+    first -- that was a check-then-read race (a leader removing its lock in
+    between escaped as ``FileNotFoundError``) -- so the read itself decides.
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        # Present but unreadable (permissions, a directory, I/O error): there is
+        # no leader we can use, but unlike absence it is worth a line in the log.
+        log.warning("singleton.lock_unreadable", path=str(path), error=str(exc))
+        return None
+    except UnicodeDecodeError:
         return None
     try:
-        return LeaderInfo.from_json(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, TypeError, KeyError):
-        # Corrupt lockfile — treat as if no leader; the caller will overwrite it.
+        return LeaderInfo.from_json(raw)
+    except (ValueError, TypeError, KeyError):
+        # Corrupt lockfile (bad JSON, wrong shape) -- treat as if no leader; the
+        # caller will overwrite it. JSONDecodeError is a ValueError.
         return None
 
 

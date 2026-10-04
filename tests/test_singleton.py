@@ -43,6 +43,44 @@ def test_read_lock_corrupt_returns_none(tmp_path: Path) -> None:
     assert singleton.read_lock(path=lock) is None
 
 
+def test_read_lock_non_utf8_returns_none(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    lock.write_bytes(b"\xff\xfe{garbage")
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_wrong_json_shape_returns_none(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    lock.write_text('["a", "list"]')
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_vanishing_between_check_and_read_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leader removing its lock between an existence check and the read must
+    read as "no leader", not escape as FileNotFoundError into the boot path."""
+    lock = tmp_path / "octowright.lock"
+    singleton.write_lock(singleton.make_leader_info("127.0.0.1", 8765), path=lock)
+
+    def _gone(self: Path, *args: object, **kwargs: object) -> str:
+        raise FileNotFoundError(str(self))
+
+    monkeypatch.setattr(Path, "read_text", _gone)
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_unreadable_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lock = tmp_path / "octowright.lock"
+    singleton.write_lock(singleton.make_leader_info("127.0.0.1", 8765), path=lock)
+
+    def _denied(self: Path, *args: object, **kwargs: object) -> str:
+        raise PermissionError(str(self))
+
+    monkeypatch.setattr(Path, "read_text", _denied)
+    assert singleton.read_lock(path=lock) is None
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits don't apply to Windows lockfile")
 def test_write_lock_chmod_0600_and_parent_0700(tmp_path: Path) -> None:
     """The lockfile contains pid/host/port/mcp_url — sensitive enough that
