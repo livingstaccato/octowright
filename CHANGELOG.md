@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Cancelling `scenario_start` while its participants launch closes the ones
+  already open.** The rollback covered only fixtures and startup macros, so a
+  client that timed out or cancelled during a slow plugin launch left the
+  browsers and plugin sessions already opened running, attached to no
+  scenario. They are now closed before the cancel propagates.
 - **The dashboard's Live scenarios panel refreshes when a scenario starts.**
   Dashboard invalidations published back to back were coalesced to the last
   one, so `scenario_start`'s "scenarios" refresh was replaced by the
