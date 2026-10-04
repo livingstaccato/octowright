@@ -250,6 +250,7 @@ def _publish_driver_died(pool: Any, descriptors: list[dict[str, Any]], mode: str
                 relaunch_mode=mode,
                 lost_count=len(descriptors),
                 lost_instance_ids=tuple(d["instance_id"] for d in descriptors),
+                not_reopened_instance_ids=tuple(d["instance_id"] for d in descriptors if not d.get("reopen", True)),
             )
         )
 

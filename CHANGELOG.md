@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The `driver_died` notification says which lost sessions will not be
+  reopened.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a session that was itself
+  an auto-reopen is not reopened a second time, but the notification gave one
+  `relaunch_mode` for every lost id, so a client could wait for a reopen that
+  never came. It now carries `not_reopened_instance_ids`, and its hint names
+  them.
 - **Terminal plugin: a mistyped `OCTOWRIGHT_SSH_PORT` no longer stops the
   plugin loading.** It was parsed with a bare `int()` at import, so a value
   like `22s` failed the import and took every `terminal_*` tool with it. A

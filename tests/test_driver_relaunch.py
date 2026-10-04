@@ -362,6 +362,25 @@ def test_only_already_relaunched_sessions_lost_still_publishes_and_evicts(monkey
     assert pool.launched == []
 
 
+def test_driver_died_names_the_sessions_it_will_not_reopen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With reopen on, one ``relaunch_mode`` for every lost id told a client to
+    wait for a reopen that never comes for a session already reopened once."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    _set_mode(monkeypatch, "new-id")
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    monkeypatch.setattr(driver_relaunch, "_schedule_relaunch", lambda *_a: None)
+    tagged = _session("a")
+    tagged._auto_relaunched = True
+    pool = _FakePool([tagged, _session("b")])
+
+    driver_relaunch.on_driver_reset(pool, reason="x")
+
+    died = [e for e in events if type(e).__name__ == "DriverDiedEvent"]
+    assert died[0].not_reopened_instance_ids == ("a",)
+
+
 def test_finalize_id_keep_id_missing_session_returns_new_id() -> None:
     # Defensive: the fresh session vanished before re-keying — fall back to new id.
     pool = SimpleNamespace(_sessions={}, _sessions_lock=asyncio.Lock())
