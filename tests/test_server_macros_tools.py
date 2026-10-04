@@ -155,7 +155,7 @@ async def test_run_test_suite_forwards(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import octowright.defaults as defaults_mod
     import octowright.profile_cleanup as cleanup_mod
 
@@ -172,7 +172,90 @@ def test_profile_cleanup_wraps_stale_and_in_use(monkeypatch: pytest.MonkeyPatch,
     in_use.user_data_dir = str(tmp_path / "live")
     pool_mock = cast(Any, _macros.pool)
     pool_mock._sessions = {"x": in_use}
-    pool_mock.iter_sessions.return_value = (in_use,)
-    out = _macros.profile_cleanup(days=1.0, dry_run=False)
+    pool_mock.iter_sessions_including_closing.return_value = (in_use,)
+    pool_mock.profile_users.return_value = []
+    out = await _macros.profile_cleanup(days=1.0, dry_run=False)
     assert out["removed"] == 1
     assert out["skipped_in_use"] == 1
+
+
+def _stale_profile(root: Path, persona: str, kind: str) -> Path:
+    import os
+    import time
+
+    engine_dir = root / persona / kind
+    engine_dir.mkdir(parents=True)
+    (engine_dir / "Cookies").write_text("fixture")
+    old = time.time() - 10 * 86400
+    os.utime(engine_dir, (old, old))
+    return engine_dir
+
+
+async def test_profile_cleanup_spares_a_profile_a_closing_browser_holds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A closing browser has left ``_sessions`` but still has its profile's
+    database files open; deciding "in use" from ``_sessions`` alone removed them."""
+    from types import SimpleNamespace
+
+    import octowright.defaults as defaults_mod
+    from octowright.browser_pool import BrowserPool
+
+    engine_dir = _stale_profile(tmp_path, "cosmo", "chromium")
+    closing = SimpleNamespace(
+        instance_id="closing1", kind="chromium", profile="cosmo", user_data_dir=str(engine_dir)
+    )
+    real_pool = BrowserPool()
+    real_pool._closing_sessions["closing1"] = SimpleNamespace(session=closing)  # type: ignore[assignment]
+    monkeypatch.setattr(_macros, "pool", real_pool)
+    monkeypatch.setattr(defaults_mod, "PROFILES_DIR", tmp_path)
+
+    out = await _macros.profile_cleanup(days=1.0, dry_run=False)
+
+    assert out["removed"] == 0
+    assert (engine_dir / "Cookies").exists()
+
+
+async def test_profile_cleanup_waits_for_a_launch_holding_the_profile_lock(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A launch mid-preparation holds the profile's lifecycle lock before its
+    session is registered. The sweep re-checks under that lock, so it sees the
+    session the launch registers instead of deleting the profile beneath it."""
+    from types import SimpleNamespace
+
+    import anyio
+
+    import octowright.defaults as defaults_mod
+    from octowright.browser_pool import BrowserPool
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    engine_dir = _stale_profile(tmp_path, "cosmo", "chromium")
+    real_pool = BrowserPool()
+    monkeypatch.setattr(_macros, "pool", real_pool)
+    monkeypatch.setattr(defaults_mod, "PROFILES_DIR", tmp_path)
+    outcome: dict[str, Any] = {}
+    held, release = anyio.Event(), anyio.Event()
+
+    async def _launch_holding_the_lock() -> None:
+        async with profile_lifecycle_lock("chromium", "cosmo"):
+            held.set()
+            await release.wait()
+            # Registered before the lock is released, as a launch does.
+            real_pool._sessions["launch1"] = SimpleNamespace(  # type: ignore[assignment]
+                instance_id="launch1", kind="chromium", profile="cosmo", user_data_dir=str(engine_dir)
+            )
+
+    async def _sweep() -> None:
+        outcome.update(await _macros.profile_cleanup(days=1.0, dry_run=False))
+
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(_launch_holding_the_lock)
+            await held.wait()
+            tg.start_soon(_sweep)
+            await anyio.sleep(0.05)
+            release.set()
+
+    assert outcome["removed"] == 0
+    assert (engine_dir / "Cookies").exists()

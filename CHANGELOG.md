@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`profile_cleanup` no longer deletes a profile a browser is still using.**
+  It decided what was in use from open browsers only, so it removed the
+  profile of a browser that was closing (whose database files were still
+  open) or of a launch still preparing. It now counts closing browsers and
+  checks again under the profile's lifecycle lock before each delete, as
+  `profile_delete` does.
 - **`recordings_cleanup` no longer deletes the recording of a browser that is
   still open.** It chose files by age alone, and an idle browser's recording
   stops changing, so a short cutoff unlinked a live session's JSONL and its

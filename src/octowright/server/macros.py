@@ -419,20 +419,39 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResul
         "size + age info so you can see what would be freed before committing."
     ),
 )
-def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
+async def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
+    import asyncio
+    from pathlib import Path as _Path
+
     import octowright.profile_cleanup as _pc
     from octowright.defaults import PROFILES_DIR
+    from octowright.profile_lifecycle import profile_lifecycle_lock
 
-    in_use_dirs: list[Any] = []
-    for session in pool.iter_sessions():
-        udd = getattr(session, "user_data_dir", None)
-        if udd:
-            from pathlib import Path as _Path
-
-            in_use_dirs.append(_Path(udd))
+    # Closing sessions count: one has left ``_sessions`` once its close ticket
+    # owns the gate, but still holds its profile's database files open.
+    in_use_dirs = [
+        _Path(udd)
+        for session in pool.iter_sessions_including_closing()
+        if (udd := getattr(session, "user_data_dir", None))
+    ]
 
     stale = _pc.find_stale_profiles(PROFILES_DIR, days, in_use=in_use_dirs)
-    summary = _pc.cleanup_stale(stale, dry_run=dry_run)
+    summary: dict[str, Any] = {"removed_count": 0, "removed_bytes": 0, "errors": []}
+    skipped_at_delete = 0
+    if not dry_run:
+        for entry in stale:
+            # Decided again under the profile's lifecycle lock, as
+            # profile_delete does: a launch still preparing holds that lock
+            # before its session is registered, and a browser may have opened
+            # the profile since the scan.
+            async with profile_lifecycle_lock(entry.engine, entry.persona):
+                if pool.profile_users(entry.persona, kind=entry.engine):
+                    skipped_at_delete += 1
+                    continue
+                one = await asyncio.to_thread(_pc.cleanup_stale, [entry], dry_run=False)
+            summary["removed_count"] += one["removed_count"]
+            summary["removed_bytes"] += one["removed_bytes"]
+            summary["errors"].extend(one["errors"])
     return {
         "profiles_dir": str(PROFILES_DIR),
         "days": days,
@@ -441,7 +460,7 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
         "removed": summary["removed_count"] if not dry_run else 0,
         "would_remove": len(stale) if dry_run else 0,
         "freed_bytes": summary["removed_bytes"] if not dry_run else sum(s.size_bytes for s in stale),
-        "skipped_in_use": len(in_use_dirs),
+        "skipped_in_use": len(in_use_dirs) + skipped_at_delete,
         "details": [
             {
                 "persona": s.persona,
