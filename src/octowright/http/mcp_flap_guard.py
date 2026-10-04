@@ -23,16 +23,13 @@ version. Two pieces, both on by default:
    approach the limit; a storming follower is throttled instead of taking down
    the shared leader. Source = the ``X-Octowright-Follower`` header a current
    follower sends (its pid) so each gets its own bucket. A request that omits
-   the header (an old follower, or any non-follower direct HTTP-MCP client —
-   e.g. a hand-rolled client that skips the follower handshake entirely) buckets
-   by its TCP peer (``scope["client"]``, i.e. remote host:port) instead of one
-   shared ``anonymous`` bucket: a single connection issuing repeated
-   session-creates — the actual storm pattern, whether from an old follower or a
-   misbehaving direct client that never sends ``DELETE /mcp`` to close a session
-   — still throttles together (same connection, same key), but two unrelated
-   headerless clients on different connections do not share fate and 429 each
-   other. Only a scope with no peer info at all (e.g. some ASGI test transports)
-   falls back to the fully shared ``anonymous`` bucket.
+   the header (an old follower, or a direct HTTP-MCP client that skips the
+   follower handshake) shares the one ``anonymous`` bucket — which is exactly
+   the storm, collectively throttled. It is deliberately NOT keyed by TCP peer:
+   every peer is loopback, so the only thing distinguishing two headerless
+   requests is the ephemeral port, and a storm that opens a fresh connection
+   per session would land every request in a fresh, empty bucket and never be
+   throttled at all.
 
 2. **Session-table cap + LRU evict** (``select_eviction_victims`` here, driven
    by a housekeeping job): when the manager's live session table exceeds
@@ -74,16 +71,20 @@ _NEW_SESSION_MAX_DEFAULT: Final[int] = 10
 _NEW_SESSION_WINDOW_DEFAULT: Final[float] = 10.0
 
 # Ceiling on distinct rate-limit buckets held at once. `source_key` derives the
-# bucket from client-chosen input (the follower header, else the TCP peer), and
-# `allow` allocated a tracker for every distinct key it saw; the sweep that
-# reclaims emptied ones runs at most once per window, so the map could grow
+# bucket from client-chosen input (the follower header), and `allow` allocates
+# a tracker for every distinct key it sees; the sweep that reclaims emptied
+# ones runs at most once per window, so without a ceiling the map could grow
 # unbounded WITHIN a window — a leak inside the guard built to stop a leak.
+# At the ceiling the least-recently-used bucket is dropped to make room; an
+# unseen key is never refused for it. Refusing shed exactly the wrong traffic:
+# every follower not yet seen (a client reconnecting gets a new pid) was
+# 429'd for as long as a key flood lasted, while the flood kept its buckets.
 # This does not (and cannot) stop a local process from side-stepping the rate
 # limit by rotating the header: `/mcp` needs the capability token out of the
 # 0600 lockfile, so anything reaching it is same-user and already trusted at
 # the RCE-equivalent level. What the guard defends against is a buggy/old
-# follower, which reports a stable pid and buckets correctly. 4096 buckets is
-# far past any real client population and costs well under a megabyte.
+# follower, which reports a stable pid (or none) and buckets correctly. 4096
+# buckets is far past any real client population and costs well under a MB.
 _MAX_TRACKED_SOURCES: Final[int] = 4096
 
 _ANONYMOUS_SOURCE: Final[str] = "anonymous"
@@ -165,24 +166,29 @@ class NewSessionRateLimiter:
         """Record + admit an event for ``key`` at ``now``; False if over the
         window rate (the event is NOT recorded when refused, so a throttled
         source that backs off recovers cleanly). Sweeps emptied keys at most
-        once per window so per-source state stays bounded as followers churn,
-        and refuses an unseen key outright once `max_sources` buckets are live
-        rather than allocating another — being at the cap means a key flood is
-        already underway, which is when shedding load is the whole point."""
+        once per window so per-source state stays bounded as followers churn.
+        Once `max_sources` buckets are live, an unseen key evicts the
+        least-recently-used bucket instead of being refused, so a key flood
+        cannot lock a legitimate newcomer out. The map is kept in use order
+        (a key is moved to the end on every call), so the first key is the
+        least recently used."""
         cutoff = now - self._window
         with self._lock:
             if now - self._last_prune >= self._window:
                 self._prune_locked(cutoff)
                 self._last_prune = now
-            dq = self._events.get(key)
+            dq = self._events.pop(key, None)
             if dq is None:
+                dq = deque()
                 if len(self._events) >= self._max_sources:
-                    return False
-                dq = self._events.setdefault(key, deque())
+                    self._prune_locked(cutoff)
+                while len(self._events) >= self._max_sources:
+                    del self._events[next(iter(self._events))]
+            self._events[key] = dq
             while dq and dq[0] < cutoff:
                 dq.popleft()
             if len(dq) >= self._max:
-                if not dq:  # empty deque left by pruning — drop the key
+                if not dq:  # max_events == 0: nothing to remember for the key
                     self._events.pop(key, None)
                 return False
             dq.append(now)
@@ -212,10 +218,8 @@ def is_new_session_request(scope: dict) -> bool:
 
 def source_key(scope: dict) -> str:
     """Rate-limit bucket: the follower's self-reported id when present and
-    valid; else a per-connection anonymous key (``anonymous:host:port`` from
-    ``scope["client"]``) so unrelated headerless sources don't share one
-    global bucket; else the fully shared ``anonymous`` bucket when the scope
-    carries no peer info at all."""
+    valid, else the one shared ``anonymous`` bucket (see the module docstring
+    for why a headerless request is not keyed by its TCP peer)."""
     for name, value in scope.get("headers", []):
         if name.lower() == _FOLLOWER_HEADER:
             try:
@@ -225,10 +229,6 @@ def source_key(scope: dict) -> str:
             if decoded:
                 return decoded
             break
-    client = scope.get("client")
-    if client:
-        host, port = client[0], client[1]
-        return f"{_ANONYMOUS_SOURCE}:{host}:{port}"
     return _ANONYMOUS_SOURCE
 
 

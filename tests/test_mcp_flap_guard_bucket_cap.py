@@ -6,8 +6,8 @@
 """The limiter's own bookkeeping must be bounded, not just what it limits.
 
 ``NewSessionRateLimiter`` buckets by ``source_key`` -- the follower's
-self-reported ``X-Octowright-Follower`` pid, else the TCP peer. Both are
-client-chosen, and ``allow`` did ``self._events.setdefault(key, deque())``, so
+self-reported ``X-Octowright-Follower`` pid, else one shared ``anonymous``
+bucket. The header is client-chosen, and ``allow`` did ``self._events.setdefault(key, deque())``, so
 every distinct key seen inside one window allocated a tracker. Emptied keys are
 swept, but the sweep runs at most once per window, so the map grows unbounded
 *within* it.
@@ -21,9 +21,14 @@ guard actually defends against is a BUGGY or OLD follower storming the leader,
 and that one reports a stable pid and buckets correctly. The cap just means a
 key flood cannot turn the defense into the leak it was built to prevent.
 
-Refusing at the cap (rather than evicting to make room) is deliberate: being at
-the cap means a flood is already underway, which is exactly when the guard is
-supposed to shed load.
+At the cap the limiter makes room by dropping the least-recently-used bucket
+rather than refusing the unseen key. Refusing used to look like load shedding,
+but what it shed was every follower that had not yet been seen: once the map
+was full, a legitimate follower connecting (or reconnecting with a new pid
+after its client restarted) got a 429 on its first session for as long as the
+flood lasted, while the flood's own keys kept their buckets. Evicting the
+stalest bucket keeps the bound and admits the newcomer; a flood's keys, each
+touched once, are what ages out first.
 """
 
 from __future__ import annotations
@@ -44,13 +49,33 @@ def test_distinct_keys_do_not_grow_the_map_without_bound() -> None:
     assert len(limiter._events) <= 4
 
 
-def test_a_new_key_is_refused_once_the_map_is_full() -> None:
+def test_a_new_key_at_the_cap_is_admitted_by_evicting_the_stalest_bucket() -> None:
     limiter = _limiter(2)
 
     assert limiter.allow("a", now=1.0) is True
-    assert limiter.allow("b", now=1.0) is True
-    assert limiter.allow("c", now=1.0) is False, "a new bucket past the cap must not be allocated"
-    assert "c" not in limiter._events
+    assert limiter.allow("b", now=2.0) is True
+    assert limiter.allow("c", now=3.0) is True, "an unseen follower must not be refused because the map is full"
+    assert set(limiter._events) == {"b", "c"}, "the least-recently-used bucket makes room"
+
+
+def test_a_key_flood_does_not_lock_out_a_legitimate_newcomer() -> None:
+    limiter = _limiter(8)
+    for i in range(100):
+        limiter.allow(f"spoofed-{i}", now=1.0 + i * 0.001)
+
+    assert limiter.allow("legit-follower", now=2.0) is True
+    assert len(limiter._events) <= 8
+
+
+def test_a_recently_active_bucket_survives_a_flood() -> None:
+    """Eviction is least-recently-USED: a follower still creating sessions keeps
+    its bucket (and so its own rate limit) while a flood churns past it."""
+    limiter = _limiter(4)
+    for i in range(50):
+        if i % 2 == 0:
+            limiter.allow("legit", now=1.0 + i * 0.01)
+        limiter.allow(f"spoofed-{i}", now=1.0 + i * 0.01)
+    assert "legit" in limiter._events
 
 
 def test_an_already_tracked_key_keeps_working_at_the_cap() -> None:
@@ -63,17 +88,6 @@ def test_an_already_tracked_key_keeps_working_at_the_cap() -> None:
     for _ in range(4):  # 1 (above) + 4 == max_events
         assert limiter.allow("legit", now=1.0) is True
     assert limiter.allow("legit", now=1.0) is False  # its own rate limit, not the cap
-
-
-def test_capacity_is_reclaimed_once_a_window_passes() -> None:
-    """The cap must not wedge the limiter shut forever after one flood."""
-    limiter = _limiter(2)
-    limiter.allow("old-a", now=1.0)
-    limiter.allow("old-b", now=1.0)
-    assert limiter.allow("fresh", now=1.0) is False
-
-    later = 1.0 + 10.0 + 0.1
-    assert limiter.allow("fresh", now=later) is True
 
 
 def test_the_default_cap_is_on() -> None:
