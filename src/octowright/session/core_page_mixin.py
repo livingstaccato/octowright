@@ -24,6 +24,7 @@ from octowright.request_errors import InvalidRequestError
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import (
     REDACTION_MODES,
+    ledger_scrubbed,
     resolve_redaction_mode,
 )
 from octowright.session.aria_redaction import (
@@ -689,10 +690,13 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("snapshot", **record_kwargs)
         # url comes from the snapshotted document (frame when active); title is
         # page-level — Playwright Frames have no title().
+        # The aria text is ledger-scrubbed by redacted_aria_snapshot; the url
+        # and title can echo a classified value too, and golden_save persists
+        # all three.
         return {
             "aria": aria_yaml,
-            "url": target.url,
-            "title": await bounded(self.page.title(), operation="browser_snapshot"),
+            "url": ledger_scrubbed(self, target.url),
+            "title": ledger_scrubbed(self, await bounded(self.page.title(), operation="browser_snapshot")),
         }
 
     @gated_operation("browser_evaluate")

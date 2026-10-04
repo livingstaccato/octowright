@@ -99,3 +99,46 @@ async def test_single_element_snapshot_is_scrubbed(monkeypatch, filled_page) -> 
     aria = await ar.aria_snapshot(SESSION, filled_page.locator("#p"))
     assert PASSWORD not in aria
     assert REDACTED_INPUT_PLACEHOLDER in aria
+
+
+SHADOW_PASSWORD = "Fixture-Not-A-Real-Secret-Shadow"  # pragma: allowlist secret
+SHADOW_FORM = """<html><body>
+  <my-login></my-login>
+  <script>
+    customElements.define('my-login', class extends HTMLElement {
+      constructor() {
+        super();
+        const root = this.attachShadow({mode: 'open'});
+        root.innerHTML = '<label>Password <input id="sp" type="password"></label>'
+          + '<inner-box></inner-box>';
+      }
+    });
+    customElements.define('inner-box', class extends HTMLElement {
+      constructor() {
+        super();
+        this.attachShadow({mode: 'open'}).innerHTML = '<input id="otp" autocomplete="one-time-code">';
+      }
+    });
+  </script>
+</body></html>"""
+
+
+async def test_a_password_inside_open_shadow_roots_is_scrubbed(monkeypatch) -> None:
+    from playwright.async_api import async_playwright
+
+    monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content(SHADOW_FORM)
+            await page.fill("#sp", SHADOW_PASSWORD)
+            await page.fill("#otp", OTP)
+            raw = await page.locator("html").aria_snapshot()
+            assert SHADOW_PASSWORD in raw  # characterization: the tree renders it
+            aria = await ar.aria_snapshot(SESSION, page.locator("html"))
+            assert SHADOW_PASSWORD not in aria
+            assert OTP not in aria
+            assert REDACTED_INPUT_PLACEHOLDER in aria
+        finally:
+            await browser.close()

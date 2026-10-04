@@ -124,6 +124,14 @@ a section that is already tagged and on PyPI.
   which replay then typed into the page. It is now handled like a redacted
   password field: bound to the one credential-named parameter that matched
   nothing else, or the save is refused naming the field.
+- **Snapshots are scrubbed of the session's privacy ledger, and reach into
+  open shadow roots.** An accessibility snapshot only blanked the values of
+  credential inputs on the page at that moment, so a value a macro typed and
+  the page then echoed as ordinary text was returned by `browser_snapshot` and
+  written to disk by `golden_save`, and a password inside a web component's
+  open shadow root was never read. The snapshot's tree, `url` and `title` are
+  now scrubbed of the ledger, and the credential scan recurses into open
+  shadow roots.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

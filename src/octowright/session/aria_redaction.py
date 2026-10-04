@@ -34,8 +34,13 @@ Consequences worth knowing:
 * Replacement is plain substring, longest value first. A short password
   ("ab") will also blank unrelated occurrences of that substring. That is
   the safe direction to be wrong in, and the placeholder makes it obvious.
-* Only light-DOM form controls are read; a value inside a closed shadow
-  root is not reachable and is not scrubbed.
+* Form controls in the light DOM and in every open shadow root are read; a
+  value inside a closed shadow root is not reachable and is not scrubbed by
+  this scan.
+* The result is then scrubbed of the session's privacy ledger
+  (`ledger_scrubbed`), which holds what a macro classified and what the
+  input classification hid, so an echo of such a value in ordinary page text
+  is scrubbed too -- whatever ``OCTOWRIGHT_REDACT_INPUTS`` says.
 """
 
 from __future__ import annotations
@@ -63,8 +68,17 @@ _CREDENTIAL_VALUES_JS = """
   const SEL = '__SELECTOR__';
   const scope = root || document.documentElement;
   const els = [];
+  // Open shadow roots too: the aria snapshot renders their inputs' values.
+  const visit = (node) => {
+    if (!node || !node.querySelectorAll) return;
+    for (const el of node.querySelectorAll('*')) {
+      if (el.matches(SEL)) els.push(el);
+      if (el.shadowRoot) visit(el.shadowRoot);
+    }
+  };
   if (scope.matches && scope.matches(SEL)) els.push(scope);
-  if (scope.querySelectorAll) els.push(...scope.querySelectorAll(SEL));
+  if (scope.shadowRoot) visit(scope.shadowRoot);
+  visit(scope);
   const out = [];
   for (const el of els) {
     const tag = el.tagName ? el.tagName.toLowerCase() : '';
@@ -206,6 +220,21 @@ async def aria_snapshot(session: Any, locator: Any, *, timeout_ms: int | None = 
     mode = resolve_redaction_mode()
     async with session.operation("aria_snapshot"):
         if mode == "off":
-            return str(await _snapshot(session, locator, timeout_ms))
+            return ledger_scrubbed(session, str(await _snapshot(session, locator, timeout_ms)))
         values = await collect_credential_values(session, locator, mode, timeout_ms=timeout_ms)
-        return scrub_credentials(str(await _snapshot(session, locator, timeout_ms)), values)
+        return ledger_scrubbed(session, scrub_credentials(str(await _snapshot(session, locator, timeout_ms)), values))
+
+
+def ledger_scrubbed(session: Any, text: str) -> str:
+    """*text* scrubbed of the session's privacy ledger, whatever the input-redaction mode.
+
+    The credential scan above reads the inputs on the page NOW; a value a
+    macro typed and the page then echoed as ordinary text is held only by the
+    ledger. Independent of ``OCTOWRIGHT_REDACT_INPUTS``, as the recorder's
+    ledger scrub is. ``active is True`` rather than truthiness: a mock session
+    answers every attribute read with something truthy.
+    """
+    scrub = getattr(session, "durable_text_scrubber", None)
+    if scrub is None or getattr(scrub, "active", False) is not True:
+        return text
+    return str(scrub(text))

@@ -242,7 +242,8 @@ Every sink routes through `session/aria_redaction.aria_snapshot(locator)`; a tes
 - **Matching is value-based, not node-based.** The tree is a rendered string by then, so the only reliable join back to "which name was a secret" is the value, read from the DOM.
 - Playwright **normalizes** an accessible name (a newline inside a value renders as a space), so each value is scrubbed in both raw and whitespace-collapsed form. It does *not* escape quotes/backslashes, so no unescaping is needed.
 - Replacement is plain substring, **longest value first**, so a short secret can't eat a longer one it is a substring of. A 2-char password will also blank unrelated occurrences — the safe direction to be wrong in.
-- Only light-DOM form controls are read; a value inside a **closed shadow root** is not reachable and is not scrubbed.
+- Form controls in the light DOM and in every **open shadow root** (nested ones included) are read; a value inside a **closed shadow root** is not reachable by the scan. The tree renders an open shadow root's input values, so a password in a web component leaked before the scan recursed into them.
+- The result is then scrubbed of the **session privacy ledger** (`aria_redaction.ledger_scrubbed`), whatever `OCTOWRIGHT_REDACT_INPUTS` says: the scan sees only the inputs on the page now, and a value a macro typed that the page echoed as ordinary text is held only by the ledger. `BrowserSession.snapshot` scrubs its `url` and `title` the same way, so `browser_snapshot` and `golden_save` (which persists it) inherit both.
 - `_parse_semantic_line` now handles both accessible-name renderings (`button "Confirm Order"` **and** `textbox: tanuki-tim`); only the first was handled, which is why the whole `role: value` string ended up in `role`.
 
 ### Typing into a canvas: `key_mode="keys"`
