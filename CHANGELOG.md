@@ -98,7 +98,9 @@ a section that is already tagged and on PyPI.
   scrubbed from error text too.** Python's `repr` escapes such a value in a way
   no JSON spelling matches, so it reached a macro failure payload's `original`
   and an exported script's `result.json` and error output in the clear. Every
-  scrub now also matches the value as `repr` spells it, up to twice over.
+  scrub now also matches the value as `repr` spells it, up to twice over,
+  including the `repr` of its JSON-escaped spelling, which is what a locator
+  error quoting the value produces inside `repr(exc)`.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

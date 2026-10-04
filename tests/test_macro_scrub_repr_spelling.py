@@ -41,3 +41,27 @@ def test_a_plain_value_gains_no_variants() -> None:
     """A value with no quote, backslash or control character spells the same in repr."""
     plain = "Plain-Value-42"  # pragma: allowlist secret
     assert all("\\" not in variant for variant in sensitive_value_variants([plain]))
+
+
+JSON_IN_REPR = [
+    'Fixture-Not-A-Real-Secret-pa"ss',  # pragma: allowlist secret
+    "Fixture-Not-A-Real-Secret-ba\\ck",  # pragma: allowlist secret
+    "Fixture-Not-A-Real-Secret-'mix\"\\",  # pragma: allowlist secret
+]
+
+
+@pytest.mark.parametrize("value", JSON_IN_REPR)
+def test_a_json_escaped_value_inside_a_repr_is_scrubbed(value: str) -> None:
+    """A locator error quotes the value as JSON, then ``repr(exc)`` escapes that again.
+
+    The JSON spelling's backslashes double in the repr, which neither the raw
+    value's repr spellings nor the bare JSON spelling match.
+    """
+    import json
+
+    for dumped in (json.dumps(value), json.dumps(value, ensure_ascii=False)):
+        for text in (repr(RuntimeError(f"locator {dumped}")), repr(repr(RuntimeError(f"locator {dumped}")))):
+            for case in (text, text.upper(), text.lower()):
+                scrubbed = scrub_sensitive_values(case, (value,))
+                assert "<redacted>" in scrubbed, case
+                assert "fixture-not-a-real-secret" not in scrubbed.lower(), scrubbed

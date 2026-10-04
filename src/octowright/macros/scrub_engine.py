@@ -43,8 +43,15 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
     # inside a single-quoted literal a ``'`` is escaped (repr picks that form
     # whenever the text holds both quotes), inside a double-quoted one it is
     # not; backslashes double and a control character becomes ``\xNN``, unlike
-    # JSON. Appending both quotes forces the first form.
-    reprs = {value}
+    # JSON. Appending both quotes forces the first form. Seeded with the JSON
+    # spellings too: a locator error quotes the value as JSON and ``repr(exc)``
+    # then doubles that spelling's backslashes, which no repr of the raw value
+    # produces. Bounded: three seeds, two spellings each, two levels.
+    reprs = {
+        value,
+        json.dumps(value, ensure_ascii=True)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+    }
     for _ in range(2):
         reprs = {
             spelling
