@@ -59,7 +59,8 @@ from urllib.parse import urlsplit
 # fields (selectors, locator text, ``pattern`` match strings, ``expect_*``
 # needles, ``value``/``text`` typed into the page, the screenshot ``path``
 # contained under RECORDINGS_DIR) are matched locally or ARE the intended
-# destination of a credential.
+# destination of a credential -- the typed ones only through the fill-origin
+# check; the inputs that have none are `CREDENTIAL_UNCHECKED_INPUT_FIELDS`.
 CREDENTIAL_UNSAFE_KEYS = frozenset(
     {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths", "prompt_text"}
 )
@@ -188,6 +189,16 @@ def headers_reach_trusted_origin(action: dict[str, Any], trusted_origins: frozen
 #: credential through here -- it is the intended destination -- so what is
 #: checked instead is WHICH page it lands in (`offsite_credential_origin`).
 CREDENTIAL_FILL_FIELDS = {"fill": "value", "fill_by": "value", "type": "text"}
+#: Fields that put a value into the page with NO delivery-bound origin check.
+#: A key press goes to whatever document has focus -- a cross-origin iframe
+#: included -- and a selection to whichever frame the selector resolves in, so
+#: the pre-dispatch read of the active frame's URL cannot vouch for either. A
+#: credential is refused there outright: ``type`` keys one in under the check.
+CREDENTIAL_UNCHECKED_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    "press_key": ("key",),
+    "select_option": ("value", "label"),
+    "a11y_dragdrop": ("nav_key", "nav_key_sequence", "grab_key", "drop_key", "release_key"),
+}
 #: A step's own list of extra origins it may type a credential into, for a
 #: sign-in hop to an identity provider. An input to the guard, never to the call.
 ALLOWED_ORIGINS_KEY = "allowed_origins"
@@ -447,6 +458,7 @@ class _Expander:
         node = canonical_aliases(kind, {**node, "action": resolved})
         node.pop(CREDENTIAL_FILL_MARKER, None)
         node.pop(CREDENTIAL_CALL_MARKER, None)
+        self._refuse_unchecked_input(kind, node)
         credentials = self._typed_credentials(kind, node)
         tainted = self._tainted_call_args(node) if kind == "macro_call" else []
         headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
@@ -480,6 +492,27 @@ class _Expander:
         if not isinstance(call_args, dict):
             return []
         return sorted(str(key) for key, value in call_args.items() if self._mentions_credential(value))
+
+    def _refuse_unchecked_input(self, kind: str, node: dict[str, Any]) -> None:
+        """Refuse a credential-tier arg in a field `CREDENTIAL_UNCHECKED_INPUT_FIELDS` names."""
+        if not self.blocked:
+            return
+        for field_name in CREDENTIAL_UNCHECKED_INPUT_FIELDS.get(kind, ()):
+            names = self._credential_names(node.get(field_name))
+            if names:
+                shown = ", ".join("{{" + name + "}}" for name in names)
+                raise ValueError(
+                    f"macro {kind} puts credential arg {shown} into the page through {field_name!r}, "
+                    "where nothing checks which origin receives it. Key a credential in with a type or "
+                    f"fill step, which do; set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+                )
+
+    def _credential_names(self, value: Any) -> list[str]:
+        if isinstance(value, str):
+            return sorted({name for name in self.placeholder.findall(value) if self.is_credential(name)})
+        if isinstance(value, list):
+            return sorted({name for item in value for name in self._credential_names(item)})
+        return []
 
     def _typed_credentials(self, kind: str, node: dict[str, Any]) -> list[str]:
         """The credential-tier args a typing step puts into the page, by name."""
