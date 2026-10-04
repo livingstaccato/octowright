@@ -253,7 +253,8 @@ def scenario_remap_participants(scenario_id: str, remaps: list[dict[str, Any]]) 
     description=(
         "Run the scenario's verify macros as a test suite and return pass/fail. "
         "Requires the scenario spec to declare `verify: {role: macro_name}`. "
-        "Writes JUnit XML to out_path if supplied."
+        "Writes JUnit XML to out_path (under the recordings root), or to a "
+        "timestamped octowright-report-*.xml there when omitted."
     ),
 )
 async def scenario_run_as_test(
@@ -263,6 +264,12 @@ async def scenario_run_as_test(
     live = scenario_pool.get(scenario_id)
     if not live.spec.verify:
         raise RuntimeError(f"scenario {live.name!r} declares no verify macros")
+    # Resolved and checked BEFORE any verify macro runs, so a refused path is a
+    # fast failure rather than a finished run whose report cannot be written.
+    # The default sits under the recordings root, the only place the check
+    # allows -- the daemon's working directory is never under it.
+    report_path = Path(out_path) if out_path else runner_mod._recordings_report_path()
+    report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="scenario report path")
 
     results: list[TestSuiteCaseResult] = []
 
@@ -304,9 +311,7 @@ async def scenario_run_as_test(
 
     await _asyncio.gather(*(_run(p) for p in live.participants))
     passed = sum(1 for r in results if r["ok"])
-    report_path = Path(out_path) if out_path else runner_mod._default_report_path()
-    report_path = reject_unsafe_path(report_path, defaults.RECORDINGS_DIR, label="scenario report path")
-    runner_mod._write_junit(results, report_path, kind="scenario")
+    runner_mod._write_report(results, report_path, kind="scenario")
     return {
         "scenario_id": scenario_id,
         "name": live.name,

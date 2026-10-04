@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`scenario_run_as_test` without `out_path` writes its report instead of
+  failing at the end.** It defaulted to the daemon's working directory, which
+  the recordings-root check then refused, after every verify macro had run.
+  The default is now a timestamped `octowright-report-*.xml` under the
+  recordings root, and a refused `out_path` fails before anything runs.
 - **`profile_cleanup` no longer deletes a profile a browser is still using.**
   It decided what was in use from open browsers only, so it removed the
   profile of a browser that was closing (whose database files were still

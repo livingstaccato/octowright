@@ -148,7 +148,6 @@ async def test_scenario_run_as_test_success_and_missing_macro(
     _patch_deps["scenario_pool"].get.return_value = live
     _patch_deps["pool"].get.return_value = object()
     monkeypatch.setattr(octowright_macros, "run_macro", AsyncMock(return_value=None))
-    monkeypatch.setattr(_scenarios.runner_mod, "_default_report_path", lambda: tmp_path / "default.xml")
     write_calls: list[tuple[list[dict[str, object]], Path, str]] = []
 
     def _fake_write(results: list[dict[str, object]], path: Path, *, kind: str) -> None:
@@ -215,7 +214,6 @@ async def test_scenario_run_as_test_skips_a_capability_less_kind_cleanly(
         participants=participants,
     )
     _patch_deps["scenario_pool"].get.return_value = live
-    monkeypatch.setattr(_scenarios.runner_mod, "_default_report_path", lambda: tmp_path / "default.xml")
     write_calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(_scenarios.runner_mod, "_write_junit", lambda *args, **kwargs: write_calls.append(args))
 
@@ -245,3 +243,46 @@ async def test_scenario_run_as_test_rejects_out_path_outside_recordings(
 
     with pytest.raises(ValueError, match="scenario report path"):
         await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "outside.xml"))
+
+
+@pytest.mark.anyio
+async def test_scenario_run_as_test_refuses_a_bad_out_path_before_running_anything(
+    _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The report path is checked first, so a refused one costs no verify run."""
+    participants = [{"role": "player", "persona": "cosmo", "instance_id": "i1", "kind": "chromium"}]
+    live = SimpleNamespace(name="demo", spec=SimpleNamespace(verify={"player": "m"}), participants=participants)
+    _patch_deps["scenario_pool"].get.return_value = live
+    _patch_deps["pool"].get.return_value = object()
+    run_macro = AsyncMock(return_value=None)
+    monkeypatch.setattr(octowright_macros, "run_macro", run_macro)
+
+    with pytest.raises(ValueError, match="scenario report path"):
+        await _scenarios.scenario_run_as_test("sid", out_path=str(tmp_path / "outside.xml"))
+    run_macro.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_scenario_run_as_test_default_report_lands_under_recordings(
+    _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Without out_path the report went to the daemon's CWD, which the
+    containment check then refused -- after every verify macro had run. It now
+    defaults under the recordings root, creating the directory if needed."""
+    from octowright import defaults
+
+    rec = tmp_path / "not-yet" / "recordings"
+    monkeypatch.setattr(defaults, "RECORDINGS_DIR", rec)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    live = SimpleNamespace(name="demo", spec=SimpleNamespace(verify={"player": "m"}), participants=[])
+    _patch_deps["scenario_pool"].get.return_value = live
+
+    out = await _scenarios.scenario_run_as_test("sid")
+
+    report = Path(out["report_path"])
+    assert report.parent == rec.resolve()
+    assert report.name.startswith("octowright-report-")
+    assert report.read_text(encoding="utf-8").startswith("<?xml")
+    assert list(project.iterdir()) == []
