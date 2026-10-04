@@ -49,6 +49,12 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`octowright doctor` no longer reports a recycled pid as a healthy
+  daemon.** Its `daemon` check trusted the lockfile's pid being alive. When a
+  killed daemon left its lockfile and the OS gave the pid to another process,
+  doctor said `ok` while the `followers` check found nothing answering. A live
+  pid must now also answer `/api/health`; one that does not is reported as a
+  stale lock or a wedged daemon.
 - **A bad "what's new" marker no longer stops the daemon from starting.** The
   leader records the last version it announced in `upgrade.json` before its
   HTTP server binds, without a guard. A marker holding valid JSON that is not
