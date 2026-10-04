@@ -71,7 +71,6 @@ def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot
     return RelaunchSnapshot(
         source=ReplacementSource.of(session),
         target_url=getattr(session.page, "url", None) or session.url,
-        user_data_dir=getattr(session, "user_data_dir", None),
     )
 
 

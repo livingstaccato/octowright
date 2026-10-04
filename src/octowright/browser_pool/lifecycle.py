@@ -455,7 +455,6 @@ class RelaunchSnapshot:
 
     source: ReplacementSource
     target_url: str
-    user_data_dir: Any = None
 
     @property
     def kind(self) -> str:

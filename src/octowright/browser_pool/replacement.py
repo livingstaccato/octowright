@@ -112,10 +112,6 @@ class ReplacementSource:
     def profile(self) -> str | None:
         return self.options.profile
 
-    @property
-    def stateful(self) -> bool:
-        return self.options.profile is not None or self.options.session
-
     def launch_kwargs(
         self, *, url: str, headed: bool | None = None, overrides: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:

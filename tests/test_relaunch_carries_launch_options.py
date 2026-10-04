@@ -387,3 +387,16 @@ async def test_live_an_anonymous_session_keeps_its_state_across_handoff(tmp_path
         assert await fresh.page.evaluate("localStorage.getItem('kept')") == "yes"
     finally:
         await shutdown_pool(pool)
+
+
+def test_the_replacement_inputs_carry_nothing_unread() -> None:
+    """A field nothing reads looks like an input the replacement honours.
+
+    ``RelaunchSnapshot.user_data_dir`` was captured and never read (the
+    profile/session directory comes from the launch options), and
+    ``ReplacementSource.stateful`` had no caller.
+    """
+    from octowright.browser_pool.lifecycle import RelaunchSnapshot
+
+    assert {f.name for f in dataclasses.fields(RelaunchSnapshot)} == {"source", "target_url"}
+    assert not hasattr(replacement.ReplacementSource, "stateful")
