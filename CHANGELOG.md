@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A browser labelled `something.websocket` no longer hides its own
+  recording.** The label named the file `...-something.websocket.jsonl`, the
+  shape of a WebSocket sidecar, so the dashboard, closed-session discovery and
+  cleanup all skipped it. Such a label's dots become hyphens in the filename.
 - **`recordings_cleanup` spares a live terminal session's recording.** The
   sweep skipped files belonging to live and closing browsers but never asked
   the plugin pools, so an idle terminal session's recording older than
