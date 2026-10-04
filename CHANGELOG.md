@@ -139,6 +139,11 @@ a section that is already tagged and on PyPI.
   open shadow root was never read. The snapshot's tree, `url` and `title` are
   now scrubbed of the ledger, and the credential scan recurses into open
   shadow roots.
+- **The daemon's debug log no longer quotes a classified value when a
+  semantic locator falls back to its CSS selector.** The fallback line logged
+  the semantic path's error text verbatim, which can quote the label or value
+  it was given; it is now scrubbed of the session's privacy ledger and carries
+  the error type.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail
