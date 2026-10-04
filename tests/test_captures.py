@@ -520,4 +520,7 @@ def test_save_capture_refuses_a_host_directory_symlinked_outside_the_root(tmp_pa
         captures.save_capture(kind="text", content="secret page text", url="https://example.com/", root=root)
 
     assert list(outside.iterdir()) == []
-    assert outside.stat().st_mode & 0o777 == 0o755
+    # The chmod that used to follow the symlink is only observable as POSIX
+    # mode bits; Windows ignores mkdir's mode and reports 0o777 either way.
+    if os.name != "nt":
+        assert outside.stat().st_mode & 0o777 == 0o755
