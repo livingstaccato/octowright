@@ -153,6 +153,25 @@ class TestServeCommandOptions:
 # ─── serve click command: env var export ordering ──────────────────────────
 
 
+# `serve` exports these into os.environ directly, which monkeypatch cannot see.
+# A bare `delenv(..., raising=False)` on an absent key records nothing to undo,
+# so the value the command set leaked into every later test: a leaked
+# OCTOWRIGHT_PROFILE=core,advanced made the tool-inventory guard (whose
+# measurement child inherits the environment) count a filtered surface and fail
+# test_the_committed_docs_satisfy_the_guard, depending only on test order.
+# setenv-then-delenv records the prior state, absent included.
+_SERVE_EXPORTED_ENV = ("PROVIDE_LOG_LEVEL", "OCTOWRIGHT_PROFILE", "OCTOWRIGHT_DAEMON_READY_TIMEOUT")
+
+
+@pytest.fixture(autouse=True)
+def _restore_serve_exported_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in _SERVE_EXPORTED_ENV:
+        prior = os.environ.get(key)
+        monkeypatch.setenv(key, prior if prior is not None else "")
+        if prior is None:
+            monkeypatch.delenv(key)
+
+
 class TestServeEnvVarExports:
     def test_log_level_sets_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """--log-level=DEBUG sets os.environ['PROVIDE_LOG_LEVEL']='DEBUG'."""

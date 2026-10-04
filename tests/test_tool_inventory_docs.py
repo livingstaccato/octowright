@@ -59,6 +59,14 @@ def test_the_live_surface_is_measured_without_ambient_plugins(guard) -> None:
     assert not any(name.startswith("terminal_") for name in names)
 
 
+def test_an_ambient_profile_filter_does_not_shrink_the_measured_surface(guard, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard measures the unfiltered surface, so an ``OCTOWRIGHT_PROFILE``
+    in the caller's environment -- a developer's shell, or a value an earlier
+    test leaked -- must not reach the measuring child."""
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
+    assert guard.main() == 0
+
+
 def test_a_tool_missing_from_the_inventory_is_reported(guard) -> None:
     """The drift that actually happened: a registered tool nobody listed."""
     text = (ROOT / "docs" / "architecture" / "mcp-tool-inventory.md").read_text(encoding="utf-8")
