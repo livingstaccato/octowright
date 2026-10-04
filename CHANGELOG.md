@@ -111,6 +111,13 @@ a section that is already tagged and on PyPI.
   boolean is now left out of the ledger, live and in exported scripts; it is
   still redacted by name in `args_used`. A numeric credential (`otp: 482193`)
   is still scrubbed.
+- **A value a called macro classifies is hidden where the caller reports it.**
+  A macro passing an ordinary argument to a `macro_call` whose callee declares
+  that parameter sensitive returned it in the clear in `args_used`, a failed
+  sequence step's `args_used` and the artifact manifest's `parameters`, and
+  handed it to page JavaScript in the status pill's text when it sat in a field
+  the pill does not redact by key. All four are now scrubbed with what the run
+  admitted; the manifest withholds parameter values until the replay ends.
 - **Scrubbing ignores case.** Only percent-encoded spellings used to be
   matched case-insensitively, so a page that echoed a credential upper-, lower-
   or mixed-cased put it in a macro failure payload's `original`, console tail

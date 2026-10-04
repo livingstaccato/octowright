@@ -30,6 +30,7 @@ from octowright.macros.privacy_ledger import SessionPrivacyLedger as SessionPriv
 from octowright.macros.privacy_ledger import admit_call_privacy as admit_call_privacy
 from octowright.macros.privacy_ledger import admit_redacted_input as admit_redacted_input
 from octowright.macros.privacy_ledger import install_sensitive_recorder as install_sensitive_recorder
+from octowright.macros.privacy_ledger import scrub_with_session as scrub_with_session
 from octowright.macros.privacy_ledger import refuse_if_scrub_set_full as refuse_if_scrub_set_full
 from octowright.macros.privacy_ledger import run_privacy_ledger as run_privacy_ledger
 from octowright.macros.privacy_ledger import scrub_saturation_fields as scrub_saturation_fields

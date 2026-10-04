@@ -39,6 +39,7 @@ from octowright.macros.privacy import (
     admit_call_privacy,
     run_privacy_ledger,
     scrub_saturation_fields,
+    scrub_with_session,
     with_session_values,
 )
 from octowright.macros.privacy import (
@@ -318,7 +319,9 @@ async def _dispatch_one(
     # Push status before dispatch so the pill reflects the action that's
     # actually running. macro_call is handled above (its child actions push
     # their own deeper status when they hit _dispatch_one).
-    await _push_status(session, text=_format_status(invocation_stack, action))
+    # Scrubbed: the text is handed to page JavaScript, and a value a called
+    # macro classifies can land in a field _redact_action does not cover.
+    await _push_status(session, text=scrub_with_session(session, _format_status(invocation_stack, action), run_ledger))
 
     # Slowmo runs AFTER the status push so the pill reflects the upcoming
     # action while the user gets time to read it before we actually dispatch.
@@ -408,6 +411,7 @@ async def run_macro(
     _macros: RunMacros | None = None,
     _run_ledger: RunPrivacyLedger | None = None,
     _privacy: ResolvedPrivacy | None = None,
+    _ledgers: list[RunPrivacyLedger] | None = None,
 ) -> MacroRunResult:
     """Run macro *name* on *session*.
 
@@ -423,6 +427,8 @@ async def run_macro(
     and ``_privacy`` are `run_macro_artifact`'s: a ledger that has ALREADY
     admitted this run's own arguments, and the view it admitted them under,
     resolved from the same `RunMacros` dict; the caller closes the ledger.
+    ``_ledgers`` is `run_sequence`'s: the run's ledger is appended to it, so a
+    failed step's ``args_used`` can be scrubbed with what the run admitted.
     """
     async with session.operation("macro_run"):
         with span(
@@ -444,6 +450,7 @@ async def run_macro(
                 credential_args=credential_args,
                 run_ledger=_run_ledger,
                 resolved=_privacy,
+                ledgers=_ledgers,
             )
 
 
@@ -495,6 +502,7 @@ async def _run_macro_impl(
     macros: RunMacros | None = None,
     credential_args: frozenset[str] = frozenset(),
     resolved: ResolvedPrivacy | None = None,
+    ledgers: list[RunPrivacyLedger] | None = None,
     **kwargs: Any,
 ) -> MacroRunResult:
     """One run, its session privacy scope closed however it ends.
@@ -505,6 +513,8 @@ async def _run_macro_impl(
     macros = macros if macros is not None else RunMacros(load_macro)
     admitted = run_ledger is not None
     with run_privacy_ledger(session, run_ledger) as run_ledger, conditional.written_steps_scope():
+        if ledgers is not None:
+            ledgers.append(run_ledger)
         macro = macros(name)
         # Name, position (an expect_no_text text), the caller's credential
         # origin and the macro's own parameter_specs, resolved from the dict
@@ -647,7 +657,9 @@ async def _run_admitted(
         "macro": name,
         "executed": executed,
         "skipped": skipped,
-        "args_used": _redact_args_for_response(effective_args, privacy),
+        # Scrubbed with the run's ledger too: a called macro may have classified
+        # a value this macro's own view shows (#248).
+        "args_used": run_ledger.scrub(_redact_args_for_response(effective_args, privacy)),
         "slowmo_ms": resolved_slowmo,
         "elapsed_s": round(elapsed_s, 3),
         **assertions.fields(run_ledger.values),
@@ -691,15 +703,24 @@ async def run_sequence(
             # args_used below is classified from the copy its run loaded.
             macros = RunMacros(load_macro)
             for index, (name, step_args) in enumerate(zip(names, resolved_args, strict=True)):
+                ledgers: list[RunPrivacyLedger] = []
                 try:
                     outcome = await run_macro(
-                        session=session, name=name, args=step_args, slowmo_ms=slowmo_ms, ctx=ctx, _macros=macros
+                        session=session,
+                        name=name,
+                        args=step_args,
+                        slowmo_ms=slowmo_ms,
+                        ctx=ctx,
+                        _macros=macros,
+                        _ledgers=ledgers,
                     )
                     steps.append({**outcome, "ok": True})
                 except sequence_steps.GATE_ERRORS:
                     raise
                 except Exception as exc:
                     used = sequence_steps.step_args_used(macros, name, step_args)
+                    for ledger in ledgers:  # what the step's called macros classified (#248)
+                        used = ledger.scrub(used)
                     steps.append(sequence_steps.failed_step(name, exc, used))
                     if stop_on_failure:
                         stopped_at = index

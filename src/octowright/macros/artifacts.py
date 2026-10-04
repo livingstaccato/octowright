@@ -29,6 +29,7 @@ from octowright.macros import safe_screenshot
 from octowright.macros.nesting import RunMacros
 from octowright.macros.parameter_specs import macro_privacy, resolve_macro_privacy
 from octowright.macros.privacy import (
+    REDACTED,
     MacroArgPrivacy,
     run_privacy_ledger,
     scrub_saturation_fields,
@@ -230,6 +231,9 @@ async def run_macro_artifact(
             existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
             if existing_manifest_path is not None:
                 manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+            # Every value withheld until the replay has run: a called macro can
+            # classify one this macro's view shows, and only its ledger knows (#248).
+            manifest["parameters"] = dict.fromkeys(manifest.get("parameters") or {}, REDACTED)
             write_artifact_manifest(manifest_path, manifest)
 
             run_dir = store.next_run_dir(artifact_dir)
@@ -312,6 +316,7 @@ async def run_macro_artifact(
             )
 
             manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
+            manifest["parameters"] = scrub_sensitive_values(privacy.redact(args_used), sensitive_values)
             write_artifact_manifest(manifest_path, manifest)
 
             critical_points = manifest.get("critical_points", [])

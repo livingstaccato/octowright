@@ -347,6 +347,11 @@ manifests and argument dictionaries never expose values stored under `email`,
 provenance: it replaces an admitted value wherever that text occurs in a
 diagnostic, recording row, artifact or page prepared for a screenshot. The
 default admits only credential-tier values. See **Blind-scrub policy** below.
+A run's `args_used` (and a failed sequence step's) and the artifact manifest's
+`parameters` are also scrubbed of what the run admitted, so a value a called
+macro classifies -- a `macro_call` passing an ordinary argument to a parameter
+its callee declares sensitive -- is hidden there too. The manifest withholds
+every parameter value while the replay runs.
 
 **Screenshots of a blind-scrub-protected run.** A screenshot of a page a
 credential was typed into is a durable copy of it, which no text scrub can
@@ -1098,6 +1103,9 @@ the bottom-center. While a macro runs, the pill shows:
 - After a macro finishes the pill stays visible with `<name> | done` (or
   `| failed`) until the next macro starts or `visible: false` is pushed.
 - The pill is `pointer-events: none` by default — clicks fall through to the page.
+- The text is pushed into the page, so it is scrubbed of every value the run
+  and the session classified first, including one a called macro's
+  `parameter_specs` made sensitive.
 
 **Alt-click** (Option-click on Mac) the pill to open a themed run-history modal
 listing every push for the run with timestamps. Dismiss with the X button, by

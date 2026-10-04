@@ -322,6 +322,19 @@ def with_session_values(session: Any, values: Iterable[str]) -> tuple[str, ...]:
     return merged.values
 
 
+def scrub_with_session(session: Any, value: Any, run_ledger: PrivacyLedger | None = None) -> Any:
+    """*value* scrubbed of *run_ledger*'s values and then the session ledger's, each with its own word bounds.
+
+    For text a run hands to the page or returns after a nested call may have
+    classified more than the caller's own view knew. Reads the session
+    ledger without creating one.
+    """
+    if run_ledger is not None:
+        value = run_ledger.scrub(value)
+    ledger = _existing_session_ledger(session)
+    return ledger.scrub(value) if ledger is not None else value
+
+
 def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:
     """Add values to the session's scrub set and make sure exactly one wrapper reads it.
 
