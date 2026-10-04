@@ -55,7 +55,9 @@ class _Leader:
         try:
             yield (read_recv, write_send)
         finally:
+            # As the real transport does: its streams close with the session.
             await read_send.aclose()
+            await write_send.aclose()
 
     async def wait_for(self, count: int) -> None:
         while len(self.sessions) < count:
@@ -121,5 +123,66 @@ async def test_a_queued_call_goes_to_the_new_leader_after_initialize(monkeypatch
             second = await leader.sessions[1][1].receive()
         assert str(first.message.id).startswith("octowright-bridge-replay"), first
         assert second.message.id == "call-1"
+        tg.cancel_scope.cancel()
+    await local_in.aclose()
+
+
+@pytest.mark.anyio
+async def test_a_clean_session_end_fails_the_calls_it_cannot_resume(monkeypatch: pytest.MonkeyPatch) -> None:
+    leader = _Leader()
+    local_in, local_out = _wire(monkeypatch, leader)
+
+    async def _snapshot(**_k: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(runtime.bridge_state, "record_snapshot_async", _snapshot)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: runtime.run_supervised_proxy(leader_mcp_url="http://127.0.0.1:6299/mcp/"))
+        with anyio.fail_after(5.0):
+            await leader.wait_for(1)
+            # Not a tools/call: no idempotency key, so it cannot be re-sent.
+            await local_in.send(_request("resources/list", "r1"))
+            assert (await leader.sessions[0][1].receive()).message.id == "r1"
+            await leader.sessions[0][0].aclose()  # the leader ends the stream cleanly
+            answer = await local_out.receive()
+        assert isinstance(answer.message, JSONRPCError)
+        assert answer.message.id == "r1"
+        assert "remote leader session" in answer.message.error.message
+        tg.cancel_scope.cancel()
+    await local_in.aclose()
+
+
+@pytest.mark.anyio
+async def test_a_clean_session_end_unpublishes_its_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A call made between a clean end and the next connect must wait for that
+    connect, not be written into the closed session."""
+    leader = _Leader()
+    local_in, _local_out = _wire(monkeypatch, leader)
+    hold = anyio.Event()
+
+    async def _snapshot(**_k: Any) -> bool:
+        return True
+
+    async def _held_flap_backoff(_connected_at: float | None, flap_attempt: int) -> tuple[int, bool]:
+        await hold.wait()
+        return flap_attempt, True
+
+    monkeypatch.setattr(runtime.bridge_state, "record_snapshot_async", _snapshot)
+    monkeypatch.setattr(runtime, "_flap_backoff", _held_flap_backoff)
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: runtime.run_supervised_proxy(leader_mcp_url="http://127.0.0.1:6299/mcp/"))
+        with anyio.fail_after(5.0):
+            await leader.wait_for(1)
+            await leader.sessions[0][0].aclose()
+            await anyio.sleep(0.1)  # the loop is now holding in its post-session backoff
+            # Not resumable, so only waiting for the next session can deliver it.
+            await local_in.send(_request("resources/list", "r2"))
+            await anyio.sleep(0.1)
+            hold.set()
+            await leader.wait_for(2)
+            first = await leader.sessions[1][1].receive()
+        assert first.message.id == "r2"
         tg.cancel_scope.cancel()
     await local_in.aclose()

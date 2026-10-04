@@ -451,6 +451,16 @@ async def run_supervised_proxy(
                     _LEADER_RECOVERY.add(1, attributes={"outcome": "exhausted"})
                     return False
 
+                async def _end_remote_session(reason: str) -> None:
+                    """Retire the session that just ended, however it ended: stop
+                    handing out its writer (calls wait for the next connect
+                    instead of failing on a closed stream) and fail the in-flight
+                    calls that cannot be re-sent, keeping the resumable ones."""
+                    remote_write_slot.write = None
+                    # One-shot reset so reconnect waiters pick up the next connection.
+                    remote_write_slot.ready = anyio.Event()
+                    await supervisor_obj.fail_or_mark_for_resume(reason)
+
                 flap_attempt = 0
                 while True:
                     # When this iteration's session became live (None until the
@@ -547,6 +557,11 @@ async def run_supervised_proxy(
                             raise TimeoutError(
                                 f"connection to {remote_url!r} timed out after {BRIDGE_CONNECT_TIMEOUT_SECONDS}s"
                             )
+                        # A clean end (the leader closed its stream: a graceful
+                        # restart, a reaped session) needs the same cleanup as an
+                        # error, or its closed writer stays published and its
+                        # in-flight calls are answered only by their deadline.
+                        await _end_remote_session("remote leader session ended")
                         if not await _leader_recoverable():
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
@@ -554,12 +569,8 @@ async def run_supervised_proxy(
                         # Flap guard (success path): throttle a clean instant session.
                         flap_attempt, _ = await _flap_backoff(connected_at, flap_attempt)
                     except Exception as exc:
-                        remote_write_slot.write = None
-                        remote_write_slot.ready = (
-                            anyio.Event()
-                        )  # one-shot reset so reconnect waiters pick up the next connection
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
-                        await supervisor_obj.fail_or_mark_for_resume(f"remote leader session reset: {exc!r}")
+                        await _end_remote_session(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)
                         await bridge_state.record_snapshot_async(
                             path=BRIDGE_STATE_PATH,

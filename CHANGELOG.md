@@ -49,6 +49,14 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A leader that closes its stream cleanly is handled like one that drops
+  it.** Only an error ended a session properly. After a clean close (a graceful
+  restart, a reaped session) the follower kept handing calls to the closed
+  session, so they failed instead of waiting for the reconnect. A call already
+  in flight got no answer until its deadline, and that expiry then cancelled
+  whatever session had replaced it. A clean close now retires the session the
+  same way: calls wait for the next one, and in-flight calls that cannot be
+  re-sent are answered at once.
 - **A call made while the follower reconnects no longer reaches the new
   leader ahead of `initialize`.** On reconnect the follower released the calls
   waiting for a connection before it replayed the MCP handshake on the new
