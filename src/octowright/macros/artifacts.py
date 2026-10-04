@@ -487,7 +487,8 @@ def _merge_existing_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, 
     return merged
 
 
-def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+def _stored_manifest(store: ArtifactStore, path: Path) -> tuple[Path, dict[str, Any]] | None:
+    """The manifest as it is on disk, and its contained path; what a read-modify-write writes back."""
     try:
         contained_path = store._contained(path, label="macro artifact manifest")
         contained_path.relative_to(store.root.resolve())
@@ -497,8 +498,25 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         manifest = json.loads(contained_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-    if not isinstance(manifest, dict):
+    return (contained_path, manifest) if isinstance(manifest, dict) else None
+
+
+def _writable_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+    """`_stored_manifest` with its parameters redacted as a listing shows them (one may predate that redaction)."""
+    stored = _stored_manifest(store, path)
+    if stored is None:
         return None
+    manifest = stored[1]
+    manifest["parameters"] = _listing_privacy(manifest.get("name")).redact(manifest.get("parameters") or {})
+    return manifest
+
+
+def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+    """The manifest for a response: never written back, since it drops ``artifact_version`` and adds ``path``."""
+    stored = _stored_manifest(store, path)
+    if stored is None:
+        return None
+    contained_path, manifest = stored
     return {
         "artifact_type": manifest.get("artifact_type"),
         "name": manifest.get("name"),
@@ -594,7 +612,7 @@ def _normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, An
 def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str, Any]]) -> dict[str, Any]:
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
-    manifest = _compact_manifest(store, manifest_path)
+    manifest = _writable_manifest(store, manifest_path)
     if not manifest:
         macro = load_macro(name)
         manifest = _manifest_for_plan(
@@ -657,8 +675,11 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
 
     atomic_write_text(verification_path, dumps_utf8_safe(v_res, indent=2), encoding="utf-8")
 
-    manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
-    write_artifact_manifest(manifest_path, manifest)
+    # Written back onto the manifest as stored, not the compacted view read above.
+    stored = _writable_manifest(store, manifest_path)
+    if stored is not None:
+        stored["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
+        write_artifact_manifest(manifest_path, stored)
 
     # The run bundle is written before this verification can run, so its
     # summary.md carries no verdict until it is re-rendered here.

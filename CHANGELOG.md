@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Editing or verifying a macro artifact's critical points keeps its
+  manifest intact.** `macro_artifact_critical_points_set` and
+  `macro_artifact_verify` wrote back the compacted view they had read, which
+  dropped `artifact_version` from `artifact.json` for good and added a `path`
+  key. They now update the manifest as stored.
 - **A browser dying at launch no longer closes every other browser.** Its
   error reads like a dead shared Playwright driver, and the pool used to reset
   the driver on the wording alone. It now confirms the driver is dead first,
