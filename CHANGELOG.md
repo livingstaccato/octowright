@@ -63,6 +63,12 @@ a section that is already tagged and on PyPI.
 ### Changed
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
   relaunches keep `badge` and `record_video` instead of resetting them.
+- **Handoff and relaunch keep the browser `channel`.** A browser launched on
+  system Chrome or Edge was replaced on Playwright's bundled Chromium. If the
+  channel has been uninstalled since, the replacement launches on the bundled
+  build and says so: `warnings` on the handoff or fluid-relaunch result, and
+  `channel_dropped` on a driver-death relaunch's lost-session record. The
+  channel is still never read back from a recording.
 - A call in flight when the leader restarts fails with an "outcome unknown"
   error instead of being replayed; retry it if it is safe to repeat.
 - WebSocket handshakes to the dashboard require an Origin that matches the

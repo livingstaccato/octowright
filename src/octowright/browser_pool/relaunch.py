@@ -31,7 +31,12 @@ from octowright.browser_pool.lifecycle import (
     RelaunchSnapshot,
     reserve_close_browser,
 )
-from octowright.browser_pool.replacement import FLUID_OVERRIDES, ReplacementSource
+from octowright.browser_pool.replacement import (
+    FLUID_OVERRIDES,
+    ReplacementSource,
+    channel_dropped_warning,
+    launch_replacement,
+)
 from octowright.session.operation.gate import (
     SessionCloseAbortedError,
     SessionClosedError,
@@ -90,16 +95,21 @@ async def _launch_from_snapshot(
     *,
     headed: bool | None,
     overrides: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
     """Launch the replacement from the original's own launch options (see
     ``replacement``). ``headed`` overrides the original's; ``None`` keeps it.
     The replacement opens at the page's current URL but trusts the
     original's launch URL -- passed in, not assigned afterwards, because
     ``pool.launch`` publishes the session before it returns. Its HAR goes to
-    a fresh sibling path rather than overwriting the original's."""
-    return await pool.launch(
-        **snapshot.source.launch_kwargs(url=snapshot.target_url, headed=headed, overrides=overrides)
-    )
+    a fresh sibling path rather than overwriting the original's.
+
+    Returns the launch result and the response's ``warnings`` field: present
+    only when the original's browser channel is gone from this host and the
+    replacement fell back to the bundled build (`launch_replacement`)."""
+    kwargs = snapshot.source.launch_kwargs(url=snapshot.target_url, headed=headed, overrides=overrides)
+    launch, dropped = await launch_replacement(pool.launch, kwargs)
+    warnings = {"warnings": [channel_dropped_warning(dropped, snapshot.kind)]} if dropped else {}
+    return launch, warnings
 
 
 async def _close_with_fallback_snapshot(
@@ -212,7 +222,7 @@ async def _handoff_without_close_owned(
     replacement launch, and the response -- no OTHER pre-existing session's
     lease is ever held at the same time."""
     snapshot = _relaunch_snapshot_from_session(source)
-    launch = await _launch_from_snapshot(pool, snapshot, headed=headed)
+    launch, warnings = await _launch_from_snapshot(pool, snapshot, headed=headed)
     await _restore_protection(pool, launch["instance_id"], snapshot)
     return {
         "ok": True,
@@ -223,6 +233,7 @@ async def _handoff_without_close_owned(
         "kind": snapshot.kind,
         "url": snapshot.target_url,
         "har_path": launch.get("har_path"),
+        **warnings,
     }
 
 
@@ -280,7 +291,7 @@ async def handoff_browser(
             warning_event="octowright.browser.handoff.close_raced_eviction",
         )
 
-        launch = await _launch_from_snapshot(pool, snapshot, headed=headed)
+        launch, warnings = await _launch_from_snapshot(pool, snapshot, headed=headed)
         await _restore_protection(pool, launch["instance_id"], snapshot)
 
         return {
@@ -292,6 +303,7 @@ async def handoff_browser(
             "kind": snapshot.kind,
             "url": snapshot.target_url,
             "har_path": launch.get("har_path"),
+            **warnings,
         }
 
 
@@ -316,7 +328,7 @@ async def relaunch_fluid_browser(pool: BrowserPool, instance_id: str) -> dict[st
         )
 
         # Fluid mode's deliberate departures: headed, viewport following the window.
-        result = await _launch_from_snapshot(pool, snapshot, headed=None, overrides=FLUID_OVERRIDES)
+        result, warnings = await _launch_from_snapshot(pool, snapshot, headed=None, overrides=FLUID_OVERRIDES)
         await _restore_protection(pool, result["instance_id"], snapshot)
         return {
             "ok": True,
@@ -325,4 +337,5 @@ async def relaunch_fluid_browser(pool: BrowserPool, instance_id: str) -> dict[st
             "old_closed": bool(close_result and close_result.get("closed")),
             "mode": "fluid",
             "launch": result,
+            **warnings,
         }

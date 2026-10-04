@@ -37,7 +37,7 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
-from octowright.browser_pool.replacement import ReplacementSource
+from octowright.browser_pool.replacement import ReplacementSource, launch_replacement
 
 log = get_logger(__name__)
 
@@ -324,8 +324,11 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     if source is None:
         raise RuntimeError(f"session {desc['instance_id']!r} kept no launch options to reopen it with")
     # Everything the original was launched with (replacement.ReplacementSource),
-    # reopened at its last URL.
-    result = await pool.launch(**source.launch_kwargs(url=desc["url"]))
+    # reopened at its last URL. A browser channel gone from the host since is
+    # dropped for the bundled build, and the lost record says which.
+    result, dropped = await launch_replacement(pool.launch, source.launch_kwargs(url=desc["url"]))
+    if dropped is not None:
+        desc["lost_record"]["channel_dropped"] = dropped
     new_id = result["instance_id"]
     old_id = desc["instance_id"]
     final_id = await _finalize_id(pool, new_id, old_id, mode)

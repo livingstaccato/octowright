@@ -205,10 +205,12 @@ class LaunchOptions:
     protected_reason: str = "explicit"
     #: Real installed browser build (see SUPPORTED_CHANNELS) instead of the
     #: Playwright-bundled one -- e.g. native Metal/GPU parity a bundled
-    #: headless build lacks. Launch-time only: never read back from a JSONL
-    #: recording (see from_launch_record) or carried across handoff/relaunch,
-    #: since a persisted browser-selection setting has no way to notice the
-    #: named channel became uninstalled/unavailable on a later run.
+    #: headless build lacks. Never read back from a JSONL recording (see
+    #: from_launch_record): a recording is untrusted, and only the live
+    #: session's own options say which browser it was. Carried across
+    #: handoff/relaunch from those options; a channel uninstalled since then
+    #: falls back to the bundled build with a warning
+    #: (``replacement.launch_replacement``).
     channel: str | None = None
     #: Absolute path to a specific browser binary, bypassing both the bundled
     #: build and `channel`. NEVER read from a JSONL recording (see
