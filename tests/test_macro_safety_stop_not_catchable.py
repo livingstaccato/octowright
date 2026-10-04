@@ -43,18 +43,16 @@ def block_private(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
 
 
-async def test_an_ssrf_refusal_inside_try_fails_the_run(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, block_private: None
-) -> None:
+@pytest.mark.usefixtures("block_private")
+async def test_an_ssrf_refusal_inside_try_fails_the_run(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session(tmp_path, launch=OWN, current=OWN)
     with pytest.raises(RuntimeError, match=r"SSRF policy"):
         await _run(monkeypatch, session, [{"action": "try", "actions": [{"action": "navigate", "url": PRIVATE}]}])
     session.page.goto.assert_not_awaited()
 
 
-async def test_try_each_does_not_move_past_an_ssrf_refusal(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch, block_private: None
-) -> None:
+@pytest.mark.usefixtures("block_private")
+async def test_try_each_does_not_move_past_an_ssrf_refusal(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session(tmp_path, launch=OWN, current=OWN)
     session.press_key = AsyncMock()
     branches = [[{"action": "navigate", "url": PRIVATE}], [{"action": "press_key", "key": "Escape"}]]
@@ -124,7 +122,8 @@ def test_every_safety_refusal_is_a_safety_stop_and_keeps_its_old_type() -> None:
     assert not isinstance(chain.error(), SafetyStop)
 
 
-async def test_every_ssrf_check_raises_a_refusal(monkeypatch: pytest.MonkeyPatch, block_private: None) -> None:
+@pytest.mark.usefixtures("block_private")
+async def test_every_ssrf_check_raises_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     from octowright import ssrf
 
     with pytest.raises(ssrf.SsrfRefusal):
