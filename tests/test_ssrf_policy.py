@@ -200,7 +200,12 @@ class TestUnparsableUrlUnderPolicy:
 
     @pytest.mark.parametrize(
         "url",
-        ["http://x]@169.254.169.254/latest/meta-data/", "HTTP://x]@169.254.169.254/", "https://[::1/", "ws://x]@10.0.0.5/"],
+        [
+            "http://x]@169.254.169.254/latest/meta-data/",
+            "HTTP://x]@169.254.169.254/",
+            "https://[::1/",
+            "ws://x]@10.0.0.5/",
+        ],
     )
     def test_refused_when_the_policy_is_on(self, monkeypatch: pytest.MonkeyPatch, url: str) -> None:
         monkeypatch.setenv(POLICY, "block-private")

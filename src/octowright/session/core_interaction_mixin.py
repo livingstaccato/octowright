@@ -115,7 +115,6 @@ def _upload_locator_fields(
     }
 
 
-
 def _redact_prompt_text(value: str | None) -> str | None:
     """What a recording or result shows of ``prompt_text``.
 
@@ -126,6 +125,7 @@ def _redact_prompt_text(value: str | None) -> str | None:
     from octowright.session.core_page_mixin import _redact_sink_value
 
     return _redact_sink_value(value)
+
 
 class SessionInteractionMixin(SessionLike):
     # ------------------------------------------------------------------

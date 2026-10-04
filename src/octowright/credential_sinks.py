@@ -538,14 +538,7 @@ class _Expander:
         forwarded = kind in REDIRECT_FORWARDED_HEADER_ACTIONS
         opted_in = parse_forward_on_redirect(node) if forwarded else frozenset()
         expanded = {
-            key: item
-            if key == "action"
-            else self._headers(item, opted_in)
-            if key == "headers" and own_site and forwarded and isinstance(item, dict)
-            else self.value(
-                item,
-                unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS and not (own_site and key == "headers"),
-            )
+            key: item if key == "action" else self._field(key, item, own_site=own_site, opted_in=opted_in, kind=kind)
             for key, item in node.items()
         }
         if credentials:
@@ -553,6 +546,16 @@ class _Expander:
         if tainted:
             expanded[CREDENTIAL_CALL_MARKER] = tainted
         return expanded
+
+    def _field(self, key: str, item: Any, *, own_site: bool, opted_in: frozenset[str], kind: str) -> Any:
+        """One field of a step, expanded under the sink rule that applies to it."""
+        if key != "headers" or not own_site:
+            return self.value(item, unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS)
+        if kind not in REDIRECT_FORWARDED_HEADER_ACTIONS:
+            return self.value(item, unsafe_sink=False)  # a response served to the page
+        if not isinstance(item, dict):
+            return self.value(item, unsafe_sink=True)
+        return self._headers(item, opted_in)
 
     def _headers(self, headers: dict[str, Any], opted_in: frozenset[str]) -> dict[str, Any]:
         """Own-site request headers: each exempt only if its name is opted in."""

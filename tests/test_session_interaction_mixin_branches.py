@@ -196,7 +196,10 @@ class TestDialogPromptTextRedaction:
         assert self.FAKE_PIN not in repr(captured)
         assert self.FAKE_PIN not in repr(result)
         recorded = {name: fields.get("prompt_text") for name, fields in captured if "prompt_text" in fields}
-        assert recorded == {"set_dialog_policy": REDACTED_INPUT_PLACEHOLDER, "dialog_handled": REDACTED_INPUT_PLACEHOLDER}
+        assert recorded == {
+            "set_dialog_policy": REDACTED_INPUT_PLACEHOLDER,
+            "dialog_handled": REDACTED_INPUT_PLACEHOLDER,
+        }
 
     @pytest.mark.anyio
     async def test_passwords_mode_keeps_it_readable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

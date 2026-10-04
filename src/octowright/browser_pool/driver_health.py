@@ -218,13 +218,20 @@ async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> boo
         if not done or task.cancelled():
             log.info("octowright.pool.driver_probe_unanswered", timeout_s=bound, cancelled=bool(done))
             return False
-        error = task.exception()
-        if error is None and task.result() == _LISTENER_ERROR_PENDING:
-            continue  # a listener's error arrived first; it stays for the caller
-        verdict = _answer_verdict(error, connection)
+        verdict = _finished_verdict(task, connection)
         if verdict is not None:
             return verdict
     return False
+
+
+def _finished_verdict(task: asyncio.Future[Any], connection: Any) -> bool | None:
+    """The verdict of a probe that finished; ``None`` = a listener's error got
+    there first (``_probe_send``), so it stays for the caller and the round
+    trip is tried again."""
+    error = task.exception()
+    if error is None and task.result() == _LISTENER_ERROR_PENDING:
+        return None
+    return _answer_verdict(error, connection)
 
 
 def _answer_verdict(error: BaseException | None, connection: Any) -> bool:

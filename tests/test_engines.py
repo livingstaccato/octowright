@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 import pytest
@@ -25,7 +24,9 @@ def test_every_tool_a_hint_names_is_registered() -> None:
 
     from octowright.server import registered_tool_names
 
-    named = set(re.findall(r"`((?:browser|page|macro|octowright|persona|scenario)_[a-z_]+)`", inspect.getsource(engines)))
+    named = set(
+        re.findall(r"`((?:browser|page|macro|octowright|persona|scenario)_[a-z_]+)`", inspect.getsource(engines))
+    )
     assert named, "the scan found no tool names at all"
     assert named - set(registered_tool_names()) == set()
 
