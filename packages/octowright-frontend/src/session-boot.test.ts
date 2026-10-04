@@ -31,6 +31,7 @@ import {
   renderHeader,
   renderTraceControls,
 } from "./session.js";
+import type { TailOptions } from "./tail.js";
 import type { RecordingEvent, SessionDetail } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -660,6 +661,68 @@ describe("bootSession — live session", () => {
       "2026-04-24T12:00:00Z",
       expect.any(Object),
     );
+  });
+
+  it("reconnects the tail and says so in the footer while it is down", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const api = await import("./api.js");
+    (api.getEvents as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      events: [{ ts: "2026-04-24T12:00:00Z", action: "navigate" }],
+      cursor: 10,
+      total_bytes: 10,
+      complete: true,
+    });
+    const { openTail } = await import("./tail.js");
+    let captured: TailOptions | null = null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce((_url: string, opts: TailOptions) => {
+      captured = opts;
+      return { close: vi.fn() };
+    });
+
+    await bootSession(root, "sess-live-reconnect", {});
+
+    const reconnect = (captured as TailOptions | null)?.reconnect;
+    expect(reconnect?.initialCursor).toBe(10);
+    expect(reconnect?.urlFor(42)).toContain("since=42");
+    const footer = root.querySelector("[data-testid='session-footer']");
+    reconnect?.onStatus?.("reconnecting");
+    expect(footer?.textContent).toContain("reconnecting");
+    reconnect?.onStatus?.("connected");
+    expect(footer?.textContent).toBe("Refreshing every 1s");
+  });
+
+  it("catches up from /events when the session closed while the tail was down", async () => {
+    const getSession = await getMockedGetSession();
+    getSession.mockResolvedValueOnce(makeDetail({ live: true }));
+    const api = await import("./api.js");
+    const { openTail } = await import("./tail.js");
+    const { appendTimelineEvents } = await import("./timeline.js");
+    const { mountLivePreview } = await import("./live-preview.js");
+    let captured: TailOptions | null = null;
+    (openTail as ReturnType<typeof vi.fn>).mockImplementationOnce((_url: string, opts: TailOptions) => {
+      captured = opts;
+      return { close: vi.fn() };
+    });
+
+    await bootSession(root, "sess-live-closed-while-down", {});
+    const preview = (mountLivePreview as ReturnType<typeof vi.fn>).mock.results.at(-1)?.value as {
+      markClosed: ReturnType<typeof vi.fn>;
+    };
+    (api.getEvents as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      events: [{ ts: "2026-04-24T12:00:09Z", action: "close" }],
+      cursor: 90,
+      total_bytes: 90,
+      complete: true,
+    });
+    (appendTimelineEvents as ReturnType<typeof vi.fn>).mockClear();
+
+    (captured as TailOptions | null)?.reconnect?.onSessionClosed?.(60);
+
+    await vi.waitFor(() => expect(api.getEvents).toHaveBeenLastCalledWith("sess-live-closed-while-down", 60));
+    await vi.waitFor(() => expect(appendTimelineEvents).toHaveBeenCalled());
+    expect(preview.markClosed).toHaveBeenCalled();
+    expect(root.querySelector("[data-testid='session-footer']")?.textContent).toContain("closed");
   });
 
   it("logs and swallows cheap panel refresh errors from tail messages", async () => {

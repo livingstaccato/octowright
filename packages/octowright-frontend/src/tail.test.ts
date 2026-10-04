@@ -210,3 +210,123 @@ describe("openTail", () => {
     window.removeEventListener(DASHBOARD_AUTH_REQUIRED_EVENT, authRequired);
   });
 });
+
+describe("openTail reconnect", () => {
+  interface Timer {
+    callback: () => void;
+    delay: number;
+  }
+
+  function harness(extra: { initialCursor?: number } = {}) {
+    FakeWebSocket.instances = [];
+    const timers: Timer[] = [];
+    const messages: number[] = [];
+    const statuses: string[] = [];
+    const sessionClosed: number[] = [];
+    const handle = openTail("ws://test/tail?since=5", {
+      onMessage: (msg) => messages.push(msg.cursor),
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+      reconnect: {
+        urlFor: (cursor) => `ws://test/tail?since=${cursor}`,
+        initialCursor: extra.initialCursor ?? 5,
+        onStatus: (status) => statuses.push(status),
+        onSessionClosed: (cursor) => sessionClosed.push(cursor),
+        setTimeoutFn: (callback, delay) => {
+          timers.push({ callback, delay });
+          return timers.length;
+        },
+        clearTimeoutFn: () => {},
+      },
+    });
+    const frame = (cursor: number, complete = false) => ({
+      data: JSON.stringify({ events: [], cursor, complete }),
+    });
+    return { handle, timers, messages, statuses, sessionClosed, frame };
+  }
+
+  it("reconnects from the last cursor after an abnormal close", () => {
+    const h = harness();
+    FakeWebSocket.instances[0]!.emit("message", h.frame(40));
+    FakeWebSocket.instances[0]!.emit("close", { code: 1006, reason: "", wasClean: false });
+
+    expect(h.statuses).toContain("reconnecting");
+    expect(h.timers).toHaveLength(1);
+    h.timers[0]!.callback();
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(FakeWebSocket.instances[1]!.url).toBe("ws://test/tail?since=40");
+    FakeWebSocket.instances[1]!.emit("open", new Event("open"));
+    expect(h.statuses.at(-1)).toBe("connected");
+  });
+
+  it("starts from the initial cursor when the drop came before any frame", () => {
+    const h = harness({ initialCursor: 7 });
+    FakeWebSocket.instances[0]!.emit("close", { code: 1011, reason: "boom", wasClean: false });
+    h.timers[0]!.callback();
+    expect(FakeWebSocket.instances[1]!.url).toBe("ws://test/tail?since=7");
+  });
+
+  it("backs off exponentially, capped, and resets after a frame", () => {
+    const h = harness();
+    for (let i = 0; i < 8; i += 1) {
+      FakeWebSocket.instances.at(-1)!.emit("close", { code: 1006, reason: "", wasClean: false });
+      h.timers.at(-1)!.callback();
+    }
+    const delays = h.timers.map((t) => t.delay);
+    expect(delays.slice(0, 4)).toEqual([1000, 2000, 4000, 8000]);
+    expect(Math.max(...delays)).toBe(15000);
+
+    FakeWebSocket.instances.at(-1)!.emit("message", h.frame(9));
+    FakeWebSocket.instances.at(-1)!.emit("close", { code: 1006, reason: "", wasClean: false });
+    expect(h.timers.at(-1)!.delay).toBe(1000);
+  });
+
+  it("does not reconnect after the server reports the session complete", () => {
+    const h = harness();
+    FakeWebSocket.instances[0]!.emit("message", h.frame(50, true));
+    FakeWebSocket.instances[0]!.emit("close", { code: 1000, reason: "", wasClean: true });
+    expect(h.timers).toHaveLength(0);
+    expect(h.statuses.at(-1)).toBe("ended");
+  });
+
+  it("hands the cursor back when the session closed while disconnected", () => {
+    const h = harness();
+    FakeWebSocket.instances[0]!.emit("message", h.frame(60));
+    FakeWebSocket.instances[0]!.emit("close", { code: 1006, reason: "", wasClean: false });
+    h.timers[0]!.callback();
+    FakeWebSocket.instances[1]!.emit("close", {
+      code: 1003,
+      reason: "closed sessions don't support tail; use GET /api/sessions/{id}/events instead",
+      wasClean: true,
+    });
+    expect(h.sessionClosed).toEqual([60]);
+    expect(h.timers).toHaveLength(1);
+    expect(h.statuses.at(-1)).toBe("ended");
+  });
+
+  it("does not reconnect after an auth close or an unknown session", () => {
+    sessionStorage.clear();
+    const h = harness();
+    FakeWebSocket.instances[0]!.emit("close", { code: 1008, reason: "dashboard pairing required", wasClean: true });
+    expect(h.timers).toHaveLength(0);
+
+    const h2 = harness();
+    FakeWebSocket.instances[0]!.emit("close", { code: 1008, reason: "no session with id x", wasClean: true });
+    expect(h2.timers).toHaveLength(0);
+    expect(h2.statuses.at(-1)).toBe("ended");
+  });
+
+  it("close() stops a pending reconnect and closes the live socket", () => {
+    const h = harness();
+    FakeWebSocket.instances[0]!.emit("close", { code: 1006, reason: "", wasClean: false });
+    h.handle.close();
+    h.timers[0]!.callback();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    const h2 = harness();
+    h2.handle.close();
+    expect(FakeWebSocket.instances[0]!.closed).toBe(true);
+    FakeWebSocket.instances[0]!.emit("close", { code: 1005, reason: "", wasClean: true });
+    expect(h2.timers).toHaveLength(0);
+  });
+});

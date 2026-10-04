@@ -28,7 +28,7 @@ import type { MountStream, StreamContext } from "./plugin-contract.js";
 import { loadPluginRegistry, resolveRenderer } from "./plugin-registry.js";
 import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
 import { mountFallbackStream } from "./session-fallback.js";
-import { openTail } from "./tail.js";
+import { openTail, type TailStatus } from "./tail.js";
 import { bindContext, getLogger, initTelemetry, tabSwitchesCounter, userActionsCounter } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
@@ -590,6 +590,20 @@ export function renderFooter(target: HTMLElement, detail: SessionDetail): void {
   }
 }
 
+/**
+ * Say in the footer what the live tail is doing. A dropped tail used to leave
+ * "Refreshing every 1s" up over a timeline that had stopped moving.
+ */
+export function renderTailStatus(target: HTMLElement, detail: SessionDetail, status: TailStatus | "closed"): void {
+  if (status === "reconnecting") {
+    target.textContent = "Live tail disconnected; reconnecting...";
+  } else if (status === "closed") {
+    target.textContent = "Session closed";
+  } else if (status === "connected") {
+    renderFooter(target, detail);
+  }
+}
+
 export function installDashboardAuthRequiredNotice(root: HTMLElement, sessionId?: string): () => void {
   const onAuthRequired = (event: Event): void => {
     if (root.querySelector('[data-testid="pairing-gate"]')) return;
@@ -846,6 +860,25 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
         if (msg.complete) {
           livePreview.markClosed();
         }
+      },
+      reconnect: {
+        urlFor: (cursor) => tailWebSocketUrl(sessionId, cursor),
+        initialCursor: initial.cursor,
+        onStatus: (status) => renderTailStatus(refs.footer, detail, status),
+        // The session closed while the tail was down, and the server will not
+        // tail a closed session: what it wrote meanwhile comes from /events.
+        onSessionClosed: (cursor) => {
+          getAllEvents(sessionId, cursor)
+            .then((rest) => {
+              if (rest.events.length > 0) appendTimelineEvents(refs.timeline, rest.events, baseIso, { onSeek: seek });
+              livePreview.markClosed();
+              renderTailStatus(refs.footer, detail, "closed");
+              return refreshPanels(sessionId, refs, data, ["console", "downloads"]);
+            })
+            .catch((err: unknown) => {
+              log.warn({ event: "tail_catch_up_failed", session_id: sessionId, error: String(err) });
+            });
+        },
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });

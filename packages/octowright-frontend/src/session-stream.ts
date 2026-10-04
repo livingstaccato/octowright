@@ -19,7 +19,7 @@ import { tailWebSocketUrl } from "./api.js";
 import { getAllEvents } from "./events-pager.js";
 import type { MountStream, StreamContext, StreamHandle } from "./plugin-contract.js";
 import { mountFallbackStream, type FallbackReason } from "./session-fallback.js";
-import { installDashboardAuthRequiredNotice, renderFooter, renderHeader } from "./session.js";
+import { installDashboardAuthRequiredNotice, renderFooter, renderHeader, renderTailStatus } from "./session.js";
 import { openTail } from "./tail.js";
 import { getLogger } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
@@ -181,6 +181,26 @@ export async function bootStreamSession(
           appendTimelineEvents(refs.timeline, msg.events, baseIso);
           feed(msg.events);
         }
+      },
+      reconnect: {
+        urlFor: (cursor) => tailWebSocketUrl(sessionId, cursor),
+        initialCursor: initial.cursor,
+        onStatus: (status) => renderTailStatus(refs.footer, detail, status),
+        // Closed while the tail was down: the server will not tail a closed
+        // session, so the rest of its history comes from /events.
+        onSessionClosed: (cursor) => {
+          getAllEvents(sessionId, cursor)
+            .then((rest) => {
+              if (rest.events.length > 0) {
+                appendTimelineEvents(refs.timeline, rest.events, baseIso);
+                feed(rest.events);
+              }
+              renderTailStatus(refs.footer, detail, "closed");
+            })
+            .catch((err: unknown) => {
+              log.warn({ event: "stream_tail_catch_up_failed", session_id: sessionId, error: errorMessage(err) });
+            });
+        },
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });

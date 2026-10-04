@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A dropped live tail reconnects instead of freezing the session page.**
+  The tail WebSocket had no close handling beyond re-pairing, so a drop for
+  any other reason (a network blip, a server error) stopped the timeline
+  while the footer still said "Refreshing every 1s". The session page and the
+  plugin session view now reconnect from the last cursor with capped
+  exponential backoff, say "reconnecting" in the footer while down, and, if
+  the session closed in the meantime, fetch what it wrote from `/events`.
 - **The session page shows a large recording's whole timeline.** One
   `/events` answer is bounded (8 MiB of JSONL by default) and says so with
   `complete: false`, but the session page and the plugin session view fetched
