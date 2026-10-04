@@ -368,10 +368,13 @@ def test_poisoned_record_value_is_refused(value: object) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("value", [True, False, None])
-async def test_handoff_and_relaunch_carry_the_request(value: bool | None) -> None:
+async def test_handoff_and_relaunch_carry_the_request(value: bool | None, monkeypatch: pytest.MonkeyPatch) -> None:
     """The REQUEST is carried, so auto stays auto and re-detects. It comes
     from the session's stored launch options, which the launch validated
-    strictly -- a duck-typed session attribute is never read."""
+    strictly -- a duck-typed session attribute is never read. The host is
+    pinned to Linux: an explicit True is refused elsewhere, which is the
+    platform rule, not what this test is about."""
+    monkeypatch.setattr(wayland, "host_platform", lambda: "linux")
     session = SimpleNamespace(
         launch_options=LaunchOptions(kind="chromium", label="lab", profile="lab", wayland_native=value),
         har_path=None,
