@@ -56,8 +56,6 @@ from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
-#: ``_reset_driver``'s default: reset whatever driver is current.
-_ANY_DRIVER: Any = object()
 
 _safe_cleanup_on_launch_failure = cleanup_on_launch_failure
 
@@ -146,7 +144,7 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def _reset_driver(self, *, reason: str | None = None, expected: Any = _ANY_DRIVER) -> None:
+    async def _reset_driver(self, *, reason: str | None = None, expected: Any = None) -> None:
         """Discard the shared Playwright driver so the next launch rebuilds it.
 
         Called when a driver-death error is seen (see ``driver_health``). Clears
@@ -159,9 +157,12 @@ class BrowserPool:
         ``expected`` is the handle the caller confirmed dead. If ``_pw`` is no
         longer that handle, another failure already replaced it, and resetting
         again would stop the NEW driver and evict every browser a second time:
-        nothing is done."""
+        nothing is done. ``None`` (the default) resets whatever is current.
+        Deliberately not an ``object()`` sentinel: a test that reloads this
+        module rebinds the global while earlier-imported functions keep the
+        old default, and every unguarded reset was then skipped."""
         async with self._pw_lock:
-            if expected is not _ANY_DRIVER and self._pw is not expected:
+            if expected is not None and self._pw is not expected:
                 log.info("octowright.pool.driver_reset_skipped_already_replaced")
                 return
             old = self._pw
