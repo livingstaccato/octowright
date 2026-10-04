@@ -154,7 +154,7 @@ trusted_roots:
 
 Chromium on Linux reads trust from `$HOME/.pki/nssdb`, so importing a private
 root there trusts it in every browser the user runs. Instead, on every
-Chromium launch of this persona, octowright rebuilds a private NSS store under
+Chromium launch of this persona, Octowright rebuilds a private NSS store under
 the persona's directory holding exactly the listed roots (with `certutil`,
 from `libnss3-tools`), and starts that Chromium with `HOME` pointed at it.
 

@@ -63,7 +63,7 @@ These are separate systems and can be enabled independently.
 
 HTTP request metrics for the debugger/API server are recorded through
 `provide.telemetry`'s `TelemetryMiddleware` and exported via OTLP alongside the
-rest of octowright's telemetry — RED metrics (`http.requests.total`,
+rest of Octowright's telemetry — RED metrics (`http.requests.total`,
 `http.errors.total`, `http.request.duration_ms`) attributed by route, method,
 and status code, plus request-id/session-id log correlation and W3C trace
 propagation. There is no separate Prometheus scrape endpoint; point an OTLP
@@ -233,7 +233,7 @@ The OTel SDK is pulled in as an extra (`provide-telemetry[otel]`); without it (o
 
 #### Backend-specific notes
 
-**Local OTel Collector (gRPC 4317 / HTTP 4318)** — most LGTM stacks (Loki + Grafana + Tempo + Mimir/Prometheus + Pyroscope) and any "agent-in-the-middle" deployment land here. The collector fans out to whatever backends it's configured with; from octowright's perspective it's the only URL you care about:
+**Local OTel Collector (gRPC 4317 / HTTP 4318)** — most LGTM stacks (Loki + Grafana + Tempo + Mimir/Prometheus + Pyroscope) and any "agent-in-the-middle" deployment land here. The collector fans out to whatever backends it's configured with; from Octowright's perspective it's the only URL you care about:
 
 ```bash
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318

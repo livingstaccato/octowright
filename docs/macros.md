@@ -250,7 +250,7 @@ reader can see: rendered text, open shadow roots, visible form values and
 placeholders, a broken image's alt text, a select's option labels and CSS
 generated content. Password fields, attribute text such as a resource address,
 `visibility: hidden` text and anything not rendered do not count, and neither
-do octowright's own overlays. Case, whitespace and invisible characters are
+do Octowright's own overlays. Case, whitespace and invisible characters are
 ignored. On Chromium a whole-page check also reads the DOM snapshot, which
 reaches closed shadow roots; other engines and exported scripts cannot. Canvas,
 video and other pixel-only content cannot be text-checked.
@@ -360,7 +360,7 @@ order:
    itself.
 2. If it called `enable_redacted_screenshots(session)` without a handler, or
    `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
-   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
+   [env-vars.md](env-vars.md)), Octowright takes a **redacted screenshot** of a
    Chromium page:
    - It pauses the page's animations for the whole capture and ends every running view
      transition, on the document or on any element in it or in its open or closed
@@ -439,7 +439,7 @@ order:
      screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
-The in-page state is held through octowright's own DevTools session, not on a page
+The in-page state is held through Octowright's own DevTools session, not on a page
 global, so page script cannot reach it.
 
 The limits are real and deliberate:
@@ -763,7 +763,7 @@ the same source.
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 6`, and resolve the same blind-scrub policy,
 length floor and common-value list when they run (a script is one run, so run
-scoping does not arise there). A script exported by an older octowright keeps the classifier
+scoping does not arise there). A script exported by an older Octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
 default.
 
@@ -813,7 +813,7 @@ uv run octowright test [path] --kind webkit --tag smoke --out "$OCTOWRIGHT_RECOR
 Equivalent MCP tool: `run_test_suite`.
 
 **Where the report goes.** `--out` must resolve under `OCTOWRIGHT_RECORDINGS`,
-like every other path octowright writes; its directory is created if it does
+like every other path Octowright writes; its directory is created if it does
 not exist. Without `--out` the report is `<artifacts>/octowright-report.xml`
 when `--artifacts` is given, else a timestamped
 `octowright-report-<UTC stamp>.xml` directly under `OCTOWRIGHT_RECORDINGS`.
@@ -923,7 +923,7 @@ video: /…/smoke/smoke.webm
   `OCTOWRIGHT_VIEWPORT_H` (default 1280x800, so unset nothing changes; a value
   that is not a positive integer, such as `1920px` or `0`, falls back to the
   default with a logged warning), and
-  the video is recorded at exactly that size -- octowright pins Playwright's
+  the video is recorded at exactly that size -- Octowright pins Playwright's
   `record_video_size` to the viewport, since Playwright's own default scales
   the video down to fit 800x800 (a 1920x1080 page otherwise records at
   800x450, measured on all three engines):

@@ -147,7 +147,7 @@ file flagged itself — so the note means *check whether this was deliberate*,
 never proof that it was.
 
 A related trap for anyone counting dumps: `browser_pool.crash_reports.enrich`
-only decorates incidents octowright already observed, so this noise does **not**
+only decorates incidents Octowright already observed, so this noise does **not**
 reach `octowright_status()["crash"]["recent"]`. Any method that instead counts
 fresh `.ips` files is measuring the chaos tests unless it filters by
 signature.

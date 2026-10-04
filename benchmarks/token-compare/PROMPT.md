@@ -85,7 +85,7 @@ One row per run, grouped by model then backend:
 
 `model | backend | trial | total tokens | wall-clock | tool calls | correct?`
 
-Then per `(model, backend)`: **avg tokens**, **Δ tokens octowright−playwright (and %)**,
+Then per `(model, backend)`: **avg tokens**, **Δ tokens Octowright−playwright (and %)**,
 avg tool calls, avg time, correctness rate.
 
 ## Fairness / method

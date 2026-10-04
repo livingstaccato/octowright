@@ -27,7 +27,7 @@ Values are validated before they can forge a request rather than decorate one: h
 
 The reason this deserves its own note, rather than being one more slow call, is **where it runs**. The match happens inside the **Node driver**, which `BrowserPool` shares across every session (`pool.py`'s single `async_playwright().start()`), so a hostile pattern installed on one browser stalls navigation in all of them — measured at 3000x on a victim browser that had no route of its own. The leader's Python event loop keeps running normally throughout, which is precisely why none of this repo's hang machinery notices: `session/timeouts.bounded` bounds an *awaited Python call* and this is not one, the operation gate sees a healthy session, and `doctor`'s engine probes pass. Playwright's own `timeout=` is enforced in that same wedged driver, so it cannot fire either — a `page.goto(timeout=45000)` was observed still running at 180s.
 
-`url_patterns.validate_url_pattern` therefore refuses the pattern **before** it is forwarded (`MAX_URL_PATTERN_WILDCARDS`, counting wildcard *runs* — `*` and `**` each contribute one group, so counting only `**` would leave `*a*a*a…` unguarded). Refusing in Python is sufficient exactly because the wedge is driver-side: a pattern octowright never sends is never compiled by anyone. It guards `mock_route`, `inject_headers` and the launch-time `extra_http_headers_urls` — that last one already capped *length* at 2048, which an eighteen-character attack walks straight past. `unmock_route`/`uninject_headers` need no guard; they pop an already-registered handler and compile nothing. The cap is **two** runs, because the cost is the URL length raised to the number of runs and the page picks the URL: it was five, tuned against a 129-character URL, while the same shape at an 8 KB URL took 134 s at three runs (V8; two took 0.06 s). Two runs are still quadratic -- a URL of tens of kilobytes costs seconds per intercepted request -- and closing that needs a linear-time matcher in place of Playwright's regex. The cap is pinned as a **constant** as well as by timing (the timing test checks the polynomial degree at 2 vs 8 KB), because the test that would catch a raised cap is the test that hangs on it.
+`url_patterns.validate_url_pattern` therefore refuses the pattern **before** it is forwarded (`MAX_URL_PATTERN_WILDCARDS`, counting wildcard *runs* — `*` and `**` each contribute one group, so counting only `**` would leave `*a*a*a…` unguarded). Refusing in Python is sufficient exactly because the wedge is driver-side: a pattern Octowright never sends is never compiled by anyone. It guards `mock_route`, `inject_headers` and the launch-time `extra_http_headers_urls` — that last one already capped *length* at 2048, which an eighteen-character attack walks straight past. `unmock_route`/`uninject_headers` need no guard; they pop an already-registered handler and compile nothing. The cap is **two** runs, because the cost is the URL length raised to the number of runs and the page picks the URL: it was five, tuned against a 129-character URL, while the same shape at an 8 KB URL took 134 s at three runs (V8; two took 0.06 s). Two runs are still quadratic -- a URL of tens of kilobytes costs seconds per intercepted request -- and closing that needs a linear-time matcher in place of Playwright's regex. The cap is pinned as a **constant** as well as by timing (the timing test checks the polynomial degree at 2 vs 8 KB), because the test that would catch a raised cap is the test that hangs on it.
 
 **Scoping launch headers: `extra_http_headers_urls`.** Context-level headers have no URL filter, so they ride **every** request the browser makes — including cross-origin subresources. On Chromium that makes those requests CORS-preflighted, and a third party that does not echo `Access-Control-Allow-Headers` rejects them outright; measured, and reported from the field as blocked font/CDN requests with a page that never finished rendering. Firefox and WebKit applied the header *below* the CORS check and were unaffected, so this is **Chromium-specific rather than universal** — worth knowing before reproducing it elsewhere. Passing URL globs moves the headers onto scoped **context routes** (`launch_helpers.install_scoped_header_routes`) that still follow popups and new tabs but leave everyone else's requests untouched; the context then carries no unscoped headers at all, or they would apply twice. It exists alongside `browser_inject_headers` because the launch navigation happens *during* launch, which a post-launch call cannot cover.
 
@@ -135,7 +135,7 @@ guard raising the type is classified correctly wherever it runs.
 `InvalidRequestError` subclasses `ValueError`, so every existing `except
 ValueError` still catches it and the conversion needed no call-site audit.
 
-**An option octowright cannot read is refused, not dropped.**
+**An option Octowright cannot read is refused, not dropped.**
 `LaunchOptions.from_mapping` reads every key by name, so anything it did not
 recognise was silently discarded while the caller went on believing the option
 applied. The one that bit is `headless` — Playwright's OWN parameter name, and
@@ -285,8 +285,8 @@ General Protection Fault`, registers full of PartitionAlloc's `0xcd` freed
 byte), not a CHECK -- there is no message to quote; the field's earlier SIGTRAP
 attribution came from unrelated `chrome-headless-shell` renderers in a
 concurrent test run, and `/var/log/apport.log` shows the headed browser pids
-dying of signal 11 (one, on 09-23, of SIGTRAP -- its message was not captured). Nothing in octowright causes it:
-raw Playwright with no octowright code, no extension and no download listener
+dying of signal 11 (one, on 09-23, of SIGTRAP -- its message was not captured). Nothing in Octowright causes it:
+raw Playwright with no Octowright code, no extension and no download listener
 crashed 7/7. `download_history.prune_download_history` deletes the rows before
 every Chromium persistent launch -- a `profile` AND a `session=True` tmpdir,
 which is reused per label and so carries rows into its next launch (full
@@ -306,7 +306,7 @@ the first evicting close signal (`listeners._accept_external_close`). Four
 things are load-bearing:
 
 - **Judge only the live identity.** The close events Playwright fires for
-  octowright's OWN close arrive after the session left `_sessions`, when the
+  Octowright's OWN close arrive after the session left `_sessions`, when the
   process is already gone -- judging them would report every agent close as a
   crash. `_accept_external_close` skips the verdict for a non-current identity.
 - **Judge at the first evicting signal, not later.** Liveness is only
@@ -346,7 +346,7 @@ frontend job.
 They stay plain `.js` deliberately. They are read from the wheel at runtime,
 templated, and injected as strings, so compiling them would add a build
 artifact that can drift from its source — for code that runs inside every page
-octowright drives, in a repo that already needs `check_wheel_assets.py` because
+Octowright drives, in a repo that already needs `check_wheel_assets.py` because
 packaging can silently drop assets. `checkJs` buys the type safety with no
 build step and nothing new to ship.
 

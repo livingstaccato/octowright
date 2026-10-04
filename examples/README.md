@@ -1,4 +1,4 @@
-# octowright examples
+# Octowright examples
 
 These are the raw offline building blocks for Octowright demos: reusable
 macros, lightweight scenarios, and verify flows that work without external
@@ -18,7 +18,7 @@ scenario inputs. Use `demo/bundles/` when you want the curated catalog-facing
 manifests that drive `demo/INDEX.md` and the regeneration scripts under
 `scripts/demos/`.
 
-Tell octowright to load these instead of the user-config defaults by setting:
+Tell Octowright to load these instead of the user-config defaults by setting:
 
 ```bash
 export OCTOWRIGHT_MACROS_DIR="$(pwd)/examples/macros"

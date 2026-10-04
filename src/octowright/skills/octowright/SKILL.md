@@ -77,7 +77,7 @@ If Octowright tools vanish from your tool list, or **any** Octowright tool retur
 
 **The required response — exactly this, nothing more:**
 1. Tell the user: "Octowright is disconnected — I can't drive a browser until it's reconnected."
-2. If in Claude Code: `/mcp` → select **octowright** → **Reconnect**.
+2. If in Claude Code: `/mcp` → select **`octowright`** → **Reconnect**.
 3. For any other client, ask which client they're using and have them use its MCP reconnect control.
 4. Wait for them to confirm it's back. Then resume.
 

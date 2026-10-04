@@ -1,6 +1,6 @@
 # octowright-frontend
 
-TypeScript web debugger UI for octowright. Built with Vite into
+TypeScript web debugger UI for Octowright. Built with Vite into
 the Python server's static-file directory (`src/octowright/server/frontend/`).
 
 ## Layout
