@@ -71,7 +71,7 @@ SYNTHETIC_PROGRESS_PREFIX = "owpt-"
 
 # Answer for an in-flight call whose leader was replaced before it responded.
 LEADER_REPLACED_REASON = (
-    "the octowright leader was replaced while this call was in flight; its outcome is unknown "
+    "the Octowright leader was replaced while this call was in flight; its outcome is unknown "
     "(it may already have taken effect). Check the current state before retrying."
 )
 

@@ -164,3 +164,10 @@ async def test_the_runtime_stamps_each_connection_with_the_leader_generation(mon
             sessions[1][1].receive_nowait()
         tg.cancel_scope.cancel()
     await local_in_send.aclose()
+
+
+def test_the_unknown_outcome_answer_names_the_product_in_prose() -> None:
+    """The reason reaches the agent and the user verbatim: product name in
+    prose is "Octowright", not the lowercase identifier."""
+    assert "Octowright leader" in supervisor.LEADER_REPLACED_REASON
+    assert "octowright leader" not in supervisor.LEADER_REPLACED_REASON
