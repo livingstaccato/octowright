@@ -80,8 +80,10 @@ _OFF = frozenset({"", "off", "0", "false", "no", "never", "none", "disabled"})
 
 # Only IP-routable schemes can reach an internal host; data:/about:/blob: can't,
 # and the dangerous file:/javascript:/chrome: schemes are already refused by
-# _reject_unsafe_url before this runs.
-_CHECKED_SCHEMES = frozenset({"http", "https"})
+# _reject_unsafe_url before this runs. ws:/wss: dial a host exactly as http(s)
+# does, so they are classified here rather than trusting every caller to
+# rewrite them to http(s) first.
+_CHECKED_SCHEMES = frozenset({"http", "https", "ws", "wss"})
 
 # Hostnames that resolve to a private/metadata target by convention.
 _BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata", "metadata.google.internal"})
@@ -347,7 +349,7 @@ def _refuse_as_spelled(host: str) -> bool:
 def check_navigation_url(url: str) -> None:
     """Raise ``ValueError`` if the active SSRF policy refuses ``url``.
 
-    A no-op when the policy is ``off`` (default) or the URL is not http(s).
+    A no-op when the policy is ``off`` (default) or the URL is not http(s) or ws(s).
     Allowlisted hosts always pass.
     """
     host = _policy_host(url)
