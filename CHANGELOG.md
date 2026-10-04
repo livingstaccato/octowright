@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A mistyped `OCTOWRIGHT_PROFILE` warns once, not on every result.** Each
+  compact-discovery result re-parsed the profile spec to annotate its
+  `next_actions`, logging the unknown-profile warning hundreds of times per
+  call. The resolved filter is now reused, and a `next_actions` entry for a
+  plugin tool (`terminal_*`) names the plugin profile that provides it.
 - **Octowright Advisor's profile suggestions know about `goldens` and plugin
   profiles.** Its hand-kept profile list had no `goldens`, so golden usage
   under `core` recommended `OCTOWRIGHT_PROFILE=core` (no change), and

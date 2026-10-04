@@ -252,3 +252,52 @@ def test_profiled_mcpserver_filters_out_when_name_override_missing_from_allowlis
     registered = {tool.name for tool in server._tool_manager.list_tools()}
     assert "hidden_tool" not in registered
     assert "browser_launch" not in registered
+
+
+def test_annotating_next_actions_does_not_reparse_a_typoed_profile_per_call(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Every compact-discovery result annotates its next_actions; re-parsing
+    OCTOWRIGHT_PROFILE each time logged the unknown-profile warning hundreds
+    of times per call site. It is parsed once per distinct spec."""
+    import logging
+
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core,advaned-fixture-typo")
+    profiles.reset_plugin_profiles()
+    with caplog.at_level(logging.WARNING, logger="octowright.server.profiles"):
+        for _ in range(5):
+            profiles.annotate_next_actions_for_profile([{"tool": "macro_run"}])
+    unknown = [rec for rec in caplog.records if "octowright.profile.unknown" in rec.message]
+    assert len(unknown) <= 1
+
+
+def test_annotation_names_a_plugin_profile_for_a_plugin_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
+    profiles.register_plugin_profile("refterms", ["refterm_launch"])
+    try:
+        out = profiles.annotate_next_actions_for_profile([{"tool": "refterm_launch"}])
+    finally:
+        profiles.unregister_plugin_profile("refterms")
+    assert out == [
+        {
+            "tool": "refterm_launch",
+            "available": False,
+            "requires_profile": "refterms",
+            "available_profiles": ["refterms"],
+        }
+    ]
+
+
+def test_the_cached_filter_follows_plugin_profile_registration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core,refterms")
+    profiles.reset_plugin_profiles()
+    before = profiles.active_filter()
+    assert before is not None and "refterm_launch" not in before
+    profiles.register_plugin_profile("refterms", ["refterm_launch"])
+    try:
+        after = profiles.active_filter()
+        assert after is not None and "refterm_launch" in after
+        after.add("mutating-the-result-fixture")
+        assert "mutating-the-result-fixture" not in (profiles.active_filter() or set())
+    finally:
+        profiles.unregister_plugin_profile("refterms")
