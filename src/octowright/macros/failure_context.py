@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
 
+from octowright import conditional
 from octowright.artifacts.digest import sanitize_url
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.privacy import MacroArgPrivacy, with_session_values
@@ -83,6 +84,27 @@ def written_actions(actions: list[Any], privacy_for: Callable[[Any], MacroArgPri
     step may pass a credential literally.
     """
     return [_written(action, privacy_for) for action in actions]
+
+
+def register_written_steps(
+    actions: list[Any], expanded: list[Any], privacy_for: Callable[[Any], MacroArgPrivacy]
+) -> None:
+    """Let a ``try``/``try_each`` that suppresses a step of *expanded* report it as written.
+
+    The `written_actions` form, so the record gets the payload's redactions too.
+    """
+    conditional.register_written_steps(written_actions(actions, privacy_for), expanded)
+
+
+def tracking_substitute(substitute: Any, privacy_for: Callable[[Any], MacroArgPrivacy]) -> Any:
+    """*substitute*, registering the written twin of every step it expands (a called macro's)."""
+
+    def expand(actions: list[Any], args: dict[str, Any], **kwargs: Any) -> list[Any]:
+        expanded: list[Any] = substitute(actions, args, **kwargs)
+        register_written_steps(actions, expanded, privacy_for)
+        return expanded
+
+    return expand
 
 
 def _written(value: Any, privacy_for: Callable[[Any], MacroArgPrivacy]) -> Any:

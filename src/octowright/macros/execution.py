@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
@@ -279,7 +280,7 @@ async def _dispatch_nested_call(
         invocation_stack=invocation_stack,
         max_depth=max_depth,
         load_macro=macros,
-        substitute=substitute,
+        substitute=failure_context.tracking_substitute(substitute, partial(_macro_privacy, macros)),
         dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, macros=macros, **kw),
     )
 
@@ -571,7 +572,7 @@ async def _run_macro_impl(
     """
     macros = macros if macros is not None else RunMacros(load_macro)
     admitted = run_ledger is not None
-    with run_privacy_ledger(session, run_ledger) as run_ledger:
+    with run_privacy_ledger(session, run_ledger) as run_ledger, conditional.written_steps_scope():
         macro = macros(name)
         # An argument that IS the forbidden text is sensitive whatever it is named;
         # the exported CLI reads the same set (privacy.assertion_text_args).
@@ -617,6 +618,7 @@ async def _run_admitted(
     actions = substitute(
         macro.get("actions", []), effective_args, trusted_origins=origins, credential_args=credential_args
     )
+    failure_context.register_written_steps(macro.get("actions", []), actions, partial(_macro_privacy, macros))
     credential_names = credential_fill.credential_run_args(macro.get("actions", []), actions, credential_args)
     start_request_tracking(session, actions, macros)
 
