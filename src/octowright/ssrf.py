@@ -277,6 +277,38 @@ def normalize_host_for_policy(host: str) -> str:
     return mapped.lower()
 
 
+#: Schemes the WHATWG URL Standard calls "special". After one of them, every
+#: ``/`` and ``\`` following the colon is skipped before the authority starts.
+_SPECIAL_SCHEMES = frozenset({"http", "https", "ws", "wss", "ftp"})
+#: Stripped from both ends before WHATWG parsing (C0 controls and space).
+_C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
+#: Deleted from anywhere in the URL before WHATWG parsing.
+_TAB_AND_NEWLINES = {0x09: None, 0x0A: None, 0x0D: None}
+
+
+def _with_whatwg_authority(url: str) -> str:
+    """``url`` spelled so ``urlsplit`` finds the authority a browser finds.
+
+    For a special scheme WHATWG skips ANY run of ``/`` and ``\\`` after the
+    colon -- ``http:127.0.0.1``, ``http:/169.254.169.254`` and
+    ``http:///127.0.0.1`` all have a host -- and treats ``\\`` as ``/``, so it
+    also ends the authority (``127.0.0.1\\@public.example`` is host
+    127.0.0.1). ``urlsplit`` reports no host for the first three and
+    ``public.example`` for the last, so the policy had nothing, or the wrong
+    thing, to classify. Tab/CR/LF are removed and C0/space trimmed first, as
+    WHATWG does, so they cannot hide a scheme or a slash.
+
+    Deliberately the no-base reading. Against a ``base_url`` of the same
+    scheme, ``http:foo`` is a relative path instead; reading it as a host here
+    can only refuse a URL, never admit one.
+    """
+    cleaned = url.strip(_C0_OR_SPACE).translate(_TAB_AND_NEWLINES)
+    scheme, sep, rest = cleaned.partition(":")
+    if not sep or scheme.lower() not in _SPECIAL_SCHEMES:
+        return cleaned
+    return f"{scheme}://{rest.replace(chr(92), '/').lstrip('/')}"
+
+
 def _policy_host(url: str) -> str | None:
     """The normalized host of ``url`` the active policy has to classify, if any.
 
@@ -287,7 +319,7 @@ def _policy_host(url: str) -> str | None:
     if _policy() == "off":
         return None
     try:
-        parts = urlsplit(url)
+        parts = urlsplit(_with_whatwg_authority(url))
     except ValueError:
         return None
     if parts.scheme.lower() not in _CHECKED_SCHEMES:
