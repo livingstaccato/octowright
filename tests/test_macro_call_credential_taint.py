@@ -86,8 +86,9 @@ async def test_the_taint_survives_every_depth(tmp_path: Any, monkeypatch: pytest
         "inner": [{"action": "navigate", "url": "{{target}}"}],
     }
     navigated = _navigations(session)
-    # ``try`` swallows its body's error; what matters is that navigate never ran.
-    await _run(monkeypatch, session, macros)
+    # A credential refusal is not something ``try`` may swallow: it fails the run.
+    with pytest.raises(RuntimeError, match=r"credential arg \{\{target\}\} into a navigation or code sink"):
+        await _run(monkeypatch, session, macros)
     assert navigated == []
 
 

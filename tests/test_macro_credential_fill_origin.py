@@ -192,9 +192,10 @@ async def test_a_non_credential_arg_on_a_foreign_origin_is_unaffected(
 
 @pytest.mark.anyio
 async def test_a_credential_in_a_try_body_is_checked(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``try`` suppresses its body's errors, the refusal included; the fill still never runs."""
+    """``try`` suppresses its body's errors but not this refusal: the run fails and the fill never runs."""
     session = _session(tmp_path, launch="https://app.example.test/", current="https://evil.example/")
-    await _run(monkeypatch, session, [{"action": "try", "actions": [_step("fill")]}])
+    with pytest.raises(RuntimeError, match=r"evil\.example"):
+        await _run(monkeypatch, session, [{"action": "try", "actions": [_step("fill")]}])
     session.fill.assert_not_awaited()
 
 

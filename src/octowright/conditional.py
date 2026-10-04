@@ -11,7 +11,9 @@ a macro author guard against that:
 
 * ``if_selector`` — predicate on selector presence; runs ``then`` or ``else``.
 * ``try`` — best-effort: run a sub-sequence and SUPPRESS errors. Useful for
-  optional steps like dismissing a one-off cookie banner.
+  optional steps like dismissing a one-off cookie banner. A credential
+  check's refusal (``credential_sinks.CredentialSafetyStop``) is never
+  suppressed, here or by ``try_each``: it fails the run.
 * ``try_each`` — run branches in order, succeed on first that completes; raise
   if all fail. The "v1 OR v2 OR v3 of this flow" hammer.
 
@@ -43,6 +45,8 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
+
+from octowright.credential_sinks import CredentialSafetyStop
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -125,6 +129,10 @@ async def do_try(
             e, s = await dispatch(session, sub)
             e_total += e
             s_total += s
+        except CredentialSafetyStop:
+            # A credential check's verdict on the macro, not a step that missed:
+            # suppressing it would report the run as a success.
+            raise
         except Exception as exc:
             session.recorder.record(
                 "try_suppressed",
@@ -161,6 +169,9 @@ async def do_try_each(
                 s_total += s
             session.recorder.record("try_each_succeeded", branch_idx=branch_idx, branch_size=len(branch))
             return e_total, s_total
+        except CredentialSafetyStop:
+            # Not a branch that missed: never fall through to the next one.
+            raise
         except Exception as exc:
             last_error = exc
             session.recorder.record(

@@ -81,6 +81,23 @@ def credential_sinks_blocked() -> bool:
     return raw not in _CREDENTIAL_SINKS_OFF
 
 
+class CredentialSafetyStop(Exception):
+    """A credential check stopped a macro: a verdict on the macro, never a flaky page.
+
+    A macro's ``try`` and ``try_each`` (``octowright.conditional``) re-raise it
+    rather than suppressing it or moving on to another branch, so a refusal
+    always fails the run and is reported instead of reading as success.
+    """
+
+
+class CredentialRefusal(CredentialSafetyStop, ValueError):
+    """A credential step refused before it ran. Still a ``ValueError`` for every existing caller."""
+
+
+class CredentialInputHalted(CredentialSafetyStop, RuntimeError):
+    """A credential step stopped while typing. Still a ``RuntimeError`` for every existing caller."""
+
+
 # Recorded keys that need renaming to match the method's parameter names.
 # mock_route/unmock_route: session/core_interaction_mixin.py's recorder.record()
 # writes the field as "pattern" (matching macros/lint.py's required-field name),
@@ -235,7 +252,7 @@ def parse_allowed_origins(value: object) -> frozenset[Origin]:
     if value is None:
         return frozenset()
     if not isinstance(value, list):
-        raise ValueError(
+        raise CredentialRefusal(
             f"{ALLOWED_ORIGINS_KEY} must be a list of origins such as ['https://login.example'], "
             f"got {type(value).__name__}"
         )
@@ -243,7 +260,7 @@ def parse_allowed_origins(value: object) -> frozenset[Origin]:
     for entry in value:
         origin = url_origin(entry) if isinstance(entry, str) and _EXACT_ORIGIN.match(entry) else None
         if origin is None:
-            raise ValueError(
+            raise CredentialRefusal(
                 f"{ALLOWED_ORIGINS_KEY} entry {str(entry)[:120]!r} is not an exact origin; write it "
                 "literally as scheme://host[:port], with no wildcard, path or {{placeholder}}"
             )
@@ -274,9 +291,9 @@ def offsite_credential_origin(
     return f"{scheme}:" if scheme else "<no page>"
 
 
-def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
+def credential_fill_refusal(action: dict[str, Any], shown: str) -> CredentialRefusal:
     names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
-    return ValueError(
+    return CredentialRefusal(
         f"macro {action.get('action')} would type credential arg {names} into a page at {shown}, "
         "which is not the session's own origin (its launch URL or persona base_url). For an "
         f'intended sign-in hop, list the origin literally on this step: "{ALLOWED_ORIGINS_KEY}": ["{shown}"]. '
@@ -285,7 +302,7 @@ def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
     )
 
 
-def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bool = True) -> RuntimeError:
+def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bool = True) -> CredentialInputHalted:
     """A credential step that stopped, naming the step and why -- never the value, nor how much was typed.
 
     ``started`` is ``CredentialInputStopped.started``: a step stopped before
@@ -293,11 +310,11 @@ def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bo
     """
     names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
     if not started:
-        return RuntimeError(
+        return CredentialInputHalted(
             f"macro {action.get('action')} did not start typing credential arg {names}: {reason}. "
             "Nothing was typed; re-run the step once the page has settled."
         )
-    return RuntimeError(
+    return CredentialInputHalted(
         f"macro {action.get('action')} stopped typing credential arg {names}: {reason}. "
         "The rest of the value was not typed; re-run the step once the page has settled."
     )
@@ -354,7 +371,9 @@ def credential_args_in(
     return sorted(name for name in names if name in credential_args or is_credential(name))
 
 
-def page_code_refusal(action: dict[str, Any], credential_names: list[str] | tuple[str, ...]) -> ValueError | None:
+def page_code_refusal(
+    action: dict[str, Any], credential_names: list[str] | tuple[str, ...]
+) -> CredentialRefusal | None:
     """Why *action* may not run in a run that expands *credential_names*, or None.
 
     The sink guard judges only fields a credential placeholder expands into,
@@ -371,7 +390,7 @@ def page_code_refusal(action: dict[str, Any], credential_names: list[str] | tupl
     if field is None:
         return None
     names = ", ".join("{{" + str(name) + "}}" for name in credential_names)
-    return ValueError(
+    return CredentialRefusal(
         f"macro {action.get('action')} runs page code ({field}) in a run that types credential arg {names}; "
         "page code can read a typed credential back and send it anywhere. Run it in a macro that carries "
         f"no credential, or set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
@@ -391,8 +410,8 @@ def refuse_page_code(actions: Any, credential_names: list[str] | tuple[str, ...]
             stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
 
 
-def _sink_refusal(key: str) -> ValueError:
-    return ValueError(
+def _sink_refusal(key: str) -> CredentialRefusal:
+    return CredentialRefusal(
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
         "this would send the secret off-machine. A header may carry one through "
         "inject_headers whose pattern spells out the session's own origin -- scheme, host "
@@ -446,7 +465,7 @@ class _Expander:
             return written
         for key in self.placeholder.findall(written):
             if self.is_credential(key):
-                raise ValueError(
+                raise CredentialRefusal(
                     f"macro uses credential arg {{{{{key}}}}} as an action name; an action name must "
                     "be written literally or come from a non-credential arg"
                 )
@@ -501,7 +520,7 @@ class _Expander:
             names = self._credential_names(node.get(field_name))
             if names:
                 shown = ", ".join("{{" + name + "}}" for name in names)
-                raise ValueError(
+                raise CredentialRefusal(
                     f"macro {kind} puts credential arg {shown} into the page through {field_name!r}, "
                     "where nothing checks which origin receives it. Key a credential in with a type or "
                     f"fill step, which do; set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
