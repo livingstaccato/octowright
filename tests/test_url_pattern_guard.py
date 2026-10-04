@@ -63,6 +63,15 @@ def test_ordinary_patterns_are_accepted(pattern: str) -> None:
     validate_url_pattern(pattern, field="url_pattern")
 
 
+@pytest.mark.parametrize("pattern", ["**a**a**b", "*a*a*b", "**a*a**b"])
+def test_three_wildcard_runs_are_refused_because_the_url_length_is_the_attackers(pattern: str) -> None:
+    """The cost is URL length to the power of the wildcard runs, and the URL is
+    the page's: at an 8 KB URL three runs took 134 s in V8 (two took 0.06 s).
+    A cap tuned against a 129-character URL admitted five."""
+    with pytest.raises(ValueError, match="wildcard"):
+        validate_url_pattern(pattern, field="url_pattern")
+
+
 def test_the_measured_attack_pattern_is_refused() -> None:
     """The exact shape that took 18 seconds, as a regression."""
     with pytest.raises(ValueError, match="wildcard"):
@@ -99,16 +108,14 @@ def test_the_error_names_the_field_it_came_from() -> None:
 def test_the_cap_is_not_raised_past_the_measured_safe_value() -> None:
     """Checked as a constant, deliberately, so a bad edit fails INSTANTLY.
 
-    The obvious test -- time the worst pattern the cap still allows -- cannot
-    police the upper side, because the thing it would catch is the thing that
-    makes it hang: at 6 wildcards the same match takes roughly 500 seconds, so
-    a test that measured it would blow the suite's 300s per-test timeout and
-    kill the whole run rather than report a failure. (Observed while verifying
-    this guard: raising the cap to 7 wedged the check until it was killed.)
+    The obvious test -- time the worst pattern the cap allows at a realistic
+    URL length -- cannot police the upper side, because the thing it would
+    catch is the thing that makes it hang: three runs against an 8 KB URL took
+    134 s in V8 and would blow the suite's 300 s per-test timeout at four.
 
     An assertion on the number costs nothing and fails in microseconds.
     """
-    assert MAX_URL_PATTERN_WILDCARDS <= 5
+    assert MAX_URL_PATTERN_WILDCARDS <= 2
 
 
 def _worst_case_seconds(wildcards: int, url: str, *, runs: int) -> float:
@@ -124,35 +131,31 @@ def _worst_case_seconds(wildcards: int, url: str, *, runs: int) -> float:
     return best
 
 
-#: How much one more ``**`` may multiply the worst-case match cost. Measured
-#: ~23x per wildcard at the cap (0.071 s at 4, 1.67 s at 5, Linux, Playwright
-#: 1.62); the uncapped next step is the same factor again, so a converter change
-#: that made each wildcard much more expensive would blow through this.
-MAX_COST_GROWTH_PER_WILDCARD = 100.0
+#: Quadrupling the URL may multiply the worst admitted cost by at most this.
+#: Degree two gives 16x and degree three 64x, so this pins the polynomial
+#: degree the cap allows -- which is what it controls -- independent of how
+#: fast the runner is.
+MAX_COST_GROWTH_PER_4X_URL = 40.0
 
-#: A hang guard, not the bound under test: an absolute wall-clock limit is what
-#: this test used to assert (< 5 s), and the same 1.67 s took 6.9 s on a
-#: loaded macOS Intel runner. Speed varies by machine; the growth ratio does not.
+#: A hang guard, not the bound under test. ~0.27 s on a Linux laptop at 8 KB;
+#: speed varies by machine, the growth ratio does not.
 WORST_CASE_HANG_GUARD_SECONDS = 60.0
 
 
-def test_the_cap_actually_bounds_the_match_cost() -> None:
-    """And the accepted worst case really is bounded, against the real converter.
+def test_the_cap_bounds_the_match_cost_at_a_realistic_url_length() -> None:
+    """The worst pattern the cap admits, against the real converter, at 2 and 8 KB.
 
-    Judged on the machine running it: the cost at the cap against the cost one
-    wildcard below, both measured here, so a slow or loaded runner slows both
-    alike. What the cap protects is the exponential step -- each ``**`` past it
-    multiplies the backtracking cost -- and that is what the ratio pins.
+    The previous version of this test measured a 129-character URL, which is
+    how a cap of five passed while the same pattern took hours at 8 KB.
     """
     pytest.importorskip("playwright")
     worst_allowed = "**a" * (MAX_URL_PATTERN_WILDCARDS - 1) + "**b"
     validate_url_pattern(worst_allowed, field="url_pattern")
 
-    url = "http://a.test/" + "a" * 115
-    below_cap = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS - 1, url, runs=3)
-    at_cap = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS, url, runs=1)
-    assert at_cap < WORST_CASE_HANG_GUARD_SECONDS
-    assert at_cap / max(below_cap, 1e-6) < MAX_COST_GROWTH_PER_WILDCARD
+    short = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS, "http://a.test/" + "a" * 2_000, runs=3)
+    realistic = _worst_case_seconds(MAX_URL_PATTERN_WILDCARDS, "http://a.test/" + "a" * 8_000, runs=1)
+    assert realistic < WORST_CASE_HANG_GUARD_SECONDS
+    assert realistic / max(short, 1e-6) < MAX_COST_GROWTH_PER_4X_URL
 
 
 # ---------------------------------------------------------------------------

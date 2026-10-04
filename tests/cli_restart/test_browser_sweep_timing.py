@@ -172,7 +172,7 @@ def test_stop_leader_snapshots_browsers_before_signalling(monkeypatch: pytest.Mo
     )
     monkeypatch.setattr(restart_mod, "_send_signal", lambda pid, sig: order.append("signal"))
     monkeypatch.setattr(restart_mod, "_escalate_survivors", lambda pids, timeout: [])
-    monkeypatch.setattr(restart_mod.singleton, "remove_lock", lambda: None)
+    monkeypatch.setattr(restart_mod.singleton, "remove_lock_if_owned", lambda *_a, **_kw: False)
 
     stopped, killed, owned = restart_mod._stop_leader(1.0)
 

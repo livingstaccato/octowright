@@ -119,7 +119,10 @@ async def test_frames_are_observable_through_the_session(serve_page: Any) -> Non
         assert received[0]["payload_text"] == "echo:hello-from-page"
         assert sent[0]["size"] == len("hello-from-page")
     finally:
-        await pool.close_all(force=True)
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()
         # Awaited, not just closed: an unawaited server is torn down at GC
         # after the loop has gone, which surfaces as "Event loop is closed"
         # and fails the run even though the test itself passed.

@@ -895,6 +895,7 @@ async def test_handoff_close_fallback_awaits_in_flight_external_close(monkeypatc
         protected_reason="explicit",
         page=None,
         url="https://octowright.com",
+        launch_options=LaunchOptions(label="l", ephemeral=True),
     )
     pool_stub = object()
 

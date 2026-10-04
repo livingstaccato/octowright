@@ -419,6 +419,13 @@ async def test_live_screenshot_session_closing_error_maps_to_409(
 
 
 class TestFrameEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _known_duration(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The route probes the video's duration to bound ``t``; the 1-byte stub
+        # is not a video, so without this the probe shells out to a real
+        # ffprobe wherever one is installed.
+        monkeypatch.setattr(_http_state._video, "probe_video", lambda _p: {"duration_seconds": 10.0})
+
     def test_extract_raises_500(
         self,
         client: TestClient,

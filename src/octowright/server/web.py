@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from typing import cast
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+import anyio.to_thread
 import httpcore2
 import httpx2
 from defusedxml import ElementTree  # type: ignore[import-untyped]
@@ -76,9 +77,14 @@ class _PinnedDNSBackend(httpcore2.AsyncNetworkBackend):
         socket_options: Iterable[httpcore2.SOCKET_OPTION] | None = None,
     ) -> httpcore2.AsyncNetworkStream:
         pinned = self._host_to_ips.get(host.lower())
-        connect_host = pinned[0] if pinned else host
+        if not pinned:
+            # Fail closed. Falling back to ``host`` here hands the name to the
+            # OS resolver a second time -- the rebinding window the pin exists
+            # to close -- and a key that misses (it was keyed by a different
+            # spelling of the host) used to land exactly here.
+            raise httpcore2.ConnectError(f"web discovery has no validated address for host {host!r}")
         return await self._backend.connect_tcp(
-            connect_host,
+            pinned[0],
             port,
             timeout=timeout,
             local_address=local_address,
@@ -164,21 +170,36 @@ def _check_ip_host(host: str) -> bool:
     return True
 
 
-def _check_discovery_url(url: str, *, resolve_host: bool = False) -> None:
-    parts = urlsplit(url)
-    scheme = parts.scheme.lower()
-    if scheme not in {"http", "https"}:
+def _dial_host(url: str) -> str:
+    """The host httpx will hand the network backend for ``url``.
+
+    Parsed by httpx itself, not ``urlsplit``: httpx connects to the IDNA-2008
+    ASCII form (``straße.de`` -> ``xn--strae-oqa.de``) while ``urlsplit``
+    reports the Unicode spelling, and ``getaddrinfo`` encodes that with
+    IDNA-2003 (``strasse.de``) -- a different domain. Validating, pinning and
+    dialing must all use this one name, or the check and the connection can
+    be about two different hosts.
+    """
+    try:
+        parsed = httpx2.URL(url)
+    except httpx2.InvalidURL as exc:
+        raise ValueError(f"web discovery could not parse URL {url!r}: {exc}") from None
+    if parsed.scheme not in {"http", "https"}:
         raise ValueError("web discovery only supports http(s) URLs")
-    host = (parts.hostname or "").lower()
+    host = parsed.raw_host.decode("ascii").lower()
     if not host:
         raise ValueError("web discovery URL must include a host")
+    return host
+
+
+def _check_discovery_url(url: str, *, resolve_host: bool = False) -> None:
+    host = _dial_host(url)
     if not _check_ip_host(host):
         _check_hostname(host, resolve_host=resolve_host)
 
 
 def _checked_public_target(url: str) -> tuple[str, list[str]]:
-    _check_discovery_url(url)
-    host = (urlsplit(url).hostname or "").lower()
+    host = _dial_host(url)
     if _check_ip_host(host):
         return host, [host]
     return host, _check_hostname(host, resolve_host=True)
@@ -217,7 +238,9 @@ async def _read_limited_text(response: httpx2.Response) -> str:
 async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str]:
     current_url = url
     pinned: dict[str, list[str]] = {}
-    host, ips = _checked_public_target(current_url)
+    # Validation resolves with a blocking getaddrinfo, and this runs on the
+    # leader's event loop: in a worker thread, as ssrf.py resolves.
+    host, ips = await anyio.to_thread.run_sync(_checked_public_target, current_url)
     pinned[host] = ips
     async with httpx2.AsyncClient(
         transport=_PinnedDNSAsyncHTTPTransport(pinned),
@@ -228,11 +251,14 @@ async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str
         for _ in range(_MAX_REDIRECTS + 1):
             async with client.stream("GET", current_url) as response:
                 response_url = str(response.url)
-                _check_discovery_url(response_url, resolve_host=True)
+                # Structural only: the request already went to the pinned,
+                # validated address, so resolving again here would block the
+                # loop and prove nothing about the connection that was made.
+                _check_discovery_url(response_url)
                 redirect_url = _redirect_target(response_url, response)
                 if redirect_url:
                     current_url = redirect_url
-                    host, ips = _checked_public_target(current_url)
+                    host, ips = await anyio.to_thread.run_sync(_checked_public_target, current_url)
                     pinned[host] = ips
                     continue
                 response.raise_for_status()

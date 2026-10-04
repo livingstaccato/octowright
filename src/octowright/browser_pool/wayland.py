@@ -34,8 +34,6 @@ from typing import Any, Final, Literal
 
 from provide.telemetry import get_logger
 
-from octowright.browser_pool.driver_health import is_driver_dead_error
-
 log = get_logger(__name__)
 
 WAYLAND_NATIVE_ENV: Final = "OCTOWRIGHT_WAYLAND_NATIVE"
@@ -75,11 +73,12 @@ class WaylandLaunchError(RuntimeError):
     """Chromium could not start natively on Wayland, and Wayland was asked for
     explicitly (argument or env), so octowright did not fall back to X11.
 
-    Its message deliberately does NOT repeat Playwright's first line: that
-    line ("Target page, context or browser has been closed") matches
-    ``driver_health``'s dead-driver markers, and a dead-driver verdict makes the
-    pool stop the SHARED Playwright driver -- closing every live browser -- for
-    one browser's display problem.
+    Its message quotes the browser's own complaint about Wayland rather than
+    Playwright's first line; the full original stays on ``__cause__``. It is
+    never read as a dead shared driver, whatever its text
+    (``driver_health.is_driver_dead_error`` excludes this type), so one
+    browser's display problem cannot stop the driver -- not even when the
+    liveness probe cannot read Playwright's internals and falls back to "dead".
     """
 
 
@@ -307,10 +306,6 @@ def explicit_failure(decision: WaylandDecision, exc: BaseException) -> WaylandLa
     """The error for a native-Wayland launch that was asked for explicitly."""
     asked = "wayland_native=True" if decision.source == "argument" else f"{WAYLAND_NATIVE_ENV}=on"
     reported = failure_summary(exc)
-    if is_driver_dead_error(RuntimeError(reported)):
-        # Never let the browser's own words turn this into a dead-driver
-        # verdict (see WaylandLaunchError); the full text stays on __cause__.
-        reported = "see the chained error"
     return WaylandLaunchError(
         f"Chromium could not start as a native Wayland client ({asked}; flags {' '.join(WAYLAND_NATIVE_ARGS)}). "
         f"Chromium reported: {reported}. "

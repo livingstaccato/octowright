@@ -281,10 +281,12 @@ async def test_a_navigation_while_the_fill_waits_on_a_disabled_field_is_refused(
     is tied to the element it checked, so the navigation detaches it, and the
     second check refuses the new document.
     """
-    move = {"action": "evaluate", "expression": f"setTimeout(() => {{ location.href = '{evil}/login'; }}, 700)"}
-    steps = [{"action": "navigate", "url": trusted + "/disabled"}, move, _step(kind, "#pw")]
+    # The page is moved from outside the macro: a run that types a credential
+    # runs no page code of its own.
+    await session.page.goto(trusted + "/disabled")
+    await session.page.evaluate(f"setTimeout(() => {{ location.href = '{evil}/login'; }}, 700)")
     with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
-        await _run(session, monkeypatch, steps)
+        await _run(session, monkeypatch, [_step(kind, "#pw")])
     await session.page.wait_for_url(evil + "/login")
     assert await _values(session, "#pw") == [""]
 
@@ -307,7 +309,12 @@ async def _run_cli(actions: list[dict[str, Any]], trusted: str) -> None:
 
 
 @pytest.mark.parametrize("kind", ["fill", "type"])
-async def test_the_exported_cli_fills_the_first_of_two_matches(trusted: str, kind: str) -> None:
+async def test_the_exported_cli_fills_the_first_of_two_matches(
+    trusted: str, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The probe is page code, which a run carrying a credential refuses unless
+    # the sink guard is off; the credential is still typed through the checked path.
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
     lengths = "[...document.querySelectorAll('input')].map((el) => el.value.length).join()"
     probe = {"action": "expect_js", "expression": lengths, "equals": f"{len(SECRET)},0"}
     await _run_cli([{"action": "navigate", "url": trusted + "/confirm"}, _step(kind, "input"), probe], trusted)

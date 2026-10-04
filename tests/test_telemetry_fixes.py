@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from octowright.browser_pool.options import LaunchOptions
 from tests._operation_gate_fakes import OperationAwareFake
 
 
@@ -626,6 +627,8 @@ def _telemetry_fake_source(
         trace_path=None,
         _teardown_after_close_cutoff=AsyncMock(),
         _operation_gate=gate,
+        # What a real launch records; the replacement is built from it.
+        launch_options=LaunchOptions(kind=kind, label=label, profile=profile, ephemeral=profile is None),
     )
     source.operation = gate.operation
     source.operation_snapshot = gate.snapshot

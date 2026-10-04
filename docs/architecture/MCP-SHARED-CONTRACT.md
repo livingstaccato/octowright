@@ -1,4 +1,4 @@
-# octowright debugger — shared API contract
+# Octowright debugger — shared API contract
 
 The Python `src/octowright/http/` package and the TypeScript `packages/octowright-frontend/`
 implement the two sides of this contract. Both subagents must keep the wire

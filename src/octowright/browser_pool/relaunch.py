@@ -20,18 +20,18 @@ DIFFERENT exception handling here -- see ``_close_with_fallback_snapshot``.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any, LiteralString, cast
 
 from provide.telemetry import get_logger
 
 from octowright._tracing import span
-from octowright.browser_pool.launch_helpers import rotate_har_path
 from octowright.browser_pool.lifecycle import (
     CloseCoordinatorOutcome,
     RelaunchSnapshot,
     reserve_close_browser,
 )
+from octowright.browser_pool.replacement import FLUID_OVERRIDES, ReplacementSource
 from octowright.session.operation.gate import (
     SessionCloseAbortedError,
     SessionClosedError,
@@ -62,29 +62,11 @@ async def _await_in_flight_close(pool: BrowserPool, instance_id: str) -> None:
         await existing.reservation.wait()
 
 
-def _requested_wayland_native(session: BrowserSession) -> bool | None:
-    """The session's wayland_native request, or auto for anything that is not
-    a real bool -- a duck-typed session must not hand a strictly validated
-    launch a truthy stand-in."""
-    value = getattr(session, "wayland_native", None)
-    return value if isinstance(value, bool) else None
-
-
 def _relaunch_snapshot_from_session(session: BrowserSession) -> RelaunchSnapshot:
     return RelaunchSnapshot(
-        kind=session.kind,
-        label=session.label,
-        profile=session.profile,
-        user_data_dir=getattr(session, "user_data_dir", None),
-        stabilize=getattr(session, "stabilize", False),
-        trace=getattr(session, "trace", False),
-        har_path=getattr(session, "har_path", None),
-        protected=getattr(session, "protected", False),
-        protected_reason=getattr(session, "protected_reason", "explicit"),
-        disable_automation_controlled=getattr(session, "disable_automation_controlled", False),
-        wayland_native=_requested_wayland_native(session),
+        source=ReplacementSource.of(session),
         target_url=getattr(session.page, "url", None) or session.url,
-        launch_url=session.launch_url,
+        user_data_dir=getattr(session, "user_data_dir", None),
     )
 
 
@@ -107,33 +89,17 @@ async def _launch_from_snapshot(
     snapshot: RelaunchSnapshot,
     *,
     headed: bool | None,
-    badge: bool = True,
-    ephemeral: bool = False,
+    overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    # Don't overwrite the prior HAR — a handoff/relaunch gets a fresh sibling path.
-    next_har = rotate_har_path(snapshot.har_path)
-    result = await pool.launch(
-        kind=snapshot.kind,
-        url=snapshot.target_url,
-        headed=headed,
-        label=snapshot.label,
-        profile=snapshot.profile,
-        stabilize=snapshot.stabilize,
-        trace=snapshot.trace,
-        har=bool(snapshot.har_path),
-        har_path=str(next_har) if next_har else None,
-        badge=badge,
-        ephemeral=ephemeral,
-        session=snapshot.profile is None and snapshot.user_data_dir is not None,
-        protected=snapshot.protected,
-        disable_automation_controlled=snapshot.disable_automation_controlled,
-        wayland_native=snapshot.wayland_native,
-        # The replacement opens at the page's current URL but trusts the
-        # original's (RelaunchSnapshot.launch_url). Passed in, not assigned
-        # afterwards: pool.launch publishes the session before it returns.
-        trusted_launch_url=snapshot.launch_url,
+    """Launch the replacement from the original's own launch options (see
+    ``replacement``). ``headed`` overrides the original's; ``None`` keeps it.
+    The replacement opens at the page's current URL but trusts the
+    original's launch URL -- passed in, not assigned afterwards, because
+    ``pool.launch`` publishes the session before it returns. Its HAR goes to
+    a fresh sibling path rather than overwriting the original's."""
+    return await pool.launch(
+        **snapshot.source.launch_kwargs(url=snapshot.target_url, headed=headed, overrides=overrides)
     )
-    return result
 
 
 async def _close_with_fallback_snapshot(
@@ -349,8 +315,8 @@ async def relaunch_fluid_browser(pool: BrowserPool, instance_id: str) -> dict[st
             warning_event="octowright.browser.relaunch_fluid.close_raced_eviction",
         )
 
-        stateless = snapshot.profile is None and snapshot.user_data_dir is None
-        result = await _launch_from_snapshot(pool, snapshot, headed=True, ephemeral=stateless)
+        # Fluid mode's deliberate departures: headed, viewport following the window.
+        result = await _launch_from_snapshot(pool, snapshot, headed=None, overrides=FLUID_OVERRIDES)
         await _restore_protection(pool, result["instance_id"], snapshot)
         return {
             "ok": True,

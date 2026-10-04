@@ -74,14 +74,27 @@ import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from octowright.request_errors import InvalidRequestError
+from octowright.safety_stop import SafetyStop
+
+
+class SsrfRefusal(SafetyStop, InvalidRequestError):
+    """The SSRF policy refused a URL: still the caller's own input, and a `SafetyStop`.
+
+    An ``InvalidRequestError`` so every sink that keeps a refused request out
+    of engine health still does; a `SafetyStop` so a macro's ``try`` or
+    ``try_each`` cannot suppress it.
+    """
+
 
 # Tokens that mean "policy disabled". Empty/unset is the default → off.
 _OFF = frozenset({"", "off", "0", "false", "no", "never", "none", "disabled"})
 
 # Only IP-routable schemes can reach an internal host; data:/about:/blob: can't,
 # and the dangerous file:/javascript:/chrome: schemes are already refused by
-# _reject_unsafe_url before this runs.
-_CHECKED_SCHEMES = frozenset({"http", "https"})
+# _reject_unsafe_url before this runs. ws:/wss: dial a host exactly as http(s)
+# does, so they are classified here rather than trusting every caller to
+# rewrite them to http(s) first.
+_CHECKED_SCHEMES = frozenset({"http", "https", "ws", "wss"})
 
 # Hostnames that resolve to a private/metadata target by convention.
 _BLOCKED_HOSTNAMES = frozenset({"localhost", "metadata", "metadata.google.internal"})
@@ -277,6 +290,38 @@ def normalize_host_for_policy(host: str) -> str:
     return mapped.lower()
 
 
+#: Schemes the WHATWG URL Standard calls "special". After one of them, every
+#: ``/`` and ``\`` following the colon is skipped before the authority starts.
+_SPECIAL_SCHEMES = frozenset({"http", "https", "ws", "wss", "ftp"})
+#: Stripped from both ends before WHATWG parsing (C0 controls and space).
+_C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
+#: Deleted from anywhere in the URL before WHATWG parsing.
+_TAB_AND_NEWLINES = {0x09: None, 0x0A: None, 0x0D: None}
+
+
+def _with_whatwg_authority(url: str) -> str:
+    """``url`` spelled so ``urlsplit`` finds the authority a browser finds.
+
+    For a special scheme WHATWG skips ANY run of ``/`` and ``\\`` after the
+    colon -- ``http:127.0.0.1``, ``http:/169.254.169.254`` and
+    ``http:///127.0.0.1`` all have a host -- and treats ``\\`` as ``/``, so it
+    also ends the authority (``127.0.0.1\\@public.example`` is host
+    127.0.0.1). ``urlsplit`` reports no host for the first three and
+    ``public.example`` for the last, so the policy had nothing, or the wrong
+    thing, to classify. Tab/CR/LF are removed and C0/space trimmed first, as
+    WHATWG does, so they cannot hide a scheme or a slash.
+
+    Deliberately the no-base reading. Against a ``base_url`` of the same
+    scheme, ``http:foo`` is a relative path instead; reading it as a host here
+    can only refuse a URL, never admit one.
+    """
+    cleaned = url.strip(_C0_OR_SPACE).translate(_TAB_AND_NEWLINES)
+    scheme, sep, rest = cleaned.partition(":")
+    if not sep or scheme.lower() not in _SPECIAL_SCHEMES:
+        return cleaned
+    return f"{scheme}://{rest.replace(chr(92), '/').lstrip('/')}"
+
+
 def _policy_host(url: str) -> str | None:
     """The normalized host of ``url`` the active policy has to classify, if any.
 
@@ -287,7 +332,7 @@ def _policy_host(url: str) -> str | None:
     if _policy() == "off":
         return None
     try:
-        parts = urlsplit(url)
+        parts = urlsplit(_with_whatwg_authority(url))
     except ValueError:
         return None
     if parts.scheme.lower() not in _CHECKED_SCHEMES:
@@ -308,14 +353,14 @@ def _refuse_as_spelled(host: str) -> bool:
     ip = _literal_ip(host)
     blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else ip_is_non_public(ip)
     if blocked:
-        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+        raise SsrfRefusal(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
     return ip is not None
 
 
 def check_navigation_url(url: str) -> None:
     """Raise ``ValueError`` if the active SSRF policy refuses ``url``.
 
-    A no-op when the policy is ``off`` (default) or the URL is not http(s).
+    A no-op when the policy is ``off`` (default) or the URL is not http(s) or ws(s).
     Allowlisted hosts always pass.
     """
     host = _policy_host(url)
@@ -379,7 +424,7 @@ async def check_navigation_url_resolved(url: str) -> None:
         return
     refusal = await _resolution_refusal(host)
     if refusal is not None:
-        raise InvalidRequestError(refusal)
+        raise SsrfRefusal(refusal)
 
 
 #: How long a subresource host's verdict is reused. A page issues dozens of
@@ -415,7 +460,7 @@ async def check_request_url_cached(url: str) -> None:
     else:
         refusal = cached[1]
     if refusal is not None:
-        raise InvalidRequestError(refusal)
+        raise SsrfRefusal(refusal)
 
 
 async def _shared_lookup(host: str) -> str | None:

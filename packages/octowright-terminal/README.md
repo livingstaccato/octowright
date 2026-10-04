@@ -1,16 +1,16 @@
 # octowright-terminal
 
-The terminal session-kind plugin for [octowright](https://github.com/livingstaccato/octowright). Drives a local PTY shell, an SSH session, or a telnet connection in-process, recorded to the same JSONL format octowright uses for browsers, and exposed to an MCP client as `terminal_*` tools.
+The terminal session-kind plugin for [Octowright](https://github.com/livingstaccato/octowright). Drives a local PTY shell, an SSH session, or a telnet connection in-process, recorded to the same JSONL format Octowright uses for browsers, and exposed to an MCP client as `terminal_*` tools.
 
-This package is entirely optional. Octowright core has no terminal-specific code left anywhere in `src/octowright` — no `terminal/` package, no `provide.uterm` import, no hardcoded scenario branch. Everything here reaches core through exactly one seam: the `octowright.session_kinds` entry point (`octowright_terminal.plugin:plugin`, declared in this package's `pyproject.toml`). See `AGENTS.md` in the octowright repo root ("Terminal Sessions (plugin)") for the short version and how `OCTOWRIGHT_PLUGINS` resolves which plugins a daemon loads.
+This package is entirely optional. Octowright core has no terminal-specific code left anywhere in `src/octowright` — no `terminal/` package, no `provide.uterm` import, no hardcoded scenario branch. Everything here reaches core through exactly one seam: the `octowright.session_kinds` entry point (`octowright_terminal.plugin:plugin`, declared in this package's `pyproject.toml`). See `AGENTS.md` in the Octowright repo root ("Terminal Sessions (plugin)") for the short version and how `OCTOWRIGHT_PLUGINS` resolves which plugins a daemon loads.
 
 ## Installation
 
-This package is **on PyPI** — `uv pip install octowright-terminal` resolves, imports, and registers its entry point in a clean venv. It first shipped alongside core 0.19.2 on 2026-08-31, from the same GitHub Release. Its dependencies were already there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout (the `[tool.uv.sources]` path overrides that once required one are gone from the octowright repo's `pyproject.toml`).
+This package is **on PyPI** — `uv pip install octowright-terminal` resolves, imports, and registers its entry point in a clean venv. It first shipped alongside core 0.19.2 on 2026-08-31, from the same GitHub Release. Its dependencies were already there: `provide-uterm`, `provide-uterm-platform` and `provide-uterm-server` were published on 2026-08-26, so nothing here needs a sibling `../provide-uterm` checkout (the `[tool.uv.sources]` path overrides that once required one are gone from the Octowright repo's `pyproject.toml`).
 
 Installing it only makes the plugin *discoverable*; enabling it stays a separate, deliberate act via `OCTOWRIGHT_PLUGINS=terminal`.
 
-The release path is wired: the octowright repo's `release.yml` builds this package into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so the next release is its first upload. One thing gates that, and it is not something the repo can do for itself — PyPI needs a trusted publisher for the `octowright-terminal` project, registered as a *pending publisher* because the name has never been uploaded. Until it lands, install from the repo:
+The release path is wired: the Octowright repo's `release.yml` builds this package into its own `dist-terminal/` and publishes it alongside core from the same GitHub Release, so the next release is its first upload. One thing gates that, and it is not something the repo can do for itself — PyPI needs a trusted publisher for the `octowright-terminal` project, registered as a *pending publisher* because the name has never been uploaded. Until it lands, install from the repo:
 
 ```bash
 uv pip install ./packages/octowright-terminal   # from an octowright checkout
@@ -101,7 +101,7 @@ A terminal participant is `kind: terminal, options: {connector_type: pty/ssh, ..
 
 `TerminalScenarioAdapter` (`scenario.py`) implements only the mandatory `resolve_participant` — nothing else. Core derives what a kind can do in a scenario from which optional protocols its adapter satisfies (`SupportsMacros` / `SupportsSync` / `SupportsDialogPolicy` / `SupportsMockRoutes`), not from a declared string, so this is the real, current behavior rather than a placeholder: **terminal cannot run macros, wait-for-sync, set a dialog policy, or install mock routes in a scenario, today.** A terminal participant declaring `startup_macros` is therefore a validation error, and `run_macro`/`wait_for_sync` against it report the missing capability by name (e.g. "does not support macros (its adapter provides no run_macro)"). Starting a scenario with a `kind: terminal` participant when this plugin isn't enabled fails scenario validation with an "unsupported kind" error that names `OCTOWRIGHT_PLUGINS` as the fix, rather than failing obscurely deeper in the launch path.
 
-Example: `examples/scenarios/browser-plus-terminal.yaml` in the octowright repo root.
+Example: `examples/scenarios/browser-plus-terminal.yaml` in the Octowright repo root.
 
 ## Telemetry
 
@@ -126,7 +126,7 @@ Emitted only when `PROVIDE_TRACE_ENABLED=true` / `PROVIDE_METRICS_ENABLED=true` 
 
 ## Development
 
-This package is a `uv` workspace member of the octowright repo, but it lives in its own `terminal` dependency group rather than in `dev`. The group *is* the dependency boundary: core's CI legs sync `--all-groups --no-group terminal` to prove core builds, installs and passes with no uterm present anywhere (the dependency-layer twin of `tests/test_plugin_isolation.py`), and `make install` / `--all-groups` is how a dev working here opts in. `uv sync` on its own (default groups only) does **not** install it — and uninstalls it if it was there; ask for the group, or for every group:
+This package is a `uv` workspace member of the Octowright repo, but it lives in its own `terminal` dependency group rather than in `dev`. The group *is* the dependency boundary: core's CI legs sync `--all-groups --no-group terminal` to prove core builds, installs and passes with no uterm present anywhere (the dependency-layer twin of `tests/test_plugin_isolation.py`), and `make install` / `--all-groups` is how a dev working here opts in. `uv sync` on its own (default groups only) does **not** install it — and uninstalls it if it was there; ask for the group, or for every group:
 
 ```bash
 uv sync --all-groups                      # or: --group terminal

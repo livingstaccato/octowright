@@ -407,7 +407,8 @@ async def _run_follower(leader_mcp_url: str) -> None:
     from octowright.proxy_bridge import run_proxy
 
     # Same host:port serves /api/health — used by the bridge watchdog to
-    # detect a wedged leader (silent SSE) and tear down rather than hang.
+    # detect a wedged leader (silent SSE) and tear down rather than hang. This
+    # only seeds it: the bridge re-derives it from each reconnect's leader URL.
     health_url = leader_mcp_url.rsplit("/mcp", 1)[0] + "/api/health"
     click.echo(f"octowright: connecting to leader at {leader_mcp_url}", err=True)
     await run_proxy(leader_mcp_url, health_url=health_url)
@@ -587,7 +588,10 @@ async def _run_leader(
         await _close_plugin_pools_on_shutdown(_plugin_state.registry(), log=_log)
         await shutdown_browser_pool_on_shutdown(pool, log=_log)
         if not no_singleton:
-            _sn.remove_lock()
+            # Only while the lockfile still describes THIS leader: a successor
+            # may already have replaced it, and erasing its record would make
+            # the next client spawn a third leader beside it.
+            await _sn.release_own_lock(leader_token)
 
 
 async def _close_plugin_pools_on_shutdown(registry: Any, *, log: Any) -> None:

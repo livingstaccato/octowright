@@ -14,7 +14,7 @@ Every `BrowserSession` owns one `SessionOperationGate` (`src/octowright/session/
 was half the problem. On a WebKit build that could not navigate to
 `about:blank`, `page.evaluate` still answered in ~6s while
 `context.expose_binding`, `context.add_init_script` and `context.route`
-**never returned at all** (measured with raw Playwright and no octowright
+**never returned at all** (measured with raw Playwright and no Octowright
 imported). Playwright gives none of them a `timeout` either.
 
 The consequence was worse than a slow launch. `browser_launch` wedged inside

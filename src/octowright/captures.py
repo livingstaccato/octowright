@@ -22,8 +22,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from octowright._json_text import dumps_utf8_safe
-from octowright._paths import atomic_write_text
+from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.capture_actions import base_capture_next_actions, capture_search_next_actions, listed_capture_actions
+from octowright.capture_regex import regex_match_spans
 from octowright.capture_summaries import summarize_capture_payload
 from octowright.defaults import CAPTURE_MAX_TOTAL_BYTES, CAPTURE_TTL_SECONDS, CAPTURES_DIR
 from octowright.private_paths import secure_artifact_tree
@@ -136,7 +137,12 @@ def save_capture(
     host = host_for_url(url)
     capture_id = f"cap_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:10]}"
     path = _capture_path(root, host, instance_id, capture_id)
+    # Contained BEFORE mkdir: a symlinked ``<root>/<host>`` would otherwise
+    # have mkdir, the 0700 chmod and the write all land wherever it points.
+    # Checked again after, for a directory swapped in between.
+    reject_unsafe_path(path.parent, root, label="capture directory")
     path.parent.mkdir(parents=True, exist_ok=True)
+    reject_unsafe_path(path.parent, root, label="capture directory")
     # A capture holds page text, accessibility trees, evaluate results and
     # request headers -- the same class of data the JSONL recording does, and
     # governed by the same knob. The 0700 tree, not the 0600 file, is the
@@ -157,7 +163,7 @@ def save_capture(
     }
     # Atomic temp-sibling + os.replace so a symlink swapped in at the
     # destination is replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, dumps_utf8_safe(payload, indent=2))
+    atomic_write_text(path, dumps_utf8_safe(payload, indent=2), root=root)
     stat = path.stat()
     cleanup_captures(
         root=root,
@@ -289,16 +295,19 @@ def search_capture(
     capped_context = max(0, min(context_chars, MAX_SEARCH_CONTEXT_CHARS))
     capped_limit = max(0, min(limit, MAX_SEARCH_MATCHES))
     if regex:
-        iterator = re.finditer(query, content, flags=re.IGNORECASE | re.MULTILINE)
+        # A caller's pattern can backtrack catastrophically; it runs in a
+        # child process with a hard time bound (see capture_regex).
+        spans = regex_match_spans(query, content, limit=capped_limit)
     else:
-        iterator = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
-    for match in iterator:
-        start = max(0, match.start() - capped_context)
-        end = min(len(content), match.end() + capped_context)
+        literal = re.finditer(re.escape(query), content, flags=re.IGNORECASE)
+        spans = [m.span() for _, m in zip(range(capped_limit), literal, strict=False)]
+    for match_start, match_end in spans:
+        start = max(0, match_start - capped_context)
+        end = min(len(content), match_end + capped_context)
         matches.append(
             {
-                "start": match.start(),
-                "end": match.end(),
+                "start": match_start,
+                "end": match_end,
                 "context_start": start,
                 "context_end": end,
                 "context": content[start:end],
@@ -312,8 +321,6 @@ def search_capture(
                 },
             }
         )
-        if len(matches) >= capped_limit:
-            break
     return {
         "capture_id": capture_id,
         "query": query,

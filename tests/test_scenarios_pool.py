@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -80,7 +82,18 @@ class _TerminalPool:
 
     def __init__(self) -> None:
         self.closed: list[tuple[str, bool]] = []
-        self._sessions = {"t2": SimpleNamespace(kind="terminal", profile="ops")}
+        self._sessions = {
+            "t2": SimpleNamespace(
+                instance_id="t2",
+                kind="terminal",
+                profile="ops",
+                label="ops-shell",
+                url=None,
+                log_path=Path("t2.jsonl"),
+                protected=False,
+                extra={"connector_type": "ssh"},
+            )
+        }
 
     async def close(self, instance_id: str, *, force: bool = False) -> None:
         self.closed.append((instance_id, force))
@@ -517,11 +530,11 @@ class _UrlGatedSession(OperationAwareFake):
     def __init__(self, instance_id: str, url: str) -> None:
         self.instance_id = instance_id
         super().__init__()
-        self.wait_for_url_calls: list[str] = []
+        self.wait_for_url_calls: list[str] = []  # the waited pattern's source
         self.page = SimpleNamespace(url=url, wait_for_url=self._wait_for_url)
 
-    async def _wait_for_url(self, url: str, *, timeout: int) -> None:
-        self.wait_for_url_calls.append(url)
+    async def _wait_for_url(self, url: re.Pattern[str], *, timeout: int) -> None:
+        self.wait_for_url_calls.append(url.pattern)
 
     async def wait_for(self, selector=None, text=None, timeout_ms=None):
         return None
@@ -649,3 +662,85 @@ async def test_stop_completes_teardown_even_when_cancelled() -> None:
         release.set()
 
     assert pool.closed == ["b", "c"]
+
+
+def test_remap_refreshes_every_per_session_field_from_the_replacement(tmp_path: Any) -> None:
+    """A remap rebinds the participant to another SESSION, not just another id.
+
+    Only ``instance_id`` used to move, so the entry kept the old session's
+    ``log_path``, ``url``, ``har_path`` and ``label`` -- and ``tail()`` replayed
+    the OLD recording under the new id. Everything that describes a session
+    comes from the replacement; ``persona`` and ``role`` are the scenario's own.
+    """
+    old_log = tmp_path / "old.jsonl"
+    old_log.write_text('{"ts": 1, "action": "navigate", "url": "https://old.test/"}\n')
+    new_log = tmp_path / "new.jsonl"
+    new_log.write_text('{"ts": 2, "action": "navigate", "url": "https://new.test/"}\n')
+    sp = ScenarioPool()
+    live = LiveScenario(
+        scenario_id="rm",
+        name="rm",
+        spec=_Spec("rm", [], fixtures={}, teardown_macro=None),
+        participants=[
+            {
+                "instance_id": "a",
+                "persona": "cosmo",
+                "role": "player",
+                "kind": "chromium",
+                "label": "old-label",
+                "profile": "cosmo",
+                "url": "https://old.test/",
+                "log_path": str(old_log),
+                "har_path": "/old.har",
+                "har_mode": "full",
+                "record_video": True,
+                "video_dir": "/old-video",
+                "protected": True,
+            }
+        ],
+    )
+    sp._live[live.scenario_id] = live
+    replacement = SimpleNamespace(
+        instance_id="x",
+        kind="chromium",
+        label="new-label",
+        profile="cosmo",
+        url="https://new.test/",
+        log_path=new_log,
+        har_path=None,
+        protected=False,
+    )
+    bp = SimpleNamespace(maybe_get=lambda instance_id: replacement if instance_id == "x" else None)
+
+    sp.remap_participant(scenario_id="rm", old_instance_id="a", new_instance_id="x", browser_pool=bp)
+
+    (entry,) = live.participants
+    assert entry == {
+        "instance_id": "x",
+        "persona": "cosmo",
+        "role": "player",
+        "kind": "chromium",
+        "label": "new-label",
+        "profile": "cosmo",
+        "url": "https://new.test/",
+        "log_path": str(new_log),
+        "protected": False,
+    }
+    # The caller's cursor for the old id is an offset into the OLD log; the
+    # new id starts the new log from its beginning.
+    tailed = sp.tail(scenario_id="rm", since_cursors={"a": old_log.stat().st_size})
+    assert [(e["instance_id"], e["url"]) for e in tailed["events"]] == [("x", "https://new.test/")]
+    assert tailed["cursors"] == {"x": new_log.stat().st_size}
+
+
+def test_remap_carries_a_plugin_replacements_extra_nested(registered_terminal_pool: Any) -> None:
+    sp = ScenarioPool()
+    live = _mixed_live()
+    sp._live[live.scenario_id] = live
+    sp.remap_participant(scenario_id="mix", old_instance_id="t", new_instance_id="t2", browser_pool=_Pool())
+    entry = next(p for p in live.participants if p["role"] == "operator")
+    replacement = registered_terminal_pool.maybe_get("t2")
+    assert entry["instance_id"] == "t2"
+    assert entry["log_path"] == str(replacement.log_path)
+    assert "connector_type" not in entry, "a plugin's kind-specific field rides under extra, never flattened"
+    assert entry["extra"] == {"connector_type": "ssh"}

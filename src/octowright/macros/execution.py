@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
@@ -14,7 +15,7 @@ from provide.telemetry import get_logger
 import octowright.conditional as conditional
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import MACRO_SLOWMO_MS, METRICS_MACRO_LABEL_CAP
-from octowright.macros import failure_context, safe_screenshot, screenshot_refusal, sequence_steps
+from octowright.macros import credential_fill, failure_context, safe_screenshot, screenshot_refusal, sequence_steps
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
 from octowright.macros.assertion_results import begin_collecting, end_collecting
 from octowright.macros.calls import (
@@ -279,7 +280,7 @@ async def _dispatch_nested_call(
         invocation_stack=invocation_stack,
         max_depth=max_depth,
         load_macro=macros,
-        substitute=substitute,
+        substitute=failure_context.tracking_substitute(substitute, partial(_macro_privacy, macros)),
         dispatch_one=lambda *a, **kw: _dispatch_one(*a, slowmo_ms=slowmo_ms, run_ledger=ledger, macros=macros, **kw),
     )
 
@@ -571,7 +572,7 @@ async def _run_macro_impl(
     """
     macros = macros if macros is not None else RunMacros(load_macro)
     admitted = run_ledger is not None
-    with run_privacy_ledger(session, run_ledger) as run_ledger:
+    with run_privacy_ledger(session, run_ledger) as run_ledger, conditional.written_steps_scope():
         macro = macros(name)
         # An argument that IS the forbidden text is sensitive whatever it is named;
         # the exported CLI reads the same set (privacy.assertion_text_args).
@@ -617,6 +618,8 @@ async def _run_admitted(
     actions = substitute(
         macro.get("actions", []), effective_args, trusted_origins=origins, credential_args=credential_args
     )
+    failure_context.register_written_steps(macro.get("actions", []), actions, partial(_macro_privacy, macros))
+    credential_names = credential_fill.credential_run_args(macro.get("actions", []), actions, credential_args)
     start_request_tracking(session, actions, macros)
 
     executed = 0
@@ -630,7 +633,7 @@ async def _run_admitted(
 
     macro_started = time.monotonic()
     completed_ok = False
-    audit, audit_token = begin_fill_audit()
+    audit, audit_token = begin_fill_audit(credential_names)
     assertions, collecting = begin_collecting()
     try:
         for index, action in enumerate(actions):

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, LiteralString, cast
 from provide.telemetry import get_logger
 
 from octowright._tracing import counter, span
-from octowright.browser_pool import close_helpers
+from octowright.browser_pool import close_helpers, driver_health
 from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.session.operation.gate import (
@@ -27,6 +27,7 @@ from octowright.session.operation.gate import (
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
+    from octowright.browser_pool.replacement import ReplacementSource
     from octowright.session import BrowserSession
 
 log = get_logger(__name__)
@@ -440,34 +441,37 @@ def accept_external_close_nowait(
 
 @dataclass(slots=True, frozen=True)
 class RelaunchSnapshot:
-    """Immutable capture of every field a close-then-relaunch compound
-    (handoff, fluid relaunch) needs to build its replacement launch.
+    """Immutable capture of what a close-then-relaunch compound (handoff,
+    fluid relaunch) builds its replacement from.
 
     Built by ``_relaunch_snapshot_from_session`` and returned from the
     preparation callback the coordinator runs once the close ticket owns the
     gate -- ``target_url`` in particular must reflect the session's FINAL
     navigated URL (``session.page.url``), not a pre-close read that a
-    concurrent navigation could have raced past.
+    concurrent navigation could have raced past. The launch options come
+    from ``source`` (``replacement.ReplacementSource``), the one place that
+    decides what a replacement carries.
     """
 
-    kind: str
-    label: str | None
-    profile: str | None
-    user_data_dir: Any
-    stabilize: bool
-    trace: bool
-    har_path: Any
-    protected: bool
-    protected_reason: str
-    disable_automation_controlled: bool
+    source: ReplacementSource
     target_url: str
-    # Where the operator launched the original, which the replacement keeps:
-    # ``target_url`` is where the page is NOW, and the macro header guard
-    # (``substitution.own_site_origins``) must not come to trust a host a macro
-    # navigated to just because the browser was relaunched there.
-    launch_url: str | None = None
-    # The original launch's wayland_native request (None = auto).
-    wayland_native: bool | None = None
+    user_data_dir: Any = None
+
+    @property
+    def kind(self) -> str:
+        return self.source.kind
+
+    @property
+    def profile(self) -> str | None:
+        return self.source.profile
+
+    @property
+    def protected(self) -> bool:
+        return self.source.protected
+
+    @property
+    def protected_reason(self) -> str:
+        return self.source.protected_reason
 
 
 async def shutdown_pool(pool: BrowserPool) -> None:
@@ -486,8 +490,10 @@ async def shutdown_pool(pool: BrowserPool) -> None:
         except Exception as exc:
             log.warning("octowright.pool.shutdown_straggler_close_failed", error=repr(exc))
     if pool._pw is not None:
-        await pool._pw.stop()
-        pool._pw = None
+        pw, pool._pw = pool._pw, None
+        # Bounded, killing the driver on timeout: an unbounded stop of a hung
+        # driver held daemon exit forever (driver_health.stop_driver).
+        await driver_health.stop_driver(pw)
     # Hold ``_sessions_lock`` across the snapshot-and-clear so a concurrent
     # ``_resolve_session_dir`` (which mints tmpdirs under the same lock) can't
     # slip a new entry into the dict between our iteration and ``.clear()``.

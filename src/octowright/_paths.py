@@ -17,6 +17,8 @@ untrusted input. Centralised so a future hardening change lands in one place.
 from __future__ import annotations
 
 import os
+import secrets
+import stat
 import tempfile
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -66,6 +68,95 @@ def reject_unsafe_path(candidate: Path, root: Path, *, label: str) -> Path:
     return candidate.resolve()
 
 
+#: Whether the parent directory can be held open and written through, so the
+#: temp file and the final rename cannot be redirected by swapping a path
+#: component for a symlink. POSIX; on Windows the helpers fall back to names.
+_DIR_FD_SUPPORTED = (
+    os.open in os.supports_dir_fd
+    and os.rename in os.supports_dir_fd  # os.replace shares its implementation
+    and hasattr(os, "O_DIRECTORY")
+    and hasattr(os, "O_NOFOLLOW")
+)
+
+
+def _relative_beneath(directory: Path, root: Path) -> tuple[Path, Path]:
+    """``(root_to_open, directory relative to it)``, without resolving ``directory``.
+
+    Resolving ``directory`` would follow the very symlinks the walk refuses.
+    ``root`` may be spelled through a symlink of the operator's own (a
+    symlinked home or state dir), so its resolved form is tried too.
+    """
+    absolute = Path(os.path.abspath(directory))
+    for anchor in (Path(os.path.abspath(root)), root.resolve()):
+        try:
+            return anchor, absolute.relative_to(anchor)
+        except ValueError:
+            continue
+    raise InvalidRequestError(f"directory {str(directory)!r} is not under {str(root)!r}")
+
+
+def _open_parent(path: Path, root: Path | None) -> int:
+    """An open descriptor for ``path.parent``; walked from ``root`` without following symlinks.
+
+    Without ``root`` the descriptor still pins ONE directory for the temp file
+    and the rename. With it, every component below ``root`` is opened with
+    ``O_NOFOLLOW``, so a component replaced by a symlink after the caller's
+    containment check is refused instead of followed.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+    if root is None:
+        return os.open(path.parent, flags)
+    anchor, relative = _relative_beneath(path.parent, root)
+    fd = os.open(anchor, flags)
+    for part in relative.parts:
+        try:
+            if part == "..":
+                raise NotADirectoryError(part)
+            next_fd = os.open(part, flags | os.O_NOFOLLOW, dir_fd=fd)
+        except (NotADirectoryError, OSError) as exc:
+            os.close(fd)
+            if isinstance(exc, FileNotFoundError):
+                raise
+            raise InvalidRequestError(
+                f"{part!r} under {str(anchor)!r} is not a plain directory (a symlink?); refusing to write through it"
+            ) from None
+        os.close(fd)
+        fd = next_fd
+    return fd
+
+
+def _create_temp_in(dir_fd: int, name: str) -> str:
+    """Create an empty ``0600`` temp sibling of ``name`` inside ``dir_fd``; return its name."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    for _ in range(100):
+        tmp_name = f".{name}.{secrets.token_hex(6)}.tmp"
+        try:
+            os.close(os.open(tmp_name, flags, 0o600, dir_fd=dir_fd))
+        except FileExistsError:
+            continue
+        return tmp_name
+    raise FileExistsError(f"could not create a temp sibling of {name!r}")
+
+
+def _inherit_target_mode_at(dir_fd: int, name: str, tmp_name: str) -> None:
+    try:
+        st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISREG(st.st_mode):
+        try:
+            os.chmod(tmp_name, st.st_mode & 0o7777, dir_fd=dir_fd)
+        except OSError:
+            pass
+
+
+def _unlink_at(dir_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=dir_fd)
+    except OSError:
+        pass
+
+
 def _make_temp_sibling(path: Path) -> Path:
     """Create a hidden empty sibling temp file in ``path.parent`` and return it.
 
@@ -96,20 +187,33 @@ def _inherit_target_mode(target: Path, tmp_path: Path) -> None:
         pass
 
 
-async def atomic_write_via_writer(path: Path, writer: Callable[[Path], Awaitable[None]]) -> None:
+async def atomic_write_via_writer(
+    path: Path, writer: Callable[[Path], Awaitable[None]], *, root: Path | None = None
+) -> None:
     """Run ``writer(tmp_path)`` then ``os.replace(tmp_path, path)`` atomically.
 
-    Defeats the symlink-swap TOCTOU window between the caller's path
-    containment check and the actual write: a same-user attacker who
-    replaces ``path`` (or any segment of its parent) with a symlink between
-    resolve() and the writer's open() could redirect the bytes. Staging
-    into a sibling temp file inside the same already-resolved parent and
-    atomically renaming closes that window.
+    A symlink at ``path`` itself is replaced, never followed. On POSIX the
+    parent directory is also held open for the whole write (walked from
+    ``root`` without following symlinks when it is given), and the temp file
+    is created and renamed through that descriptor, so a parent swapped for a
+    symlink after the caller's containment check cannot redirect the rename
+    onto a file elsewhere. Earlier versions claimed this and staged by name,
+    which a swap between check and rename defeated.
+
+    Residual limit: ``writer`` can only be handed a path, so a parent swapped
+    WHILE it runs sends the writer's bytes through the new link to a fresh
+    temp name there. That is detected (the name no longer reaches the file
+    created here) and the write is refused rather than published; it cannot
+    replace an existing file outside the directory. Windows has no directory
+    descriptors and keeps the name-based staging.
 
     The ``writer`` is responsible for writing to (or having the underlying
     tool write to) the temp path. On any exception the temp file is
     best-effort unlinked; on success ``os.replace`` consumes it.
     """
+    if _DIR_FD_SUPPORTED:
+        await _atomic_write_via_writer_at(path, writer, root)
+        return
     tmp_path = _make_temp_sibling(path)
     cleanup: Path | None = tmp_path
     try:
@@ -125,8 +229,43 @@ async def atomic_write_via_writer(path: Path, writer: Callable[[Path], Awaitable
                 pass
 
 
-def atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None:
-    """Synchronous sibling of :func:`atomic_write_via_writer` for plain text."""
+async def _atomic_write_via_writer_at(path: Path, writer: Callable[[Path], Awaitable[None]], root: Path | None) -> None:
+    dir_fd = _open_parent(path, root)
+    tmp_name: str | None = None
+    try:
+        tmp_name = _create_temp_in(dir_fd, path.name)
+        await writer(path.parent / tmp_name)
+        # The writer could only be given a NAME, so it reached the temp file
+        # through ``path.parent`` as it stood then. If that is no longer the
+        # directory held open here, its bytes went somewhere else, and
+        # renaming would publish the empty file we created -- refuse instead.
+        pinned = os.stat(tmp_name, dir_fd=dir_fd, follow_symlinks=False)
+        try:
+            named = os.stat(path.parent / tmp_name, follow_symlinks=False)
+        except OSError:
+            named = None
+        if named is None or (named.st_dev, named.st_ino) != (pinned.st_dev, pinned.st_ino):
+            raise InvalidRequestError(
+                f"directory {str(path.parent)!r} changed during the write; refusing to publish it"
+            )
+        _inherit_target_mode_at(dir_fd, path.name, tmp_name)
+        os.replace(tmp_name, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_name = None
+    finally:
+        if tmp_name is not None:
+            _unlink_at(dir_fd, tmp_name)
+        os.close(dir_fd)
+
+
+def atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8", root: Path | None = None) -> None:
+    """Synchronous sibling of :func:`atomic_write_via_writer` for plain text.
+
+    Pass the containment ``root`` the caller validated ``path`` against, and
+    the directory is re-walked from it without following symlinks (POSIX).
+    """
+    if _DIR_FD_SUPPORTED:
+        _atomic_write_text_at(path, body, encoding, root)
+        return
     tmp_path = _make_temp_sibling(path)
     cleanup: Path | None = tmp_path
     try:
@@ -140,3 +279,20 @@ def atomic_write_text(path: Path, body: str, *, encoding: str = "utf-8") -> None
                 cleanup.unlink()
             except OSError:
                 pass
+
+
+def _atomic_write_text_at(path: Path, body: str, encoding: str, root: Path | None) -> None:
+    dir_fd = _open_parent(path, root)
+    tmp_name: str | None = None
+    try:
+        tmp_name = _create_temp_in(dir_fd, path.name)
+        fd = os.open(tmp_name, os.O_WRONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=dir_fd)
+        with open(fd, "w", encoding=encoding) as fh:
+            fh.write(body)
+        _inherit_target_mode_at(dir_fd, path.name, tmp_name)
+        os.replace(tmp_name, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        tmp_name = None
+    finally:
+        if tmp_name is not None:
+            _unlink_at(dir_fd, tmp_name)
+        os.close(dir_fd)

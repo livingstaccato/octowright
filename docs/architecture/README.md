@@ -50,5 +50,5 @@ PlantUML needs Java 8+). `make diagrams-png` also requires `rsvg-convert`
   OTLP when telemetry tracing is enabled).
 - The Starlette app records HTTP RED metrics via `provide.telemetry`'s
   `TelemetryMiddleware` (`http.requests/errors/duration`), exported over OTLP
-  with the rest of octowright's telemetry — there is no separate Prometheus
+  with the rest of Octowright's telemetry — there is no separate Prometheus
   scrape endpoint.

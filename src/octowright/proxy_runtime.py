@@ -125,6 +125,21 @@ def resolve_leader_token() -> str:
     return ""
 
 
+def resolve_leader_generation() -> str | None:
+    """Identity of the leader process the live lock describes, or None.
+
+    The follower binds each in-flight call to this (see
+    ``BridgeSupervisor.resume_in_flight``): the leader's idempotency cache is
+    process-local, so a call is only re-sent to the process it was sent to.
+    ``pid`` plus ``started_at`` distinguishes a replacement even when the OS
+    recycles the pid.
+    """
+    info = singleton.read_lock()
+    if info is None or singleton.is_stale(info):
+        return None
+    return f"{info.pid}:{info.started_at!r}"
+
+
 def _leader_url_is_safe(mcp_url: str) -> bool:
     """Refuse to bridge to a leader URL whose host isn't loopback.
 
@@ -221,7 +236,7 @@ def _arm_follower_exit_backstop(
 
 
 async def monitor_leader_health(
-    health_url: str,
+    health_url: str | Callable[[], str],
     interval: float,
     max_failures: int,
     on_unhealthy: Callable[[], None],
@@ -233,13 +248,25 @@ async def monitor_leader_health(
     loop stuck; this is the only thing that breaks it out so the loop can reconnect
     to a respawned leader (instead of wedging until the recovery window expires).
     The inline windowed retry remains the sole authority on giving up. Keeps
-    watching (re-fires) so a still-silent connection is unstuck again."""
+    watching (re-fires) so a still-silent connection is unstuck again.
+
+    ``health_url`` may be a callable, read before every probe, so the monitor
+    follows the leader the bridge is currently connected to."""
+    current_url: Callable[[], str]
+    if isinstance(health_url, str):
+        fixed_url = health_url
+
+        def current_url() -> str:
+            return fixed_url
+
+    else:
+        current_url = health_url
     failures = 0
     async with httpx2.AsyncClient(timeout=5.0) as client:
         while True:
             await anyio.sleep(interval)
             try:
-                response = await client.get(health_url)
+                response = await client.get(current_url())
                 ok = response.status_code == 200
             except (httpx2.HTTPError, OSError):
                 ok = False
@@ -250,6 +277,11 @@ async def monitor_leader_health(
             if failures >= max_failures:
                 on_unhealthy()
                 failures = 0
+
+
+def _health_url_from_mcp(mcp_url: str) -> str:
+    """The leader's ``/api/health`` URL derived from its ``/mcp`` URL."""
+    return mcp_url.rsplit("/mcp", 1)[0] + "/api/health"
 
 
 def _events_url_from_mcp(mcp_url: str) -> str:
@@ -365,6 +397,13 @@ async def run_supervised_proxy(
             # leader's outage is observed by the monitor (silent SSE), and stamping
             # here lets the eventual reconnect still be metered as a recovery.
             leader_down: list[float | None] = [None]
+            # The health URL of the leader this follower is bridged to. Seeded
+            # from the caller and re-derived from each connect's resolved URL:
+            # a leader that comes back on another port (the lifespan port-walk)
+            # is reconnected to there, and probing the first leader's port
+            # would declare the healthy new one dead and tear its session down
+            # every probe cycle. None (no health_url) keeps the watchdog off.
+            health_target: list[str | None] = [health_url]
 
             def _mark_leader_health_failed() -> None:
                 nonlocal leader_health_failed
@@ -391,9 +430,10 @@ async def run_supervised_proxy(
                     NOT clear ``leader_down`` on a healthy probe — only a successful
                     reconnect does, so an outage seen here OR by the monitor is still
                     metered as a recovery when the reconnect lands."""
-                    if health_url is None:
+                    current_health_url = health_target[0]
+                    if current_health_url is None:
                         return True
-                    if await leader_health_alive(health_url):
+                    if await leader_health_alive(current_health_url):
                         return True
                     now = anyio.current_time()
                     down_at = leader_down[0]
@@ -417,6 +457,8 @@ async def run_supervised_proxy(
                     # almost immediately — on the success path below.
                     connected_at: float | None = None
                     remote_url = resolve_leader_url(leader_mcp_url)
+                    if health_url is not None:
+                        health_target[0] = _health_url_from_mcp(remote_url)
                     # Present the capability token from the 0600 lockfile so the
                     # leader's /mcp guard admits us. Re-read each connect so a
                     # restarted leader's fresh token is picked up.
@@ -453,6 +495,9 @@ async def run_supervised_proxy(
                             ):
                                 _connect_scope.deadline = math.inf
                                 connected_at = anyio.current_time()
+                                # Before the writer is published: every call sent
+                                # on this session is stamped with this leader.
+                                supervisor_obj.leader_generation = resolve_leader_generation()
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
                                 supervisor_obj.reconnect_attempts = attempt
@@ -561,7 +606,7 @@ async def run_supervised_proxy(
 
                 local_tg.start_soon(
                     monitor_leader_health,
-                    health_url,
+                    lambda: health_target[0] or health_url,
                     heartbeat_interval,
                     heartbeat_max_failures,
                     _unstick_current_remote,

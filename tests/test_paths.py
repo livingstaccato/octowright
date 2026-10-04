@@ -218,3 +218,61 @@ async def test_atomic_write_via_writer_preserves_existing_target_mode(tmp_path: 
 
     assert target.read_text() == "new"
     assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+# ---------------------------------------------------------------------------
+# The parent directory is pinned: a swap after validation cannot redirect it
+# ---------------------------------------------------------------------------
+
+_POSIX_DIR_FD = pytest.mark.skipif(os.name == "nt", reason="directory descriptors are POSIX-only")
+
+
+def _swap_for_symlink(directory: Path, to: Path) -> None:
+    """Replace ``directory`` with a symlink to ``to``, the attacker's move."""
+    directory.rename(directory.with_name(directory.name + ".moved"))
+    directory.symlink_to(to, target_is_directory=True)
+
+
+@_POSIX_DIR_FD
+def test_atomic_write_text_refuses_a_parent_swapped_for_a_symlink_after_validation(tmp_path: Path) -> None:
+    from octowright._paths import atomic_write_text
+    from octowright.request_errors import InvalidRequestError
+
+    root = tmp_path / "recordings"
+    (root / "sub").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "out.py").write_text("KEEP")
+    target = reject_unsafe_path(root / "sub" / "out.py", root, label="out_path")
+    _swap_for_symlink(root / "sub", outside)
+
+    with pytest.raises(InvalidRequestError, match="not a plain directory"):
+        atomic_write_text(target, "payload", root=root)
+
+    assert (outside / "out.py").read_text() == "KEEP"
+    assert sorted(p.name for p in outside.iterdir()) == ["out.py"]
+
+
+@_POSIX_DIR_FD
+@pytest.mark.anyio
+async def test_atomic_write_via_writer_never_renames_into_a_parent_swapped_mid_write(tmp_path: Path) -> None:
+    """The writer (Playwright, a copy) can only be handed a path, so a parent
+    swapped while it runs sends ITS bytes elsewhere; the final rename must
+    still not replace a file outside the directory the write started in."""
+    from octowright._paths import atomic_write_via_writer
+    from octowright.request_errors import InvalidRequestError
+
+    real = tmp_path / "real"
+    real.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "shot.png").write_text("KEEP")
+
+    async def writer(tmp: Path) -> None:
+        _swap_for_symlink(real, outside)
+        tmp.write_text("payload")
+
+    with pytest.raises(InvalidRequestError, match="changed during the write"):
+        await atomic_write_via_writer(real / "shot.png", writer)
+
+    assert (outside / "shot.png").read_text() == "KEEP"

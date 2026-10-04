@@ -169,20 +169,39 @@ def test_daemon_survives_parent_sigkill(tmp_path: Path) -> None:
 
 class TestResolveDaemonEntrypoint:
     """Pin the entrypoint resolver. ``sys.argv[0]`` is unreliable for the
-    ``python -m octowright`` launch path; the resolver must prefer the
-    installed console script, then fall back to ``python -m octowright``.
+    ``python -m octowright`` launch path; the resolver must prefer this
+    interpreter's console script, then ``python -m octowright`` on it.
     """
 
-    def test_prefers_shutil_which_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """If `octowright` is on PATH, that absolute path is the entrypoint."""
+    def test_prefers_the_console_script_beside_this_interpreter(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The install that is running wins over whatever ``octowright`` PATH finds.
+
+        A different version earlier on PATH would otherwise be spawned as the
+        daemon -- the same reason ``restart`` resolves the venv neighbour first.
+        """
+        bindir = tmp_path / "venv" / "bin"
+        bindir.mkdir(parents=True)
+        suffix = ".exe" if sys.platform == "win32" else ""
+        neighbour = bindir / f"octowright{suffix}"
+        neighbour.write_text("")
+        monkeypatch.setattr(_daemon.sys, "executable", str(bindir / f"python{suffix}"))
+        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: "/usr/local/bin/octowright")
+        assert _daemon._resolve_daemon_entrypoint() == [str(neighbour)]
+
+    def test_without_a_neighbour_runs_this_interpreter_not_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``python -m octowright`` on this interpreter is still this install; PATH may not be."""
+        monkeypatch.setattr(_daemon.sys, "executable", str(tmp_path / "python3.13"))
+        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: "/usr/local/bin/octowright")
+        assert _daemon._resolve_daemon_entrypoint() == [str(tmp_path / "python3.13"), "-m", "octowright"]
+
+    def test_path_lookup_only_without_an_interpreter(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_daemon.sys, "executable", "")
         monkeypatch.setattr(_daemon.shutil, "which", lambda _name: "/opt/venv/bin/octowright")
         assert _daemon._resolve_daemon_entrypoint() == ["/opt/venv/bin/octowright"]
-
-    def test_falls_back_to_python_m_octowright(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When `octowright` is NOT on PATH, fall back to `python -m octowright`."""
-        monkeypatch.setattr(_daemon.shutil, "which", lambda _name: None)
-        monkeypatch.setattr(_daemon.sys, "executable", "/usr/bin/python3.13")
-        assert _daemon._resolve_daemon_entrypoint() == ["/usr/bin/python3.13", "-m", "octowright"]
 
     def test_last_resort_uses_sys_argv0(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If both PATH lookup and sys.executable are unavailable, fall back to argv[0]."""

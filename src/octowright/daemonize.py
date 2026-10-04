@@ -191,21 +191,41 @@ def _detach_kwargs(*, breakaway: bool = True) -> dict[str, Any]:
     return {"creationflags": flags}
 
 
+def console_script_beside_interpreter() -> Path | None:
+    """This interpreter's own ``octowright`` console script, if it has one.
+
+    Windows console scripts are always ``<name>.exe`` beside
+    ``...\\Scripts\\python.exe``, so the suffix is part of the lookup.
+    """
+    if not sys.executable:
+        return None
+    suffix = ".exe" if sys.platform == "win32" else ""
+    candidate = Path(sys.executable).parent / f"octowright{suffix}"
+    return candidate if candidate.exists() else None
+
+
 def _resolve_daemon_entrypoint() -> list[str]:
     """Resolve the argv prefix that re-launches ``octowright serve``.
 
     ``sys.argv[0]`` is unreliable for re-launching the daemon: when the parent
     was started via ``python -m octowright``, ``sys.argv[0]`` is a module path
     that isn't directly executable, and various wrappers (pipx, uv tool) can
-    also leave it in shapes that won't round-trip through ``Popen``. We prefer
-    the installed console script, then fall back to ``python -m octowright``,
-    and only as a last resort use the (possibly broken) ``sys.argv[0]``.
+    also leave it in shapes that won't round-trip through ``Popen``.
+
+    Both preferred forms run THIS install: the console script beside this
+    interpreter, then ``python -m octowright`` on it. ``octowright`` on PATH is
+    only consulted without an interpreter path, because PATH can name a
+    different install -- a different version spawned as the daemon every
+    follower then talks to. ``sys.argv[0]`` is the last resort.
     """
+    neighbour = console_script_beside_interpreter()
+    if neighbour is not None:
+        return [str(neighbour)]
+    if sys.executable:
+        return [sys.executable, "-m", "octowright"]
     on_path = shutil.which("octowright")
     if on_path:
         return [on_path]
-    if sys.executable:
-        return [sys.executable, "-m", "octowright"]
     return [sys.argv[0]]
 
 
@@ -240,6 +260,7 @@ def spawn_daemon(
     http_port: int | None,
     idle_grace: float | None,
     keep_alive: bool = False,
+    entrypoint: list[str] | None = None,
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
@@ -252,8 +273,12 @@ def spawn_daemon(
     follower's choice actually reaches the process that owns the watchdog (the
     detached daemon, not the follower). Without forwarding ``--keep-alive`` the
     flag was silently dropped and the daemon kept its own default.
+
+    ``entrypoint`` overrides the resolved argv prefix (``restart`` passes the
+    console script beside this interpreter); detachment, the daemon log and
+    the argv shape stay shared, so every daemon spawner detaches the same way.
     """
-    args: list[str] = [*_resolve_daemon_entrypoint(), "serve", "--daemon-mode"]
+    args: list[str] = [*(entrypoint or _resolve_daemon_entrypoint()), "serve", "--daemon-mode"]
     if http_host:
         args.extend(["--http-host", http_host])
     if http_port is not None:

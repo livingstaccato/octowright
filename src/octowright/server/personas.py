@@ -15,9 +15,27 @@ from octowright import personas as persona_mod
 from octowright.dashboard_events import publish_dashboard_invalidation_nowait
 from octowright.defaults import SUPPORTED_KINDS
 from octowright.listing import match_name, order_newest_first, paginate
-from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks, profile_names_match
+from octowright.profile_lifecycle import profile_lifecycle_lock, profile_lifecycle_locks
 from octowright.server._state import log, mcp, pool
 from octowright.types import CredentialCheckReport
+
+
+def _in_use_message(subject: str, users: list[tuple[str, bool]]) -> str:
+    """Refusal text for a delete that browsers still hold, live or closing.
+
+    A closing browser still has the directory open until its teardown ends,
+    so it is named as such rather than as a live one to close."""
+    live = [iid for iid, closing in users if not closing]
+    closing = [iid for iid, closing in users if closing]
+    parts = []
+    if live:
+        parts.append(
+            f"in use by live browser(s) {live}; close with "
+            f"`browser_close instance_id={live[0]!r}` (or browser_close_all) first"
+        )
+    if closing:
+        parts.append(f"still held by browser(s) {closing} that are closing; retry once their teardown finishes")
+    return f"{subject} is " + " and ".join(parts)
 
 
 @mcp.tool(structured_output=False, description="List saved browser profiles. Pass kind to filter to one engine.")
@@ -43,17 +61,9 @@ def profile_list(
 )
 async def profile_delete(kind: str, name: str) -> dict[str, Any]:
     async with profile_lifecycle_lock(kind, name):
-        if pool.profile_in_use(kind, name):
-            live_ids = [
-                s["instance_id"]
-                for s in pool.list_sessions()
-                if s["kind"] == kind and profile_names_match(s["profile"], name)
-            ]
+        if users := pool.profile_users(name, kind=kind):
             log.warning("octowright.profile.delete_refused", kind=kind, profile=name, reason="in_use")
-            raise RuntimeError(
-                f"profile {kind}/{name} is in use by live browser(s) {live_ids}; "
-                f"close with `browser_close instance_id={live_ids[0]!r}` (or browser_close_all) first"
-            )
+            raise RuntimeError(_in_use_message(f"profile {kind}/{name}", users))
         path = await asyncio.to_thread(profile_mod.delete_profile, kind, name)
     log.info("octowright.profile.deleted", kind=kind, profile=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")
@@ -132,12 +142,8 @@ def persona_create(
 )
 async def persona_delete(name: str) -> dict[str, Any]:
     async with profile_lifecycle_locks((kind, name) for kind in SUPPORTED_KINDS):
-        for s in pool.list_sessions():
-            if profile_names_match(s["profile"], name):
-                raise RuntimeError(
-                    f"persona {name!r} is in use by live instance {s['instance_id']}; "
-                    f"close with `browser_close instance_id={s['instance_id']!r}` first"
-                )
+        if users := pool.profile_users(name):
+            raise RuntimeError(_in_use_message(f"persona {name!r}", users))
         path = await asyncio.to_thread(profile_mod.delete_persona, name)
     log.info("octowright.persona.deleted", name=name, path=str(path))
     publish_dashboard_invalidation_nowait("personas")

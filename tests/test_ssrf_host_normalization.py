@@ -85,3 +85,36 @@ def test_the_allowlist_still_wins_for_an_internal_target() -> None:
         ssrf.check_navigation_url("http://10.0.0.5/")
     finally:
         del os.environ["OCTOWRIGHT_SSRF_ALLOW"]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http:127.0.0.1/",
+        "http:/169.254.169.254/latest/meta-data/",
+        "http:///127.0.0.1/",
+        "HTTP:127.0.0.1",
+        "https:\\\\10.0.0.1/",
+        "https:\\10.0.0.1/",
+        "http:/\\169.254.169.254/",
+        "http://127.0.0.1\\@public.example/",
+        " http:127.0.0.1/",
+        "ht\ttp:127.0.0.1/",
+    ],
+)
+def test_a_special_scheme_has_an_authority_however_many_slashes_follow_it(url: str) -> None:
+    """WHATWG skips every ``/`` and ``\\`` after a special scheme's colon.
+
+    ``urlsplit`` reports no host at all for ``http:127.0.0.1``, so the check
+    had nothing to classify and passed it, while a browser (and ``new URL``
+    with no base) reads the same string as ``http://127.0.0.1/``. ``\\`` also
+    ends the authority for a special scheme, so ``127.0.0.1\\@public.example``
+    is host 127.0.0.1 to the browser and ``public.example`` to urlsplit.
+    """
+    with pytest.raises(ValueError, match="non-public host"):
+        ssrf.check_navigation_url(url)
+
+
+def test_an_ordinary_special_scheme_url_with_a_public_host_still_passes() -> None:
+    ssrf.check_navigation_url("https:example.com/path")
+    ssrf.check_navigation_url("https:\\\\example.com\\path")

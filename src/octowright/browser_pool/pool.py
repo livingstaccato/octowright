@@ -56,6 +56,7 @@ from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
 
+
 _safe_cleanup_on_launch_failure = cleanup_on_launch_failure
 
 
@@ -143,25 +144,35 @@ class BrowserPool:
                 self._pw = await async_playwright().start()
         return self._pw
 
-    async def _reset_driver(self, *, reason: str | None = None) -> None:
+    async def _reset_driver(self, *, reason: str | None = None, expected: Any = None) -> None:
         """Discard the shared Playwright driver so the next launch rebuilds it.
 
-        Called when a driver-death error is seen (see ``driver_health``). Best-
-        effort ``stop()`` of the dead handle, then clear it under the lock so a
-        concurrent ``_ensure_pw`` starts a fresh driver. Hands off to
+        Called when a driver-death error is seen (see ``driver_health``). Clears
+        the handle under the lock so a concurrent ``_ensure_pw`` starts a fresh
+        driver, then a bounded stop of the dead one. Hands off to
         ``driver_relaunch.on_driver_reset`` which records the restart incident,
         captures/evicts the sessions lost with the dead driver (surfaced in
-        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them."""
+        status), and — when OCTOWRIGHT_DRIVER_RELAUNCH is set — reopens them.
+
+        ``expected`` is the handle the caller confirmed dead. If ``_pw`` is no
+        longer that handle, another failure already replaced it, and resetting
+        again would stop the NEW driver and evict every browser a second time:
+        nothing is done. ``None`` (the default) resets whatever is current.
+        Deliberately not an ``object()`` sentinel: a test that reloads this
+        module rebinds the global while earlier-imported functions keep the
+        old default, and every unguarded reset was then skipped."""
         async with self._pw_lock:
+            if expected is not None and self._pw is not expected:
+                log.info("octowright.pool.driver_reset_skipped_already_replaced")
+                return
             old = self._pw
             self._pw = None
-        self._driver_restarts += 1
+            self._driver_restarts += 1
         driver_relaunch.on_driver_reset(self, reason=reason)
         if old is not None:
-            try:
-                await old.stop()
-            except Exception as exc:
-                log.debug("octowright.pool.driver_stop_failed", error=repr(exc))
+            # Bounded, killing the process on timeout: an unbounded stop of a
+            # hung driver never returns (driver_health.stop_driver).
+            await driver_health.stop_driver(old)
 
     def driver_restart_count(self) -> int:
         """How many times the shared driver has been rebuilt after a death."""
@@ -243,17 +254,34 @@ class BrowserPool:
 
     async def _launch_with_driver_retry(self, options: dict[str, Any], kind_hint: str) -> dict[str, Any]:
         async with launch_span(kind_hint) as sp:
+            # Which driver this attempt ran on: _driver_restarts moves (under
+            # _pw_lock) exactly when the handle is replaced.
+            generation = self._driver_restarts
             try:
                 return await self._launch_impl(options, sp)
             except Exception as exc:
                 # A dead shared driver (its pipe closed) fails every launch until
                 # rebuilt. Reset it and retry ONCE — a second failure propagates,
                 # so there is no retry loop. Ordinary launch errors are re-raised
-                # untouched.
+                # untouched -- and so is one that only READS like driver death:
+                # a browser exiting during launch raises the same TargetClosed
+                # text, and resetting would evict every live browser for it.
                 if not driver_health.is_driver_dead_error(exc):
                     raise
+                #
+                # Judge the driver THIS attempt used. If a concurrent failure
+                # already replaced it, the death is settled: retry on the new
+                # driver, without probing (or resetting) one this launch never
+                # touched.
+                if self._driver_restarts != generation:
+                    log.info("octowright.pool.driver_already_replaced_retrying", error=repr(exc))
+                    return await self._launch_impl(options, sp)
+                used = self._pw
+                if not await driver_health.driver_confirmed_dead(used):
+                    log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))
+                    raise
                 log.warning("octowright.pool.driver_died_relaunching", error=repr(exc))
-                await self._reset_driver(reason=repr(exc))
+                await self._reset_driver(reason=repr(exc), expected=used)
                 return await self._launch_impl(options, sp)
 
     async def _launch_impl(self, options: dict[str, Any], _sp: Any) -> dict[str, Any]:
@@ -440,8 +468,25 @@ class BrowserPool:
         # ``relaunch_fluid_browser`` / ``RelaunchSnapshot``.
         return await relaunch_fluid_browser(self, instance_id)
 
+    def profile_users(self, profile: str, *, kind: str | None = None) -> list[tuple[str, bool]]:
+        """``(instance_id, closing)`` for every browser holding ``profile`` open.
+
+        Includes sessions still draining in ``_closing_sessions``: the close
+        coordinator drops a session from ``_sessions`` once its ticket owns
+        the gate, which is BEFORE teardown releases the profile directory, so
+        a deletion that read ``_sessions`` alone removed live database files
+        out from under a closing browser. ``kind=None`` matches every engine.
+        """
+        users: dict[int, tuple[str, bool]] = {}
+        closing = [(entry.session, True) for entry in tuple(self._closing_sessions.values())]
+        live = [(s, False) for s in tuple(self._sessions.values())]
+        for session, is_closing in closing + live:
+            if (kind is None or session.kind == kind) and profile_names_match(session.profile, profile):
+                users.setdefault(id(session), (session.instance_id, is_closing))
+        return sorted(users.values())
+
     def profile_in_use(self, kind: str, profile: str) -> bool:
-        return any(s.kind == kind and profile_names_match(s.profile, profile) for s in tuple(self._sessions.values()))
+        return bool(self.profile_users(profile, kind=kind))
 
     def _accept_external_close_nowait(
         self,

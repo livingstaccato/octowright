@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -61,10 +63,101 @@ def _valid_session_id(sid: str) -> bool:
     return bool(_SESSION_ID_RE.match(sid))
 
 
+#: What one ``?t=`` may cost. Every distinct value used to start its own ffmpeg
+#: and leave its own PNG behind, and ``float()`` admits ``nan``, ``inf``,
+#: negatives and ``1e300`` (a 300-digit cache filename: ENAMETOOLONG, a 500).
+#: ``t`` is therefore finite, non-negative, at most the video's duration (or
+#: this ceiling when ffprobe cannot say), and quantized so scrubbing reuses
+#: frames; each session keeps at most ``FRAME_CACHE_MAX_FILES`` of them.
+FRAME_TIME_MAX_SECONDS = 24 * 3600.0
+FRAME_TIME_STEP_SECONDS = 0.1
+FRAME_CACHE_MAX_FILES = 256
+#: ffmpeg runs at once across every session; a thread semaphore because the
+#: extraction runs in executor threads, and an asyncio one binds to one loop.
+_FRAME_EXTRACTIONS = threading.BoundedSemaphore(2)
+#: (path, size, mtime_ns) -> duration seconds, or None when ffprobe could not say.
+_VIDEO_DURATIONS: dict[tuple[str, int, int], float | None] = {}
+_VIDEO_DURATIONS_MAX = 64
+
+
+def _parse_frame_time(raw_t: str) -> float | None:
+    try:
+        t = float(raw_t)
+    except ValueError:
+        return None
+    if not math.isfinite(t) or t < 0 or t > FRAME_TIME_MAX_SECONDS:
+        return None
+    return round(round(t / FRAME_TIME_STEP_SECONDS) * FRAME_TIME_STEP_SECONDS, 3)
+
+
+def _video_duration(video_path: Path) -> float | None:
+    """The video's duration, probed once per file version; ``None`` if unknown."""
+    st = video_path.stat()
+    key = (str(video_path), st.st_size, st.st_mtime_ns)
+    if key not in _VIDEO_DURATIONS:
+        try:
+            duration = float(state._video.probe_video(video_path).get("duration_seconds") or 0.0)
+        except Exception as exc:
+            # No ffprobe, or a file it cannot read: the absolute ceiling still applies.
+            state.log.debug("octowright.http.frame_duration_unknown", path=str(video_path), error=repr(exc))
+            duration = 0.0
+        if len(_VIDEO_DURATIONS) >= _VIDEO_DURATIONS_MAX:
+            _VIDEO_DURATIONS.pop(next(iter(_VIDEO_DURATIONS)))
+        _VIDEO_DURATIONS[key] = duration if duration > 0 else None
+    return _VIDEO_DURATIONS[key]
+
+
+def _extract_frame_bounded(video_path: Path, cache_dir: Path, t: float) -> None:
+    with _FRAME_EXTRACTIONS:
+        state._video.extract_frames(video_path, cache_dir, at_times=[t])
+
+
+def _prune_frame_cache(cache_dir: Path, keep: Path) -> None:
+    """Drop the oldest frames past ``FRAME_CACHE_MAX_FILES`` (never ``keep``)."""
+    try:
+        frames = sorted(cache_dir.glob("*.png"), key=lambda p: p.stat().st_mtime_ns)
+    except OSError:
+        return
+    excess = len(frames) - FRAME_CACHE_MAX_FILES
+    for frame in frames:
+        if excess <= 0:
+            break
+        if frame == keep:
+            continue
+        try:
+            frame.unlink()
+            excess -= 1
+        except OSError:
+            continue  # raced with another request's prune; best-effort cache
+
+
 def _frame_cache_path(session_id: str, t: float) -> Path:
     cache_dir = state.RECORDINGS_DIR / ".frame-cache" / session_id
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"{t:.3f}.png"
+
+
+async def _extract_into_cache(video_path: Path, cached: Path, t: float) -> SafeJSONResponse | None:
+    """Extract the frame at ``t`` into ``cached``; an error response, or ``None`` on success."""
+    # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _extract_frame_bounded, video_path, cached.parent, t)
+    except Exception as e:
+        return SafeJSONResponse(
+            {"error": f"frame extraction failed: {e}"},
+            status_code=500,
+        )
+    # `extract_frames` writes `frame-000-t<t>.png`; rename to the cache key.
+    produced = cached.parent / f"frame-000-t{t:.3f}.png"
+    if produced.exists() and produced != cached:
+        produced.replace(cached)
+    elif not cached.exists():
+        return SafeJSONResponse(
+            {"error": "frame extraction produced no file"},
+            status_code=500,
+        )
+    _prune_frame_cache(cached.parent, keep=cached)
+    return None
 
 
 async def session_frame(request: Request) -> Response:
@@ -72,10 +165,12 @@ async def session_frame(request: Request) -> Response:
     if not _valid_session_id(sid):
         return SafeJSONResponse({"error": "invalid session id"}, status_code=400)
     raw_t = request.query_params.get("t", "0")
-    try:
-        t = float(raw_t)
-    except ValueError:
-        return SafeJSONResponse({"error": f"invalid t={raw_t!r}, must be float"}, status_code=400)
+    t = _parse_frame_time(raw_t)
+    if t is None:
+        return SafeJSONResponse(
+            {"error": f"invalid t={raw_t!r}: must be a finite number of seconds in [0, {FRAME_TIME_MAX_SECONDS:g}]"},
+            status_code=400,
+        )
 
     video_path = _resolve_artifact_path(sid, "video_path")
     if video_path is None or not video_path.exists():
@@ -84,29 +179,19 @@ async def session_frame(request: Request) -> Response:
             status_code=404,
         )
 
+    loop = asyncio.get_running_loop()
+    duration = await loop.run_in_executor(None, _video_duration, video_path)
+    if duration is not None and t > duration:
+        return SafeJSONResponse(
+            {"error": f"t={t:g} is past the end of the video (duration {duration:.3f}s)"},
+            status_code=400,
+        )
+
     cached = _frame_cache_path(sid, t)
     if not cached.exists():
-        # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(
-                None,
-                lambda: state._video.extract_frames(video_path, cached.parent, at_times=[t]),
-            )
-        except Exception as e:
-            return SafeJSONResponse(
-                {"error": f"frame extraction failed: {e}"},
-                status_code=500,
-            )
-        # `extract_frames` writes `frame-000-t<t>.png`; rename to the cache key.
-        produced = cached.parent / f"frame-000-t{t:.3f}.png"
-        if produced.exists() and produced != cached:
-            produced.replace(cached)
-        elif not cached.exists():
-            return SafeJSONResponse(
-                {"error": "frame extraction produced no file"},
-                status_code=500,
-            )
+        failure = await _extract_into_cache(video_path, cached, t)
+        if failure is not None:
+            return failure
 
     # FileResponse streams from disk via sendfile() instead of reading the
     # full PNG into Python memory each request — frame scrubbing in the

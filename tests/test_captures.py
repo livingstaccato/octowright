@@ -492,3 +492,35 @@ def test_save_capture_does_not_follow_symlink_at_target(monkeypatch, tmp_path: P
     assert sentinel.read_text(encoding="utf-8") == "KEEP"  # outside file untouched
     assert not target.is_symlink()  # symlink replaced by a real file
     assert _json.loads(target.read_text(encoding="utf-8"))["content"] == "hello"
+
+
+def test_search_with_a_limit_of_zero_or_less_returns_no_matches(tmp_path: Path) -> None:
+    """The cap was applied after appending, so ``limit=0`` still returned one match."""
+    saved = captures.save_capture(kind="text", content="alpha beta alpha", root=tmp_path)
+    for regex in (False, True):
+        for limit in (0, -3):
+            found = captures.search_capture(saved["capture_id"], "alpha", regex=regex, limit=limit, root=tmp_path)
+            assert (found["count"], found["matches"], found["limit"]) == (0, [], 0)
+
+
+def test_save_capture_refuses_a_host_directory_symlinked_outside_the_root(tmp_path: Path) -> None:
+    """A symlinked ``<root>/<host>`` used to carry the capture -- and a chmod
+    0700 -- into whatever directory it pointed at."""
+    import pytest
+
+    from octowright.request_errors import InvalidRequestError
+
+    root = tmp_path / "captures"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    (root / "example.com").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(InvalidRequestError, match="resolves outside"):
+        captures.save_capture(kind="text", content="secret page text", url="https://example.com/", root=root)
+
+    assert list(outside.iterdir()) == []
+    # The chmod that used to follow the symlink is only observable as POSIX
+    # mode bits; Windows ignores mkdir's mode and reports 0o777 either way.
+    if os.name != "nt":
+        assert outside.stat().st_mode & 0o777 == 0o755

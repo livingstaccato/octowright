@@ -495,6 +495,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
     actions = expand_actions(
         ACTIONS, args, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE, trusted_origins=trusted
     )
+    # Page code can read a typed credential back, so a run that carries one runs none.
+    credential_names = credential_args_in(ACTIONS, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE)
+    refuse_page_code(actions, credential_names)
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         try:

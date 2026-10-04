@@ -31,7 +31,8 @@ from octowright.request_errors import InvalidRequestError
 
 #: The real failure text, captured from chromium-1243 launched with
 #: --ozone-platform=wayland against a missing socket (trimmed). Note the first
-#: line also matches driver_health's driver-dead markers.
+#: line also matches driver_health's driver-dead markers, which is why the pool
+#: confirms a dead driver with a liveness probe before resetting it.
 WAYLAND_FAILURE = (
     "BrowserType.launch: Target page, context or browser has been closed\n"
     "Browser logs:\n"
@@ -102,6 +103,28 @@ async def test_auto_failure_retries_once_without_the_flags() -> None:
 
 
 @pytest.mark.anyio
+async def test_auto_does_not_fall_back_when_the_browser_did_not_blame_wayland() -> None:
+    """A failure with no Wayland complaint (a locked profile, a missing
+    library) would fail identically on X11: retrying doubled the launch time
+    and reported an unrelated error as the Wayland reason."""
+    unrelated = RuntimeError(
+        "BrowserType.launch_persistent_context: Target page, context or browser has been closed\n"
+        "Browser logs:\n<launching> /cache/chrome --ozone-platform=wayland --user-data-dir=/p\n"
+        "[pid=1][err] The profile appears to be in use by another Chromium process\n"
+    )
+    opener = _Opener(unrelated, "opened")
+    cleanup = AsyncMock()
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await launch_execution.open_with_wayland_fallback(
+            decision=_decision(), launch_kwargs=ON_ARGS, open_context=opener, cleanup=cleanup
+        )
+    assert excinfo.value is unrelated
+    assert len(opener.calls) == 1
+    cleanup.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_a_second_failure_raises_the_x11_error() -> None:
     second = RuntimeError("x11 also broken")
     opener = _Opener(RuntimeError(WAYLAND_FAILURE), second)
@@ -134,14 +157,16 @@ async def test_explicit_failure_does_not_fall_back(source: str) -> None:
 
 
 @pytest.mark.anyio
-async def test_explicit_failure_is_not_read_as_a_dead_driver() -> None:
-    """The raw text matches driver_health's markers; reading it as a dead
-    driver makes the pool stop the SHARED driver, taking every live browser
-    with it, for what is one browser's display problem."""
+async def test_explicit_failure_reports_the_browsers_line_and_chains_the_original() -> None:
+    """The raw text matches driver_health's markers. The message no longer has
+    to hide that line from them -- the pool confirms a dead driver with a
+    liveness probe before resetting (tests/test_driver_liveness_probe.py) --
+    but it still leads with the browser's own complaint, the useful part."""
     from octowright.browser_pool import driver_health
 
     assert driver_health.is_driver_dead_error(RuntimeError(WAYLAND_FAILURE)) is True
-    opener = _Opener(RuntimeError(WAYLAND_FAILURE))
+    original = RuntimeError(WAYLAND_FAILURE)
+    opener = _Opener(original)
     with pytest.raises(wayland.WaylandLaunchError) as excinfo:
         await launch_execution.open_with_wayland_fallback(
             decision=_decision(source="argument", requested=True),
@@ -149,7 +174,8 @@ async def test_explicit_failure_is_not_read_as_a_dead_driver() -> None:
             open_context=opener,
             cleanup=AsyncMock(),
         )
-    assert driver_health.is_driver_dead_error(excinfo.value) is False
+    assert "Chromium reported: ERROR:ui/ozone/platform/wayland/host/wayland_connection.cc" in str(excinfo.value)
+    assert excinfo.value.__cause__ is original
 
 
 @pytest.mark.anyio
@@ -327,10 +353,6 @@ def test_launch_record_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     recorder.close()
     row = json.loads(log_path.read_text(encoding="utf-8").splitlines()[0])
     assert row["wayland_native"] is value
-    # A HAR-less launch records har_mode/har_url_filter/har_content as null,
-    # which from_launch_record does not accept (pre-existing, unrelated to
-    # this option); drop them so the round trip tests only wayland_native.
-    row = {k: v for k, v in row.items() if v is not None or k == "wayland_native"}
     assert LaunchOptions.from_launch_record(row).wayland_native is value
 
 
@@ -346,44 +368,29 @@ def test_poisoned_record_value_is_refused(value: object) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("value", [True, False, None])
-async def test_handoff_and_relaunch_carry_the_request(value: bool | None) -> None:
+async def test_handoff_and_relaunch_carry_the_request(value: bool | None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The REQUEST is carried, so auto stays auto and re-detects. It comes
+    from the session's stored launch options, which the launch validated
+    strictly -- a duck-typed session attribute is never read. The host is
+    pinned to Linux: an explicit True is refused elsewhere, which is the
+    platform rule, not what this test is about."""
+    monkeypatch.setattr(wayland, "host_platform", lambda: "linux")
     session = SimpleNamespace(
-        kind="chromium",
-        label="lab",
-        profile="lab",
-        user_data_dir=None,
-        stabilize=False,
-        trace=False,
+        launch_options=LaunchOptions(kind="chromium", label="lab", profile="lab", wayland_native=value),
         har_path=None,
         protected=False,
         protected_reason="explicit",
-        disable_automation_controlled=False,
-        wayland_native=value,
+        user_data_dir=None,
+        wayland_native=object(),
         page=SimpleNamespace(url="https://x.test/now"),
         url="https://x.test/",
         launch_url="https://x.test/",
     )
     snapshot = _relaunch_snapshot_from_session(session)  # type: ignore[arg-type]
-    assert snapshot.wayland_native is value
 
     pool = SimpleNamespace(launch=AsyncMock(return_value={"instance_id": "new"}))
     await _launch_from_snapshot(pool, snapshot, headed=True)  # type: ignore[arg-type]
     assert pool.launch.call_args.kwargs["wayland_native"] is value
-
-
-def test_snapshot_ignores_a_non_boolean_session_attribute() -> None:
-    """A duck-typed session (MagicMock in several tests) must not smuggle a
-    truthy non-bool into a launch that validates strictly."""
-    session = SimpleNamespace(
-        kind="chromium",
-        label=None,
-        profile=None,
-        page=SimpleNamespace(url="https://x.test/"),
-        url="https://x.test/",
-        launch_url="https://x.test/",
-        wayland_native=object(),
-    )
-    assert _relaunch_snapshot_from_session(session).wayland_native is None  # type: ignore[arg-type]
 
 
 # ─── status ──────────────────────────────────────────────────────────────────

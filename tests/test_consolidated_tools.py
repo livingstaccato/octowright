@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from octowright.browser_pool import BrowserPool
+from octowright.browser_pool.options import LaunchOptions
 from octowright.server.browser import inspect as _inspect
 from octowright.server.browser import lifecycle as _lifecycle
 from tests._aria_stubs import stub_credential_scan
@@ -281,6 +282,16 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     session.user_data_dir = None
     session.url = "https://octowright.com/original"
     session.page.url = "https://octowright.com/current"
+    # What the launch recorded; the replacement is built from it.
+    session.launch_options = LaunchOptions(
+        label="player",
+        profile="profile-a",
+        stabilize=True,
+        disable_automation_controlled=True,
+        headed=False,
+        viewport_w=800,
+        viewport_h=600,
+    )
     pool._sessions["old-id"] = session
     pool.launch = AsyncMock(return_value={"instance_id": "new-id"})
 
@@ -295,8 +306,10 @@ async def test_browser_relaunch_fluid_preserves_state_without_viewport(monkeypat
     assert kwargs["profile"] == "profile-a"
     assert kwargs["headed"] is True
     assert kwargs["disable_automation_controlled"] is True
-    assert "viewport_w" not in kwargs
-    assert "viewport_h" not in kwargs
+    # Fluid drops a pinned size: its viewport follows the window.
+    assert kwargs["viewport_w"] is None
+    assert kwargs["viewport_h"] is None
+    assert kwargs["stabilize"] is True
     assert result["old_instance_id"] == "old-id"
     assert result["new_instance_id"] == "new-id"
 

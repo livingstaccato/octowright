@@ -44,6 +44,38 @@ class ScenarioRoleNotFoundError(ValueError):
     """Raised when an explicit role filter matches no live participant."""
 
 
+#: What a participant entry reads off its session, for a browser and a plugin
+#: kind alike (``plugins.contract.SessionRecord`` carries all of these).
+_SESSION_ENTRY_ATTRS = ("label", "profile", "url", "protected")
+
+
+def _session_entry(session: Any, instance_id: str, *, fallback_kind: str | None) -> dict[str, Any]:
+    """The per-session fields of a participant entry, read off *session*.
+
+    A remap rebinds the participant to another session, so every field that
+    describes one comes from it. Rewriting only ``instance_id`` left the old
+    session's ``log_path``, ``url``, ``har_path`` and ``label`` in place, and
+    ``tail()`` replayed the OLD recording under the new id. A launch-only field
+    the session does not carry (``record_video``, ``video_dir``, ``har_mode``)
+    described the old launch and is dropped rather than kept stale. A plugin
+    kind's own fields stay nested under ``extra``, as at start.
+    """
+    entry: dict[str, Any] = {"instance_id": instance_id, "kind": getattr(session, "kind", None) or fallback_kind}
+    for attr in _SESSION_ENTRY_ATTRS:
+        if hasattr(session, attr):
+            entry[attr] = getattr(session, attr)
+    log_path = getattr(session, "log_path", None)
+    if log_path is not None:
+        entry["log_path"] = str(log_path)
+    har_path = getattr(session, "har_path", None)
+    if har_path:
+        entry["har_path"] = str(har_path)
+    extra = getattr(session, "extra", None)
+    if extra:
+        entry["extra"] = dict(extra)
+    return entry
+
+
 class ScenarioPool:
     def __init__(self) -> None:
         self._live: dict[str, LiveScenario] = {}
@@ -123,7 +155,11 @@ class ScenarioPool:
             raise ValueError(
                 f"replacement instance_id={new_instance_id!r} has profile={actual_profile!r}, expected {expected_profile!r}"
             )
-        target["instance_id"] = new_instance_id
+        rebound = {"persona": target.get("persona"), "role": target.get("role")}
+        rebound.update(_session_entry(replacement, new_instance_id, fallback_kind=expected_kind))
+        # In place: the live participant list holds this dict.
+        target.clear()
+        target.update(rebound)
         return {
             "scenario_id": scenario_id,
             "role": target.get("role"),

@@ -106,3 +106,18 @@ async def test_launch_reraises_if_retry_also_fails(monkeypatch: pytest.MonkeyPat
 def test_driver_restart_count_surfaced() -> None:
     pool = BrowserPool()
     assert pool.driver_restart_count() == 0
+
+
+def test_reset_driver_default_survives_a_module_reload() -> None:
+    """A test elsewhere reloads ``browser_pool.pool``: its globals are rebound
+    while classes imported earlier keep their old functions. The "reset
+    whatever is current" default must therefore not be an ``object()`` module
+    global compared at call time -- with one, every reset without
+    ``expected`` was skipped in CI on every platform, never in an isolated run.
+    ``None`` is the same object across reloads."""
+    import inspect
+
+    from octowright.browser_pool.pool import BrowserPool
+
+    default = inspect.signature(BrowserPool._reset_driver).parameters["expected"].default
+    assert default is None

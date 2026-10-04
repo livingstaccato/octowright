@@ -88,26 +88,30 @@ def test_source_key_anonymous_on_bad_encoding_or_empty() -> None:
     assert fg.source_key(_scope("POST", [(b"x-octowright-follower", b"  ")])) == fg._ANONYMOUS_SOURCE
 
 
-def test_source_key_headerless_buckets_by_peer() -> None:
-    key = fg.source_key(_scope("POST", client=("127.0.0.1", 54321)))
-    assert key == "anonymous:127.0.0.1:54321"
-
-
-def test_source_key_headerless_different_peers_get_different_buckets() -> None:
+def test_source_key_headerless_shares_the_one_anonymous_bucket_whatever_the_peer() -> None:
+    """A headerless storm opens a new TCP connection per session (a fresh
+    ephemeral port each time); keyed by peer, every request got its own empty
+    bucket and the storm was never throttled. Every headerless request shares
+    the one ``anonymous`` bucket -- the storm, collectively throttled."""
     a = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
     b = fg.source_key(_scope("POST", client=("127.0.0.1", 222)))
-    assert a != b
+    assert a == b == fg._ANONYMOUS_SOURCE
 
 
-def test_source_key_headerless_same_peer_shares_bucket() -> None:
-    a = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
-    b = fg.source_key(_scope("POST", client=("127.0.0.1", 111)))
-    assert a == b == "anonymous:127.0.0.1:111"
-
-
-def test_source_key_bad_header_still_buckets_by_peer_when_available() -> None:
+def test_source_key_bad_header_falls_back_to_anonymous_even_with_peer() -> None:
     key = fg.source_key(_scope("POST", [(b"x-octowright-follower", b"  ")], client=("127.0.0.1", 999)))
-    assert key == "anonymous:127.0.0.1:999"
+    assert key == fg._ANONYMOUS_SOURCE
+
+
+@pytest.mark.anyio
+async def test_headerless_storm_on_fresh_connections_is_throttled() -> None:
+    lim = fg.NewSessionRateLimiter(max_events=3, window_seconds=100.0)
+    mw = fg.McpNewSessionRateLimitMiddleware(app=None, limiter=lim, retry_after=10.0)
+    admitted = 0
+    for port in range(40000, 40020):
+        _sent, called = await _drive(mw, _scope("POST", client=("127.0.0.1", port)))
+        admitted += len(called)
+    assert admitted == 3
 
 
 # ── select_eviction_victims ──────────────────────────────────────────────────

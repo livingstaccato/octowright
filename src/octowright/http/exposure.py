@@ -136,24 +136,27 @@ def websocket_origin_allowed(websocket: WebSocket) -> bool:
     Policy:
       * No ``Origin`` header → non-browser client (curl/python-websockets),
         allow. Browsers always send Origin on WS handshakes.
-      * Origin host matches the request ``Host`` header → same origin, allow.
-      * Origin host is a loopback name/address → allow (developer tooling
-        on the same machine, e.g. another local dashboard tab).
-      * Otherwise → block.
+      * Origin is exactly this dashboard's origin -- ``http`` for ``ws``,
+        ``https`` for ``wss``, and the request ``Host`` -- → allow.
+      * Otherwise → block, including every OTHER loopback origin.
+
+    The last rule used to allow any loopback Origin on any port ("another
+    local dashboard tab"), which made this strictly weaker than the HTTP
+    guard's exact ``scheme://host`` comparison: a page served from another
+    local port -- a dev server rendering untrusted content, Jupyter, a preview
+    server -- could open ``/tail`` or the screencast and read typed input,
+    URLs and frames whenever pairing was off. A dashboard tab is served by
+    this daemon, so its Origin IS this host and still matches.
     """
     origin = websocket.headers.get("origin")
     if origin is None:
         return True
-    origin_host = _origin_host_from_origin(origin)
-    if origin_host is None:
+    if _origin_host_from_origin(origin) is None:
         # Malformed Origin header — refuse rather than fail open.
         return False
-    if origin_host == websocket.headers.get("host", ""):
-        return True
-    # Strip any path/query that snuck through (Origin is host-only per spec),
-    # then the optional :port via the shared canonical parser.
-    bare_host = origin_host.split("/", 1)[0]
-    return is_loopback_host(_host_without_port(bare_host))
+    page_scheme = "https" if websocket.url.scheme == "wss" else "http"
+    expected = f"{page_scheme}://{websocket.headers.get('host', '')}"
+    return origin.strip().lower() == expected.lower()
 
 
 def _cross_origin_blocked_from_parts(

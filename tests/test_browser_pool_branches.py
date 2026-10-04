@@ -109,6 +109,20 @@ def _fake_session(
     # (session/core.py) so this double exercises the identical call surface.
     session.operation = gate.operation
     session.operation_snapshot = gate.snapshot
+    # What a real launch records (replacement.recorded_launch_options); a
+    # handoff/relaunch builds its replacement from it.
+    scoped = profile is None and user_data_dir is not None
+    session.launch_options = LaunchOptions(
+        kind=kind,
+        label=label,
+        profile=profile,
+        headed=False,
+        stabilize=stabilize,
+        trace=trace,
+        ephemeral=profile is None and not scoped,
+        session=scoped,
+        session_key=(label or instance_id) if scoped else None,
+    )
 
     async def _set_protected_state(protected_value: bool, *, reason: str = "explicit") -> dict[str, object]:
         def _commit() -> dict[str, object]:
@@ -459,6 +473,33 @@ class TestProfileInUse:
     def test_empty_pool_returns_false(self) -> None:
         """Empty pool → never in use."""
         assert BrowserPool().profile_in_use(kind="chromium", profile="x") is False
+
+    def test_a_closing_session_still_holds_its_profile(self) -> None:
+        """The close coordinator pops a session from ``_sessions`` once its
+        ticket owns the gate, BEFORE teardown releases the profile directory.
+        Deletion must not read that window as "not in use"."""
+        from octowright.browser_pool.lifecycle import ClosingSession
+
+        pool = BrowserPool()
+        closing = _fake_session(instance_id="c", kind="webkit", profile="cosmo one")
+        pool._closing_sessions["c"] = ClosingSession(session=closing, reservation=MagicMock())
+        assert pool.profile_in_use(kind="webkit", profile="cosmo-one") is True
+        assert pool.profile_users("cosmo-one", kind="webkit") == [("c", True)]
+        assert pool.profile_users("cosmo-one") == [("c", True)]
+        assert pool.profile_in_use(kind="chromium", profile="cosmo-one") is False
+
+    def test_profile_users_reports_live_and_closing_once_each(self) -> None:
+        from octowright.browser_pool.lifecycle import ClosingSession
+
+        pool = BrowserPool()
+        live = _fake_session(instance_id="a", kind="chromium", profile="cosmo")
+        pool._sessions["a"] = live
+        # The same object in both registries (mid-handover) is one user.
+        pool._closing_sessions["a"] = ClosingSession(session=live, reservation=MagicMock())
+        pool._closing_sessions["b"] = ClosingSession(
+            session=_fake_session(instance_id="b", kind="firefox", profile="cosmo"), reservation=MagicMock()
+        )
+        assert pool.profile_users("cosmo") == [("a", True), ("b", True)]
 
 
 class TestAcceptExternalCloseNowait:
@@ -1464,6 +1505,7 @@ def _real_session(*, instance_id: str, tmp_path: Path, protected: bool = False) 
         recorder=MagicMock(),
         log_path=tmp_path / f"{instance_id}.jsonl",
         protected=protected,
+        launch_options=LaunchOptions(ephemeral=True, headed=False),
     )
 
 

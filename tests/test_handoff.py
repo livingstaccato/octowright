@@ -15,6 +15,7 @@ import pytest
 
 from octowright.browser_pool import BrowserPool
 from octowright.browser_pool import close_helpers as _close_helpers
+from octowright.browser_pool.options import LaunchOptions
 from tests._pool_invariants import wait_until
 
 
@@ -68,6 +69,21 @@ def _fake_source(
     )
     source.operation = gate.operation
     source.operation_snapshot = gate.snapshot
+    # What a real launch records (replacement.recorded_launch_options); the
+    # replacement is built from it, not from the attributes above.
+    scoped = profile is None and user_data_dir is not None
+    source.launch_options = LaunchOptions(
+        kind=kind,
+        label=label,
+        profile=profile,
+        headed=False,
+        stabilize=stabilize,
+        trace=trace,
+        disable_automation_controlled=disable_automation_controlled,
+        ephemeral=profile is None and not scoped,
+        session=scoped,
+        session_key=(label or instance_id) if scoped else None,
+    )
 
     async def _set_protected_state(protected_value: bool, *, reason: str = "explicit") -> dict[str, object]:
         def _commit() -> dict[str, object]:

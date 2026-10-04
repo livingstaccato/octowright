@@ -74,6 +74,7 @@ __all__ = ["DEFAULT_PREVIEW_CHARS", "BrowserSession"]
 _VIEWPORT_MODE_UNKNOWN = "unknown"
 
 if TYPE_CHECKING:  # pragma: no cover - import-time-only assertion
+    from octowright.browser_pool.options import LaunchOptions
     from octowright.browser_pool.viewport import ViewportMode as _ViewportMode
     from octowright.macros.privacy import DurableTextScrubber
 
@@ -120,6 +121,12 @@ class BrowserSession(
     # The launch's wayland_native REQUEST (None = auto), kept so a handoff or
     # fluid relaunch asks for the same thing rather than for what auto chose.
     wayland_native: bool | None = field(default=None, kw_only=True)
+    # What this browser was launched with, the decisions made at launch folded
+    # in (``replacement.recorded_launch_options``). The ONE source a handoff,
+    # fluid relaunch or driver-death relaunch builds its replacement from, so
+    # a launch option cannot be lost by a hand-kept copy list. repr=False: it
+    # holds the launch headers.
+    launch_options: LaunchOptions | None = field(default=None, kw_only=True, repr=False)
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None

@@ -285,8 +285,11 @@ async def session_launch(request: Request) -> SafeJSONResponse:
         # sensitive-route guard re-raises -- so a client typo answered 500
         # "Internal Server Error" with the offending key nowhere in the body,
         # and paged whoever watches the 5xx rate for a caller's mistake.
-        launch_kwargs = LaunchOptions.from_mapping(
-            {**payload, "kind": kind, "url": payload.get("url") or get_default_url()}
+        # from_EXTERNAL_mapping: a dashboard client must not pick the URL the
+        # macro credential guards trust, nor another session's directory.
+        launch_kwargs = LaunchOptions.from_external_mapping(
+            {**payload, "kind": kind, "url": payload.get("url") or get_default_url()},
+            source="in an HTTP launch request",
         ).to_pool_kwargs()
         result = await pool.launch(**launch_kwargs)
     except ValueError as e:

@@ -105,10 +105,13 @@ def core_surface() -> dict:
         # Inherited rather than built from scratch: a minimal env is not portable
         # (Windows needs SYSTEMROOT et al. before a subprocess can even open a
         # socket), and the isolation this needs is narrow — redirect the config
-        # roots platformdirs consults, and drop the one env var that outranks
-        # them.
+        # roots platformdirs consults, and drop the env vars that change what
+        # registers.
         env = dict(os.environ)
         env.pop("OCTOWRIGHT_PLUGINS", None)
+        # The surface is measured with no profile filter; an inherited one (a
+        # developer's shell, or a value a test leaked) shrinks it.
+        env.pop("OCTOWRIGHT_PROFILE", None)
         env.update(
             HOME=isolated,
             USERPROFILE=isolated,

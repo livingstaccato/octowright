@@ -62,7 +62,10 @@ async def test_auto_runs_natively_in_a_wayland_session(monkeypatch: pytest.Monke
         assert res["wayland_native"]["effective"] is True, res["wayland_native"]
         assert "wayland_warning" not in res
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_auto_falls_back_to_x11_when_the_socket_is_dead(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -87,7 +90,10 @@ async def test_auto_falls_back_to_x11_when_the_socket_is_dead(monkeypatch: pytes
         assert pool.engine_health()["chromium"]["outcome"] == "ok"  # type: ignore[attr-defined]
         assert pool.driver_restart_count() == 0  # type: ignore[attr-defined]
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_explicit_true_with_a_dead_socket_fails_loudly_without_a_driver_reset(
@@ -105,4 +111,7 @@ async def test_explicit_true_with_a_dead_socket_fails_loudly_without_a_driver_re
         # Read as a dead driver, this would have stopped the shared driver.
         assert pool.driver_restart_count() == 0  # type: ignore[attr-defined]
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]

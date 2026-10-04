@@ -78,6 +78,23 @@ class TestBlockPrivate:
         ssrf.check_navigation_url("data:text/html,<h1>x</h1>")
         ssrf.check_navigation_url("about:blank")
 
+    @pytest.mark.parametrize(
+        "url", ["ws://127.0.0.1:6286/", "wss://169.254.169.254/", "WS://10.0.0.5/", "ws:/localhost/"]
+    )
+    def test_websocket_schemes_are_classified(self, url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        # ws:/wss: reach an IP-routable host exactly as http(s) does. The
+        # route_web_socket guard rewrites them to http(s) before checking, but
+        # the policy itself must not depend on every caller remembering to.
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        with pytest.raises(ValueError, match="SSRF"):
+            ssrf.check_navigation_url(url)
+
+    def test_public_websocket_host_allowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(POLICY, "block-private")
+        monkeypatch.delenv(ALLOW, raising=False)
+        ssrf.check_navigation_url("wss://93.184.216.34/socket")  # no raise
+
 
 class TestAllowlist:
     def test_allowlisted_private_host_permitted(self, monkeypatch: pytest.MonkeyPatch) -> None:

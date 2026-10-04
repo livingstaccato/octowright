@@ -681,6 +681,8 @@ def test_session_frame_extracts_via_video_module(
         return [produced]
 
     monkeypatch.setattr(_http_state._video, "extract_frames", fake_extract)
+    # The 1-byte stub is not a video: never let the duration probe reach ffprobe.
+    monkeypatch.setattr(_http_state._video, "probe_video", lambda _p: {"duration_seconds": 10.0})
     r = client.get("/api/sessions/framewithv01/frame?t=1.5")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"] == "image/png"
@@ -1565,9 +1567,10 @@ def test_port_is_free_and_pick_port(monkeypatch: pytest.MonkeyPatch) -> None:
         busy = s.getsockname()[1]
         assert _http_lifespan._port_is_free("127.0.0.1", busy) is False
         # Pick should walk past busy.
-        chosen = _http_lifespan._pick_port("127.0.0.1", busy, retries=20)
-        assert chosen is not None
-        assert chosen != busy
+        claimed = _http_lifespan._claim_port("127.0.0.1", busy, retries=20)
+        assert claimed is not None
+        claimed[0].close()
+        assert claimed[1] != busy
     except PermissionError as exc:
         pytest.skip(f"port binding unavailable in this environment: {exc!r}")
     finally:

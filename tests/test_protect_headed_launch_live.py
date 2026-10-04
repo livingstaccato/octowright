@@ -58,7 +58,10 @@ async def test_headed_launch_is_protected_by_default(monkeypatch: pytest.MonkeyP
         assert session.protected is True
         assert session.protected_reason == "headed_default"
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_headless_launch_is_not_protected(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
@@ -69,7 +72,10 @@ async def test_headless_launch_is_not_protected(monkeypatch: pytest.MonkeyPatch,
         session = pool.get(res["instance_id"])  # type: ignore[attr-defined]
         assert session.protected is False
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_explicit_false_overrides_headed_default(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
@@ -80,7 +86,10 @@ async def test_explicit_false_overrides_headed_default(monkeypatch: pytest.Monke
         session = pool.get(res["instance_id"])  # type: ignore[attr-defined]
         assert session.protected is False
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_protect_headed_env_off(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
@@ -92,7 +101,10 @@ async def test_protect_headed_env_off(monkeypatch: pytest.MonkeyPatch, tmp_path:
         session = pool.get(res["instance_id"])  # type: ignore[attr-defined]
         assert session.protected is False
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_ephemeral_headed_stays_closeable(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
@@ -103,7 +115,10 @@ async def test_ephemeral_headed_stays_closeable(monkeypatch: pytest.MonkeyPatch,
         session = pool.get(res["instance_id"])  # type: ignore[attr-defined]
         assert session.protected is False
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_roster_headed_participant_is_protected_by_default(
@@ -137,7 +152,10 @@ async def test_roster_headed_participant_is_protected_by_default(
         assert session.protected is True
         assert session.protected_reason == "headed_default"
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]
 
 
 async def test_relaunch_fluid_preserves_headed_default_protection(
@@ -163,4 +181,7 @@ async def test_relaunch_fluid_preserves_headed_default_protection(
         assert new_session.protected is True
         assert new_session.protected_reason == "headed_default"
     finally:
-        await pool.close_all(force=True)  # type: ignore[attr-defined]
+        # shutdown, not close_all: close_all leaves the Playwright driver
+        # running, and its subprocess transport is then collected after the
+        # test loop has closed ("Event loop is closed", unclosed transport).
+        await pool.shutdown()  # type: ignore[attr-defined]

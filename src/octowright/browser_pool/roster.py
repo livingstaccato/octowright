@@ -16,7 +16,7 @@ from octowright.browser_pool.errors import ProtectedBrowserCloseError
 from octowright.browser_pool.events import SessionCloseReason
 from octowright.browser_pool.lifecycle import CloseCoordinatorOutcome, reserve_close_browser
 from octowright.browser_pool.limits import enforce_launch_limits, headed_launch_concurrency
-from octowright.browser_pool.visuals import _BADGE_POSITION_DEFAULT
+from octowright.browser_pool.options import LaunchOptions
 
 if TYPE_CHECKING:
     from octowright.browser_pool.pool import BrowserPool
@@ -126,6 +126,22 @@ async def close_all(
     return body
 
 
+def roster_launch_kwargs(spec: dict[str, Any]) -> dict[str, Any]:
+    """``pool.launch`` kwargs for one roster spec, through ``LaunchOptions``.
+
+    A hand-kept key list here silently dropped every option it did not name
+    -- the documented ``protected`` among them -- and silently ignored unknown
+    keys such as ``headless`` (inverted sense). Going through ``from_mapping``
+    refuses an unknown key with the same message every other launch path gives.
+    An explicit null (a YAML ``key:``) means unset for EVERY key, so it is
+    dropped and the dataclass default applies; for ``headed`` that default is
+    ``None`` (auto), the same as the null. Internal-only options
+    (``INTERNAL_ONLY_LAUNCH_FIELDS``) are refused, as at every external entry."""
+    return LaunchOptions.from_external_mapping(
+        {k: v for k, v in spec.items() if v is not None}, source="in a roster spec"
+    ).to_pool_kwargs()
+
+
 async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[str, Any]:
     # The single chokepoint both the browser_spawn_roster tool AND scenario_start
     # (pool.spawn_roster) route through. Enforce the cap + memory floor here so the
@@ -141,28 +157,7 @@ async def spawn_roster(pool: BrowserPool, specs: list[dict[str, Any]]) -> dict[s
     headed_gate = asyncio.Semaphore(headed_launch_concurrency())
 
     async def _do_launch(spec: dict[str, Any]) -> dict[str, Any]:
-        return await pool.launch(
-            kind=spec.get("kind", "chromium"),
-            url=spec.get("url"),
-            headed=spec.get("headed"),
-            label=spec.get("label"),
-            viewport_w=spec.get("viewport_w"),
-            viewport_h=spec.get("viewport_h"),
-            profile=spec.get("profile"),
-            record_video=spec.get("record_video", False),
-            stabilize=spec.get("stabilize", False),
-            trace=spec.get("trace", False),
-            har=spec.get("har", False),
-            har_path=spec.get("har_path"),
-            har_mode=spec.get("har_mode", "minimal"),
-            har_url_filter=spec.get("har_url_filter"),
-            har_content=spec.get("har_content"),
-            badge=spec.get("badge", True),
-            badge_position=spec.get("badge_position", _BADGE_POSITION_DEFAULT),
-            tile=spec.get("tile", False),
-            ephemeral=spec.get("ephemeral", False),
-            session=spec.get("session", False),
-        )
+        return await pool.launch(**roster_launch_kwargs(spec))
 
     async def _launch_one(spec: dict[str, Any]) -> dict[str, Any]:
         # Headless (headed is False) never storms — launch it unthrottled. Headed

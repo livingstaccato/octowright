@@ -12,6 +12,62 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+### Added
+- **Headed Chromium on Linux runs as a native Wayland client when it can.**
+  On a Wayland desktop it opens with `--ozone-platform=wayland` instead of
+  running through XWayland. It turns on automatically
+  only for headed Chromium on Linux with a live `WAYLAND_DISPLAY` socket, and
+  `wayland_native` (per launch) or `OCTOWRIGHT_WAYLAND_NATIVE` forces it on or
+  off. An automatic launch the browser blames on Wayland retries once on X11
+  and says why in the launch result; an explicit request fails instead.
+  `octowright_status()` reports the effective setting.
+
+### Fixed
+- **A browser dying at launch no longer closes every other browser.** Its
+  error reads like a dead shared Playwright driver, and the pool used to reset
+  the driver on the wording alone. It now confirms the driver is dead first,
+  resets only the driver the failed launch used, and bounds the reset so a
+  hung driver cannot stall it.
+- **Launches no longer leak a running browser** when setup fails or the launch
+  is cancelled after the browser started, which left the profile locked so
+  the next launch of it failed as "in use".
+- **Handoff and every relaunch keep the original browser's options** --
+  launch headers, viewport, `disable_gpu`, HAR settings, `protected`,
+  `disable_automation_controlled` and `wayland_native` were dropped before. A
+  recording made without HAR relaunches again.
+- **Credentials cannot be routed around the macro checks.** A placeholder
+  action name, `prompt_text`, `press_key` and `select_option` no longer carry a
+  credential past them, page code (`evaluate`, `expect_js`, `mock_route`
+  bodies and the like) is refused in a run that uses one, and a macro `try`
+  can no longer swallow a credential, SSRF or screenshot refusal or write the
+  substituted value to the log or recording.
+- **SSRF checks see the host the browser and HTTP client actually use**: web
+  discovery validates and dials the same IDNA name, and `http:127.0.0.1`-style
+  and `ws:`/`wss:` URLs are classified the way a browser parses them.
+- **The daemon and follower bridge hold their invariants under load.**
+  Followers without an identifying header share one rate-limit bucket again,
+  a call in flight when the leader is replaced is not re-sent to the new one,
+  a second leader cannot bind a port already in use, SIGTERM exits with
+  followers attached, and a leader removes the lockfile only while it still
+  names it.
+- **Writes stay under their roots and expensive inputs are bounded.** A
+  symlinked directory cannot redirect a capture or atomic write,
+  `browser_export_script` cannot overwrite a recording, `capture_search`
+  regexes run in a child process that is killed after 5 seconds, URL globs
+  allow at most 2 wildcard groups, and the dashboard frame endpoint validates
+  its timestamp and bounds its cache.
+- `scenario_wait_for_sync` matches its regex while pages are still
+  navigating, and a remapped scenario participant follows its replacement
+  session's log and URL.
+
+### Changed
+- `pool.handoff(headed=None)` keeps the original browser's headed setting, and
+  relaunches keep `badge` and `record_video` instead of resetting them.
+- A call in flight when the leader restarts fails with an "outcome unknown"
+  error instead of being replayed; retry it if it is safe to repeat.
+- WebSocket handshakes to the dashboard require an Origin that matches the
+  page exactly, not any loopback port.
+
 ## [0.26.0] - 2026-10-03
 
 ### Added
@@ -292,7 +348,7 @@ a section that is already tagged and on PyPI.
 - **Redacted screenshots for classified macro runs.** A run holding classified
   argument values (credentials, and identity values such as `email`) refused every
   `screenshot` unless the embedding application wrote its own privacy handler, so
-  nearly every signed-in macro lost its screenshots. octowright now provides the
+  nearly every signed-in macro lost its screenshots. Octowright now provides the
   safe path for Chromium pages, turned on by
   `macros.safe_screenshot.enable_redacted_screenshots(session)` or
   `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact`. It works in three steps:
@@ -523,7 +579,7 @@ a section that is already tagged and on PyPI.
   render, keeps it. A page comparing `document.title` against what it last set
   now finds them equal and reverts nothing.
 
-  Masking costs octowright's own tooling nothing, which is measured rather than
+  Masking costs Octowright's own tooling nothing, which is measured rather than
   assumed: Playwright evaluates in an isolated world with its own
   `Document.prototype`, so this main-world patch is not there and
   `page.title()` reads the real tagged value. A burst backstop remains as a
@@ -657,7 +713,7 @@ a section that is already tagged and on PyPI.
   (`...octowright.EXE" serve --daemon-mode`), which silently made `restart`'s
   identity checks, follower detection, and target matching all fail on
   Windows -- reproduced live as a genuinely running daemon reported as "not an
-  octowright daemon" and left untouched. A separate, smaller bug in the same
+  Octowright daemon" and left untouched. A separate, smaller bug in the same
   area is also fixed: the venv-neighbour entrypoint resolver never appended
   `.exe`.
 - **Boot-time orphan sweep blocked daemon startup**, measured live at ~31s
@@ -751,7 +807,7 @@ a section that is already tagged and on PyPI.
   `CALLER_SETTABLE_FIELDS` set, so the round trip is lossless by construction
   and pinned by equality rather than by two hand-kept lists agreeing.
 
-- **A launch option octowright cannot read is refused instead of dropped.**
+- **A launch option Octowright cannot read is refused instead of dropped.**
   `LaunchOptions.from_mapping` read every key by name and silently discarded
   the rest, so `pool.launch(headless=True)` — `headless` being Playwright's own
   parameter name, and so the natural guess — launched a **headed** browser and
@@ -789,9 +845,9 @@ a section that is already tagged and on PyPI.
   on: the relaunched context returned **four pages and fired zero page
   events** — tabs unreachable by `page_switch`, absent from `page_list`, and
   unwired for dialogs, downloads, console and network, inside a session
-  octowright believed it fully owned.
+  Octowright believed it fully owned.
 - `_register_popup` no longer lists the same page twice.
-- The launch page-selection race is closed: octowright took `context.pages[0]`
+- The launch page-selection race is closed: Octowright took `context.pages[0]`
   and navigated it, and the handback order is not stable.
 
 ### Internal
@@ -1020,7 +1076,7 @@ a section that is already tagged and on PyPI.
 ### Added
 - **`octowright doctor` now detects a second, uncoordinated daemon.** `check_daemon`
   reports only on the leader the *lockfile names*, so a daemon started outside
-  octowright's election path — a systemd unit whose `ExecStart` runs
+  Octowright's election path — a systemd unit whose `ExecStart` runs
   `serve --daemon-mode` directly skips the lock by design — can bind a port while a
   CLI-triggered spawn lands on another. Both stay up, the lockfile records one, and
   `doctor` reported a clean single leader while a second one answered unrecorded.
@@ -1104,7 +1160,7 @@ a section that is already tagged and on PyPI.
 ### Added
 - **`octowright doctor` checks follower version skew.** A follower is a subprocess its
   MCP client owns, and it deliberately **survives** a leader restart so the client is
-  not dropped — so upgrading octowright and restarting the daemon updates the leader
+  not dropped — so upgrading Octowright and restarting the daemon updates the leader
   and **nothing else**, and every connected client keeps running whatever follower it
   spawned until that client reconnects. Observed with followers two releases behind a
   current leader, driving browsers, while `doctor` reported all-PASS, because nothing
@@ -1178,7 +1234,7 @@ a section that is already tagged and on PyPI.
   WebContent never gets a renderer and every navigation dies, with **no crash report
   written anywhere**. Diagnosed live: WebKit failed `goto("about:blank")` at ~6.7s and
   the GPU pid changed three times in a single six-second run. Not a WebKit, Playwright
-  or octowright bug — `system_profiler SPAudioDataType` hung identically with no
+  or Octowright bug — `system_profiler SPAudioDataType` hung identically with no
   browser involved, and `killall coreaudiod` took the same probe from never completing
   to 0.97s end to end. The engine probe could only report the symptom
   (`failed at step 'goto'`), which sends the reader into WebKit; the new
@@ -1220,11 +1276,11 @@ a section that is already tagged and on PyPI.
   indistinguishable from a grab that never registered. Replayable as the
   `a11y_dragdrop` macro action and exported to the CLI script.
 - **`octowright doctor`.** One command that answers "is this machine broken, or is
-  octowright broken?". Each engine is driven through launch → new_context → new_page →
-  goto → evaluate using **raw Playwright and no octowright code**, and the first step
+  Octowright broken?". Each engine is driven through launch → new_context → new_page →
+  goto → evaluate using **raw Playwright and no Octowright code**, and the first step
   that did not complete is reported by name — so a bad WebKit reads as
   `engine:webkit failed at step 'goto'` in seconds rather than an afternoon spent in
-  octowright's launch pipeline. Each probe runs in its own child interpreter, because
+  Octowright's launch pipeline. Each probe runs in its own child interpreter, because
   a wedged engine leaves the driver and browser alive and the awaiting coroutine
   unkillable from inside its own loop; a child can simply be killed. Also reports the
   daemon lockfile, installed browser builds, orphaned drivers, orphaned browsers, and
@@ -2365,7 +2421,7 @@ Every one was reproduced against running code before it was fixed.
   name need not be a saved persona and a persona need not declare a
   `default_url` — both pass no `base_url` at all rather than `None`, so absolute
   URLs and every existing macro keep working untouched.
-- **Explicit `LaunchOptions.base_url`.** A caller driving octowright as a library
+- **Explicit `LaunchOptions.base_url`.** A caller driving Octowright as a library
   has no persona to speak for it — a suite replaying macros against a dev stack,
   a batch run pinned to one tier. Explicit wins over the persona's `default_url`,
   because a caller naming an origin is more specific than a default.
@@ -2448,7 +2504,7 @@ Every one was reproduced against running code before it was fixed.
   fresh session on the leader instead of reusing one — could pile per-session
   server tasks and transports onto the shared daemon until it was at multiple GB
   RSS and real tool calls were starved (observed live at **18 GB over 2 days**),
-  making octowright appear to crash across every connected client. Every prior
+  making Octowright appear to crash across every connected client. Every prior
   storm defense was *follower*-side, so it only helped once every client
   upgraded; the leader had no protection of its own. Two leader-side guards, on
   by default and deployable with a single daemon restart, independent of
@@ -2477,7 +2533,7 @@ Every one was reproduced against running code before it was fixed.
   leader. The default was **15s** — shorter than a real leader outage
   (`octowright restart` alone takes 20-30s+; a split-brain/port fight can last
   minutes), so on every restart all followers blew past the window at the same
-  instant and octowright broke across every client simultaneously. Raised the
+  instant and Octowright broke across every client simultaneously. Raised the
   default to **180s** (`proxy_runtime.py`): followers now wait out a normal
   restart and reconnect to the new leader transparently. A truly-gone leader
   takes up to 180s before a follower respawns one — an acceptable trade against
@@ -2543,7 +2599,7 @@ Every one was reproduced against running code before it was fixed.
 - **Dependency refresh.** All locked dependencies bumped to their latest
   compatible versions, clearing three `mcp` advisories (CVE-2026-52870,
   CVE-2026-52869, CVE-2026-59950; `mcp` 1.27.1 → 1.28.1). No API or behavior
-  changes in octowright — lockfile-only, verified against the full test suite.
+  changes in Octowright — lockfile-only, verified against the full test suite.
 
 ## [0.13.4] - 2026-07-09
 
@@ -2845,8 +2901,8 @@ disconnects clients mid-session, and follower processes no longer leak.
 - **Idle watchdog disabled by default.** The daemon holds live browser state, and
   its idle auto-exit closed the follower's stdio mid-session — breaking the MCP
   connection and dropping open browsers with no transparent wake (the user had to
-  reconnect by hand). The daemon now stays up until an explicit `octowright
-  restart`. Opt back into auto-exit for CI / shared / resource-constrained hosts
+  reconnect by hand). The daemon now stays up until an explicit
+  `octowright restart`. Opt back into auto-exit for CI / shared / resource-constrained hosts
   with `OCTOWRIGHT_IDLE_GRACE=<seconds>` or `--idle-grace`; `off` / `never` /
   `none` / `disabled` / `0` / a non-positive value also disable it.
 
@@ -2944,9 +3000,9 @@ disconnects clients mid-session, and follower processes no longer leak.
   and echoed once as a startup banner (a human terminal in inline mode, the
   daemon log otherwise). New `octowright.upgrade` module; `OCTOWRIGHT_UPGRADE_STATE`
   overrides the last-seen-version marker path.
-- **Dead-server reconnect guidance** — when the octowright MCP transport is
+- **Dead-server reconnect guidance** — when the Octowright MCP transport is
   disconnected (tools missing, or `Transport closed` that doesn't recover after
-  one retry), the agent is steered to reconnect octowright in its client — asking
+  one retry), the agent is steered to reconnect `octowright` in its client — asking
   which client and using its native reconnect rather than guessing — instead of
   substituting a shell-opened browser it can't drive. Carried in the agent skill,
   the MCP server instructions, and the follower-bridge error text.
@@ -3235,7 +3291,7 @@ the full record.
 - `octowright cleanup` to prune stale recordings / screenshots / videos / traces.
 - `octowright takeover` to detect and disable competing Playwright MCP plugins.
 - `octowright test` JSONL-driven test suite runner.
-- `octowright skill` to install / inspect the octowright agent skill,
+- `octowright skill` to install / inspect the Octowright agent skill,
   with skill-pack distribution baked into the wheel.
 - `octowright selftest` to list MCP tools without a client.
 - `--log-level` flag and watchdog / shutdown visibility on `octowright serve`.

@@ -9,8 +9,8 @@ Playwright converts a route glob to a regex and matches it against every
 intercepted request. ``**`` becomes ``(.*)`` and ``*`` becomes ``([^/]*)``, so
 ``**a**a**b`` compiles to ``^(.*)a(.*)a(.*)b$``. No quantifier is ever nested
 inside another, so the blow-up is polynomial rather than exponential -- but the
-exponent is one per wildcard and the caller chooses it. Measured against a
-129-character URL:
+exponent is one per wildcard and the caller chooses it, while the page chooses
+the URL length it is raised to. Measured against a 129-character URL:
 
     k=2   0.0014s
     k=3   0.0394s
@@ -47,12 +47,21 @@ import re
 
 from octowright.request_errors import InvalidRequestError
 
-# Generous against real globs and far below the cliff. `**/api/**/users` uses
-# two; the measured cost at four is ~0.9s and at five ~18s, so the accepted
-# worst case stays under a second. Raising this re-opens a 20x-per-wildcard
-# curve, which `tests/test_url_pattern_guard.py` asserts against directly
-# rather than trusting this comment.
-MAX_URL_PATTERN_WILDCARDS = 5
+# The match cost is roughly (URL length) ** (wildcard runs), and the URL is
+# the page's choice, not ours. This was 5, tuned against a 129-character URL;
+# the same worst-case shape against an 8 KB URL, measured in V8 (the driver):
+#
+#     runs=2   0.06 s        runs=3   134 s
+#
+# and in CPython, where Playwright also matches each route client-side: 0.27 s
+# at two runs. So two: `**/api/**`, `**/*.png` and `https://*.test/**` still
+# fit. Residual limit, stated: two runs are still quadratic, so a URL of tens
+# of kilobytes costs seconds per intercepted request (CPython: ~4 s at 32 KB)
+# -- bounded by the URL a page can build, not by anything here. Closing that
+# needs a linear-time matcher in place of Playwright's regex, which would mean
+# re-implementing its glob semantics; `tests/test_url_pattern_guard.py`
+# measures the degree at a realistic length rather than trusting this comment.
+MAX_URL_PATTERN_WILDCARDS = 2
 
 # A long pattern costs on every intercepted request even without wildcards.
 # Matches the bound `http_headers` already applies to header-scoping globs.
@@ -78,7 +87,7 @@ def validate_url_pattern(pattern: str, *, field: str) -> None:
         raise InvalidRequestError(
             f"{field}: URL pattern uses {wildcards} wildcard groups, more than the "
             f"{MAX_URL_PATTERN_WILDCARDS} allowed. Playwright compiles each one into a "
-            f"regex group whose match cost multiplies about 20x per wildcard, in the "
-            f"driver process shared by every browser in the pool. Narrow the pattern "
-            f"(e.g. '**/api/**/users' rather than '**a**a**a**a**a**b')."
+            f"regex group, and the match cost grows as the URL length to the power of "
+            f"the groups, in the driver process shared by every browser in the pool. "
+            f"Narrow the pattern (e.g. '**/api/**' rather than '**/api/**/users/*')."
         )

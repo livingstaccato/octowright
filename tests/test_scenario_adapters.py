@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -95,8 +96,14 @@ async def test_wait_for_sync_by_url_skips_the_wait_when_already_there(adapter):
 
 async def test_wait_for_sync_by_url_waits_when_it_does_not_match(adapter):
     ad, pool = adapter
-    await ad.wait_for_sync("br0wser01", selector=None, text=None, url=r"checkout", timeout_ms=1000)
-    assert pool.sessions["br0wser01"].page.waited == "checkout"
+    await ad.wait_for_sync("br0wser01", selector=None, text=None, url=r"check(out)?/\d+", timeout_ms=1000)
+    # The url is a regex (the already-there check is re.search). Playwright
+    # reads a plain str as a glob or an exact URL, so a pattern handed over as
+    # a str would never match and the sync would wait out its whole timeout.
+    waited = pool.sessions["br0wser01"].page.waited
+    assert isinstance(waited, re.Pattern)
+    assert waited.pattern == r"check(out)?/\d+"
+    assert waited.search("https://shop.test/checkout/42")
 
 
 async def test_set_dialog_policy_reaches_the_session(adapter):

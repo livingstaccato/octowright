@@ -43,6 +43,44 @@ def test_read_lock_corrupt_returns_none(tmp_path: Path) -> None:
     assert singleton.read_lock(path=lock) is None
 
 
+def test_read_lock_non_utf8_returns_none(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    lock.write_bytes(b"\xff\xfe{garbage")
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_wrong_json_shape_returns_none(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    lock.write_text('["a", "list"]')
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_vanishing_between_check_and_read_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leader removing its lock between an existence check and the read must
+    read as "no leader", not escape as FileNotFoundError into the boot path."""
+    lock = tmp_path / "octowright.lock"
+    singleton.write_lock(singleton.make_leader_info("127.0.0.1", 8765), path=lock)
+
+    def _gone(self: Path, *args: object, **kwargs: object) -> str:
+        raise FileNotFoundError(str(self))
+
+    monkeypatch.setattr(Path, "read_text", _gone)
+    assert singleton.read_lock(path=lock) is None
+
+
+def test_read_lock_unreadable_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    lock = tmp_path / "octowright.lock"
+    singleton.write_lock(singleton.make_leader_info("127.0.0.1", 8765), path=lock)
+
+    def _denied(self: Path, *args: object, **kwargs: object) -> str:
+        raise PermissionError(str(self))
+
+    monkeypatch.setattr(Path, "read_text", _denied)
+    assert singleton.read_lock(path=lock) is None
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX mode bits don't apply to Windows lockfile")
 def test_write_lock_chmod_0600_and_parent_0700(tmp_path: Path) -> None:
     """The lockfile contains pid/host/port/mcp_url — sensitive enough that
@@ -247,3 +285,82 @@ def test_write_lock_atomically_replaces_existing(tmp_path: Path) -> None:
     # No leftover .tmp files in the directory.
     leftovers = [p for p in lock.parent.iterdir() if p.suffix == ".tmp" or ".tmp" in p.name]
     assert leftovers == []
+
+
+# ─── ownership-checked removal ───────────────────────────────────────────────
+#
+# A leader that exits (or restart, after killing one) used to unlink the
+# lockfile unconditionally. If a successor had already written its own lock --
+# leader A stalls, followers spawn B on 6287, A then exits -- A erased B's
+# record: the next client saw no leader and a free 6286, spawned C there, and B
+# kept running with its followers and browsers, invisible to `restart`.
+
+
+def _lock_for(pid: int, *, token: str, path: Path) -> singleton.LeaderInfo:
+    info = singleton.LeaderInfo(
+        pid=pid,
+        http_host="127.0.0.1",
+        http_port=6299,
+        mcp_url="http://127.0.0.1:6299/mcp/",
+        started_at=1.0,
+        token=token,
+    )
+    singleton.write_lock(info, path=path)
+    return info
+
+
+def test_remove_lock_if_owned_removes_our_own_lock(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(4242, token="ours", path=lock)
+    assert singleton.remove_lock_if_owned({4242}, token="ours", path=lock) is True
+    assert not lock.exists()
+
+
+def test_remove_lock_if_owned_keeps_a_successors_lock(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(5151, token="theirs", path=lock)
+    assert singleton.remove_lock_if_owned({4242}, token="ours", path=lock) is False
+    assert singleton.read_lock(path=lock) is not None
+
+
+def test_remove_lock_if_owned_checks_the_token_against_a_recycled_pid(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(4242, token="successor", path=lock)
+    assert singleton.remove_lock_if_owned({4242}, token="ours", path=lock) is False
+    assert lock.exists()
+
+
+def test_remove_lock_if_owned_without_a_token_matches_on_pid(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(4242, token="whatever", path=lock)
+    assert singleton.remove_lock_if_owned({1, 4242}, path=lock) is True
+    assert not lock.exists()
+
+
+def test_remove_lock_if_owned_tolerates_a_missing_lock(tmp_path: Path) -> None:
+    assert singleton.remove_lock_if_owned({4242}, path=tmp_path / "nope.lock") is False
+
+
+@pytest.mark.anyio
+async def test_release_own_lock_leaves_a_successor_in_place(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(os.getpid() + 1, token="successor", path=lock)
+    assert await singleton.release_own_lock("ours", path=lock) is False
+    assert lock.exists()
+
+
+@pytest.mark.anyio
+async def test_release_own_lock_removes_this_processs_lock(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(os.getpid(), token="ours", path=lock)
+    assert await singleton.release_own_lock("ours", path=lock) is True
+    assert not lock.exists()
+
+
+@pytest.mark.anyio
+async def test_release_own_lock_gives_up_rather_than_hang_on_a_held_election_lock(tmp_path: Path) -> None:
+    lock = tmp_path / "octowright.lock"
+    _lock_for(os.getpid(), token="ours", path=lock)
+    with singleton.election_lock(path=lock):
+        assert await singleton.release_own_lock("ours", path=lock, timeout=0.1) is False
+    assert lock.exists(), "whoever holds the election lock owns what the lockfile says next"

@@ -37,6 +37,7 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
+from octowright.browser_pool.replacement import ReplacementSource
 
 log = get_logger(__name__)
 
@@ -105,8 +106,8 @@ def _descriptor(session: Any) -> dict[str, Any]:
         "profile": session.profile,
         "url": session.url,
         "user_data_dir": str(udd) if udd else None,
-        # What the replacement trusts, as relaunch.py's snapshot does: the page
-        # reopens at its CURRENT url, but own_site_origins must keep trusting
+        # Reported, not relaunched from: the reopen carries the session's own
+        # launch options (replacement.ReplacementSource), which keep trusting
         # the origin the operator launched it at, not one a macro navigated to.
         "launch_url": getattr(session, "launch_url", None),
         "base_url": getattr(session, "base_url", None),
@@ -142,8 +143,21 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
         closing = pool._accept_external_close_nowait(
             desc["instance_id"], expected_session=session, reason="external_disconnect"
         )
-        descriptors.append({**desc, "lost_record": record, "closing": closing})
+        descriptors.append({**desc, "lost_record": record, "closing": closing, "replacement": _replacement_of(session)})
     return descriptors
+
+
+def _replacement_of(session: Any) -> ReplacementSource | None:
+    """What a reopen would launch with -- the session's own launch options.
+    Read at capture, while the session is in hand; kept OUT of the lost
+    record, which status serializes and which must not carry launch headers.
+    ``None`` (a session with nothing to rebuild from) fails only that reopen,
+    never the synchronous capture of the rest."""
+    try:
+        return ReplacementSource.of(session)
+    except TypeError as exc:
+        log.warning("octowright.driver_relaunch.no_launch_options", instance_id=session.instance_id, error=repr(exc))
+        return None
 
 
 def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | None:
@@ -202,6 +216,7 @@ def on_browser_process_crash(pool: Any, session: Any, closing: Any) -> asyncio.T
                 "closing": closing,
                 "crash_incident": incident,
                 "log_path": str(session.log_path),
+                "replacement": _replacement_of(session),
             }
         ],
         _mode(),
@@ -305,22 +320,12 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
                 kind=desc["kind"],
                 error=repr(exc),
             )
-    profile = desc["profile"]
-    udd = desc["user_data_dir"]
-    session_scoped = profile is None and udd is not None
-    stateless = profile is None and udd is None
-    result = await pool.launch(
-        kind=desc["kind"],
-        url=desc["url"],
-        headed=None,
-        label=desc["label"],
-        profile=profile,
-        ephemeral=stateless,
-        session=session_scoped,
-        badge=True,
-        trusted_launch_url=desc.get("launch_url"),
-        **({"base_url": desc["base_url"]} if desc.get("base_url") else {}),
-    )
+    source = desc.get("replacement")
+    if source is None:
+        raise RuntimeError(f"session {desc['instance_id']!r} kept no launch options to reopen it with")
+    # Everything the original was launched with (replacement.ReplacementSource),
+    # reopened at its last URL.
+    result = await pool.launch(**source.launch_kwargs(url=desc["url"]))
     new_id = result["instance_id"]
     old_id = desc["instance_id"]
     final_id = await _finalize_id(pool, new_id, old_id, mode)

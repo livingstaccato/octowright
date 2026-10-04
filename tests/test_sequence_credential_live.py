@@ -61,14 +61,16 @@ def _env(tmp_path: Path) -> dict[str, str]:
 
 @pytest.mark.live_browser
 @pytest.mark.parametrize(
-    ("fill_mode", "failed_step"),
-    # block (the default): the credential is now held to the fill-origin guard,
-    # which refuses typing it into about:blank. warn: the guard lets it through,
-    # so the value IS typed and the assertion that fails quotes it.
-    [("block", 1), ("warn", 2)],
+    ("guard_env", "failure_marker"),
+    # The default: the credential (credential-tier because the sequence says so,
+    # whatever the macro calls it) makes this a run that types a credential, so
+    # its page code is refused before any step runs. Sinks allow: no credential
+    # guard runs, the value IS typed into about:blank, and the assertion that
+    # fails quotes it -- the payload scrubbing is what keeps it out.
+    [({}, "runs page code"), ({"OCTOWRIGHT_MACRO_CREDENTIAL_SINKS": "allow"}, "'failed_at_step': 2")],
 )
 def test_a_sequence_credential_under_an_innocent_name_never_reaches_the_report(
-    tmp_path: Path, fill_mode: str, failed_step: int
+    tmp_path: Path, guard_env: dict[str, str], failure_marker: str
 ) -> None:
     pytest.importorskip("playwright")
     macros = tmp_path / "macros"
@@ -83,14 +85,14 @@ def test_a_sequence_credential_under_an_innocent_name_never_reaches_the_report(
     proc = subprocess.run(  # nosec B603 -- fixed argv, no shell
         [sys.executable, "-c", "from octowright.cli import main; main()", "test", "--kind", "chromium",
          "--persona", "lab", "--sequence", str(sequence), "--artifacts", str(artifacts)],
-        env=dict(_env(tmp_path), OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS=fill_mode), cwd=tmp_path, capture_output=True, encoding="utf-8", errors="replace", timeout=180, check=False,
+        env=dict(_env(tmp_path), **guard_env), cwd=tmp_path, capture_output=True, encoding="utf-8", errors="replace", timeout=180, check=False,
     )  # fmt: skip
     if proc.returncode != 1 and any(s in (proc.stdout + proc.stderr).lower() for s in _UNAVAILABLE):
         pytest.skip(f"chromium unavailable here: {proc.stderr[-400:]}")
 
     report = artifacts / "octowright-report.xml"
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert f"'failed_at_step': {failed_step}" in report.read_text(encoding="utf-8")  # the failure text was written
+    assert failure_marker in report.read_text(encoding="utf-8")  # the failure text was written
     assert PIN not in report.read_text(encoding="utf-8")
     assert PIN not in proc.stdout + proc.stderr
     assert list((tmp_path / "recordings").rglob("*.jsonl")), "the run left no recording to check"

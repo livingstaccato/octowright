@@ -250,7 +250,7 @@ reader can see: rendered text, open shadow roots, visible form values and
 placeholders, a broken image's alt text, a select's option labels and CSS
 generated content. Password fields, attribute text such as a resource address,
 `visibility: hidden` text and anything not rendered do not count, and neither
-do octowright's own overlays. Case, whitespace and invisible characters are
+do Octowright's own overlays. Case, whitespace and invisible characters are
 ignored. On Chromium a whole-page check also reads the DOM snapshot, which
 reaches closed shadow roots; other engines and exported scripts cannot. Canvas,
 video and other pixel-only content cannot be text-checked.
@@ -360,7 +360,7 @@ order:
    itself.
 2. If it called `enable_redacted_screenshots(session)` without a handler, or
    `OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact` is set (see
-   [env-vars.md](env-vars.md)), octowright takes a **redacted screenshot** of a
+   [env-vars.md](env-vars.md)), Octowright takes a **redacted screenshot** of a
    Chromium page:
    - It pauses the page's animations for the whole capture and ends every running view
      transition, on the document or on any element in it or in its open or closed
@@ -439,7 +439,7 @@ order:
      screenshot is deleted.
 3. Otherwise the screenshot is refused.
 
-The in-page state is held through octowright's own DevTools session, not on a page
+The in-page state is held through Octowright's own DevTools session, not on a page
 global, so page script cannot reach it.
 
 The limits are real and deliberate:
@@ -637,14 +637,28 @@ carry `scrub_saturated: true` on a saturated session, and omit it otherwise.
 
 **Credential-named arguments in URLs, code and outbound fields.** A
 credential-named argument expanded into `url`, `expression`, `verify_js`,
-`grabbed_predicate_js`, a `headers` value, a mock_route `body` or an upload
-`paths` entry is refused by default. The one exemption is a header sent to the
+`grabbed_predicate_js`, a `headers` value, a mock_route `body`, an upload
+`paths` entry or a `set_dialog_policy` `prompt_text` (the answer every later
+`prompt()` gets, on whatever page asks) is refused by default. The one exemption is a header sent to the
 session's own origin: `inject_headers` whose `pattern` spells out the scheme,
 host and port of the launch URL or persona `base_url` may carry
 `Bearer {{token}}` (`https://app.example.test/**` for a launch at
 `https://app.example.test`, but not `http://localhost:45678/**` for a launch at
 `http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
+
+**A run that types a credential runs no page code.** Page code needs no
+placeholder to read a credential back: a constant `evaluate` that installs an
+`input` listener before a `fill` of `{{password}}` on the session's own origin,
+or a constant `expect_js` that reads the field after it, sends the value
+wherever it likes. So when a run expands a credential-named argument anywhere
+(a typed value, a header, a `macro_call`'s `args`), every `evaluate`,
+`expect_js`, `wait_for` with an `expression`, `a11y_dragdrop` with
+`verify_js`/`grabbed_predicate_js`, and `mock_route` with a `body` in it is
+refused -- before the fill or after it, in a nested body or a called macro --
+naming the step and the argument, never the value. Split such a check into a
+macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+Each `macro_run_sequence` step is its own run.
 
 **Credentials are typed only onto the session's own origin.** A `fill`,
 `fill_by` or `type` whose value comes from a credential-named argument checks,
@@ -734,6 +748,11 @@ names no `timeout_ms`: Playwright's own 30s default.
 A credential passed to a called macro under another name
 (`macro_call` `args: {q: "{{password}}"}`) is a credential in the callee too.
 
+A step whose `action` is itself a placeholder (`"action": "{{kind}}"`) is
+judged as the action it expands to, so `kind=fill` is checked as a credential
+fill and `"{{call}}"` resolving to `macro_call` keeps its credential taint. A
+credential-named argument is refused as an action name.
+
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`
 refuses a credential in a URL, code or outbound field, types a credential only
 on an origin passed as `--trusted-origin` (or listed in the step's
@@ -744,7 +763,7 @@ the same source.
 **Exported scripts** carry their own copy of the classifier, stamped
 `_ARG_PRIVACY_CLASSIFIER_VERSION = 6`, and resolve the same blind-scrub policy,
 length floor and common-value list when they run (a script is one run, so run
-scoping does not arise there). A script exported by an older octowright keeps the classifier
+scoping does not arise there). A script exported by an older Octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
 default.
 
@@ -794,7 +813,7 @@ uv run octowright test [path] --kind webkit --tag smoke --out "$OCTOWRIGHT_RECOR
 Equivalent MCP tool: `run_test_suite`.
 
 **Where the report goes.** `--out` must resolve under `OCTOWRIGHT_RECORDINGS`,
-like every other path octowright writes; its directory is created if it does
+like every other path Octowright writes; its directory is created if it does
 not exist. Without `--out` the report is `<artifacts>/octowright-report.xml`
 when `--artifacts` is given, else a timestamped
 `octowright-report-<UTC stamp>.xml` directly under `OCTOWRIGHT_RECORDINGS`.
@@ -904,7 +923,7 @@ video: /…/smoke/smoke.webm
   `OCTOWRIGHT_VIEWPORT_H` (default 1280x800, so unset nothing changes; a value
   that is not a positive integer, such as `1920px` or `0`, falls back to the
   default with a logged warning), and
-  the video is recorded at exactly that size -- octowright pins Playwright's
+  the video is recorded at exactly that size -- Octowright pins Playwright's
   `record_video_size` to the viewport, since Playwright's own default scales
   the video down to fit 800x800 (a 1920x1080 page otherwise records at
   800x450, measured on all three engines):

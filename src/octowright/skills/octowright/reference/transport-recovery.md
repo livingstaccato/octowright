@@ -81,7 +81,7 @@ Two failure modes: a **transient** drop recovers on one retry; a **gone** leader
 
 **Required response when Octowright is down — one message, then stop:**
 1. "Octowright is disconnected — I can't drive a browser until it's reconnected."
-2. If in Claude Code: `/mcp` → select **octowright** → **Reconnect**. If it stays failed, ask them to also run `octowright restart` first.
+2. If in Claude Code: `/mcp` → select **`octowright`** → **Reconnect**. If it stays failed, ask them to also run `octowright restart` first.
 3. For any other client: ask which MCP client they're using, then have them use its reconnect/refresh control or restart it.
 4. Wait for them to confirm Octowright is back. Then resume.
 
@@ -91,7 +91,7 @@ Octowright talks to the MCP client over **stdio**, and stdio MCP servers general
 
 The exact reconnect command depends on the client **and its version**, and these UIs change often. Do NOT state a reconnect command you're not certain applies to the user's setup — a confident-but-wrong instruction sends them in circles.
 
-- **Claude Code** (the one to state confidently): `/mcp` → select **octowright** → **Reconnect**. If it stays failed, restart Claude Code.
+- **Claude Code** (the one to state confidently): `/mcp` → select **`octowright`** → **Reconnect**. If it stays failed, restart Claude Code.
 - **Any other client:** first **ask the user which MCP client they're using** (and version if they know it). Then have them use *that* client's own MCP **reconnect / refresh / toggle** control — usually under its MCP or Tools settings — or, if it has none, **restart the client app**. If you don't know the exact steps for their client, say so and ask them to reconnect via its MCP settings (or check that client's MCP docs) rather than guessing.
 
 ## `octowright restart`

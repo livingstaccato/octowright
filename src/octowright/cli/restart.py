@@ -37,7 +37,6 @@ import io
 import os
 import re
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -47,6 +46,7 @@ from pathlib import Path
 import click
 
 from octowright import singleton
+from octowright._port_probe import port_is_free
 from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
@@ -272,39 +272,11 @@ def _wait_for_pid_exit(pid: int, timeout: float) -> bool:
     return not singleton.pid_is_alive(pid)
 
 
-def _port_is_free(host: str, port: int) -> bool:
-    try:
-        addrinfos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return False
-    if not addrinfos:
-        return False
-    checked = False
-    seen: set[tuple[int, int, int, object]] = set()
-    for family, socktype, proto, _canonname, sockaddr in addrinfos:
-        key = (family, socktype, proto, sockaddr)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            sock = socket.socket(family, socktype, proto)
-        except OSError:
-            continue
-        try:
-            # Match the daemon's bind options so this pre-flight check agrees
-            # with what the new daemon can actually do: SO_REUSEADDR lets a
-            # TIME_WAIT socket (from the daemon we just stopped) read as free,
-            # so restart doesn't sit through the full TIME_WAIT timeout. An
-            # actively-listening socket still blocks the bind, so a not-yet-dead
-            # daemon is still correctly reported busy.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(sockaddr)
-            checked = True
-        except OSError:
-            return False
-        finally:
-            sock.close()
-    return checked
+# The daemon's own probe, so this pre-flight wait agrees with what the new
+# daemon can actually bind: SO_REUSEADDR (POSIX) lets the just-stopped
+# daemon's TIME_WAIT socket read as free, while a still-listening daemon reads
+# busy on every platform (see _port_probe for why Windows differs).
+_port_is_free = port_is_free
 
 
 def _wait_for_port_free(host: str, port: int, timeout: float) -> bool:
@@ -410,7 +382,10 @@ def _stop_leader(
     for pid in pids:
         _send_signal(pid, signal.SIGTERM)
     survivors = _escalate_survivors(pids, timeout)
-    singleton.remove_lock()
+    # Only a lock naming a process we just stopped: a follower's respawn may
+    # already have written its successor's, and erasing that would hide a live
+    # leader and let the next client spawn another beside it.
+    singleton.remove_lock_if_owned(pids)
     return len(pids) - len(survivors), len(survivors), owned_browsers
 
 
@@ -481,28 +456,28 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     the daemon would default to ``defaults.HTTP_PORT`` and silently retry up
     if it was busy, leaving the probe target out of sync.
     """
-    octowright = _resolve_octowright_entry()
-    # --daemon-mode is REQUIRED, not cosmetic: it tells serve to run the leader
-    # directly and SKIP leader election (``cli/serve`` dispatches on it before
-    # ``_ensure_leader_or_inline`` is ever reached), which is exactly what
-    # ``daemonize.spawn_daemon`` does for the same reason. Without it the
-    # spawned process runs the full singleton election and blocks acquiring the
-    # election lock -- the lock this very command now holds across spawn and
-    # health-confirm. That is not a deadlock but a guaranteed stall: the child
-    # waits out our whole health budget, we report "daemon did not become
-    # healthy", release the lock on the way out, and the daemon then starts ~10s
-    # late. Observed live after the lock was introduced; the tests missed it
-    # because they stub _spawn_daemon and so never see this argv.
-    proc = subprocess.Popen(  # nosec B603
-        [octowright, "serve", "--daemon-mode", "--http-host", http_host, "--http-port", str(http_port)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
+    # Through the shared spawner, not a Popen of our own: that is what carries
+    # the platform detachment ladder (on Windows, the console flags AND the
+    # job-object breakaway -- ``start_new_session`` alone does nothing there,
+    # so a restarted daemon died with a CI step's job) and the daemon log every
+    # spawn-failure message points at. It also passes --daemon-mode, which is
+    # REQUIRED: it makes serve run the leader directly and SKIP leader
+    # election. Without it the child blocks acquiring the election lock this
+    # very command holds across spawn and health-confirm -- a guaranteed stall
+    # (observed live) that reported "daemon did not become healthy" and started
+    # the daemon ~10s late. The entrypoint stays restart's own: the console
+    # script beside this interpreter, so a different version on PATH is not
+    # what comes back.
+    from octowright import daemonize
+
+    pid = daemonize.spawn_daemon(
+        http_host=http_host,
+        http_port=http_port,
+        idle_grace=None,
+        entrypoint=[_resolve_octowright_entry()],
     )
-    click.echo(f"spawned octowright serve (launcher pid={proc.pid}) on {http_host}:{http_port}")
-    return proc.pid
+    click.echo(f"spawned octowright serve (launcher pid={pid}) on {http_host}:{http_port}")
+    return pid
 
 
 def _health_candidates(host: str, port: int) -> list[str]:

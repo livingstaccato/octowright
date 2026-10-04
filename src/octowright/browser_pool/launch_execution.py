@@ -27,6 +27,7 @@ from octowright.browser_pool.launch_helpers import (
 )
 from octowright.browser_pool.launch_pipeline import cleanup_failed_launch, post_context_setup
 from octowright.browser_pool.options import LaunchOptions, resolve_protected
+from octowright.browser_pool.replacement import recorded_launch_options
 from octowright.browser_pool.wayland import WaylandDecision, resolve_wayland_native
 from octowright.defaults import HEADLESS_DEFAULT
 from octowright.recorder import new_log_path
@@ -61,7 +62,14 @@ async def launch_profile_locked(
     protected, protected_reason = resolve_protected(
         launch_options.protected, headed=not headless, ephemeral=launch_options.ephemeral
     )
-    launch_options = replace(launch_options, protected=protected, protected_reason=protected_reason)
+    # What the session keeps, and what a handoff/relaunch rebuilds from: the
+    # request with these launch-time decisions folded in (see replacement).
+    launch_options = recorded_launch_options(
+        replace(launch_options, protected=protected, protected_reason=protected_reason),
+        instance_id=instance_id,
+        profile=profile,
+        headless=headless,
+    )
     log_path = new_log_path(pool._recordings_dir, instance_id, label, kind)
 
     viewport_kwargs, log_viewport, explicit_size, viewport_info = _build_viewport_kwargs(
@@ -104,8 +112,8 @@ async def launch_profile_locked(
         )
 
     async def cleanup() -> None:
-        # Nothing was assigned when _open_browser_context raised, so there is
-        # no context or browser to close here -- only the video dir to tidy.
+        # _open_browser_context closes any browser it launched before raising,
+        # so there is no context or browser to close here -- only the video dir.
         await cleanup_failed_launch(
             registered=False,
             context=None,
@@ -175,7 +183,8 @@ async def open_with_wayland_fallback(
     """Open the browser; if a native-Wayland launch fails, retry ONCE with X11
     forced (``wayland.x11_retry_kwargs``).
 
-    Only AUTO falls back. Auto chose Wayland on the caller's behalf from a socket
+    Only AUTO falls back, and only when the browser blamed Wayland
+    (``wayland.mentions_wayland``). Auto chose Wayland on the caller's behalf from a socket
     that exists -- which says nothing about whether a compositor answers on it --
     so its failure must not cost the caller a browser. An explicit request
     (argument, or ``OCTOWRIGHT_WAYLAND_NATIVE=on``) fails loudly instead: quietly
@@ -185,9 +194,10 @@ async def open_with_wayland_fallback(
     The retry is internal to one ``pool.launch``, so engine health and the
     launch metrics see a single outcome: ``ok`` when the X11 browser opened
     (Chromium works on this machine), else the X11 attempt's error. The first
-    failure is caught HERE, before ``_launch_with_driver_retry`` sees it --
-    its text matches the dead-driver markers, and a dead-driver verdict stops
-    the shared driver and every live browser with it.
+    failure is caught HERE, before ``_launch_with_driver_retry`` sees it, so
+    the fallback stays inside this launch. (Its text matches the dead-driver
+    markers, but that alone no longer resets the shared driver: the pool
+    confirms with ``driver_health.driver_confirmed_dead`` first.)
     """
     try:
         return await open_context(launch_kwargs), decision
@@ -201,12 +211,14 @@ async def open_with_wayland_fallback(
         raise
     except Exception as exc:
         await cleanup()
-        if not decision.effective:
+        # Only a failure the browser itself blamed on Wayland is Wayland's: any
+        # other (locked profile, missing library) fails identically on X11, so
+        # an auto retry would double the launch time and report an unrelated
+        # error as the Wayland reason.
+        if not decision.effective or not wayland_mod.mentions_wayland(exc):
             raise
         if decision.source != "auto":
-            if wayland_mod.mentions_wayland(exc):
-                raise wayland_mod.explicit_failure(decision, exc) from exc
-            raise
+            raise wayland_mod.explicit_failure(decision, exc) from exc
         decision = decision.fell_back(exc)
         log.warning(
             "octowright.launch.wayland_fallback_x11",

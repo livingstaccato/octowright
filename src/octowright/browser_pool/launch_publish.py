@@ -220,6 +220,7 @@ def _build_session_object(
         ),
         _browser_for_close=(browser if browser is not None else getattr(context, "browser", None)),
         operation_queue_timeout_seconds=operation_queue_timeout_seconds,
+        launch_options=launch_options,
     )
     # Wire up video tracking — page.video is only non-None when record_video_dir was set.
     if launch_options.record_video and page.video is not None:

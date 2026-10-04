@@ -32,9 +32,9 @@ Model: `claude-opus-4-8`. Fixture: `catalog.html` @ `http://localhost:8000`.
 
 | id | backend | skill | concurrency | trials | status |
 |----|---------|-------|-------------|--------|--------|
-| A | octowright | allowed (realistic) | parallel-isolated | 3 | done |
+| A | Octowright | allowed (realistic) | parallel-isolated | 3 | done |
 | B | playwright-mcp | OFF (read via snapshot) | sequential-isolated | 3 | done |
-| C | octowright | OFF | parallel-isolated | 3 | done |
+| C | Octowright | OFF | parallel-isolated | 3 | done |
 | D | playwright-mcp | OFF (read via evaluate) | sequential-isolated | 3 | done |
 
 The clean symmetric backend diff is **C vs B** (both skill-off). A is kept as a
@@ -113,7 +113,7 @@ PROMPT.md's assumption** that snapshot/accessibility verbosity dominates.
 ### Baseline context (system + tool surface + first user msg) — fixed per backend (~±150 tok)
 | backend | baseline ctx tokens |
 |---|---|
-| octowright | **11,171** (range 11,171–11,330 across trials) |
+| Octowright | **11,171** (range 11,171–11,330 across trials) |
 | playwright-mcp | **9,913** (range 9,913–10,017 across trials) |
 
 Octowright exposes ~111 (deferred) tools to the subagent vs ~22 for Playwright; that
@@ -137,14 +137,14 @@ schemas loaded on demand, so it's surface *names*, not full schemas.)
 ### Turns + output tokens (the interaction-strategy tax)
 | backend (skill-off) | assistant turns | sum output tokens |
 |---|---|---|
-| octowright (a9bdd2) | 41 | 4,133 |
+| Octowright (a9bdd2) | 41 | 4,133 |
 | playwright (3 trials) | 29–34 | 1,890–2,357 |
 
 Octowright's model drives state reads with `browser_evaluate` (authoring JS each time)
 → ~2× the output tokens across more turns. Playwright snapshots-and-reads → leaner output.
 
 ### Per-observation payload size (chars) — Octowright is SMALLER
-| tool | octowright | playwright-mcp |
+| tool | Octowright | playwright-mcp |
 |---|---|---|
 | `browser_snapshot` | ~630 | **~1,190** (≈1.9×) |
 | action echo (`click`) | **16** | 256 |
@@ -266,7 +266,7 @@ Token amortization (using the measured single-run costs above):
 Repeats are ~free on Octowright, linear on Playwright. **Caveat:** macros amortize the
 *deterministic* flow; a task needing fresh per-run judgment still pays the LLM for that part.
 
-Two Octowright bugs surfaced while running this (filed in the octowright repo HANDOFF):
+Two Octowright bugs surfaced while running this (filed in the Octowright repo HANDOFF):
 - `macro_save` retained recorder noise (`user_navigation` to `:6286/new-tab` + `markdown_cached`)
   that inflated replay past the **bridge request-timeout** (original `macro_run` timed out twice,
   half-applied); a hand-stripped 3-step macro ran in **62 ms**.

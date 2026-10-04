@@ -237,3 +237,82 @@ async def test_spawn_roster_does_not_throttle_headless_launches(monkeypatch: pyt
     await _roster.spawn_roster(pool, specs)
 
     assert state["max"] == 6, f"headless should be unthrottled, peak was {state['max']}"
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_reads_a_null_har_mode_as_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scenario participant written ``har_mode:`` (YAML null) means "not set".
+
+    ``dict.get``'s default does not cover an explicit null, so it reached
+    ``LaunchOptions.validate()`` as ``None`` and refused the whole roster."""
+    from octowright.browser_pool import roster as _roster
+
+    monkeypatch.setattr(_roster, "enforce_launch_limits", lambda *_a, **_k: None)
+    pool = _make_pool()
+    seen: dict[str, Any] = {}
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        seen.update(kwargs)
+        return _launch_result(kind=kwargs["kind"])
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+
+    await _roster.spawn_roster(pool, [{"kind": "chromium", "headed": False, "har_mode": None}])
+
+    assert seen["har_mode"] == "minimal"
+
+
+async def _spawn_capturing(
+    monkeypatch: pytest.MonkeyPatch, specs: list[dict[str, Any]]
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    from octowright.browser_pool import roster as _roster
+
+    monkeypatch.setattr(_roster, "enforce_launch_limits", lambda *_a, **_k: None)
+    pool = _make_pool()
+    seen: list[dict[str, Any]] = []
+
+    async def _fake_launch(**kwargs: Any) -> dict[str, Any]:
+        seen.append(kwargs)
+        return _launch_result(kind=kwargs["kind"])
+
+    monkeypatch.setattr(pool, "launch", _fake_launch)
+    return await _roster.spawn_roster(pool, specs), seen
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_passes_protected_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``protected`` is documented on browser_spawn_roster and was silently
+    dropped by a hand-kept key list, so a roster browser the caller marked
+    user-owned could be closed by any close-capable tool."""
+    _, seen = await _spawn_capturing(monkeypatch, [{"headed": False, "protected": True}])
+    assert seen[0]["protected"] is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("key", ["headless", "viewport_width", "trusted_launch_url"])
+async def test_spawn_roster_refuses_an_option_it_would_not_honour(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    """Unknown keys (and ``headless``, whose sense is inverted) are refused the
+    way ``LaunchOptions`` refuses them everywhere else -- not dropped. And a
+    tool caller cannot pick the URL the macro credential guards trust;
+    browser_launch does not expose that either."""
+    result, seen = await _spawn_capturing(monkeypatch, [{"headed": False, key: "x"}])
+    assert seen == []
+    assert result["launched"] == []
+    assert key in result["errors"][0]["error"]
+
+
+@pytest.mark.anyio
+async def test_spawn_roster_reads_every_explicit_null_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A YAML ``key:`` is an explicit null, which ``dict.get``'s default does
+    not cover -- for any key, not just ``har_mode``."""
+    from octowright.browser_pool.options import LaunchOptions
+
+    nulls = {"kind": None, "badge_position": None, "badge": None, "tile": None, "headed": None, "har_mode": None}
+    _, seen = await _spawn_capturing(monkeypatch, [nulls])
+    defaults = LaunchOptions()
+    assert seen[0]["kind"] == defaults.kind
+    assert seen[0]["badge_position"] == defaults.badge_position
+    assert seen[0]["badge"] is defaults.badge
+    assert seen[0]["tile"] is defaults.tile
+    assert seen[0]["headed"] is None  # auto
+    assert seen[0]["har_mode"] == defaults.har_mode

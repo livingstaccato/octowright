@@ -1,4 +1,4 @@
-![octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/brand/octowright-banner.png)
+![Octowright](https://raw.githubusercontent.com/livingstaccato/octowright/main/docs/images/brand/octowright-banner.png)
 
 # Octowright
 
@@ -412,7 +412,7 @@ without going through an MCP client:
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. `--out` must sit under `OCTOWRIGHT_RECORDINGS` (checked before anything launches); without it the report is a timestamped file there. `--persona` runs tests one at a time (refused with `--max-parallel` above 1). |
 | `octowright test --sequence <file> [--persona <name>] [--artifacts <dir>] [--redact-errors] [--record-video]` | Run a macro sequence file (the names and arguments `macro_run_sequence` takes) in one browser of a persona; one JUnit case per step, later steps skipped after a failure. `--redact-errors` records only macro, step and action. `--record-video` records the browser and prints `video: <path>` after the report, failed and interrupted runs included; with `--artifacts` the video is copied there as `<sequence-stem>.webm` (`_2`, `_3`, ... when the name is taken; nothing is overwritten). The browser (and video) size is `OCTOWRIGHT_VIEWPORT_W`x`OCTOWRIGHT_VIEWPORT_H`, default 1280x800; `OCTOWRIGHT_MACRO_SLOWMO_MS` slows every action. |
 | `octowright cleanup [--days N] [--apply] [--browsers]` | Prune old recording artefacts (JSONL logs, screenshots, videos, traces). Dry-run by default; `--apply` actually deletes. `--browsers` also reaps stray Playwright-managed browser processes, machine-wide. |
-| `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup). Reversible — rename back to re-enable. |
+| `octowright takeover [--apply --scope=session\|project\|global --name=<n>]` | Detect competing Playwright MCP plugins in `.mcp.json` / `~/.claude.json` and offer to disable them in favour of Octowright. Default is read-only report; `--apply` rewrites the config (with timestamped backup). Reversible — rename back to re-enable. |
 | `octowright persona list\|show\|create\|delete` | Manage personas from the terminal. |
 | `octowright scenario list\|start [--test --out <xml>] [--watch]` | Start a scenario; `--watch` streams participant events to stdout in real-time; the command blocks until Ctrl-C. |
 | `octowright restart [--keep-browsers] [--kill-followers]` | Stop the running daemon, sweep orphans, start a fresh one. `--kill-followers` also severs connected MCP client transports for a full reset. |

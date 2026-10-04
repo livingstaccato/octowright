@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Final
@@ -22,6 +23,15 @@ from octowright.request_errors import InvalidRequestError
 #: browser ended up protected; a caller supplying it would be describing a
 #: decision that has not been made yet.
 _NOT_CALLER_SETTABLE: Final = frozenset({"protected_reason"})
+
+#: Fields only the pool's own handoff/relaunch may set: ``trusted_launch_url``
+#: picks the URL the macro credential guards trust, and ``session_key`` names
+#: another browser's ``session=True`` directory. ``from_mapping`` accepts them
+#: because ``pool.launch`` must; every entry point that builds options from a
+#: CALLER's mapping goes through ``from_external_mapping``, which refuses them.
+#: ``tests/test_internal_launch_options_closed.py`` enumerates those entry
+#: points, so a new one cannot bypass this by calling ``from_mapping``.
+INTERNAL_ONLY_LAUNCH_FIELDS: Final = frozenset({"trusted_launch_url", "session_key"})
 
 #: Names a caller plausibly reaches for that mean something else here, mapped to
 #: what they should have written. ``headless`` is Playwright's OWN parameter
@@ -130,6 +140,40 @@ def resolve_protected(explicit: bool | None, *, headed: bool, ephemeral: bool) -
     return False, "unprotected"
 
 
+#: ``har_mode`` when none was given.
+_HAR_MODE_DEFAULT = "minimal"
+
+
+def _one_of(value: object, allowed: Collection[str]) -> bool:
+    """Membership that cannot raise: a poisoned recording can carry a list or
+    dict, which ``in`` on a set answers with ``TypeError`` (unhashable) -- a
+    500 instead of the ``InvalidRequestError`` a refused value gets."""
+    return isinstance(value, str) and value in allowed
+
+
+def _record_bool(record: dict[str, Any], key: str, default: bool) -> bool:
+    """A flag the writer always records as a bool: anything else -- null
+    included -- is a corrupt or poisoned file, refused rather than read by
+    truthiness."""
+    value = record.get(key, default)
+    if not isinstance(value, bool):
+        raise InvalidRequestError(f"{key} must be a boolean in a launch record")
+    return value
+
+
+def _contained_har_path(har_path: Any) -> Any:
+    """HAR writes go under RECORDINGS_DIR by construction in the live launch
+    path. Enforce that on the JSONL replay path too, so a poisoned record can't
+    redirect HAR writes anywhere on disk. Read defaults.RECORDINGS_DIR
+    dynamically so tests that monkeypatch it (or reload defaults after setenv)
+    see the current value, not the import-time snapshot."""
+    if har_path is None:
+        return None
+    from octowright._paths import safe_under
+
+    return har_path if safe_under(Path(har_path), defaults.RECORDINGS_DIR) else None
+
+
 @dataclass(frozen=True)
 class LaunchOptions:
     kind: str = "chromium"
@@ -149,7 +193,7 @@ class LaunchOptions:
     trace: bool = False
     har: bool = False
     har_path: str | None = None
-    har_mode: str = "minimal"
+    har_mode: str = _HAR_MODE_DEFAULT
     har_url_filter: str | None = None
     har_content: str | None = None
     badge: bool = True
@@ -227,6 +271,13 @@ class LaunchOptions:
     #: recording (see ``from_launch_record``): a poisoned one must not choose
     #: what the guard trusts.
     trusted_launch_url: str | None = None
+    #: The key a ``session=True`` tmpdir is shared under, when it is not the
+    #: label. An anonymous session's directory is keyed by its instance_id, so
+    #: a handoff or relaunch -- which gets a new one -- opened an empty profile
+    #: and lost every cookie; the replacement carries the original's key
+    #: instead. Grants nothing a ``label`` does not, being the same key. NEVER
+    #: read from a JSONL recording (see ``from_launch_record``).
+    session_key: str | None = None
 
     @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
@@ -268,6 +319,18 @@ class LaunchOptions:
         return launch_options
 
     @classmethod
+    def from_external_mapping(cls, options: dict[str, Any], *, source: str) -> LaunchOptions:
+        """:meth:`from_mapping` for a mapping a caller supplied, refusing internal-only fields.
+
+        ``source`` names the entry point for the message (``"in a roster
+        spec"``), so the refusal points at what to edit.
+        """
+        refused = sorted(INTERNAL_ONLY_LAUNCH_FIELDS & set(options))
+        if refused:
+            raise InvalidRequestError(f"launch option(s) not accepted {source}: {', '.join(map(repr, refused))}")
+        return cls.from_mapping(options)
+
+    @classmethod
     def from_launch_record(cls, record: dict[str, Any]) -> LaunchOptions:
         """Translate a JSONL ``launch`` event back into ``LaunchOptions``.
 
@@ -285,20 +348,15 @@ class LaunchOptions:
         ``kind``/``badge_position``/``har_mode``/``har_content`` values, and
         the ``har_path`` containment check below blocks write-anywhere.
         """
+        # The writer always records the RESOLVED bool, so anything else is a
+        # corrupt or poisoned file. Read loosely, a null became "auto" (headless
+        # on a display-less host) and the string "false" became headed.
+        headed = _record_bool(record, "headed", True)
         viewport = record.get("viewport") if isinstance(record.get("viewport"), dict) else None
-        har_path = record.get("har_path")
-        if har_path is not None:
-            # HAR writes go under RECORDINGS_DIR by construction in the live
-            # launch path. Enforce that on the JSONL replay path too, so a
-            # poisoned record can't redirect HAR writes anywhere on disk.
-            # Read defaults.RECORDINGS_DIR dynamically so tests that
-            # monkeypatch it (or reload defaults after setenv) see the
-            # current value, not the import-time snapshot.
-            from octowright import defaults as _defaults
-            from octowright._paths import safe_under
-
-            if not safe_under(Path(har_path), _defaults.RECORDINGS_DIR):
-                har_path = None
+        # Checked here rather than left to validate(): it is folded into a
+        # derived value below, where "false" would read as true.
+        har = _record_bool(record, "har", False)
+        har_path = _contained_har_path(record.get("har_path"))
         return cls.from_mapping(
             {
                 "kind": record.get("kind", "chromium"),
@@ -307,13 +365,17 @@ class LaunchOptions:
                 "profile": record.get("profile"),
                 "viewport_w": viewport.get("w") if viewport else None,
                 "viewport_h": viewport.get("h") if viewport else None,
-                "headed": record.get("headed", True),
+                "headed": headed,
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
                 "trace": record.get("trace", False),
-                "har": bool(record.get("har")) and har_path is not None,
+                "har": har and har_path is not None,
                 "har_path": har_path,
-                "har_mode": record.get("har_mode", "minimal"),
+                # The writer records har_mode as null for a launch without
+                # HAR, and the default of dict.get does not cover an explicit null.
+                # Null means "not set" here; a non-null junk value still
+                # reaches validate() and is refused.
+                "har_mode": _HAR_MODE_DEFAULT if record.get("har_mode") is None else record["har_mode"],
                 "har_url_filter": record.get("har_url_filter"),
                 "har_content": record.get("har_content"),
                 "badge": record.get("badge", True),
@@ -327,9 +389,10 @@ class LaunchOptions:
         )
 
     def validate(self) -> None:
+        self._validate_flags()
         if self.kind not in SUPPORTED_KINDS:
             raise InvalidRequestError(f"kind must be one of {SUPPORTED_KINDS}, got {self.kind!r}")
-        if self.badge_position not in _BADGE_POSITIONS:
+        if not _one_of(self.badge_position, _BADGE_POSITIONS):
             raise InvalidRequestError(
                 f"badge_position must be one of {sorted(_BADGE_POSITIONS)}, got {self.badge_position!r}"
             )
@@ -337,18 +400,34 @@ class LaunchOptions:
             raise InvalidRequestError("ephemeral and session are mutually exclusive")
         if self.profile and self.session:
             raise InvalidRequestError("profile and session are mutually exclusive")
-        if self.har_mode not in {"full", "minimal"}:
+        if not _one_of(self.har_mode, {"full", "minimal"}):
             raise InvalidRequestError("har_mode must be one of ['full', 'minimal']")
-        if self.har_content is not None and self.har_content not in {"omit", "embed", "attach"}:
+        if self.har_content is not None and not _one_of(self.har_content, {"omit", "embed", "attach"}):
             raise InvalidRequestError("har_content must be one of ['omit', 'embed', 'attach']")
         self._validate_browser_selection()
         self._validate_engine_specific_options()
         self._validate_headers()
         self._validate_trusted_launch_url()
 
+    def _validate_flags(self) -> None:
+        """Every boolean option must BE a boolean (or null, where null means
+        auto/unset). Truthiness is the trap: a poisoned launch record's
+        ``ephemeral: "false"`` relaunched a browser ephemeral, and the same
+        string reached ``from_mapping`` from an HTTP body or roster spec. The
+        field set is derived from the annotations, so a new flag is covered."""
+        for name in _BOOL_FIELDS:
+            if not isinstance(getattr(self, name), bool):
+                raise InvalidRequestError(f"{name} must be a boolean")
+        for name in _OPTIONAL_BOOL_FIELDS:
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, bool):
+                raise InvalidRequestError(f"{name} must be a boolean or null")
+
     def _validate_trusted_launch_url(self) -> None:
         if self.trusted_launch_url is not None and not isinstance(self.trusted_launch_url, str):
             raise InvalidRequestError("trusted_launch_url must be a string")
+        if self.session_key is not None and (not isinstance(self.session_key, str) or not self.session):
+            raise InvalidRequestError("session_key must be a string, and only with session=True")
 
     def _validate_engine_specific_options(self) -> None:
         if not isinstance(self.disable_automation_controlled, bool):
@@ -401,7 +480,7 @@ class LaunchOptions:
         return self.profile
 
     def session_name(self, instance_id: str) -> str:
-        return self.label or instance_id
+        return self.session_key or self.label or instance_id
 
     def to_pool_kwargs(self) -> dict[str, Any]:
         """Flatten back to the kwarg dict accepted by ``BrowserPool.launch``.
@@ -449,3 +528,7 @@ class LaunchOptions:
 #: remembered to update. A module constant rather than a method because
 #: ``from_mapping`` runs on every launch and this value never changes.
 CALLER_SETTABLE_FIELDS: Final = frozenset(f.name for f in fields(LaunchOptions)) - _NOT_CALLER_SETTABLE
+
+#: Options typed ``bool`` / ``bool | None``, checked by ``_validate_flags``.
+_BOOL_FIELDS: Final = tuple(f.name for f in fields(LaunchOptions) if f.type == "bool")
+_OPTIONAL_BOOL_FIELDS: Final = tuple(f.name for f in fields(LaunchOptions) if f.type == "bool | None")
