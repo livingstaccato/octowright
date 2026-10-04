@@ -23,11 +23,13 @@ split-brain the tests above recover from. See ``_spawn_election_lock``.
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 from typing import Any
 
 import pytest
 from click.testing import CliRunner
 
+from octowright import daemonize
 from octowright.cli import port_owner
 from octowright.cli import restart as restart_mod
 from octowright.cli._root import cli
@@ -172,38 +174,58 @@ class TestSpawnedDaemonArgv:
     real command line.
     """
 
-    def _captured_argv(self, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-        seen: dict[str, list[str]] = {}
+    def _captured(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+        seen: dict[str, Any] = {}
 
         class _FakePopen:
             pid = 4242
 
-            def __init__(self, args: list[str], **_kw: Any) -> None:
+            def __init__(self, args: list[str], **kw: Any) -> None:
                 seen["args"] = args
+                seen["kwargs"] = kw
 
         monkeypatch.setattr(restart_mod.subprocess, "Popen", _FakePopen)
         monkeypatch.setattr(restart_mod, "_resolve_octowright_entry", lambda: "/x/bin/octowright")
+        # The shared spawner writes the daemon's stderr to the user state log;
+        # keep that in the test's tmp dir.
+        monkeypatch.setattr(daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))
+        monkeypatch.setattr(daemonize, "_detach_candidates", lambda: [{"sentinel_detach_flag": True}])
         restart_mod._spawn_daemon("127.0.0.1", 6286)
-        return seen["args"]
+        return seen
 
-    def test_spawn_passes_daemon_mode(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        argv = self._captured_argv(monkeypatch)
+    def _captured_argv(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
+        return self._captured(monkeypatch, tmp_path)["args"]
+
+    def test_spawn_uses_the_shared_detachment(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Restart is a daemon spawner like any other, so it must detach the same
+        way: its own ``start_new_session`` Popen skipped the Windows console and
+        job-object flags, so on a runner whose job tears down with
+        KILL_ON_JOB_CLOSE the "healthy" restarted daemon died with the step. It
+        also sent the daemon's stderr to /dev/null instead of the daemon log
+        every failure message points at."""
+        seen = self._captured(monkeypatch, tmp_path)
+        assert seen["kwargs"].get("sentinel_detach_flag") is True
+        assert seen["kwargs"]["stderr"] is not restart_mod.subprocess.DEVNULL
+        assert seen["args"][0] == "/x/bin/octowright", "restart keeps preferring this venv's console script"
+
+    def test_spawn_passes_daemon_mode(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        argv = self._captured_argv(monkeypatch, tmp_path)
         assert "--daemon-mode" in argv, (
             "without --daemon-mode the child runs leader election and blocks on the "
             "election lock restart holds across spawn+health"
         )
 
-    def test_spawn_still_pins_host_and_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_spawn_still_pins_host_and_port(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """The health probe that follows must target the endpoint we asked for."""
-        argv = self._captured_argv(monkeypatch)
+        argv = self._captured_argv(monkeypatch, tmp_path)
         assert argv[argv.index("--http-host") + 1] == "127.0.0.1"
         assert argv[argv.index("--http-port") + 1] == "6286"
 
-    def test_spawn_argv_matches_daemonize_shape(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_spawn_argv_matches_daemonize_shape(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Both spawners must agree: ``serve --daemon-mode`` then host/port.
 
         They are the only two places a daemon is started; drift between them is
         what produced the stall.
         """
-        argv = self._captured_argv(monkeypatch)
+        argv = self._captured_argv(monkeypatch, tmp_path)
         assert argv[1:3] == ["serve", "--daemon-mode"]

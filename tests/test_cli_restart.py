@@ -13,6 +13,7 @@ command rather than running real daemons.
 from __future__ import annotations
 
 import signal
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -327,6 +328,7 @@ def test_follower_pids_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_spawn_passes_http_host_and_port_through(
     runner: CliRunner,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The daemon spawn must include the --http-host and --http-port the
     user passed to restart, so the health probe afterwards is checking the
@@ -340,6 +342,9 @@ def test_spawn_passes_http_host_and_port_through(
 
     monkeypatch.setattr(_restart_mod.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(_restart_mod, "_resolve_octowright_entry", lambda: "/fake/octowright")
+    from octowright import daemonize as _daemonize
+
+    monkeypatch.setattr(_daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))
     monkeypatch.setattr(
         _restart_mod,
         "reap_daemon_browsers",

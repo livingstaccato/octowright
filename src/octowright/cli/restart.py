@@ -484,28 +484,28 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     the daemon would default to ``defaults.HTTP_PORT`` and silently retry up
     if it was busy, leaving the probe target out of sync.
     """
-    octowright = _resolve_octowright_entry()
-    # --daemon-mode is REQUIRED, not cosmetic: it tells serve to run the leader
-    # directly and SKIP leader election (``cli/serve`` dispatches on it before
-    # ``_ensure_leader_or_inline`` is ever reached), which is exactly what
-    # ``daemonize.spawn_daemon`` does for the same reason. Without it the
-    # spawned process runs the full singleton election and blocks acquiring the
-    # election lock -- the lock this very command now holds across spawn and
-    # health-confirm. That is not a deadlock but a guaranteed stall: the child
-    # waits out our whole health budget, we report "daemon did not become
-    # healthy", release the lock on the way out, and the daemon then starts ~10s
-    # late. Observed live after the lock was introduced; the tests missed it
-    # because they stub _spawn_daemon and so never see this argv.
-    proc = subprocess.Popen(  # nosec B603
-        [octowright, "serve", "--daemon-mode", "--http-host", http_host, "--http-port", str(http_port)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
+    # Through the shared spawner, not a Popen of our own: that is what carries
+    # the platform detachment ladder (on Windows, the console flags AND the
+    # job-object breakaway -- ``start_new_session`` alone does nothing there,
+    # so a restarted daemon died with a CI step's job) and the daemon log every
+    # spawn-failure message points at. It also passes --daemon-mode, which is
+    # REQUIRED: it makes serve run the leader directly and SKIP leader
+    # election. Without it the child blocks acquiring the election lock this
+    # very command holds across spawn and health-confirm -- a guaranteed stall
+    # (observed live) that reported "daemon did not become healthy" and started
+    # the daemon ~10s late. The entrypoint stays restart's own: the console
+    # script beside this interpreter, so a different version on PATH is not
+    # what comes back.
+    from octowright import daemonize
+
+    pid = daemonize.spawn_daemon(
+        http_host=http_host,
+        http_port=http_port,
+        idle_grace=None,
+        entrypoint=[_resolve_octowright_entry()],
     )
-    click.echo(f"spawned octowright serve (launcher pid={proc.pid}) on {http_host}:{http_port}")
-    return proc.pid
+    click.echo(f"spawned octowright serve (launcher pid={pid}) on {http_host}:{http_port}")
+    return pid
 
 
 def _health_candidates(host: str, port: int) -> list[str]:
