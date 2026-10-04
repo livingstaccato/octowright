@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from provide.telemetry import get_logger
 from pydantic import StrictBool
 
 from octowright import _format as fmt
@@ -36,6 +37,8 @@ from octowright.server.browser.lifecycle_navigate import (
 )
 from octowright.server.browser.lifecycle_summary import browser_list_summary_row
 
+log = get_logger(__name__)
+
 __all__ = [
     "browser_close",
     "browser_close_all",
@@ -53,6 +56,27 @@ __all__ = [
     "browser_viewport_status",
     "browser_viewport_sync",
 ]
+
+
+def _project_slug_persona(label: str) -> str | None:
+    """The persona named after the project (the label's last path part), if it loads.
+
+    No such persona is the expected, quiet case. One that exists but cannot be
+    loaded is logged: the launch still goes ahead on a throwaway profile, and
+    without the log nothing said why the operator's persona -- and the login
+    saved in it -- was not used.
+    """
+    from octowright import personas
+
+    slug = label.rsplit("/", 1)[-1]
+    try:
+        personas.load_persona(slug)
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.warning("octowright.launch.project_persona_unloadable", persona=slug, error=str(exc))
+        return None
+    return slug
 
 
 def _enforce_browser_cap(*, adding: int) -> None:
@@ -224,14 +248,7 @@ async def browser_launch(
         elif cfg_persona:
             profile = cfg_persona
         else:
-            _slug = label.split("/")[-1] if "/" in label else label
-            try:
-                from octowright.personas import load_persona
-
-                load_persona(_slug)
-                profile = _slug
-            except Exception:
-                pass
+            profile = _project_slug_persona(label)
 
     # Single source of truth: LaunchOptions.to_pool_kwargs() — adding a launch
     # field is a one-line edit in options.py, not four parallel sites.
@@ -348,14 +365,7 @@ async def browser_quick_launch(
         elif cfg_persona:
             profile = cfg_persona
         else:
-            _slug = label.split("/")[-1] if "/" in label else label
-            try:
-                from octowright.personas import load_persona
-
-                load_persona(_slug)
-                profile = _slug
-            except Exception:
-                pass
+            profile = _project_slug_persona(label)
 
     def _build_options(*, profile_for_launch: str | None, kind_for_launch: str) -> LaunchOptions:
         # Reuses the LaunchOptions schema so this site never drifts from
