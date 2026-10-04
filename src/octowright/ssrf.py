@@ -74,6 +74,17 @@ import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from octowright.request_errors import InvalidRequestError
+from octowright.safety_stop import SafetyStop
+
+
+class SsrfRefusal(SafetyStop, InvalidRequestError):
+    """The SSRF policy refused a URL: still the caller's own input, and a `SafetyStop`.
+
+    An ``InvalidRequestError`` so every sink that keeps a refused request out
+    of engine health still does; a `SafetyStop` so a macro's ``try`` or
+    ``try_each`` cannot suppress it.
+    """
+
 
 # Tokens that mean "policy disabled". Empty/unset is the default → off.
 _OFF = frozenset({"", "off", "0", "false", "no", "never", "none", "disabled"})
@@ -342,7 +353,7 @@ def _refuse_as_spelled(host: str) -> bool:
     ip = _literal_ip(host)
     blocked = (host in _BLOCKED_HOSTNAMES or host.endswith(".localhost")) if ip is None else ip_is_non_public(ip)
     if blocked:
-        raise InvalidRequestError(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
+        raise SsrfRefusal(f"SSRF policy block-private refuses navigation to non-public host {host!r}")
     return ip is not None
 
 
@@ -413,7 +424,7 @@ async def check_navigation_url_resolved(url: str) -> None:
         return
     refusal = await _resolution_refusal(host)
     if refusal is not None:
-        raise InvalidRequestError(refusal)
+        raise SsrfRefusal(refusal)
 
 
 #: How long a subresource host's verdict is reused. A page issues dozens of
@@ -449,7 +460,7 @@ async def check_request_url_cached(url: str) -> None:
     else:
         refusal = cached[1]
     if refusal is not None:
-        raise InvalidRequestError(refusal)
+        raise SsrfRefusal(refusal)
 
 
 async def _shared_lookup(host: str) -> str | None:

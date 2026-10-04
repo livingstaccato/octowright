@@ -150,7 +150,6 @@ from urllib.parse import urljoin
 from provide.telemetry import get_logger
 
 from octowright import ssrf
-from octowright.request_errors import InvalidRequestError
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -375,7 +374,7 @@ class FrameChain:
         """The exception a caller raises for this chain's ending."""
         if self.failed:
             return NavigationFailedError(self.reason or "navigation failed")
-        return InvalidRequestError(self.reason or "navigation refused by the SSRF policy")
+        return ssrf.SsrfRefusal(self.reason or "navigation refused by the SSRF policy")
 
     def end(self, reason: str, *, failed: bool) -> None:
         self.reason = reason

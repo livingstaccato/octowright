@@ -40,6 +40,7 @@ from octowright.macros.privacy_ledger import held_provenance
 from octowright.macros.redaction_text import normalize
 from octowright.macros.rendered_surface import OPAQUE_REASONS, rendered_leaks
 from octowright.macros.scrub_engine import REDACTED, sensitive_value_variants
+from octowright.safety_stop import SafetyStop
 
 log = get_logger(__name__)
 
@@ -47,8 +48,11 @@ FIELD = "screenshot_refused"
 REFUSED = "screenshot refused"
 
 
-class ScreenshotRefused(RuntimeError):
-    """A classified screenshot was refused; ``fields`` say why, never with the value."""
+class ScreenshotRefused(SafetyStop, RuntimeError):
+    """A classified screenshot was refused; ``fields`` say why, never with the value.
+
+    A `SafetyStop`: no macro ``try`` or ``try_each`` may suppress it.
+    """
 
     def __init__(self, message: str, fields: dict[str, Any]) -> None:
         super().__init__(message)
