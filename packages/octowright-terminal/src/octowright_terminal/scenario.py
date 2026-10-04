@@ -64,6 +64,22 @@ def _validate_options(p: Any) -> None:
             )
 
 
+def _require_bool(value: Any, *, source: str) -> bool:
+    """``insecure_no_host_check`` must be a real boolean, from either source.
+
+    It turns SSH host-key verification OFF, and ``bool("false")`` is True: a
+    quoted YAML ``"false"`` (or a JSON string from an MCP caller, or a persona
+    ``app.ssh`` block) silently disabled the check while reading as "keep it
+    on". Core's browser flags refuse the same truthiness trap.
+    """
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"terminal participant {source}.insecure_no_host_check must be a boolean "
+            f"(true/false, unquoted), got {type(value).__name__} {value!r}"
+        )
+    return value
+
+
 def _resolve_launch(p: Any, persona: Any) -> dict[str, Any]:
     """Return kwargs for ``terminal_pool.launch(**kwargs)`` from a terminal participant.
 
@@ -96,7 +112,10 @@ def _resolve_launch(p: Any, persona: Any) -> dict[str, Any]:
         # cast satisfies it with zero runtime effect.
         port = cast(int, port_opt) if port_opt is not None else int(ssh.get("port", SSH_DEFAULT_PORT))
         insecure_opt = opts.get("insecure_no_host_check")
-        insecure = bool(insecure_opt) if insecure_opt is not None else bool(ssh.get("insecure_no_host_check", False))
+        insecure = _require_bool(
+            insecure_opt if insecure_opt is not None else ssh.get("insecure_no_host_check", False),
+            source="options" if insecure_opt is not None else "persona app.ssh",
+        )
         cfg = ssh_connector_config(
             host=_pick("host"),
             port=port,

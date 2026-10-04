@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Terminal plugin: a quoted `"false"` no longer turns SSH host-key
+  verification off.** A scenario participant's (or persona `app.ssh` block's)
+  `insecure_no_host_check` was coerced with `bool()`, so the string `"false"`
+  skipped `known_hosts`. Anything but a real boolean is now refused at launch.
 - **Console cursors keep working after 1,000 messages.** `browser_console_messages`
   and `browser_console_summary` cursors were positions in the session's
   bounded console buffer, so once it filled, `since=1000` returned nothing
