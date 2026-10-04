@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A call made while the follower reconnects no longer reaches the new
+  leader ahead of `initialize`.** On reconnect the follower released the calls
+  waiting for a connection before it replayed the MCP handshake on the new
+  session. A queued call could then reach an uninitialized session, which the
+  leader answered with an error during an ordinary restart and counted against
+  the follower's new-session rate limit. The handshake and any resumed calls
+  now go out first.
 - **A call the old leader never received is sent to its replacement instead
   of failing.** When the leader is replaced, a call it might have run is
   answered "outcome unknown" rather than run a second time on the new leader.

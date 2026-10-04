@@ -499,9 +499,18 @@ async def run_supervised_proxy(
                                 # Before the writer is published: every call sent
                                 # on this session is stamped with this leader.
                                 supervisor_obj.leader_generation = resolve_leader_generation()
+                                supervisor_obj.reconnect_attempts = attempt
+                                # Initialize the session, and re-send the calls kept
+                                # across the reconnect (idempotent resume), BEFORE the
+                                # writer is published: publishing wakes every call
+                                # queued behind ``ready``, and one sent ahead of the
+                                # replayed initialize reaches an uninitialized session,
+                                # which the leader answers with an error (and a stray
+                                # session against our new-session rate limit).
+                                await supervisor_obj.replay_initialize(remote_write)
+                                await supervisor_obj.resume_in_flight(remote_write)
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
-                                supervisor_obj.reconnect_attempts = attempt
                                 await bridge_state.record_snapshot_async(
                                     path=BRIDGE_STATE_PATH,
                                     follower_pid=__import__("os").getpid(),
@@ -512,10 +521,6 @@ async def run_supervised_proxy(
                                     reconnect_attempts=supervisor_obj.reconnect_attempts,
                                     request_timeouts=supervisor_obj.request_timeouts,
                                 )
-                                await supervisor_obj.replay_initialize(remote_write)
-                                # Re-send any in-flight requests kept across the
-                                # reconnect (idempotent resume) on this fresh session.
-                                await supervisor_obj.resume_in_flight(remote_write)
                                 attempt = 0
                                 # Connected → the leader is back. If an outage was
                                 # observed (inline OR by the monitor's unstick), this
