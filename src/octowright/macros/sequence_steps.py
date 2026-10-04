@@ -8,7 +8,8 @@
 A failing step never raises out of a sequence (#248): with ``stop_on_failure``
 the walk stops after it and the result says where (``stopped_at``), so the
 caller keeps the steps that passed. What still raises is what means the
-sequence could not run at all -- malformed ``names``/``args_list``
+sequence could not run at all -- malformed ``names``/``args_list``, an
+``args_list`` longer than ``names``, or a name no macro could have
 (`resolve_sequence_args`), the operation gate (`GATE_ERRORS`), and
 cancellation, which is a ``BaseException`` and never reaches an
 ``except Exception``.
@@ -25,6 +26,7 @@ from octowright._tracing import set_attrs
 from octowright.macros._redact import _REDACTED_MACRO_VALUE
 from octowright.macros.nesting import MacroLoader
 from octowright.macros.privacy import MacroArgPrivacy
+from octowright.macros.storage import macro_path
 from octowright.mcp_types import MacroSequenceStep
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
@@ -54,15 +56,37 @@ def resolve_sequence_args(names: Any, args_list: Any) -> list[dict[str, Any]]:
 
     A short *args_list* pads with ``{}`` and a ``None`` entry means ``{}``, as
     before. A malformed one used to surface as a failure of whichever step it
-    reached, after the steps before it had already acted on the browser.
+    reached, after the steps before it had already acted on the browser. A
+    longer one is refused (its extra entries used to be dropped without a
+    word, usually a caller's off-by-one), and so is a name ``macro_path``
+    would refuse: it, too, used to fail only when its step ran.
     """
     if not _list_of(names, str):
         raise ValueError("names must be a list of macro names")
     supplied = [] if args_list is None else args_list
     if not _list_of(supplied, (dict, type(None))):
         raise ValueError("args_list must be a list of argument objects (or null), one per name")
+    if len(supplied) > len(names):
+        raise ValueError(
+            f"args_list has {len(supplied)} entries but names has {len(names)}; "
+            "each args_list entry supplies the macro at the same index, so the extra ones would never run"
+        )
+    _check_names(names)
     padded = supplied + [None] * (len(names) - len(supplied))
     return [padded[index] or {} for index in range(len(names))]
+
+
+def _check_names(names: list[str]) -> None:
+    """Refuse a name no step could load (`storage.macro_path`) before the first step acts.
+
+    Only the name's shape: a macro that is merely not saved is still a failed
+    step, as it was, so the steps before it keep their results.
+    """
+    for index, name in enumerate(names):
+        try:
+            macro_path(name)
+        except ValueError as exc:
+            raise ValueError(f"names[{index}] cannot name a macro: {exc}") from None
 
 
 def _list_of(value: Any, kinds: type | tuple[type, ...]) -> bool:

@@ -59,6 +59,12 @@ a section that is already tagged and on PyPI.
 - `scenario_wait_for_sync` matches its regex while pages are still
   navigating, and a remapped scenario participant follows its replacement
   session's log and URL.
+- **`macro_run_sequence` checks every input before the first step acts.** An
+  `args_list` longer than `names` was silently cut short and is now refused,
+  and so is a name no macro can have (`..`), which used to fail only when its
+  step ran, after the steps before it had acted on the browser. A sequence
+  file with such a name is refused before `octowright test --sequence`
+  launches a browser. A name that is merely not saved is still a failed step.
 
 ### Changed
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and

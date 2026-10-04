@@ -204,8 +204,9 @@ def macro_delete(name: str) -> MacroDeleteResult:
         "it (a failed step carries ok: false, error, and `failure` with the macro's structured "
         "failure details such as failed_at_step). Pass False to run every step and collect "
         "per-step outcomes; stopped_at is then null. A missing macro is a failed step. The call "
-        "still errors when it cannot run at all: unknown instance, malformed names/args_list, "
-        "or the session's operation gate refusing."
+        "still errors, before any step acts, when it cannot run at all: unknown instance, "
+        "malformed names/args_list, an args_list longer than names, a name no macro can have "
+        "(such as '..'), or the session's operation gate refusing."
     ),
 )
 async def macro_run_sequence(

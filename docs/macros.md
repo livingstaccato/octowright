@@ -871,6 +871,8 @@ octowright test --kind chromium --persona buyer --sequence sequences/smoke.json 
   [where the report goes](#test-suite-mode)).
 - The sequence stops at the first failing macro; later steps are reported as
   skipped. One JUnit testcase per step. `--sequence` and `--tag` are exclusive.
+- A step whose `macro` no macro could be named (`..`, say) is refused when the
+  file is loaded, before any browser launches.
 
 ### Recording a video of the run
 
@@ -1021,8 +1023,12 @@ It returns one shape whatever happens to the steps:
   of the whole call: the steps before it already ran against the browser, and
   the point of the result is to keep them.
 - The call still **errors** when it cannot run at all: an unknown instance,
-  malformed `names` or `args_list` (refused before any step runs), the
-  session's operation gate refusing or breaking, and cancellation.
+  malformed `names` or `args_list`, an `args_list` longer than `names` (its
+  extra entries would never run, which is usually an off-by-one), a name no
+  macro can have (one `macro_path` refuses, such as `..`), the session's
+  operation gate refusing or breaking, and cancellation. Each of these is
+  refused before the first step acts on the browser; a name that is merely
+  not saved stays a failed step.
 
 **Breaking change.** `macro_run_sequence` used to raise the failing step's
 error when `stop_on_failure` was on, losing the steps that had passed. A caller

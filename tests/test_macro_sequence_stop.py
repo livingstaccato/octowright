@@ -208,3 +208,35 @@ async def test_malformed_arguments_raise_before_any_step_runs(
     with pytest.raises(ValueError, match=r"names|args_list"):
         await run_sequence(session=session, names=names, args_list=args_list)
     assert macros["dispatched"] == []
+
+
+@pytest.mark.anyio
+async def test_an_args_list_longer_than_names_is_refused_before_any_step_runs(
+    session: _Session, macros: dict[str, Any]
+) -> None:
+    """Extra entries used to be dropped without a word: usually a caller's off-by-one."""
+    macros["saved"]["a"] = [{"action": "click", "selector": "#a"}]
+    with pytest.raises(ValueError, match=r"args_list has 3 entries but names has 2") as caught:
+        await run_sequence(session=session, names=["a", "a"], args_list=[{}, {}, {"password": PASSWORD}])
+    assert macros["dispatched"] == []
+    assert PASSWORD not in str(caught.value)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("unsafe", ["..", "", "///"])
+async def test_an_unusable_macro_name_is_refused_before_the_first_step_acts(
+    session: _Session, macros: dict[str, Any], unsafe: str
+) -> None:
+    """``macro_path`` refused it only when its step ran, after earlier steps had acted."""
+    macros["saved"]["a"] = [{"action": "click", "selector": "#a"}]
+    with pytest.raises(ValueError, match=r"names\[1\]"):
+        await run_sequence(session=session, names=["a", unsafe])
+    assert macros["dispatched"] == []
+
+
+@pytest.mark.anyio
+async def test_a_missing_but_valid_macro_name_is_still_a_failed_step(session: _Session, macros: dict[str, Any]) -> None:
+    """Only the name's shape is checked up front; a missing file stays a step result."""
+    macros["saved"]["a"] = [{"action": "click", "selector": "#a"}]
+    result = await run_sequence(session=session, names=["a", "not-saved"])
+    assert [step["ok"] for step in result["steps"]] == [True, False]

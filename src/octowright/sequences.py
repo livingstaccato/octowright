@@ -70,6 +70,16 @@ def _check_arg(index: int, key: str, value: Any) -> None:
     )
 
 
+def _check_macro_name(index: int, name: str) -> None:
+    """Refuse a name no macro can have (`storage.macro_path`), before anything launches."""
+    from octowright.macros.storage import macro_path
+
+    try:
+        macro_path(name)
+    except ValueError:
+        raise SequenceError(f"step {index}: 'macro' cannot name a macro") from None
+
+
 def load_sequence(path: Path) -> list[SequenceStep]:
     """Parse and shape-check a sequence file. Resolves nothing."""
     doc = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -81,6 +91,7 @@ def load_sequence(path: Path) -> list[SequenceStep]:
     for index, raw in enumerate(doc):
         if not isinstance(raw, dict) or not isinstance(raw.get("macro"), str) or not raw["macro"]:
             raise SequenceError(f"step {index}: 'macro' must be a non-empty string")
+        _check_macro_name(index, raw["macro"])
         args = raw.get("args", {})
         if not isinstance(args, dict):
             raise SequenceError(f"step {index}: 'args' must be an object")

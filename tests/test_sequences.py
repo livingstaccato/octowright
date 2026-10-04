@@ -49,6 +49,8 @@ def test_steps_load_in_order(tmp_path: Path) -> None:
         ([{"macro": "x", "args": {"a": {"credential": ""}}}], r"step 0 argument 'a'"),
         ([{"macro": "x", "args": {"a": {"artifact": "../up.png"}}}], r"step 0 argument 'a'"),
         ([{"macro": "x", "args": {"a": {"other": 1}}}], r"step 0 argument 'a'"),
+        # A name no macro can have: refused before the browser launches, not at its step.
+        ([{"macro": "ok"}, {"macro": ".."}], r"step 1: 'macro' cannot name a macro"),
     ],
 )
 def test_malformed_sequences_are_refused(tmp_path: Path, doc: object, message: str) -> None:
