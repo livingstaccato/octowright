@@ -455,3 +455,48 @@ def test_plugin_session_artifacts_age_out_with_their_recording(tmp_path: Path) -
     transcript = _touch(root / "session-artifacts" / "refsess01" / "transcript.txt", age_days=90)
 
     assert {s.path for s in rc.find_stale_files(root, days=30)} == {recording, transcript}
+
+
+def test_mcp_recordings_cleanup_spares_live_and_closing_sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Age is mtime, and an idle protected browser's recording stops changing:
+    the sweep used to unlink the JSONL of a browser still writing to it. A
+    session mid-teardown (``_closing_sessions``) is spared too."""
+    from types import SimpleNamespace
+
+    from octowright import defaults as _defaults
+    from octowright.server import macros as server_macros
+
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    live_log = rec / "20260101T000000Z-chromium-liveidabcdef.jsonl"
+    closing_log = rec / "20260101T000000Z-firefox-closingidabc.jsonl"
+    live_files = [
+        live_log,
+        rec / f"{live_log.stem}.har",
+        rec / f"{live_log.stem}.websocket.jsonl",
+        rec / "liveidabcdef-fail-123.png",
+        rec / "videos" / live_log.stem / "page.webm",
+        rec / "downloads" / "liveidabcdef" / "000-report.pdf",
+        closing_log,
+        rec / f"{closing_log.stem}.png",
+    ]
+    for path in live_files:
+        _touch(path, age_days=10)
+    dead = rec / "20260101T000000Z-chromium-deadidabcdef.jsonl"
+    _touch(dead, age_days=10)
+
+    live = SimpleNamespace(instance_id="liveidabcdef", log_path=live_log)
+    closing = SimpleNamespace(instance_id="closingidabc", log_path=closing_log)
+    from octowright.browser_pool import BrowserPool
+
+    real_pool = BrowserPool()
+    real_pool._sessions["liveidabcdef"] = live  # type: ignore[assignment]
+    real_pool._closing_sessions["closingidabc"] = SimpleNamespace(session=closing)  # type: ignore[assignment]
+    monkeypatch.setattr(server_macros, "pool", real_pool)
+    monkeypatch.setattr(_defaults, "RECORDINGS_DIR", rec)
+
+    result = server_macros.recordings_cleanup(days=1.0, dry_run=False)
+
+    assert result["removed"] == 1
+    assert not dead.exists()
+    assert [p for p in live_files if not p.exists()] == []

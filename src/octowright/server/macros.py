@@ -378,14 +378,18 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
         "breakdown so you can see what would be freed before committing. Macro "
         "artifacts (manifests, critical points, run bundles, exports) live under the "
         "same root but are never swept -- they are curated, not incidental, so age "
-        "does not make them disposable. Use macro_artifact_* tools to manage those."
+        "does not make them disposable. Use macro_artifact_* tools to manage those. "
+        "Files belonging to a live or closing browser are skipped whatever their age."
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
     import octowright.recording_cleanup as _rc
     from octowright.defaults import RECORDINGS_DIR
 
-    stale = _rc.find_stale_files(RECORDINGS_DIR, days)
+    # Files a live or closing browser still writes are never swept, however
+    # old their mtime: an idle browser's recording stops changing.
+    in_use = _rc.session_file_matcher(pool.iter_sessions_including_closing())
+    stale = [entry for entry in _rc.find_stale_files(RECORDINGS_DIR, days) if not in_use(entry.path)]
     summary = _rc.cleanup_stale(stale, dry_run=dry_run)
     return {
         "recordings_dir": str(RECORDINGS_DIR),

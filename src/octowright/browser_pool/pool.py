@@ -380,6 +380,15 @@ class BrowserPool:
     def iter_sessions(self) -> Iterable[BrowserSession]:
         return tuple(self._sessions.values())
 
+    def iter_sessions_including_closing(self) -> Iterable[BrowserSession]:
+        """Live sessions plus those still draining in ``_closing_sessions``.
+
+        A closing session has left ``_sessions`` but still holds its profile
+        and its recording files open until teardown finishes.
+        """
+        closing = tuple(entry.session for entry in tuple(self._closing_sessions.values()))
+        return closing + tuple(s for s in tuple(self._sessions.values()) if s not in closing)
+
     def active_count(self) -> int:
         return len(self._sessions)
 

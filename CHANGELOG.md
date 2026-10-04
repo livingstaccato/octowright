@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`recordings_cleanup` no longer deletes the recording of a browser that is
+  still open.** It chose files by age alone, and an idle browser's recording
+  stops changing, so a short cutoff unlinked a live session's JSONL and its
+  later rows went nowhere. Every file a live or closing browser owns (its
+  recording and sidecars, video, downloads and failure dumps) is now skipped.
+  The `octowright cleanup` CLI runs outside the daemon and still goes by age
+  alone, as its help now says.
 - **A screenshot or macro CLI export can no longer overwrite a recording or a
   macro artifact.** `browser_screenshot`, `browser_capture_and_close` and
   `macro_export_cli` only checked that their path stayed under the recordings
