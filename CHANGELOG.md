@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Terminal plugin: a mistyped `OCTOWRIGHT_SSH_PORT` no longer stops the
+  plugin loading.** It was parsed with a bare `int()` at import, so a value
+  like `22s` failed the import and took every `terminal_*` tool with it. A
+  value that is not a TCP port now falls back to 22 with a warning.
 - **Terminal plugin: a change to `OCTOWRIGHT_REDACT_INPUTS` reaches terminal
   recordings without a restart.** Core reads the policy on every call, but
   the plugin read a snapshot taken when the daemon started, so a policy
