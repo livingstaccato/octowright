@@ -98,7 +98,10 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
         return None
     opening = _read_first_opening(jsonl_path) or {}
     stat = jsonl_path.stat()
-    started = opening.get("ts") or _iso(stat.st_ctime)
+    # The listing sorts on this string; a numeric or other non-string ``ts``
+    # (a hand-edited or foreign recording) would make that sort raise.
+    opening_ts = opening.get("ts")
+    started = opening_ts if isinstance(opening_ts, str) and opening_ts else _iso(stat.st_ctime)
     # The opening row names its own kind -- generic across every plugin, since
     # core's launch transaction writes ``session_start`` with ``kind`` before a
     # plugin does anything else. The filename answers for anything that row

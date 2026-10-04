@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A recording whose opening row carries a numeric `ts` no longer breaks the
+  dashboard's session list.** The closed-session listing sorted on it and
+  raised on the first non-string, so `GET /api/sessions` failed until the file
+  was removed. A non-string timestamp now falls back to the file's time.
 - **A recording's websocket sidecar is no longer listed as a session.** The
   `{stem}.websocket.jsonl` file shares the recording's `.jsonl` suffix, so the
   dashboard showed it as a phantom closed session, a labelled recording's

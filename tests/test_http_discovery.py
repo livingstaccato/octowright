@@ -410,3 +410,15 @@ def test_websocket_sidecar_is_not_a_recording(tmp_path: Path) -> None:
     ids = sorted(s["id"] for s in discovery._summaries_for(rec))
     assert ids == ["labelledidab", "plainidabcde"]
 
+
+def test_numeric_opening_ts_does_not_break_the_listing(tmp_path: Path) -> None:
+    """An opening row whose ``ts`` is a number (a hand-edited or foreign
+    recording) must not make the listing's sort raise ``TypeError``."""
+    rec = tmp_path / "recordings"
+    _write_recording(rec, "isotsabcdefg")
+    numeric = rec / "20260101T000000Z-chromium-numerictsabc.jsonl"
+    numeric.write_text(json.dumps({"action": "launch", "ts": 1700000000}) + "\n", encoding="utf-8")
+
+    summaries = discovery._summaries_for(rec)
+    assert {s["id"] for s in summaries} == {"isotsabcdefg", "numerictsabc"}
+    assert all(isinstance(s["started_at"], str) for s in summaries)
