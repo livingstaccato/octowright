@@ -10,7 +10,7 @@ import secrets
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString
 from weakref import WeakKeyDictionary, WeakSet
@@ -467,6 +467,11 @@ class BrowserSession(
         def _commit() -> dict[str, object]:
             self.protected = protected
             self.protected_reason = reason
+            # launch_options is what a replacement is built from; left alone it
+            # kept resolve_protected's stamp ("explicit") after a reopen
+            # restored the original reason, a stale copy of this same fact.
+            if self.launch_options is not None:
+                self.launch_options = replace(self.launch_options, protected=protected, protected_reason=reason)
             return {"instance_id": self.instance_id, "protected": protected}
 
         return await self._operation_gate.control_update("browser_set_protected", _commit)

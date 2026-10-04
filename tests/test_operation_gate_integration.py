@@ -101,6 +101,34 @@ async def test_set_protected_state_updates_fields_and_routes_through_gate(
 
 
 @pytest.mark.asyncio
+async def test_set_protected_state_keeps_launch_options_in_step(
+    fake_session_kwargs: dict[str, object],
+) -> None:
+    """A reopen restores the original reason through set_protected_state; the
+    session's launch_options kept resolve_protected's "explicit" stamp, a
+    stale second copy of the same fact."""
+    from octowright.browser_pool.options import LaunchOptions
+
+    session = BrowserSession(
+        **fake_session_kwargs,  # type: ignore[arg-type]
+        launch_options=LaunchOptions(kind="chromium", protected=True, protected_reason="explicit"),
+    )
+    await session.set_protected_state(True, reason="headed_default")
+    assert session.launch_options is not None
+    assert session.launch_options.protected is True
+    assert session.launch_options.protected_reason == "headed_default"
+    await session.set_protected_state(False, reason="explicit")
+    assert session.launch_options.protected is False
+
+
+@pytest.mark.asyncio
+async def test_set_protected_state_without_launch_options(fake_session_kwargs: dict[str, object]) -> None:
+    session = BrowserSession(**fake_session_kwargs)  # type: ignore[arg-type]
+    await session.set_protected_state(True, reason="user_pin")
+    assert session.launch_options is None
+
+
+@pytest.mark.asyncio
 async def test_set_protected_state_runs_while_an_operation_is_active(
     fake_session_kwargs: dict[str, object],
 ) -> None:
