@@ -16,6 +16,7 @@ from typing import Any, NoReturn
 from octowright import captures as _captures
 from octowright._paths import reject_unsafe_path
 from octowright.defaults import RECORDINGS_DIR, SNAPSHOT_TIMEOUT_SECONDS
+from octowright.export import checked_export_target
 from octowright.export import export_script as _export_script
 from octowright.mcp_types import (
     BrowserBriefResult,
@@ -273,8 +274,9 @@ def browser_export_script(
     session = pool.get(instance_id)
     suffix = ".py" if format == "python" else ".ts"
     target = Path(out_path) if out_path else session.log_path.with_suffix(suffix)
-    # MCP-supplied path could escape RECORDINGS_DIR; confine before writing.
-    target = reject_unsafe_path(target, RECORDINGS_DIR, label="export_script out_path")
+    # MCP-supplied path could escape RECORDINGS_DIR, or name a recording or
+    # macro artifact inside it; only a script export may be (re)written.
+    target = checked_export_target(target, format, RECORDINGS_DIR)
     result = _export_script(session.log_path, target, fmt=format, root=RECORDINGS_DIR)
     return {"path": str(result)}
 
