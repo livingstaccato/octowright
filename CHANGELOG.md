@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A capture larger than the whole capture budget is refused instead of
+  reported as saved.** The cleanup after the write deleted it at once, while
+  the tool returned its `capture_id`, so the next `capture_get` failed. It now
+  fails up front naming `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES`.
 - **Saving a capture no longer fails when an expired capture was the only one
   in its directory.** The cleanup that runs first deleted the expired file and
   the directory it emptied, which was the one the new capture was about to be

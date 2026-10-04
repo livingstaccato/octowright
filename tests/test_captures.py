@@ -550,3 +550,12 @@ def test_save_capture_survives_cleanup_emptying_its_own_directory(tmp_path: Path
     assert Path(second["path"]).exists()
     assert Path(second["path"]).parent == first_path.parent
 
+
+def test_save_capture_refuses_a_capture_larger_than_the_budget(tmp_path: Path) -> None:
+    """A capture that alone exceeds ``max_total_bytes`` would be deleted by the
+    post-write cleanup; it is refused up front instead of returned as saved."""
+    import pytest
+
+    with pytest.raises(ValueError, match="OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES"):
+        captures.save_capture(kind="text", content="x" * 5000, root=tmp_path, max_total_bytes=1000)
+    assert list(tmp_path.rglob("*.json")) == []

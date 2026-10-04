@@ -169,7 +169,7 @@ knob, an empty value (`OCTOWRIGHT_X=`) also opts in.
 - `OCTOWRIGHT_RECORDINGS` — recordings root (JSONL, videos, HAR, traces, screenshots, downloads, macro artifacts). Default `<user state dir>/sessions`. `defaults.RECORDINGS_DIR`.
 - `OCTOWRIGHT_SCENARIOS_DIR` — scenario spec root (default `<user config dir>/scenarios`). `defaults.SCENARIOS_DIR`.
 - `OCTOWRIGHT_GOLDENS_DIR` — golden-snapshot root (default `<user config dir>/goldens`). `defaults.GOLDENS_DIR`.
-- `OCTOWRIGHT_CAPTURES_DIR` / `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` / `OCTOWRIGHT_CAPTURE_TTL_SECONDS` — cached analysis captures: root (default `<user cache dir>/captures`), total size cap (default 50 MiB) and age cap (default 7 days). `defaults.CAPTURES_DIR` and neighbours.
+- `OCTOWRIGHT_CAPTURES_DIR` / `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` / `OCTOWRIGHT_CAPTURE_TTL_SECONDS` — cached analysis captures: root (default `<user cache dir>/captures`), total size cap (default 50 MiB) and age cap (default 7 days). A single capture larger than the total cap is refused rather than written and immediately pruned. `defaults.CAPTURES_DIR` and neighbours.
 - `OCTOWRIGHT_SESSION_MANIFEST` — live-session manifest used for crash recovery (default `<user state dir>/session-manifest.json`). `defaults.SESSION_MANIFEST_PATH`.
 - `OCTOWRIGHT_BRIDGE_STATE` — where followers write bridge health snapshots for `octowright_status()["bridge"]` (default `<user state dir>/bridge-state.json`). `defaults.BRIDGE_STATE_PATH`.
 

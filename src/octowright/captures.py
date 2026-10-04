@@ -120,6 +120,21 @@ def _remove_empty_parents(path: Path, root: Path) -> None:
         cur = cur.parent
 
 
+def _refuse_over_budget(size_bytes: int, max_total_bytes: int) -> None:
+    """Refuse a capture that alone exceeds the store's total budget.
+
+    The post-write cleanup spares the new capture only while something else can
+    be deleted instead, then deletes it too; written, it would vanish at once
+    while its id was reported as saved.
+    """
+    if size_bytes > max_total_bytes:
+        raise ValueError(
+            f"capture is {size_bytes} bytes, more than the capture store's whole budget of "
+            f"{max_total_bytes} bytes (OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES); it was not saved. "
+            "Capture a narrower source, or raise the budget."
+        )
+
+
 def save_capture(
     *,
     kind: str,
@@ -137,6 +152,19 @@ def save_capture(
     host = host_for_url(url)
     capture_id = f"cap_{int(time.time() * 1000):x}_{uuid.uuid4().hex[:10]}"
     path = _capture_path(root, host, instance_id, capture_id)
+    payload = {
+        "capture_id": capture_id,
+        "created_at": time.time(),
+        "kind": kind,
+        "host": host,
+        "instance_id": instance_id,
+        "url": url,
+        "title": title,
+        "meta": source or {},
+        "content": content,
+    }
+    serialized = dumps_utf8_safe(payload, indent=2)
+    _refuse_over_budget(len(serialized.encode("utf-8", "surrogatepass")), max_total_bytes)
     # Pruned BEFORE the directory is made: the cleanup removes a directory it
     # empties, and the one it empties can be this capture's own.
     cleanup_captures(root=root, ttl_seconds=ttl_seconds, max_total_bytes=max_total_bytes, apply=True)
@@ -151,21 +179,9 @@ def save_capture(
     # governed by the same knob. The 0700 tree, not the 0600 file, is the
     # control: see private_paths.secure_artifact_tree.
     secure_artifact_tree(path.parent, root)
-    created_at = time.time()
-    payload = {
-        "capture_id": capture_id,
-        "created_at": created_at,
-        "kind": kind,
-        "host": host,
-        "instance_id": instance_id,
-        "url": url,
-        "title": title,
-        "meta": source or {},
-        "content": content,
-    }
     # Atomic temp-sibling + os.replace so a symlink swapped in at the
     # destination is replaced, not followed (see atomic_write_text).
-    atomic_write_text(path, dumps_utf8_safe(payload, indent=2), root=root)
+    atomic_write_text(path, serialized, root=root)
     stat = path.stat()
     cleanup_captures(
         root=root,
