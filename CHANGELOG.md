@@ -49,6 +49,14 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A download no longer blocks the browser while it transfers, and no longer
+  overwrites an earlier one.** Saving held the session for the whole transfer,
+  so a large download stalled every other tool call on that browser until it
+  timed out, and a refusal from the session's queue was lost without a
+  `download_save_error` row. Files were numbered by how many downloads the
+  session had seen, so two at once, or the first after a driver relaunch that
+  kept the instance id, reused a name and replaced a file an earlier recording
+  points to. Each download now claims a free name before the transfer starts.
 - **`scenario_run_as_test` without `out_path` writes its report instead of
   failing at the end.** It defaulted to the daemon's working directory, which
   the recordings-root check then refused, after every verify macro had run.
