@@ -125,6 +125,21 @@ def resolve_leader_token() -> str:
     return ""
 
 
+def resolve_leader_generation() -> str | None:
+    """Identity of the leader process the live lock describes, or None.
+
+    The follower binds each in-flight call to this (see
+    ``BridgeSupervisor.resume_in_flight``): the leader's idempotency cache is
+    process-local, so a call is only re-sent to the process it was sent to.
+    ``pid`` plus ``started_at`` distinguishes a replacement even when the OS
+    recycles the pid.
+    """
+    info = singleton.read_lock()
+    if info is None or singleton.is_stale(info):
+        return None
+    return f"{info.pid}:{info.started_at!r}"
+
+
 def _leader_url_is_safe(mcp_url: str) -> bool:
     """Refuse to bridge to a leader URL whose host isn't loopback.
 
@@ -453,6 +468,9 @@ async def run_supervised_proxy(
                             ):
                                 _connect_scope.deadline = math.inf
                                 connected_at = anyio.current_time()
+                                # Before the writer is published: every call sent
+                                # on this session is stamped with this leader.
+                                supervisor_obj.leader_generation = resolve_leader_generation()
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
                                 supervisor_obj.reconnect_attempts = attempt

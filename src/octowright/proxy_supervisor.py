@@ -70,6 +70,12 @@ SUSPEND_THRESHOLD_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_SUSPEND_THRE
 # test — see forward_remote_message.
 SYNTHETIC_PROGRESS_PREFIX = "owpt-"
 
+# Answer for an in-flight call whose leader was replaced before it responded.
+LEADER_REPLACED_REASON = (
+    "the octowright leader was replaced while this call was in flight; its outcome is unknown "
+    "(it may already have taken effect). Check the current state before retrying."
+)
+
 log = get_logger(__name__)
 
 
@@ -109,6 +115,10 @@ class InFlightRequest:
     # Number of times this request has been re-sent on a fresh leader session
     # after a reconnect; bounded by BRIDGE_RESUME_MAX_ATTEMPTS.
     resume_count: int = 0
+    # The leader process (``BridgeSupervisor.leader_generation``) this request
+    # was first sent to. Its idempotency cache is process-local, so a resume is
+    # only safe on a session to that same leader -- see ``resume_in_flight``.
+    leader_generation: str | None = None
     # Guards against the watchdog and the remote reader both popping the
     # same id concurrently — without this, a response arriving in the same
     # asyncio tick as deadline expiry produces two outbound frames for one
@@ -167,6 +177,11 @@ class BridgeSupervisor:
         self.last_error: str | None = None
         self.remote_session_id: str | None = None
         self.reconnect_attempts = 0
+        # Identity of the leader process the current session talks to, set by
+        # the runtime on each connect (``proxy_runtime.resolve_leader_generation``).
+        # None when it cannot be told; two Nones compare equal, which keeps resume
+        # working wherever identity is unavailable rather than failing every call.
+        self.leader_generation: str | None = None
 
     @property
     def in_flight_count(self) -> int:
@@ -365,6 +380,7 @@ class BridgeSupervisor:
                 progress_token=progress_token,
                 idempotency_key=idempotency_key,
                 outgoing=outgoing,
+                leader_generation=self.leader_generation,
             )
 
     async def replay_initialize(self, remote_write: Any) -> None:
@@ -543,18 +559,20 @@ class BridgeSupervisor:
         to failing everything — today's fail-safe behaviour.
         """
         self.last_error = reason
-        now = time.monotonic()
         for item in list(self._in_flight.values()):
             if item.responded or self._is_resumable(item):
                 continue  # resumable ones stay in-flight for resume_in_flight()
-            item.responded = True
-            self._discard_progress_token(item)
-            self._in_flight.pop(item.request_id, None)
-            _BRIDGE_RPC_DURATION.record(
-                now - item.started_at,
-                attributes={"method": item.method or "unknown", "outcome": "failure"},
-            )
-            await self.local_write.send(bridge_error(item.request_id, reason))
+            await self._fail_in_flight(item, reason, outcome="failure")
+
+    async def _fail_in_flight(self, item: InFlightRequest, reason: str, *, outcome: str) -> None:
+        item.responded = True
+        self._discard_progress_token(item)
+        self._in_flight.pop(item.request_id, None)
+        _BRIDGE_RPC_DURATION.record(
+            time.monotonic() - item.started_at,
+            attributes={"method": item.method or "unknown", "outcome": outcome},
+        )
+        await self.local_write.send(bridge_error(item.request_id, reason))
 
     async def resume_in_flight(self, remote_write: Any) -> None:
         """Re-send still-in-flight resumable requests on a freshly-reconnected
@@ -565,6 +583,12 @@ class BridgeSupervisor:
         now = time.monotonic()
         for item in list(self._in_flight.values()):
             if item.responded or not self._is_resumable(item) or item.outgoing is None:
+                continue
+            if item.leader_generation != self.leader_generation:
+                # The leader that received this call is gone and its dedup cache
+                # with it: the replacement would run the call again. It may or may
+                # not have committed on the old leader, so say exactly that.
+                await self._fail_in_flight(item, LEADER_REPLACED_REASON, outcome="unknown")
                 continue
             item.resume_count += 1
             item.deadline = now + (item.timeout or self.request_timeout_seconds)
