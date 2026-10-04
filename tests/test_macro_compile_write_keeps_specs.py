@@ -24,7 +24,9 @@ from octowright.macros import dsl
 from tests._macro_artifact_fixtures import _reload, restore_reloaded_defaults
 
 SPECS = {"display": {"sensitive": True}}
-YAML = "name: checkout\nparameters: [display]\nactions:\n  - {action: expect_text, selector: body, text: '{{display}}'}\n"
+YAML = (
+    "name: checkout\nparameters: [display]\nactions:\n  - {action: expect_text, selector: body, text: '{{display}}'}\n"
+)
 
 
 @pytest.fixture(autouse=True)
