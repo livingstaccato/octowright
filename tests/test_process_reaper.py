@@ -161,6 +161,35 @@ def test_find_browser_pids_orphaned_still_reaps_real_orphans_beside_a_handler(fa
     assert process_reaper.find_browser_pids("orphaned") == [2000]
 
 
+# macOS WebKit runs its web-content, networking and GPU work in XPC services
+# that launchd starts and parents (ppid 1), from inside the same
+# ms-playwright/webkit-* bundle as the browser. Like the crash handlers they
+# own no window and are not the pool's to close, and ppid 1 is their normal
+# state, so the orphan rule would kill a healthy WebKit session's page
+# processes every housekeeping cycle. Reasoned from the bundle layout; NOT yet
+# observed on a Mac.
+_WEBKIT_XPC_CMD = (
+    "/Users/u/Library/Caches/ms-playwright/webkit-2248/Playwright.app/Contents/Frameworks/"
+    "WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/"
+    "com.apple.WebKit.WebContent"
+)
+
+
+@pytest.mark.parametrize("command", [_WEBKIT_XPC_CMD, _WEBKIT_XPC_CMD.upper()])
+def test_macos_webkit_xpc_services_are_not_browsers(command: str) -> None:
+    assert process_reaper._is_browser_command(command) is False
+
+
+def test_find_browser_pids_orphaned_spares_live_webkit_xpc_services(fake_ps: list[str]) -> None:
+    fake_ps.append(
+        "4000 1 python octowright serve\n"
+        "4001 4000 node playwright driver\n"
+        "4002 4001 /Users/u/Library/Caches/ms-playwright/webkit-2248/Playwright.app/Contents/MacOS/Playwright\n"
+        f"4003 1 {_WEBKIT_XPC_CMD}\n"
+    )
+    assert process_reaper.find_browser_pids("orphaned") == []
+
+
 def test_reap_orphan_browsers_orphaned_scope_reaps_reparented(
     fake_ps: list[str],
     monkeypatch: pytest.MonkeyPatch,

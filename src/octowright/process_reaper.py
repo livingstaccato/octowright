@@ -87,9 +87,17 @@ _BROWSER_PATH_SUBSTRINGS = (
 # Killing them frees nothing and silently disables crash reporting for sessions
 # that are working fine — which then hides the genuine renderer crashes the
 # reporter exists to capture.
+#
+# macOS WebKit's XPC services (``.../XPCServices/com.apple.WebKit.*.xpc``) are
+# the same case for the same reason: launchd starts and parents them, so
+# ``ppid == 1`` is their healthy state, and they own no window the pool could
+# close. Without the exclusion every housekeeping cycle would kill a live WebKit
+# session's page processes. Reasoned from the bundle layout, not yet observed
+# on a Mac.
 _CRASH_HELPER_SUBSTRINGS = (
     "crashpad_handler",  # chromium
     "crashreporter",  # firefox
+    "/xpcservices/",  # macOS webkit (launchd-parented XPC helpers)
 )
 
 

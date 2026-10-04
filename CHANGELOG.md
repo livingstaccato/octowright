@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **The orphan-browser sweep leaves macOS WebKit's helper processes alone.**
+  WebKit runs its page, network and GPU work in XPC services that launchd
+  starts, so their parent is always pid 1, which the sweep reads as "the
+  driver died". It would have killed a healthy WebKit session's page processes
+  on every housekeeping cycle. They are now excluded, as the browsers' crash
+  reporters already were. This is worked out from the bundle layout and has
+  not yet been seen on a Mac.
 - **On Windows, a running daemon's session-manifest entries are no longer
   pruned, and `octowright restart` reclaims a split-brain leader's port.** Both
   recognised a daemon by the text `octowright serve`, which never matches the
