@@ -613,6 +613,16 @@ where it stands as a whole identifier, because it is
 often an ordinary word (`admin`) and replacing it inside `#admin-menu` broke the
 selectors of a macro saved from the recording.
 
+**Every spelling of a value.** Each scrub matches a value raw, JSON-escaped
+(ASCII and not), HTML-escaped, percent-encoded up to three times over,
+markdown-escaped, and as Python's `repr` spells it -- twice over, for an error
+message's `{value!r}` inside a failure payload's `repr(exc)`. Without the last
+one, a value holding both quotes, a backslash or a control character reached
+a failure payload, and an exported script's `result.json`, in the clear: repr
+escapes `'` as `\'` and a control character as `\xNN`, which no JSON
+spelling does. Running an exported script against a real browser
+(`tests/test_macro_export_run_privacy_live.py`) is what found it.
+
 A failure payload goes back to the MCP client, and its fields follow two rules.
 The text the page produced -- `original` (the exception), the console tail,
 `failed_requests`, `page_errors`, the `assertions` block, the A11y

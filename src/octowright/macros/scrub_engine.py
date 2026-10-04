@@ -38,6 +38,21 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
         html.escape(value, quote=True),
         html.escape(value, quote=False),
     }
+    # Python's repr, which every ``{value!r}`` error message and every
+    # ``repr(exc)`` uses -- so twice over for a failure payload's ``original``:
+    # inside a single-quoted literal a ``'`` is escaped (repr picks that form
+    # whenever the text holds both quotes), inside a double-quoted one it is
+    # not; backslashes double and a control character becomes ``\xNN``, unlike
+    # JSON. Appending both quotes forces the first form.
+    reprs = {value}
+    for _ in range(2):
+        reprs = {
+            spelling
+            for item in reprs
+            for single in (repr(item + "'\"")[1:-4],)
+            for spelling in (single, single.replace("\\'", "'"))
+        }
+        variants.update(reprs)
     frontier = set(variants)
     for _ in range(_MAX_ENCODING_DEPTH):
         frontier = {encoded for item in frontier for encoded in (quote(item, safe=""), quote_plus(item, safe=""))}

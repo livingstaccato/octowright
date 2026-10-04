@@ -95,6 +95,11 @@ a section that is already tagged and on PyPI.
   not finished, or whose session's scrub set is saturated is still written,
   with key-level redaction added, and marked `privacy_unresolved: true`. Both
   flags also appear on the `macro_artifact_run` result.
+- **A credential holding quotes, a backslash or a control character is
+  scrubbed from error text too.** Python's `repr` escapes such a value in a way
+  no JSON spelling matches, so it reached a macro failure payload's `original`
+  and an exported script's `result.json` and error output in the clear. Every
+  scrub now also matches the value as `repr` spells it, up to twice over.
 
 ### Changed
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
