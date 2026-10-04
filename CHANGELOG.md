@@ -49,6 +49,10 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **More credential header names are redacted.** A header named `*-key`,
+  such as `Ocp-Apim-Subscription-Key` or `X-Functions-Key`, and underscore
+  spellings such as `X_API_KEY`, were recorded and listed in `browser_list` in
+  clear. They are now classified as credentials, like `X-Api-Key`.
 - **Launch-failure hints name only tools that exist.** A missing engine
   pointed the agent at `browser_engine_status` and `browser_engine_reinstall`,
   and a closed browser at `browser_handoff`. No tool by any of those names was
