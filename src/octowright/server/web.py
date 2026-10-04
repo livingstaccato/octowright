@@ -20,6 +20,7 @@ from collections.abc import Iterable
 from typing import cast
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
+import anyio.to_thread
 import httpcore2
 import httpx2
 from defusedxml import ElementTree  # type: ignore[import-untyped]
@@ -237,7 +238,9 @@ async def _read_limited_text(response: httpx2.Response) -> str:
 async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str]:
     current_url = url
     pinned: dict[str, list[str]] = {}
-    host, ips = _checked_public_target(current_url)
+    # Validation resolves with a blocking getaddrinfo, and this runs on the
+    # leader's event loop: in a worker thread, as ssrf.py resolves.
+    host, ips = await anyio.to_thread.run_sync(_checked_public_target, current_url)
     pinned[host] = ips
     async with httpx2.AsyncClient(
         transport=_PinnedDNSAsyncHTTPTransport(pinned),
@@ -248,11 +251,14 @@ async def _fetch_text(url: str, *, require_html: bool = False) -> tuple[str, str
         for _ in range(_MAX_REDIRECTS + 1):
             async with client.stream("GET", current_url) as response:
                 response_url = str(response.url)
-                _check_discovery_url(response_url, resolve_host=True)
+                # Structural only: the request already went to the pinned,
+                # validated address, so resolving again here would block the
+                # loop and prove nothing about the connection that was made.
+                _check_discovery_url(response_url)
                 redirect_url = _redirect_target(response_url, response)
                 if redirect_url:
                     current_url = redirect_url
-                    host, ips = _checked_public_target(current_url)
+                    host, ips = await anyio.to_thread.run_sync(_checked_public_target, current_url)
                     pinned[host] = ips
                     continue
                 response.raise_for_status()

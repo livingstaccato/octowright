@@ -16,6 +16,8 @@ request reach another.
 
 from __future__ import annotations
 
+import threading
+
 import httpcore2
 import pytest
 
@@ -72,3 +74,24 @@ async def test_the_backend_refuses_a_host_it_was_not_given_a_pin_for() -> None:
 
     with pytest.raises(httpcore2.ConnectError, match="no validated address"):
         await backend.connect_tcp("other.example", 443)
+
+
+@pytest.mark.anyio
+async def test_host_validation_resolves_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``getaddrinfo`` blocks; on the leader's loop it stalls every other call."""
+    loop_thread = threading.get_ident()
+    resolver_threads: list[int] = []
+
+    def fake_resolve(host: str) -> list[str]:
+        del host
+        resolver_threads.append(threading.get_ident())
+        return ["93.184.216.34"]
+
+    monkeypatch.setattr(_web, "_resolve_host_ips", fake_resolve)
+    monkeypatch.setattr(_web, "AutoBackend", lambda: _RecordingBackend())
+
+    with pytest.raises(RuntimeError, match="stop after backend host check"):
+        await _web._fetch_text("https://example.com/")
+
+    assert resolver_threads
+    assert loop_thread not in resolver_threads
