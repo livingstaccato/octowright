@@ -56,6 +56,12 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A crashed background page's headers no longer haunt later
+  replacements.** When crash recovery gave up on a page that was not the
+  active one, its `browser_set_extra_http_headers` record stayed (a crashed
+  page is not closed), and every later handoff or relaunch warned that
+  headers on another page were not carried. The record is now dropped when
+  recovery gives up, and the crash incident's `route_warnings` says so.
 - **`macro_export_cli` refuses a macro its script cannot run.** An exported
   script has no `if_selector`, `try`, `try_each` or `macro_call`, so a macro
   with one exported fine and then failed with "unsupported macro action"

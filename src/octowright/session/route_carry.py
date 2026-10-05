@@ -48,7 +48,12 @@ from typing import Any, Final
 
 from provide.telemetry import get_logger
 
-from octowright.session.page_headers import move_page_headers, open_pages_with_headers, page_headers_on
+from octowright.session.page_headers import (
+    move_page_headers,
+    open_pages_with_headers,
+    page_headers_on,
+    set_page_headers,
+)
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -230,3 +235,19 @@ def rebind_page_routes(session: Any, routes: PageRoutes, new_page: Any) -> None:
             specs[pattern] = MockSpec(**spec.kwargs(), page=new_page)
     if routes.page_headers is not None:
         move_page_headers(session, routes.page, new_page)
+
+
+def forget_crashed_page_headers(session: Any, page: Any) -> list[str]:
+    """Drop *page*'s page-header record once crash recovery has given up on it.
+
+    A crashed page is not closed (measured, headless Chromium: ``is_closed()``
+    stays False after ``Page.crash``), so the closed-page pruning never forgot
+    it, and every later replacement warned about headers on a page other than
+    the active one -- a dead one. Kept while *page* is still the active page:
+    a replacement reopens the active page, so carrying them is still right.
+    Returns the warning for the crash incident (no header values in it).
+    """
+    if page is getattr(session, "page", None) or page_headers_on(session, page) is None:
+        return []
+    set_page_headers(session, page, {})
+    return ["page-level extra HTTP headers set on the crashed page were dropped: crash recovery gave up on it"]

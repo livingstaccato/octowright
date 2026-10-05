@@ -160,6 +160,12 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "both inside a close lease and as the close-race / driver-death capture where the gate "
         "is no longer available",
     ),
+    "session/route_carry.py:forget_crashed_page_headers": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the crashed "
+        "page -- no Playwright I/O; called by crash recovery once it has given up, from inside "
+        "its crash_recovery lease or from schedule_recovery's page-crash handler before one exists",
+    ),
     "session/screencast.py:ScreencastManager._stop_bound_owned_locked": (
         "cached-property-only",
         "reads and clears the cached _bound_page reference (no I/O) purely to decide whether "

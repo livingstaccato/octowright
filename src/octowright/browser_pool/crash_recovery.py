@@ -64,7 +64,13 @@ from octowright.session.operation.gate import (
     SessionClosingError,
     SessionOperationAbortedError,
 )
-from octowright.session.route_carry import PageRoutes, install_page_routes, page_routes_of, rebind_page_routes
+from octowright.session.route_carry import (
+    PageRoutes,
+    forget_crashed_page_headers,
+    install_page_routes,
+    page_routes_of,
+    rebind_page_routes,
+)
 from octowright.session.timeouts import bounded
 
 if TYPE_CHECKING:
@@ -170,7 +176,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             attempts=session._crash_recoveries,
             max=CRASH_RECOVERY_MAX,
         )
-        incidents.record(
+        incident = incidents.record(
             incidents.CATEGORY_RENDERER_CRASH,
             instance_id=session.instance_id,
             kind=session.kind,
@@ -178,6 +184,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             outcome="exhausted",
             attempts=session._crash_recoveries,
         )
+        _note_given_up(session, incident, page)
         _publish_recovered(session, "exhausted")
         return None
     try:
@@ -230,12 +237,12 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
         )
     except _RecoveryExhaustedError as exc:
         _count_failure(session, exc.__cause__ or exc)
-        _record_incident(session, url, "exhausted")
+        _note_given_up(session, _record_incident(session, url, "exhausted"), page, exc.dead_page)
         _publish_recovered(session, "exhausted")
         return False
     except Exception as exc:
         _count_failure(session, exc)
-        _record_incident(session, url, "failed")
+        _note_given_up(session, _record_incident(session, url, "failed"), page)
         _publish_recovered(session, "failed")
         return False
     session._crashed = False
@@ -283,8 +290,23 @@ def _count_failure(session: Any, exc: BaseException) -> None:
     )
 
 
+def _note_given_up(session: Any, incident: dict[str, Any], *dead_pages: Any) -> None:
+    """Recovery gave up on *dead_pages*: forget their page headers (unless one
+    is still the active page) and say so on the incident."""
+    warnings: list[str] = []
+    for dead in dict.fromkeys(dead_pages):
+        warnings.extend(forget_crashed_page_headers(session, dead))
+    if warnings:
+        incident["route_warnings"] = warnings
+
+
 class _RecoveryExhaustedError(RuntimeError):
-    """Every replacement the crash-loop bound allows crashed; ``__cause__`` is the last one's."""
+    """Every replacement the crash-loop bound allows crashed; ``__cause__`` is the
+    last one's, and ``dead_page`` the page the next attempt would have replaced."""
+
+    def __init__(self, message: str, *, dead_page: Any = None) -> None:
+        super().__init__(message)
+        self.dead_page = dead_page
 
 
 async def _replace_until_it_holds(
@@ -326,7 +348,7 @@ async def _replace_until_it_holds(
                     attempts=session._crash_recoveries,
                     max=CRASH_RECOVERY_MAX,
                 )
-                raise _RecoveryExhaustedError(str(exc)) from exc
+                raise _RecoveryExhaustedError(str(exc), dead_page=exc.dead_page) from exc
             session._crash_recoveries += 1
             log.info(
                 "octowright.crash.replacement_retry",
