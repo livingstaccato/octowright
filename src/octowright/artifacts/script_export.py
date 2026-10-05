@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from octowright import credential_input, credential_sinks, drawn_text
+from octowright import credential_input, credential_sinks, drawn_text, http_headers
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
 from octowright.artifacts.script_export_args import (
@@ -105,6 +105,17 @@ def render_macro_cli(
     # The default staging dir is rendered as its resolver, not its value: the
     # value is the exporting user's absolute path, which names their home and
     # does not exist on CI or for anyone else.
+    # Which header names carry a credential, by the recorder's own rule: the
+    # script's inject_headers refuses one a navigation redirect would carry.
+    credential_header_source = "\n".join(
+        (
+            f"_CREDENTIAL_HEADER_NAMES = frozenset({sorted(http_headers._CREDENTIAL_HEADER_NAMES)!r})",
+            f"_CREDENTIAL_HEADER_HINTS = {http_headers._CREDENTIAL_HEADER_HINTS!r}",
+            "",
+            "",
+            inspect.getsource(http_headers.is_credential_header).rstrip(),
+        )
+    )
     upload_source = "\n\n\n".join(
         inspect.getsource(fn).rstrip() for fn in (user_config_dir, upload_staging_dir, upload_roots, check_upload_path)
     )
@@ -375,6 +386,28 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 
 
 {upload_source}
+
+
+{credential_header_source}
+
+
+def _refuse_redirected_credential_headers(action: dict[str, Any], headers: dict[str, Any]) -> None:
+    # This script's inject_headers is a plain context route, and Playwright
+    # re-applies a route's header override to every redirect a navigation
+    # follows; macro_run matches navigations per hop and this script does not.
+    # A credential-named header therefore needs the step's forward_on_redirect.
+    if not credential_sinks_blocked():
+        return
+    opted_in = parse_forward_on_redirect(action)
+    named = sorted(
+        str(name) for name in headers if is_credential_header(str(name)) and str(name).strip().casefold() not in opted_in
+    )
+    if named:
+        raise CredentialRefusal(
+            f"inject_headers header(s) {{', '.join(named)}} hold a credential, and in an exported script a "
+            "navigation redirect carries them to wherever it leads; accept that with "
+            f'forward_on_redirect {{{{"{{named[0]}}": true}}}} on the step, or run the macro with macro_run'
+        )
 
 
 def _is_credential_arg(key: str) -> bool:

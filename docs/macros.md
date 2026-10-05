@@ -761,7 +761,12 @@ browser re-sends the header on every redirect that request follows, so an
 own-site endpoint that answers `302` to another host hands it the token
 (measured on Chromium and Firefox for every header; WebKit drops only
 `Authorization`). An exported macro CLI does not match navigations per hop
-either. `forward_on_redirect` is
+either, so there a navigation redirect carries the header too; an exported
+script therefore refuses, when the step runs, any credential-named header in
+an `inject_headers` step (`Authorization`, `Cookie`, `X-Api-Key` and the rest
+of the recorder's name rule), literal values included, unless the step names
+it in `forward_on_redirect`. `macro_run` does not need that for a literal
+value, because it matches navigations per hop. `forward_on_redirect` is
 the step's statement that the site will not redirect that header anywhere it
 should not go. It waives nothing else: the pattern must still name the own
 origin, each value must be a literal `true` or `false`, and the name must be

@@ -49,6 +49,14 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **An exported macro script no longer lets a navigation redirect carry a
+  credential header.** In a script from `macro_export_cli`, an
+  `inject_headers` header rode every redirect a page load followed, wherever
+  it led (`macro_run` matches navigations per hop and was not affected). The
+  script now refuses a credential-named header in an `inject_headers` step,
+  such as `Authorization`, `Cookie` or `X-Api-Key`, when the step runs, unless
+  the step names it in `forward_on_redirect`. Re-export a script to pick this
+  up.
 - **Removing the last `browser_inject_headers` injection stops routing
   navigations.** The first injection routes the browser's navigations through
   a per-hop handler so a scoped header does not follow a redirect; that route

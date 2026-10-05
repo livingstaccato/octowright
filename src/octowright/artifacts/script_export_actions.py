@@ -662,6 +662,7 @@ if scrubbed:
         f"header(s) {', '.join(scrubbed)} hold the recorder's redaction placeholder; "
         "parameterize the macro and pass the real value at run time"
     )
+_refuse_redirected_credential_headers(action, headers)
 
 
 def _make_header_injector(extra):
