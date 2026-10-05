@@ -56,6 +56,13 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A redacted screenshot no longer stops a page's animations for hours.**
+  An animation that had not started yet when the screenshot began, as on a
+  page screenshotted right after it loaded, was given a start time about as
+  far ahead as the machine had been running. It switched to its unanimated
+  style partway through the capture and did not play again until then. Such
+  an animation now holds its first frame for the capture and carries on from
+  it afterwards.
 - **A crashed background page's headers no longer haunt later
   replacements.** When crash recovery gave up on a page that was not the
   active one, its `browser_set_extra_http_headers` record stayed (a crashed
