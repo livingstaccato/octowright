@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RENDERER_API_VERSION, loadPluginRegistry, resolveRenderer } from "./plugin-registry.js";
+import { loadPluginRegistry, RENDERER_API_VERSION, resolveRenderer } from "./plugin-registry.js";
 
 function fakeFetch(body: unknown, ok = true) {
   return vi.fn().mockResolvedValue({ ok, json: async () => body });

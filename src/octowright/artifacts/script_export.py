@@ -10,9 +10,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from octowright import credential_input, credential_sinks, drawn_text
+from octowright import credential_input, credential_sinks, drawn_text, http_headers
 from octowright._paths import atomic_write_text
-from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.artifacts.script_export_actions import EXPORT_SKIPPED, STATE_HELPERS, render_dispatch_chain
 from octowright.artifacts.script_export_args import (
     _args_dict,
     _call_args,
@@ -105,6 +105,17 @@ def render_macro_cli(
     # The default staging dir is rendered as its resolver, not its value: the
     # value is the exporting user's absolute path, which names their home and
     # does not exist on CI or for anyone else.
+    # Which header names carry a credential, by the recorder's own rule: the
+    # script's inject_headers refuses one a navigation redirect would carry.
+    credential_header_source = "\n".join(
+        (
+            f"_CREDENTIAL_HEADER_NAMES = frozenset({sorted(http_headers._CREDENTIAL_HEADER_NAMES)!r})",
+            f"_CREDENTIAL_HEADER_HINTS = {http_headers._CREDENTIAL_HEADER_HINTS!r}",
+            "",
+            "",
+            inspect.getsource(http_headers.is_credential_header).rstrip(),
+        )
+    )
     upload_source = "\n\n\n".join(
         inspect.getsource(fn).rstrip() for fn in (user_config_dir, upload_staging_dir, upload_roots, check_upload_path)
     )
@@ -160,7 +171,7 @@ _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 # none, so Playwright's own default applies, and a credential step, which has
 # to pass one, passes the same. The script sets no default timeout of its own.
 _PLAYWRIGHT_DEFAULT_TIMEOUT_MS = 30000
-_LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
+_LIFECYCLE_SKIP = set({sorted(EXPORT_SKIPPED)!r})
 _PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
@@ -377,6 +388,25 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 {upload_source}
 
 
+{credential_header_source}
+
+
+def _refuse_redirected_credential_headers(action: dict[str, Any], headers: dict[str, Any]) -> None:
+    # This script's inject_headers is a plain context route, and Playwright
+    # re-applies a route's header override to every redirect a navigation
+    # follows; macro_run matches navigations per hop and this script does not.
+    # A credential-named header therefore needs the step's forward_on_redirect.
+    if not credential_sinks_blocked():
+        return
+    named = redirect_exposed_credential_headers(action, headers, is_credential_header)
+    if named:
+        raise CredentialRefusal(
+            f"inject_headers header(s) {{', '.join(named)}} hold a credential, and in an exported script a "
+            "navigation redirect carries them to wherever it leads; accept that with "
+            f'forward_on_redirect {{{{"{{named[0]}}": true}}}} on the step, or run the macro with macro_run'
+        )
+
+
 def _is_credential_arg(key: str) -> bool:
     # What the sink guards and fill-origin check treat as a credential: a
     # credential-like name, or one the macro's parameter_specs declare sensitive.
@@ -526,7 +556,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
     actions = expand_actions(
         ACTIONS, args, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE, trusted_origins=trusted
     )
-    # Page code can read a typed credential back, so a run that carries one runs none.
+    # Page code can read a typed credential back, so a run that carries one runs
+    # none: refused here where every run reaches it, and again as each step is
+    # dispatched (below), as macro_run does.
     credential_names = credential_args_in(ACTIONS, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE)
     refuse_page_code(actions, credential_names)
     async with async_playwright() as p:
@@ -574,6 +606,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
                     print(json.dumps(log_record, sort_keys=True))
                     if evidence is not None:
                         evidence.record(log_record)
+                    refusal = page_code_refusal(action, credential_names)
+                    if refusal is not None:
+                        raise refusal
                     _check_credential_fill(state, index, action, trusted)
                     if kind in _LIFECYCLE_SKIP:
                         skipped += 1

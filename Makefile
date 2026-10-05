@@ -44,13 +44,24 @@ test-frontend: ## Run TypeScript frontend tests with coverage gating
 
 typecheck-assets: ## Type-check the JS init scripts injected into every page
 	# Separate from `lint` for the same reason the frontend targets are: `lint`
-	# is Python-only and runs with no node and no npm install. Wired into CI in
-	# the frontend job, which already has both.
+	# must run with no node and no npm install (its one frontend check, the
+	# formatter, skips itself then). Wired into CI in the frontend job, which
+	# already has both.
 	npm run typecheck:assets
 
-lint: ## Ruff/format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
+lint: ## Ruff/format, frontend biome check, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
 	uv run ruff check .
 	uv run ruff format --check .
+	# The dashboard sources' biome check: formatter, linter and import order
+	# (`biome check`), not the formatter alone. Needs the npm workspace install
+	# (`make install` / `npm ci`); without it the check is skipped with a
+	# message rather than failing, so `lint` still runs on a node-less host,
+	# the same way `install` treats a missing npm. CI runs it in the frontend job.
+	@if [ -x node_modules/.bin/biome ]; then \
+		npm run --silent check:frontend; \
+	else \
+		echo "SKIP: frontend biome check (node_modules absent; run 'make install' or 'npm ci' to enable it)." >&2; \
+	fi
 	# tests/plugins/reference is included so the reference plugin's
 	# `_assert_structural_conformance` pin is actually checked: `activate`
 	# types a plugin pool as `Any`, so nothing else verifies that a pool
@@ -143,9 +154,14 @@ rerecord-playground-demos: ## Re-record the playground-targeted bundles (seven-m
 	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/with_playground.py seven-mix-orchestration
 	OCTOWRIGHT_MACRO_SLOWMO_MS=$(RERECORD_SLOWMO_MS) uv run python scripts/demos/with_playground.py role-based-duo
 
-format: ## Apply ruff format + ruff --fix
+format: ## Apply ruff format + ruff --fix, and biome format to the dashboard sources when installed
 	uv run ruff format .
 	uv run ruff check --fix .
+	@if [ -x node_modules/.bin/biome ]; then \
+		npm run --silent format:frontend; \
+	else \
+		echo "SKIP: frontend format (node_modules absent; run 'make install' or 'npm ci' to enable it)." >&2; \
+	fi
 
 typecheck: ## mypy only
 	uv run mypy src/octowright packages/octowright-terminal/src tests/plugins/reference

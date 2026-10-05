@@ -36,10 +36,7 @@ export function renderScenarioList(scenarios: LiveScenario[]): HTMLElement {
   return ul;
 }
 
-export function renderSavedScenarios(
-  scenarios: SavedScenario[],
-  onStart: (name: string) => void,
-): HTMLElement {
+export function renderSavedScenarios(scenarios: SavedScenario[], onStart: (name: string) => void): HTMLElement {
   if (scenarios.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";

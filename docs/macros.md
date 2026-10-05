@@ -761,7 +761,13 @@ browser re-sends the header on every redirect that request follows, so an
 own-site endpoint that answers `302` to another host hands it the token
 (measured on Chromium and Firefox for every header; WebKit drops only
 `Authorization`). An exported macro CLI does not match navigations per hop
-either. `forward_on_redirect` is
+either, so there a navigation redirect carries the header too; an exported
+script therefore refuses, when the step runs, any credential-named header in
+an `inject_headers` step (`Authorization`, `Cookie`, `X-Api-Key` and the rest
+of the recorder's name rule), literal values included, unless the step names
+it in `forward_on_redirect`. `macro_run` does not need that for a literal
+value, because it matches navigations per hop; `macro_lint` warns about such a
+step at save time (`export_refuses_credential_header`). `forward_on_redirect` is
 the step's statement that the site will not redirect that header anywhere it
 should not go. It waives nothing else: the pattern must still name the own
 origin, each value must be a literal `true` or `false`, and the name must be
@@ -779,8 +785,14 @@ wherever it likes. So when a run expands a credential-named argument anywhere
 `expect_js`, `wait_for` with an `expression`, `a11y_dragdrop` with
 `verify_js`/`grabbed_predicate_js`, and `mock_route` with a `body` in it is
 refused -- before the fill or after it, in a nested body or a called macro --
-naming the step and the argument, never the value. Split such a check into a
-macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+naming the step and the argument, never the value. A step every run reaches (a
+top-level step, a `try`'s steps, a `try_each`'s first branch) is refused before
+the run starts, so nothing is half done; one in an `if_selector` branch or a
+later `try_each` branch is refused when that branch is taken, so a run whose
+page never takes it is not refused. The exported CLI judges each step it runs
+the same way (it runs no `if_selector`, `try`, `try_each` or `macro_call`; see
+below). Split such a check into a macro that carries no credential, or set
+`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
 A `macro_run_sequence` is judged as one run: the credential arguments any of
 its steps types, read from every step's macro before the first runs, refuse
 page code in every step, since a step's page code can read back what an
@@ -880,6 +892,12 @@ judged as the action it expands to, so `kind=fill` is checked as a credential
 fill and `"{{call}}"` resolving to `macro_call` keeps its credential taint. A
 credential-named argument is refused as an action name.
 
+**Exported scripts run only flat steps.** A script runs the top-level steps
+in order and has no `if_selector`, `try`, `try_each` or `macro_call`, so
+`macro_export_cli` refuses a macro with one of those (or any step the script
+cannot dispatch), naming each step and its kind, rather than writing a script
+that would fail on it after running every step before it.
+
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`
 refuses a credential in a URL, code or outbound field, types a credential only
 on an origin passed as `--trusted-origin` (or listed in the step's
@@ -929,6 +947,10 @@ The linter catches:
 - An `inject_headers` `forward_on_redirect` replay would refuse
   (`bad_forward_on_redirect`): a value that is not a literal `true`/`false`,
   or a header name the step does not send.
+- An `inject_headers` credential-named header an exported script refuses
+  (`export_refuses_credential_header`, a warning): one the step's
+  `forward_on_redirect` does not name. `macro_run` accepts the step; a script
+  from `macro_export_cli` stops there.
 - An `expect_no_text` whose text is still the recording's redaction marker
   (`redacted_assertion_text`), which replay refuses.
 - `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):

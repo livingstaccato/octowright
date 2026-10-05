@@ -31,9 +31,7 @@ export interface PluginFrontend {
   layout: "browser" | "stream";
 }
 
-export async function loadPluginRegistry(
-  fetchImpl: typeof fetch = fetch,
-): Promise<Map<string, PluginFrontend>> {
+export async function loadPluginRegistry(fetchImpl: typeof fetch = fetch): Promise<Map<string, PluginFrontend>> {
   // A dashboard that cannot reach /api/plugins still has to render browser
   // sessions, so this degrades to "no plugin renderers" rather than failing
   // the page.

@@ -156,7 +156,7 @@ import html
 import json
 import re
 import weakref
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, cast
 from urllib.parse import urljoin
 
@@ -166,6 +166,7 @@ from octowright import ssrf
 from octowright.session.timeouts import bounded
 from octowright.ssrf_guard_served import (
     _note_served,
+    _unwatch_page,
     _watch_page,
 )
 from octowright.ssrf_guard_served import (
@@ -352,6 +353,10 @@ def frame_chain(frame: Any) -> FrameChain:
 #: every context; with it off, only those whose session carries URL-scoped
 #: headers (:func:`install_navigation_guard`).
 _GUARDED_CONTEXTS: weakref.WeakSet[Any] = weakref.WeakSet()
+
+#: The subset registered only for URL-scoped headers, with the policy off:
+#: the ones :func:`scoped_header_guard_releasable` lets a caller take back down.
+_SCOPE_ONLY_CONTEXTS: weakref.WeakSet[Any] = weakref.WeakSet()
 
 
 def guards_context(context: Any) -> bool:
@@ -631,6 +636,15 @@ async def _handle_websocket(ws: Any) -> None:
     ws.connect_to_server()
 
 
+def _track_guarded(context: Any, *, scope_only: bool) -> None:
+    try:
+        _GUARDED_CONTEXTS.add(context)
+        if scope_only:
+            _SCOPE_ONLY_CONTEXTS.add(context)
+    except TypeError:  # a context double that cannot be weakly referenced
+        log.debug("octowright.ssrf.guarded_context_untracked")
+
+
 async def install_navigation_guard(context: Any, *, scope_headers: bool = False) -> None:
     """Register the per-request check on *context*, once.
 
@@ -650,10 +664,7 @@ async def install_navigation_guard(context: Any, *, scope_headers: bool = False)
         context.route("**/*", _handle_route),
         operation="browser_install_navigation_guard",
     )
-    try:
-        _GUARDED_CONTEXTS.add(context)
-    except TypeError:  # a context double that cannot be weakly referenced
-        log.debug("octowright.ssrf.guarded_context_untracked")
+    _track_guarded(context, scope_only=not enforce)
     # Every commit clears a stale stub record (note_frame_navigated),
     # including the popups this context opens later.
     try:
@@ -671,3 +682,39 @@ async def install_navigation_guard(context: Any, *, scope_headers: bool = False)
             operation="browser_install_websocket_guard",
         )
     log.debug("octowright.ssrf.navigation_guard_installed")
+
+
+def scoped_header_guard_releasable(context: Any) -> bool:
+    """Whether *context*'s navigation route was registered for URL-scoped headers alone and may come down.
+
+    The caller decides that no scoped header is left on *context* (the last
+    ``uninject_headers``, with no scoped launch headers), unroutes
+    :func:`navigation_route` under its own gated operation, then calls
+    :func:`forget_scoped_header_guard`. Never the policy's guard: a route
+    installed under the policy, or one the policy now reads per request,
+    stays. The next scoped header installs it afresh, ahead of its own route.
+    """
+    if ssrf.policy_enabled():
+        return False
+    try:
+        return context in _SCOPE_ONLY_CONTEXTS
+    except TypeError:  # a context double that cannot be weakly referenced
+        return False
+
+
+def navigation_route() -> tuple[str, Callable[..., Awaitable[None]]]:
+    """The pattern and handler :func:`install_navigation_guard` registers, for ``context.unroute``."""
+    return "**/*", _handle_route
+
+
+def forget_scoped_header_guard(context: Any) -> None:
+    """The bookkeeping half of taking a scope-only guard down, once its route is unrouted."""
+    _SCOPE_ONLY_CONTEXTS.discard(context)
+    _GUARDED_CONTEXTS.discard(context)
+    try:
+        context.remove_listener("page", _watch_page)
+        for page in list(getattr(context, "pages", None) or ()):
+            _unwatch_page(page)
+    except Exception as exc:
+        log.debug("octowright.ssrf.frame_navigation_unwatch_failed", error=repr(exc))
+    log.debug("octowright.ssrf.navigation_guard_released")

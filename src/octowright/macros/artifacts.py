@@ -24,6 +24,7 @@ from octowright.artifacts.paths import ArtifactStore
 from octowright.artifacts.paths import slug as artifact_slug
 from octowright.artifacts.reports import refresh_run_summary, write_artifact_manifest, write_run_bundle
 from octowright.artifacts.script_export import write_macro_cli
+from octowright.artifacts.script_export_actions import refuse_unrunnable_steps
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
 from octowright.macros.nesting import RunMacros, iter_nested_actions
@@ -134,6 +135,7 @@ def export_macro_cli(
 ) -> dict[str, Any]:
     macro = load_macro(name)
     _refuse_unbound_assertions(name, macro)
+    refuse_unrunnable_steps(name, macro)
     args_used = dict(args or {})
     privacy = _privacy(macro)
     privacy.blind_scrub(args_used)

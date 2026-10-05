@@ -171,3 +171,35 @@ async def test_a_session_without_scoped_headers_registers_no_route(
         await pool.close(session.instance_id, force=True)
     finally:
         await pool.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ENGINES)
+async def test_uninjecting_the_last_injection_takes_the_route_down(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, server: Any, kind: str
+) -> None:
+    """The navigation route stays while any injection is left, and goes with the last one."""
+    pytest.importorskip("playwright")
+    _configure_runtime_paths(monkeypatch, tmp_path)
+    monkeypatch.delenv("OCTOWRIGHT_SSRF_POLICY", raising=False)
+    port = server.server_address[1]
+    scoped, other = f"http://127.0.0.1:{port}", f"http://localhost:{port}"
+    pool = BrowserPool()
+    try:
+        session = await _launch(pool, kind, f"{other}/start")
+        await session.inject_headers(f"{scoped}/**", {HEADER: VALUE})
+        await session.inject_headers(f"{scoped}/api/**", {HEADER: VALUE})
+
+        await session.uninject_headers(f"{scoped}/api/**")
+        # Still per hop with one injection left.
+        await _assert_per_hop(session, server, scoped, other)
+
+        await session.uninject_headers(f"{scoped}/**")
+        assert session.context._impl_obj._routes == []
+        # Navigations still work with the route gone, and carry nothing.
+        await session.navigate(f"{scoped}/redir?to={other}/after")
+        assert session.page.url == f"{other}/after"
+        assert HEADER.lower() not in _received(server, "127.0.0.1", "/redir")
+        await pool.close(session.instance_id, force=True)
+    finally:
+        await pool.shutdown()

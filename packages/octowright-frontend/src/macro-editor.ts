@@ -4,11 +4,7 @@
 // refresh callback (supplied by dashboard.ts to avoid a circular import).
 
 import { getMacro, getMacroRepairPreview, updateMacro, validateMacro } from "./api.js";
-import {
-  renderMacroRepairPreview,
-  renderMacroSelectorTools,
-  renderMacroSummary,
-} from "./macro-renderers.js";
+import { renderMacroRepairPreview, renderMacroSelectorTools, renderMacroSummary } from "./macro-renderers.js";
 import { showSnackbar } from "./snackbar.js";
 import type { SessionListResponse } from "./types.js";
 
@@ -16,11 +12,7 @@ function closeModal(): void {
   document.querySelector(".modal-backdrop")?.remove();
 }
 
-export function openMacroEditor(
-  name: string,
-  sessions: SessionListResponse,
-  refreshDashboard: () => void,
-): void {
+export function openMacroEditor(name: string, sessions: SessionListResponse, refreshDashboard: () => void): void {
   const existing = document.querySelector(".modal-backdrop");
   if (existing) existing.remove();
 

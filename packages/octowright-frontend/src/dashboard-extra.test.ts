@@ -2,17 +2,19 @@
 // deleteSessionRecording, relaunchClosedSession, startSavedScenario, persona
 // edit button, saved-scenario sort/start, and openMacroEditor error paths.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  PersonaSummary,
-  SavedScenario,
-  ScenarioListResponse,
-  SessionListResponse,
-} from "./types.js";
+import type { PersonaSummary, SavedScenario, ScenarioListResponse, SessionListResponse } from "./types.js";
 
 const apiMocks = vi.hoisted(() => ({
   dashboardEventsUrl: vi.fn(() => "/api/dashboard/events"),
   deleteRecording: vi.fn(),
-  getMacro: vi.fn(async () => ({ name: "m", description: "", parameters: [], created_at: "", updated_at: "", actions: [] })),
+  getMacro: vi.fn(async () => ({
+    name: "m",
+    description: "",
+    parameters: [],
+    created_at: "",
+    updated_at: "",
+    actions: [],
+  })),
   getMacroRepairPreview: vi.fn(),
   getMacros: vi.fn(async () => []),
   getPersonaDetail: vi.fn(),
@@ -269,7 +271,6 @@ describe("openMacroRepairPreview error path", () => {
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog?.textContent).toContain("No selector-based repair suggestions");
   });
-
 });
 
 describe("closed session row actions", () => {

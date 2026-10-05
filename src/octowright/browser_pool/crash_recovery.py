@@ -64,6 +64,13 @@ from octowright.session.operation.gate import (
     SessionClosingError,
     SessionOperationAbortedError,
 )
+from octowright.session.route_carry import (
+    PageRoutes,
+    forget_crashed_page_headers,
+    install_page_routes,
+    page_routes_of,
+    rebind_page_routes,
+)
 from octowright.session.timeouts import bounded
 
 if TYPE_CHECKING:
@@ -169,7 +176,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             attempts=session._crash_recoveries,
             max=CRASH_RECOVERY_MAX,
         )
-        incidents.record(
+        incident = incidents.record(
             incidents.CATEGORY_RENDERER_CRASH,
             instance_id=session.instance_id,
             kind=session.kind,
@@ -177,6 +184,7 @@ def schedule_recovery(session: Any, page: Any) -> Any | None:
             outcome="exhausted",
             attempts=session._crash_recoveries,
         )
+        _note_given_up(session, incident, page)
         _publish_recovered(session, "exhausted")
         return None
     try:
@@ -222,16 +230,19 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
     browser it never touched."""
     session._crash_recoveries += 1
     iid = session.instance_id
+    route_warnings: list[str] = []
     try:
-        navigation_error, elsewhere = await _replace_until_it_holds(session, page, reload_timeout_ms, url)
+        navigation_error, elsewhere = await _replace_until_it_holds(
+            session, page, reload_timeout_ms, url, route_warnings=route_warnings
+        )
     except _RecoveryExhaustedError as exc:
         _count_failure(session, exc.__cause__ or exc)
-        _record_incident(session, url, "exhausted")
+        _note_given_up(session, _record_incident(session, url, "exhausted"), page, exc.dead_page)
         _publish_recovered(session, "exhausted")
         return False
     except Exception as exc:
         _count_failure(session, exc)
-        _record_incident(session, url, "failed")
+        _note_given_up(session, _record_incident(session, url, "failed"), page)
         _publish_recovered(session, "failed")
         return False
     session._crashed = False
@@ -249,6 +260,10 @@ async def _recover_owned(session: Any, page: Any, reload_timeout_ms: float, url:
             log.info("octowright.crash.recovered_load_incomplete", instance_id=iid, url=url, error=navigation_error)
         incident["navigation_error"] = navigation_error
         incident["recovered_elsewhere"] = elsewhere
+    if route_warnings:
+        # The dead page's mocks and page headers are re-registered on its
+        # replacement (route_carry); one that could not be is said here.
+        incident["route_warnings"] = route_warnings
     # Published only once the outcome is whole: a client told plain "recovered"
     # carries on against a page that never reached its URL.
     _publish_recovered(session, "recovered", navigation_error, recovered_elsewhere=elsewhere)
@@ -275,12 +290,27 @@ def _count_failure(session: Any, exc: BaseException) -> None:
     )
 
 
+def _note_given_up(session: Any, incident: dict[str, Any], *dead_pages: Any) -> None:
+    """Recovery gave up on *dead_pages*: forget their page headers (unless one
+    is still the active page) and say so on the incident."""
+    warnings: list[str] = []
+    for dead in dict.fromkeys(dead_pages):
+        warnings.extend(forget_crashed_page_headers(session, dead))
+    if warnings:
+        incident["route_warnings"] = warnings
+
+
 class _RecoveryExhaustedError(RuntimeError):
-    """Every replacement the crash-loop bound allows crashed; ``__cause__`` is the last one's."""
+    """Every replacement the crash-loop bound allows crashed; ``__cause__`` is the
+    last one's, and ``dead_page`` the page the next attempt would have replaced."""
+
+    def __init__(self, message: str, *, dead_page: Any = None) -> None:
+        super().__init__(message)
+        self.dead_page = dead_page
 
 
 async def _replace_until_it_holds(
-    session: Any, dead_page: Any, reload_timeout_ms: float, url: str
+    session: Any, dead_page: Any, reload_timeout_ms: float, url: str, *, route_warnings: list[str] | None = None
 ) -> tuple[str | None, bool]:
     """:func:`_replace_crashed_page`, again for a replacement that crashed, within the crash-loop bound.
 
@@ -291,12 +321,20 @@ async def _replace_until_it_holds(
     under the same lease: a transient crash while loading recovers on the next
     page, a URL that crashes every renderer ends ``exhausted``. Nothing is
     scheduled twice.
+
+    The page routes to restore are read ONCE, off the page that crashed: a
+    replacement that crashes while loading is discarded before it held the
+    slot, so the next attempt restores the same routes, and the routes move
+    to whichever replacement finally holds (``route_carry.rebind_page_routes``).
     """
     from octowright.defaults import CRASH_RECOVERY_MAX, CRASH_RECOVERY_RESET_SECONDS
 
+    routes = page_routes_of(session, dead_page)
     while True:
         try:
-            return await _replace_crashed_page(session, dead_page, reload_timeout_ms, url)
+            return await _replace_crashed_page(
+                session, dead_page, reload_timeout_ms, url, routes=routes, route_warnings=route_warnings
+            )
         except ReplacementCrashedError as exc:
             if not _eligible(
                 session,
@@ -310,7 +348,7 @@ async def _replace_until_it_holds(
                     attempts=session._crash_recoveries,
                     max=CRASH_RECOVERY_MAX,
                 )
-                raise _RecoveryExhaustedError(str(exc)) from exc
+                raise _RecoveryExhaustedError(str(exc), dead_page=exc.dead_page) from exc
             session._crash_recoveries += 1
             log.info(
                 "octowright.crash.replacement_retry",
@@ -475,7 +513,13 @@ async def _take_dead_page_slot(session: SessionLike, dead_page: Any, new_page: A
 
 
 async def _replace_crashed_page(
-    session: SessionLike, dead_page: Any, timeout_ms: float, last_url: str
+    session: SessionLike,
+    dead_page: Any,
+    timeout_ms: float,
+    last_url: str,
+    *,
+    routes: PageRoutes | None = None,
+    route_warnings: list[str] | None = None,
 ) -> tuple[str | None, bool]:
     """Recover by replacing the dead page, NOT reloading it.
 
@@ -531,8 +575,18 @@ async def _replace_crashed_page(
     A replacement that crashes after it loaded but before the swap and the
     dead page's close have finished is still this recovery's too: it stays
     in ``_REPLACEMENTS`` until then, and raises the same error with itself as
-    the page the next attempt replaces."""
+    the page the next attempt replaces.
+
+    The context's routes survive (``inject_headers`` is a context route), but
+    a page route and a page's own headers die with the page, so the dead
+    page's ``mock_route`` mocks and ``set_extra_http_headers`` headers
+    (*routes*, read off *dead_page* when not given) are re-registered on the
+    new page BEFORE it navigates; one that cannot be is appended to
+    *route_warnings*."""
     from octowright.browser_pool.listeners import _wire_listeners
+
+    if routes is None:
+        routes = page_routes_of(session, dead_page)
 
     async with session.operation("crash_recovery", wait_timeout_seconds=None):
         new_page = await session.context.new_page()
@@ -543,6 +597,7 @@ async def _replace_crashed_page(
         # not the event ran first: new_page ends up present exactly once, dead_page
         # removed — no duplicate entry, no double listeners.
         _wire_listeners(cast("BrowserSession", session), new_page)
+        warnings = await install_page_routes(session, routes, new_page)
         navigation_error, unreached = await _load_replacement(session, dead_page, new_page, timeout_ms, last_url)
         # Decided by where the page is, whether or not the navigation raised: a
         # load that timed out after commit is AT its last URL, a goto that
@@ -555,6 +610,9 @@ async def _replace_crashed_page(
             or not _same_url(new_page.url, last_url)
         )
         await _swap_in(session, dead_page, new_page, last_url)
+        rebind_page_routes(session, routes, new_page)
+        if route_warnings is not None:
+            route_warnings[:] = warnings
         return navigation_error, elsewhere
 
 

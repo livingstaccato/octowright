@@ -31,11 +31,7 @@ const HEADLINE: Record<FallbackCode, string> = {
   "mount-failed": "This kind's renderer failed to render — showing the generic timeline.",
 };
 
-export function mountFallbackStream(
-  el: HTMLElement,
-  ctx: StreamContext,
-  reason: FallbackReason,
-): StreamHandle {
+export function mountFallbackStream(el: HTMLElement, ctx: StreamContext, reason: FallbackReason): StreamHandle {
   el.innerHTML = "";
   el.classList.add("session-stream--fallback");
 

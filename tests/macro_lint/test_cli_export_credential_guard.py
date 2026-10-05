@@ -325,3 +325,63 @@ def test_a_credential_step_waits_what_the_same_step_without_one_does(
     namespace["checked_fill"], namespace["checked_type"] = fill, type_
     asyncio.run(namespace["run_m"](password=SECRET, trusted_origins=("https://app.example.test",)))
     assert budgets == [30000]
+
+
+# --- a credential header a navigation redirect would carry (exported script only) ----------
+#
+# The script's inject_headers is a plain context route, so Playwright re-applies
+# its header override to every redirect a NAVIGATION follows; live replay matches
+# navigations per hop and the script does not. So the script refuses a
+# credential-named header unless the step's forward_on_redirect accepts it.
+
+LITERAL = "Bearer Fixture-Not-A-Real-Secret-export-hop"  # pragma: allowlist secret (obviously fake fixture)
+
+
+@pytest.mark.parametrize("header", ["Authorization", "X-Api-Key", "Cookie"])
+def test_a_literal_credential_header_needs_the_redirect_opt_in(monkeypatch: pytest.MonkeyPatch, header: str) -> None:
+    action: dict[str, Any] = {
+        "action": "inject_headers",
+        "pattern": "https://app.example.test/**",
+        "headers": {header: LITERAL},
+    }
+    rec = _Recorder()
+    _install(monkeypatch, rec)
+    source = render_macro_cli(name="guarded", macro={"actions": [action]}, include_evidence=False)
+    namespace: dict[str, Any] = {}
+    exec(source, namespace)
+    # Refused at dispatch; the script reports a step's failure as a RuntimeError.
+    with pytest.raises(RuntimeError, match="forward_on_redirect") as caught:
+        asyncio.run(namespace["run_guarded"]())
+    assert LITERAL not in str(caught.value)
+    assert "context.route" not in rec.names()
+
+
+def test_a_credential_header_with_the_opt_in_is_routed(monkeypatch: pytest.MonkeyPatch) -> None:
+    action = {
+        "action": "inject_headers",
+        "pattern": "https://app.example.test/**",
+        "headers": {"Authorization": LITERAL, "X-Trace": "t"},
+        "forward_on_redirect": {"authorization": True},
+    }
+    _result, rec = _run(monkeypatch, [action], {})
+    assert "context.route" in rec.names()
+
+
+def test_a_non_credential_header_needs_no_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    action = {"action": "inject_headers", "pattern": "**/api/**", "headers": {"X-Env": "staging"}}
+    _result, rec = _run(monkeypatch, [action], {})
+    assert "context.route" in rec.names()
+
+
+def test_sinks_allow_lifts_the_header_refusal_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_MACRO_CREDENTIAL_SINKS", "allow")
+    action = {"action": "inject_headers", "pattern": "**/api/**", "headers": {"Authorization": LITERAL}}
+    _result, rec = _run(monkeypatch, [action], {})
+    assert "context.route" in rec.names()
+
+
+def test_the_script_names_credential_headers_by_the_live_rule() -> None:
+    from octowright import http_headers
+
+    source = render_macro_cli(name="x", macro={"actions": []}, include_evidence=False)
+    assert inspect.getsource(http_headers.is_credential_header) in source

@@ -234,3 +234,69 @@ async def test_mock_route_replacing_unroutes_old_handler(tmp_path: Path) -> None
     assert first_handler is not second_handler
     # The route dict should now contain only the new handler.
     assert s.page._routes["**/api/data"] is second_handler  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# A mock is a PAGE route: removing or replacing it acts on the page it was set on
+# ---------------------------------------------------------------------------
+
+
+class _ClosablePage(FakePage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.closed = False
+        self.unrouted: list[str] = []
+
+    def is_closed(self) -> bool:
+        return self.closed
+
+    async def unroute(self, pattern: str, handler: Any) -> None:
+        self.unrouted.append(pattern)
+        await super().unroute(pattern, handler)
+
+
+@pytest.mark.anyio
+async def test_unmock_after_a_page_switch_unroutes_the_page_it_was_set_on(tmp_path: Path) -> None:
+    s = _make_session(tmp_path)
+    first, second = _ClosablePage(), _ClosablePage()
+    s.page = first  # type: ignore[assignment]
+    await s.mock_route("**/api/data", status=200)
+    s.page = second  # type: ignore[assignment]  # what page_switch does
+
+    await s.unmock_route("**/api/data")
+
+    assert "**/api/data" not in first._routes
+    assert first.unrouted == ["**/api/data"]
+    assert second.unrouted == []
+    assert "**/api/data" not in s._active_routes
+
+
+@pytest.mark.anyio
+async def test_re_mocking_after_a_page_switch_takes_the_old_mock_off_its_page(tmp_path: Path) -> None:
+    s = _make_session(tmp_path)
+    first, second = _ClosablePage(), _ClosablePage()
+    s.page = first  # type: ignore[assignment]
+    await s.mock_route("**/api/data", status=200)
+    s.page = second  # type: ignore[assignment]
+
+    await s.mock_route("**/api/data", status=404)
+
+    assert "**/api/data" not in first._routes
+    assert "**/api/data" in second._routes
+    assert s._mock_specs["**/api/data"].page is second
+
+
+@pytest.mark.anyio
+async def test_unmocking_a_mock_whose_page_closed_just_forgets_it(tmp_path: Path) -> None:
+    s = _make_session(tmp_path)
+    first, second = _ClosablePage(), _ClosablePage()
+    s.page = first  # type: ignore[assignment]
+    await s.mock_route("**/api/data", status=200)
+    first.closed = True
+    s.page = second  # type: ignore[assignment]
+
+    result = await s.unmock_route("**/api/data")
+
+    assert result["ok"] is True
+    assert first.unrouted == [] and second.unrouted == []
+    assert "**/api/data" not in s._active_routes

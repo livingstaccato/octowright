@@ -102,13 +102,19 @@ async def _launch_from_snapshot(
     ``pool.launch`` publishes the session before it returns. Its HAR goes to
     a fresh sibling path rather than overwriting the original's.
 
-    Returns the launch result and the response's ``warnings`` field: present
-    only when the original's browser channel is gone from this host and the
-    replacement fell back to the bundled build (`launch_replacement`)."""
+    The original's post-launch routes and headers (``inject_headers``,
+    ``mock_route``, ``set_extra_http_headers``) are replayed onto it before
+    its first navigation (``route_carry``).
+
+    Returns the launch result and the response's ``warnings`` field, present
+    only when there is something to say: the original's browser channel is
+    gone from this host and the replacement fell back to the bundled build
+    (`launch_replacement`), or a route or header could not be carried."""
     kwargs = snapshot.source.launch_kwargs(url=snapshot.target_url, headed=headed, overrides=overrides)
-    launch, dropped = await launch_replacement(pool.launch, kwargs)
-    warnings = {"warnings": [channel_dropped_warning(dropped, snapshot.kind)]} if dropped else {}
-    return launch, warnings
+    launch, dropped = await launch_replacement(pool.launch, kwargs, routes=snapshot.source.routes)
+    messages = [channel_dropped_warning(dropped, snapshot.kind)] if dropped else []
+    messages.extend(launch.get("route_warnings") or ())
+    return launch, ({"warnings": messages} if messages else {})
 
 
 async def _close_with_fallback_snapshot(

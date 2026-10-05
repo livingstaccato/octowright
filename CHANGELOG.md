@@ -48,7 +48,78 @@ a section that is already tagged and on PyPI.
   returns `warnings` when the write makes a parameter less sensitive; the YAML
   DSL accepts `parameter_specs`.
 
+- **`macro_lint` warns about an `inject_headers` step an exported script will
+  refuse.** A script from `macro_export_cli` refuses a credential-named header
+  the step's `forward_on_redirect` does not name, but only when it reaches the
+  step, and `macro_run` accepts the same step. The new
+  `export_refuses_credential_header` warning from `macro_lint` and the
+  dashboard's macro validation says so before the script is run.
+
 ### Fixed
+- **A crashed background page's headers no longer haunt later
+  replacements.** When crash recovery gave up on a page that was not the
+  active one, its `browser_set_extra_http_headers` record stayed (a crashed
+  page is not closed), and every later handoff or relaunch warned that
+  headers on another page were not carried. The record is now dropped when
+  recovery gives up, and the crash incident's `route_warnings` says so.
+- **`macro_export_cli` refuses a macro its script cannot run.** An exported
+  script has no `if_selector`, `try`, `try_each` or `macro_call`, so a macro
+  with one exported fine and then failed with "unsupported macro action"
+  after every step before it had already run against the target. The export
+  now refuses it, naming each such step and its kind.
+- **Page headers set on two pages are both remembered.** After
+  `browser_set_extra_http_headers` on one page and then, after `page_switch`,
+  on another, the first page kept sending its headers but `browser_list` no
+  longer reported them on it, and a handoff, relaunch or crash recovery
+  neither carried them nor said they were left behind. Each page's headers
+  are now kept: reported while that page is active, carried by crash recovery
+  of that page, and named in a replacement's `warnings` when they are on a
+  page the replacement does not reopen.
+- **A credential macro is no longer refused for page code in a branch it
+  never takes.** A run that types a credential refuses page code
+  (`evaluate`, `expect_js` and the like), and it judged every step before
+  starting, including ones in an `if_selector` branch or a later `try_each`
+  branch the page might never take. Those steps are now refused when their
+  branch runs instead; a step every run reaches is still refused before the
+  run starts. Exported scripts from `macro_export_cli` now also check each
+  step as it runs, as `macro_run` does; re-export a script to pick this up.
+- **`browser_list` no longer reports page headers on a page that is not
+  sending them.** Headers set with `browser_set_extra_http_headers` apply to
+  the page they were set on, but after `page_switch` the browser's reported
+  headers still listed them under `page` for the newly active page. They are
+  now reported only while the page they were set on is the active one.
+- **`browser_unmock_route` works after a page switch.** It removed the mock
+  from the active page, so after `page_switch` a mock set on the previous page
+  kept answering there while `browser_unmock_route` reported success. It, and
+  a `browser_mock_route` that replaces a mock on the same pattern, now act on
+  the page the mock was set on.
+- **An exported macro script no longer lets a navigation redirect carry a
+  credential header.** In a script from `macro_export_cli`, an
+  `inject_headers` header rode every redirect a page load followed, wherever
+  it led (`macro_run` matches navigations per hop and was not affected). The
+  script now refuses a credential-named header in an `inject_headers` step,
+  such as `Authorization`, `Cookie` or `X-Api-Key`, when the step runs, unless
+  the step names it in `forward_on_redirect`. Re-export a script to pick this
+  up.
+- **Removing the last `browser_inject_headers` injection stops routing
+  navigations.** The first injection routes the browser's navigations through
+  a per-hop handler so a scoped header does not follow a redirect; that route
+  stayed after the last injection was removed, so every request kept paying a
+  route round trip and every page body was still buffered. It now goes with
+  the last injection, unless the launch headers are URL-scoped too or an SSRF
+  policy is on.
+- **A handoff, relaunch or crash recovery keeps the headers and mocks you
+  set after launch.** A replacement browser from `browser_handoff`,
+  `browser_relaunch_fluid` or a driver-death / browser-process-crash reopen
+  used to arrive without the original's `browser_inject_headers`,
+  `browser_mock_route` and `browser_set_extra_http_headers`, and a page
+  replaced after a renderer crash lost its mocks and page headers, all
+  without a word. They are now installed on the replacement before its first
+  navigation, in the order they were registered, and the replacement's
+  recording shows them. Anything that cannot be carried, such as a mock on a
+  page other than the one the replacement reopens, is named in the handoff or
+  relaunch result's `warnings`, as `route_warnings` on the lost-session
+  record, or on the crash incident.
 - **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
   engine reports `console.warn` as `warning`, and the filter compared the raw
   level case-sensitively, so `level=warn` returned nothing. It now matches

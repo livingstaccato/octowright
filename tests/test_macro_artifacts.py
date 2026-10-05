@@ -274,6 +274,9 @@ def test_macro_export_cli_unsupported_action_exits_nonzero_and_writes_evidence(
             ],
         },
     )
+    # The export refuses this macro up front now (test_cli_export_refuses_unrunnable);
+    # what is under test here is the script's own fallthrough, so let it be written.
+    monkeypatch.setattr(macro_artifacts, "refuse_unrunnable_steps", lambda *_a: None)
     result = macro_artifacts.export_macro_cli(name="unsupported", args={"email": "me@example.com"})
     source = Path(result["path"]).read_text(encoding="utf-8")
     namespace: dict[str, object] = {}

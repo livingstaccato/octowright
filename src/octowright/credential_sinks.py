@@ -234,6 +234,25 @@ def parse_forward_on_redirect(action: dict[str, Any]) -> frozenset[str]:
     return frozenset(chosen)
 
 
+def redirect_exposed_credential_headers(
+    action: dict[str, Any], headers: dict[str, Any], is_credential_header: Callable[[str], bool]
+) -> list[str]:
+    """The credential-named *headers* a step's `FORWARD_ON_REDIRECT_KEY` does not opt in, sorted.
+
+    What an exported script's ``inject_headers`` refuses, since its plain route
+    lets a navigation redirect carry them, and what ``macro_lint`` warns about.
+    *is_credential_header* is ``http_headers.is_credential_header``, passed in
+    because this module imports only the standard library. Raises as
+    `parse_forward_on_redirect` does on a malformed opt-in.
+    """
+    opted_in = parse_forward_on_redirect(action)
+    return sorted(
+        str(name)
+        for name in headers
+        if is_credential_header(str(name)) and str(name).strip().casefold() not in opted_in
+    )
+
+
 def _redirect_refusal(key: str, header: str) -> CredentialRefusal:
     return CredentialRefusal(
         f"macro expands credential arg {{{{{key}}}}} into inject_headers header {header!r} for the session's "
@@ -452,8 +471,34 @@ def page_code_refusal(
     )
 
 
+def _reached_values(item: dict[str, Any]) -> list[Any]:
+    """The containers of *item* a run reaches whenever it reaches *item*.
+
+    An ``if_selector``'s ``then``/``else`` and a ``try_each``'s later branches
+    run only when the page decides so; a ``try``'s steps and a ``try_each``'s
+    first branch always start. Everything else is walked, as any nesting was.
+    """
+    kind = item.get("action")
+    reached: list[Any] = []
+    for key, value in item.items():
+        if not isinstance(value, (dict, list)):
+            continue
+        if kind == "if_selector" and key in ("then", "else"):
+            continue
+        if kind == "try_each" and key == "branches" and isinstance(value, list):
+            value = value[:1]
+        reached.append(value)
+    return reached
+
+
 def refuse_page_code(actions: Any, credential_names: list[str] | tuple[str, ...]) -> None:
-    """Raise `page_code_refusal` for the first page-code step in *actions*, at any depth."""
+    """Raise `page_code_refusal` for the first page-code step every run of *actions* reaches.
+
+    Before any step runs, so a refusal leaves nothing half done. A step in a
+    conditional branch is judged when the branch is taken instead: replay and
+    the exported script both run `page_code_refusal` on every step they
+    dispatch, so refusing it here would refuse runs that never execute it.
+    """
     stack: list[Any] = [actions]
     while stack:
         item = stack.pop(0)
@@ -462,7 +507,7 @@ def refuse_page_code(actions: Any, credential_names: list[str] | tuple[str, ...]
         elif isinstance(item, dict):
             if isinstance(item.get("action"), str) and (refusal := page_code_refusal(item, credential_names)):
                 raise refusal
-            stack.extend(value for value in item.values() if isinstance(value, (dict, list)))
+            stack.extend(_reached_values(item))
 
 
 def _sink_refusal(key: str) -> CredentialRefusal:

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setupTelemetry } from "@provide-io/telemetry";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiErrorsCounter,
   apiLatencyHistogram,

@@ -491,6 +491,7 @@ class _StubRoutes:
         self._header_routes: dict[str, object] = {}
         self._injected_headers: dict[str, dict[str, str]] = {}
         self._active_routes: dict[str, object] = {}
+        self._mock_specs: dict[str, object] = {}
         self.page = SimpleNamespace(route=self._noop, unroute=self._noop)
         self.context = SimpleNamespace(route=self._noop, unroute=self._noop)
         self.recorder = SimpleNamespace(record=lambda *a, **k: None)

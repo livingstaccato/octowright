@@ -494,8 +494,7 @@ export async function loadProtectedVideo(
     const note = document.createElement("p");
     note.className = "note note--missing";
     note.setAttribute("role", "alert");
-    note.textContent =
-      "Dashboard pairing expired. Run `octowright dashboard` and open the new URL to resume video.";
+    note.textContent = "Dashboard pairing expired. Run `octowright dashboard` and open the new URL to resume video.";
     target.append(note);
   };
   if (bearer !== null) {
@@ -763,9 +762,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     } else {
       const mod = await importRenderer(chosen.moduleUrl);
       mount =
-        "code" in mod
-          ? (el: HTMLElement, ctx: StreamContext) => mountFallbackStream(el, ctx, mod)
-          : mod.mountStream;
+        "code" in mod ? (el: HTMLElement, ctx: StreamContext) => mountFallbackStream(el, ctx, mod) : mod.mountStream;
     }
     await bootStreamSession(root, sessionId, detail, mount, {
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),

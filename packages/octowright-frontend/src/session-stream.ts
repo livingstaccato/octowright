@@ -18,8 +18,8 @@
 import { tailWebSocketUrl } from "./api.js";
 import { getAllEvents } from "./events-pager.js";
 import type { MountStream, StreamContext, StreamHandle } from "./plugin-contract.js";
-import { mountFallbackStream, type FallbackReason } from "./session-fallback.js";
 import { installDashboardAuthRequiredNotice, renderFooter, renderHeader, renderTailStatus } from "./session.js";
+import { type FallbackReason, mountFallbackStream } from "./session-fallback.js";
 import { openTail } from "./tail.js";
 import { getLogger } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
@@ -77,9 +77,7 @@ function errorMessage(err: unknown): string {
  * `undefined` throws there), which already produces the same
  * `code: "mount-failed"` fallback -- no separate check is needed here.
  */
-export async function importRenderer(
-  moduleUrl: string,
-): Promise<{ mountStream: MountStream } | FallbackReason> {
+export async function importRenderer(moduleUrl: string): Promise<{ mountStream: MountStream } | FallbackReason> {
   try {
     const mod = (await import(/* @vite-ignore */ moduleUrl)) as { mountStream: MountStream };
     return { mountStream: mod.mountStream };
@@ -95,12 +93,7 @@ export async function importRenderer(
  * on-page notice is enough for the operator, but the person debugging their
  * own plugin renderer needs it in the console too.
  */
-function fallbackFromError(
-  el: HTMLElement,
-  ctx: StreamContext,
-  err: unknown,
-  event: string,
-): StreamHandle {
+function fallbackFromError(el: HTMLElement, ctx: StreamContext, err: unknown, event: string): StreamHandle {
   const detail = errorMessage(err);
   log.warn({ event, session_id: ctx.sessionId, kind: ctx.kind, error: detail });
   return mountFallbackStream(el, ctx, { code: "mount-failed", detail });

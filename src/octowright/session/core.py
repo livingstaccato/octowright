@@ -37,6 +37,7 @@ from octowright.session.operation.gate import (
     UseDefault,
     resolve_operation_queue_timeout_seconds,
 )
+from octowright.session.route_carry import MockSpec
 from octowright.session.timeouts import SessionCallTimeoutError
 
 log = get_logger(__name__)
@@ -181,6 +182,10 @@ class BrowserSession(
     #: headers cannot be recovered -- so nothing could report what an injector
     #: was actually adding.
     _injected_headers: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: The response each _active_routes mock fulfils, same keys, with the page
+    #: it was installed on: the handler is a closure, so without this a
+    #: replacement in another context could not rebuild it (route_carry).
+    _mock_specs: dict[str, MockSpec] = field(default_factory=dict)
     #: Launch-time context-level headers, as handed to new_context(). Playwright
     #: exposes no getter, so without this copy a browser could not say what it
     #: was sending -- which left an adopting client guessing whether a running
@@ -190,10 +195,10 @@ class BrowserSession(
     #: instead of unscoped context headers. Reported alongside, because scoped
     #: headers do not ride every request and the headers alone overstate reach.
     extra_http_headers_urls: list[str] | None = None
-    #: Headers set on the ACTIVE page by set_extra_http_headers. Per page by
-    #: nature, so this tracks the page it was last applied to rather than
-    #: claiming browser-wide scope.
-    _page_extra_headers: dict[str, str] | None = None
+    #: Headers set by set_extra_http_headers, as ``(page, headers)`` per page:
+    #: Playwright keeps them per page, so each page's map is kept, and a
+    #: replacement carries them from the page they were set on (page_headers).
+    _page_extra_headers_by_page: list[tuple[Any, dict[str, str]]] = field(default_factory=list, repr=False)
     active_frame: Any | None = None  # playwright.async_api.Frame when set
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)

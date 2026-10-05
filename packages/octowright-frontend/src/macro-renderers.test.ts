@@ -46,7 +46,9 @@ const sessions: SessionListResponse = {
 };
 
 function flushPromises(): Promise<void> {
-  return Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve());
+  return Promise.resolve()
+    .then(() => Promise.resolve())
+    .then(() => Promise.resolve());
 }
 
 describe("macro summary renderers", () => {

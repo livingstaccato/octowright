@@ -29,6 +29,8 @@ from octowright.http_headers import (
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.operation.gate import gated_operation
+from octowright.session.page_headers import page_headers_on, set_page_headers
+from octowright.session.route_carry import MockSpec
 from octowright.session.timeouts import bounded
 from octowright.url_patterns import validate_url_pattern
 
@@ -248,12 +250,24 @@ class SessionInteractionMixin(SessionLike):
                 hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
             )
         if url_pattern in self._active_routes:
-            await bounded(
-                self.page.unroute(url_pattern, self._active_routes[url_pattern]),
-                operation="browser_mock_route",
-            )
+            # Off the page it was SET on, which page_switch may have left behind.
+            spec = self._mock_specs.get(url_pattern)
+            old_page = spec.page if spec is not None and spec.page is not None else self.page
+            closed = getattr(old_page, "is_closed", None)  # a closed page took its routes with it
+            if not (callable(closed) and closed()):
+                await bounded(
+                    old_page.unroute(url_pattern, self._active_routes[url_pattern]),
+                    operation="browser_mock_route",
+                )
         await bounded(self.page.route(url_pattern, _handler), operation="browser_mock_route")
+        # Popped first so each registry's order stays Playwright's registration
+        # order, which a replacement replays (route_carry).
+        self._active_routes.pop(url_pattern, None)
         self._active_routes[url_pattern] = _handler
+        self._mock_specs.pop(url_pattern, None)
+        self._mock_specs[url_pattern] = MockSpec(
+            status=status, body=body, content_type=content_type, headers=dict(headers or {}), page=self.page
+        )
         self.recorder.record(
             "mock_route",
             pattern=url_pattern,
@@ -324,9 +338,14 @@ class SessionInteractionMixin(SessionLike):
                 operation="browser_inject_headers",
             )
         await bounded(self.context.route(url_pattern, _handler), operation="browser_inject_headers")
+        # Popped first so each registry's order stays Playwright's registration
+        # order, which a replacement replays (route_carry).
+        self._header_routes.pop(url_pattern, None)
         self._header_routes[url_pattern] = _handler
         # The registry above holds the closure; the headers it merges cannot be
-        # read back out of it, so keep them for header_state().
+        # read back out of it, so keep them for header_state() and for a
+        # replacement to replay.
+        self._injected_headers.pop(url_pattern, None)
         self._injected_headers[url_pattern] = dict(headers)
         self.recorder.record(
             "inject_headers",
@@ -337,12 +356,26 @@ class SessionInteractionMixin(SessionLike):
 
     @gated_operation("browser_uninject_headers")
     async def uninject_headers(self, url_pattern: str) -> dict[str, Any]:
-        """Remove a previously-installed header injection for ``url_pattern``."""
+        """Remove a previously-installed header injection for ``url_pattern``.
+
+        The last one also takes down the scoped-header navigation route, unless
+        launch headers are scoped too or the SSRF policy is on.
+        """
         handler = self._header_routes.pop(url_pattern, None)
         self._injected_headers.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active header injection for pattern {url_pattern!r}")
         await bounded(self.context.unroute(url_pattern, handler), operation="browser_uninject_headers")
+        # Nothing scoped is left, so the per-hop navigation route the first
+        # injection installed is only cost now (a round trip per request,
+        # buffered navigation bodies). The policy's guard stays.
+        scoped_left = bool(self._header_routes) or bool(self.extra_http_headers and self.extra_http_headers_urls)
+        if not scoped_left and ssrf_guard.scoped_header_guard_releasable(self.context):
+            await bounded(
+                self.context.unroute(*ssrf_guard.navigation_route()),
+                operation="browser_uninject_headers",
+            )
+            ssrf_guard.forget_scoped_header_guard(self.context)
         self.recorder.record("uninject_headers", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 
@@ -366,13 +399,12 @@ class SessionInteractionMixin(SessionLike):
         _reject_redacted_headers(headers)
         validate_extra_http_headers(headers)
         await self.page.set_extra_http_headers(dict(headers))
-        # Playwright has no getter for these, so remember them or nothing can
-        # report what this page is sending. Replaces rather than merges,
-        # matching Playwright: each call sets the page's full header map.
-        # `or None` is not cosmetic: Playwright treats set_extra_http_headers({})
-        # as CLEARING the page's headers, so an empty map must reset the record
-        # rather than leave the previous one standing.
-        self._page_extra_headers = dict(headers) or None
+        # Playwright has no getter for these, so remember them, per page, or
+        # nothing can report what each page is sending. Replaces rather than
+        # merges, matching Playwright: each call sets the page's full header
+        # map, and set_extra_http_headers({}) CLEARS it, so an empty map drops
+        # the page's record rather than leaving the previous one standing.
+        set_page_headers(self, self.page, headers)
         self.recorder.record(
             "set_extra_http_headers",
             headers=redact_header_values(headers, resolve_redaction_mode()),
@@ -402,8 +434,10 @@ class SessionInteractionMixin(SessionLike):
             state["launch"] = redact_headers_for_report(self.extra_http_headers)
             if self.extra_http_headers_urls:
                 state["launch_url_patterns"] = list(self.extra_http_headers_urls)
-        if self._page_extra_headers:
-            state["page"] = redact_headers_for_report(self._page_extra_headers)
+        # Set on one page, they stay on that page: after a page_switch the
+        # active page is not sending them, so they are not reported for it.
+        if page_headers := page_headers_on(self, self.page):
+            state["page"] = redact_headers_for_report(page_headers)
         if self._injected_headers:
             state["injected"] = {
                 pattern: redact_headers_for_report(headers)
@@ -414,10 +448,18 @@ class SessionInteractionMixin(SessionLike):
     @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
         """Remove a previously-installed mock for url_pattern."""
-        handler = self._active_routes.pop(url_pattern, None)
+        handler = self._active_routes.get(url_pattern)
         if handler is None:
             raise KeyError(f"no active mock for pattern {url_pattern!r}")
-        await bounded(self.page.unroute(url_pattern, handler), operation="browser_unmock_route")
+        # A mock is a page route: unrouting the active page instead left it
+        # fulfilling on the page it was set on, after a page_switch.
+        spec = self._mock_specs.get(url_pattern)
+        page = spec.page if spec is not None and spec.page is not None else self.page
+        closed = getattr(page, "is_closed", None)  # a closed page took its routes with it
+        if not (callable(closed) and closed()):
+            await bounded(page.unroute(url_pattern, handler), operation="browser_unmock_route")
+        self._active_routes.pop(url_pattern, None)
+        self._mock_specs.pop(url_pattern, None)
         self.recorder.record("unmock_route", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 

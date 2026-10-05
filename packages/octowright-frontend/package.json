@@ -7,8 +7,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --coverage",
     "test:nocov": "vitest run",
-    "lint": "biome lint src/",
-    "fix": "biome check --write --unsafe src/"
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "check": "biome check .",
+    "fix": "biome check --write --unsafe ."
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.12",

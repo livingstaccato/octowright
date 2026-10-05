@@ -32,8 +32,8 @@ import { RENDERER_API_VERSION } from "./plugin-registry.js";
 import {
   bootSession,
   buildLayout,
-  loadProtectedVideo,
   installDashboardAuthRequiredNotice,
+  loadProtectedVideo,
   renderCachePanel,
   renderFooter,
   renderHeader,
@@ -179,9 +179,7 @@ describe("installDashboardAuthRequiredNotice", () => {
 
   it("distinguishes a refused bearer from a link that never carried one", () => {
     installDashboardAuthRequiredNotice(root);
-    window.dispatchEvent(
-      new CustomEvent("octowright:dashboard-auth-required", { detail: { reason: "rejected" } }),
-    );
+    window.dispatchEvent(new CustomEvent("octowright:dashboard-auth-required", { detail: { reason: "rejected" } }));
     const gate = root.querySelector('[data-testid="pairing-gate"]');
     expect(gate?.getAttribute("data-reason")).toBe("rejected");
     // The two causes are one 401 from here, so the copy must not pick one.
@@ -280,11 +278,9 @@ describe("renderVideo", () => {
     if (!video) throw new Error("video missing");
     const load = vi.spyOn(video, "load").mockImplementation(() => undefined);
     let onRecovered: (() => void) | undefined;
-    const configureMediaAuth = vi.fn(
-      async (_bearer: string, options: { onRecovered?: () => void }) => {
-        onRecovered = options.onRecovered;
-      },
-    );
+    const configureMediaAuth = vi.fn(async (_bearer: string, options: { onRecovered?: () => void }) => {
+      onRecovered = options.onRecovered;
+    });
 
     const cleanup = await loadProtectedVideo(refs.videoSlot, video, "sess-1", {
       configureMediaAuth: configureMediaAuth as never,

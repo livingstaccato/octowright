@@ -141,6 +141,31 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "close-race fallback snapshot in _close_with_fallback_snapshot where the gate is by "
         "definition no longer available",
     ),
+    "session/core_interaction_mixin.py:SessionInteractionMixin.header_state": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the page the "
+        "page-level headers were set on -- no Playwright I/O; ungated so browser_list never queues "
+        "behind a slow in-flight action",
+    ),
+    "session/page_headers.py:_closed": (
+        "cached-property-only",
+        "calls Page.is_closed(), which returns Playwright's locally cached closed flag -- no "
+        "browser I/O; reached from set_extra_http_headers' own lease and from RouteCarry.of (the "
+        "close-race / driver-death capture), where no lease is, or can be, held",
+    ),
+    "session/route_carry.py:RouteCarry.of": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the page each "
+        "mock was installed on -- no Playwright I/O; called from ReplacementSource.of, which runs "
+        "both inside a close lease and as the close-race / driver-death capture where the gate "
+        "is no longer available",
+    ),
+    "session/route_carry.py:forget_crashed_page_headers": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the crashed "
+        "page -- no Playwright I/O; called by crash recovery once it has given up, from inside "
+        "its crash_recovery lease or from schedule_recovery's page-crash handler before one exists",
+    ),
     "session/screencast.py:ScreencastManager._stop_bound_owned_locked": (
         "cached-property-only",
         "reads and clears the cached _bound_page reference (no I/O) purely to decide whether "

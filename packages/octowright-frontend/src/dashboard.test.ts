@@ -1,13 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bootDashboardFromDom, loadState, renderDashboard, updateDashboard } from "./dashboard.js";
 import * as api from "./api.js";
-import type {
-  LiveScenario,
-  MacroSummary,
-  PersonaSummary,
-  ScenarioListResponse,
-  SessionListResponse,
-} from "./types.js";
+import { bootDashboardFromDom, loadState, renderDashboard, updateDashboard } from "./dashboard.js";
+import type { LiveScenario, MacroSummary, PersonaSummary, ScenarioListResponse, SessionListResponse } from "./types.js";
 
 const macroDetail = JSON.parse(
   `{"name":"login","description":"logs in","parameters":["user"],"created_at":"2026-04-23T00:00:00Z","updated_at":"2026-04-23T00:00:00Z","actions":[{"action":"if_selector","selector":".cookie-banner","then":[{"action":"click","selector":".accept"}],"else":[{"action":"click","selector":".dismiss"}]},{"action":"try_each","branches":[[{"action":"fill","selector":"#x"}],[{"action":"fill_by","selector":"#y"},{"action":"click","selector":"#go"}]]}]}`,

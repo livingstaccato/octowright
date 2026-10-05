@@ -106,6 +106,13 @@ def _watch_page(page: Any) -> None:
         log.debug("octowright.ssrf.frame_navigation_unwatched", error=repr(exc))
 
 
+def _unwatch_page(page: Any) -> None:
+    try:
+        page.remove_listener("framenavigated", note_frame_navigated)
+    except Exception as exc:
+        log.debug("octowright.ssrf.frame_navigation_unwatch_failed", error=repr(exc))
+
+
 def served_client_redirect_last(frame: Any) -> bool:
     """Whether *frame* is showing the guard's client-redirect document, as far as the guard knows.
 

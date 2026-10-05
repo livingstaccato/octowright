@@ -34,13 +34,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, replace
+from contextvars import ContextVar
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Final
 
 from provide.telemetry import get_logger
 
 from octowright.browser_pool.options import LaunchOptions
+from octowright.session.route_carry import RouteCarry
 
 log = get_logger(__name__)
 
@@ -89,6 +91,9 @@ class ReplacementSource:
     protected: bool
     protected_reason: str
     har_path: Path | None = None
+    #: The original's post-launch routes and headers (inject_headers,
+    #: mock_route, set_extra_http_headers), which LaunchOptions cannot hold.
+    routes: RouteCarry = field(default_factory=RouteCarry)
 
     @classmethod
     def of(cls, session: Any) -> ReplacementSource:
@@ -102,6 +107,7 @@ class ReplacementSource:
             protected=bool(getattr(session, "protected", False)),
             protected_reason=getattr(session, "protected_reason", "explicit"),
             har_path=Path(har_path) if har_path else None,
+            routes=RouteCarry.of(session),
         )
 
     @property
@@ -165,8 +171,29 @@ def channel_dropped_warning(channel: str, kind: str) -> str:
     )
 
 
+#: The routes a replacement launch replays before its first navigation. Set by
+#: :func:`launch_replacement` for the duration of ``pool.launch`` and read by
+#: the launch pipeline (``launch_pipeline.post_context_setup``) inside the new
+#: session's launch lease, between wiring and the initial ``goto``. Ambient
+#: rather than a launch option on purpose: ``LaunchOptions`` is recorded on
+#: the session and carried by construction into the NEXT replacement, and
+#: these hold header values that must never reach a recording; and threading
+#: one argument through four launch signatures to its one reader is the
+#: larger change. Read, not consumed: the driver-death retry runs the
+#: pipeline twice and each attempt's session needs them.
+_PENDING_ROUTES: ContextVar[RouteCarry | None] = ContextVar("octowright_pending_route_carry", default=None)
+
+
+def pending_route_carry() -> RouteCarry | None:
+    """The routes the launch now running must replay, or ``None`` for an ordinary launch."""
+    return _PENDING_ROUTES.get()
+
+
 async def launch_replacement(
-    launch: Callable[..., Awaitable[dict[str, Any]]], kwargs: Mapping[str, Any]
+    launch: Callable[..., Awaitable[dict[str, Any]]],
+    kwargs: Mapping[str, Any],
+    *,
+    routes: RouteCarry | None = None,
 ) -> tuple[dict[str, Any], str | None]:
     """Launch a replacement with *kwargs*; returns the result and the channel it dropped, if any.
 
@@ -175,12 +202,20 @@ async def launch_replacement(
     replacement is launched again with no channel, on the bundled build, and
     the dropped channel is returned so the caller can say so. Any other
     failure propagates untouched.
+
+    ``routes`` (the original's ``ReplacementSource.routes``) are replayed onto
+    the replacement before its first navigation; what could not be carried
+    comes back as the result's ``route_warnings``.
     """
-    channel = kwargs.get("channel")
+    token = _PENDING_ROUTES.set(routes if routes else None)
     try:
-        return await launch(**kwargs), None
-    except Exception as exc:
-        if not isinstance(channel, str) or not channel or not channel_unavailable(exc, channel):
-            raise
-    log.warning("octowright.browser.replacement.channel_dropped", channel=channel, kind=kwargs.get("kind"))
-    return await launch(**{**kwargs, "channel": None}), channel
+        channel = kwargs.get("channel")
+        try:
+            return await launch(**kwargs), None
+        except Exception as exc:
+            if not isinstance(channel, str) or not channel or not channel_unavailable(exc, channel):
+                raise
+        log.warning("octowright.browser.replacement.channel_dropped", channel=channel, kind=kwargs.get("kind"))
+        return await launch(**{**kwargs, "channel": None}), channel
+    finally:
+        _PENDING_ROUTES.reset(token)

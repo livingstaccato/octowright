@@ -257,6 +257,48 @@ class TestClosedSessionConsoleSidecarHit:
         assert body["messages"] == [{"level": "info", "text": "from-sidecar"}]
 
 
+class TestClosedSessionConsoleScansOnce:
+    def test_repeated_requests_scan_the_recording_once_until_it_changes(
+        self, client: TestClient, isolated_recordings: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A dashboard polling a closed session must not re-read the recording per request.
+
+        With no sidecar, the first request scans the JSONL and the rows are
+        cached by the file's (mtime_ns, size); later requests are served from
+        that cache. Appending to the file changes the signature, so the next
+        request scans again and sees the new row.
+        """
+        from octowright.http import session_artifacts as _artifacts
+
+        p = _write_recording(
+            isolated_recordings,
+            "consonce01",
+            [
+                {"ts": "1", "action": "launch", "kind": "chromium"},
+                {"ts": "2", "action": "console", "level": "info", "text": "first"},
+            ],
+        )
+        scans: list[Path] = []
+        real_iter = _artifacts.iter_jsonl_entries
+
+        def counting_iter(path: Path) -> Any:
+            scans.append(path)
+            return real_iter(path)
+
+        monkeypatch.setattr(_artifacts, "iter_jsonl_entries", counting_iter)
+        for _ in range(3):
+            r = client.get("/api/sessions/consonce01/console")
+            assert r.status_code == 200
+            assert [m["text"] for m in r.json()["messages"]] == ["first"]
+        assert scans == [p]
+
+        with p.open("a") as fh:
+            fh.write(json.dumps({"ts": "3", "action": "console", "level": "info", "text": "second"}) + "\n")
+        r = client.get("/api/sessions/consonce01/console")
+        assert [m["text"] for m in r.json()["messages"]] == ["first", "second"]
+        assert scans == [p, p]
+
+
 # ─── dashboard SSE: hello frame + helper-level branches ────────────────────
 #
 # We don't drive the streaming endpoint end-to-end — Starlette's TestClient

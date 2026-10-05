@@ -146,7 +146,10 @@ export function parseInvalidateScopes(data: string | null | undefined): Readonly
     const raw = parsed.scope;
     if (typeof raw !== "string") return null;
     const scopes = new Set<DashboardScope>();
-    for (const part of raw.split(",").map((p) => p.trim()).filter(Boolean)) {
+    for (const part of raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean)) {
       if (part === "sessions" || part === "scenarios" || part === "personas" || part === "macros") {
         scopes.add(part);
       }
