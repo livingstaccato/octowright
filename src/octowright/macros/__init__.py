@@ -13,7 +13,15 @@ from octowright.macros.execution import (
     run_sequence,
 )
 from octowright.macros.recording_import import load_macro_from_recording
-from octowright.macros.storage import MACROS_DIR, delete_macro, list_macros, load_macro, save_macro, write_macro
+from octowright.macros.storage import (
+    MACROS_DIR,
+    delete_macro,
+    list_macros,
+    load_macro,
+    save_macro,
+    write_compiled_macro,
+    write_macro,
+)
 from octowright.macros.substitution import substitute
 
 __all__ = [
@@ -31,5 +39,6 @@ __all__ = [
     "run_sequence",
     "save_macro",
     "substitute",
+    "write_compiled_macro",
     "write_macro",
 ]

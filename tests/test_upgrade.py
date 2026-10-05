@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from octowright import upgrade
 
 #: A headline, not a paragraph. The longest backfilled title is 61 chars.
@@ -261,3 +263,47 @@ def test_release_highlights_are_newest_and_synchronized() -> None:
 
     assert VERSION == "0.26.0"
     assert next(iter(upgrade.HIGHLIGHTS)) == VERSION
+
+
+# ─── the marker never stops a leader from starting ─────────────────────────────
+
+
+@pytest.mark.parametrize("payload", ["null", "[]", '"0.21.0"', "42", "true"])
+def test_load_non_object_marker_returns_none(tmp_path: Path, payload: str) -> None:
+    """Valid JSON that is not an object used to raise AttributeError out of
+    ``data.get`` -- straight through leader startup."""
+    state = tmp_path / "upgrade.json"
+    state.write_text(payload, encoding="utf-8")
+    assert upgrade.load_last_seen(path=state) is None
+
+
+def test_announce_survives_an_unwritable_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A read-only config dir must cost the marker, not the daemon."""
+    from octowright.upgrade import core
+
+    def _refuse(*_a: object, **_k: object) -> None:
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(core, "atomic_write_text", _refuse)
+    echoed: list[str] = []
+    notice = upgrade.announce_upgrade_if_changed(
+        current="0.7.0",
+        path=tmp_path / "upgrade.json",
+        set_notice=lambda _n: None,
+        echo=echoed.append,
+    )
+    assert notice is not None
+    assert echoed, "the banner is still shown"
+
+
+def test_safe_announce_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The leader's startup call: any failure in the cosmetic notice is logged
+    and swallowed, because it ran unguarded before HTTP bound and a bad marker
+    took the whole daemon (and its inline fallback) down."""
+    from octowright.upgrade import core
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr(core, "compute_upgrade", _boom)
+    assert upgrade.announce_upgrade_safely(set_notice=lambda _n: None, echo=lambda _b: None) is None

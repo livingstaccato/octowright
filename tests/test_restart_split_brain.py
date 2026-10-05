@@ -72,6 +72,14 @@ def test_octowright_leader_on_port_ignores_non_octowright_holder(monkeypatch: py
     assert port_owner.octowright_leader_on_port(6286, lambda: procs) is None
 
 
+def test_octowright_leader_on_port_recognises_a_windows_console_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``...\\octowright.EXE" serve`` is how Windows shows the console script; a
+    bare substring check never matched it, so a squatting leader was not reclaimed."""
+    monkeypatch.setattr(port_owner, "_pid_listening_on_port", lambda _port: 444)
+    procs = [(444, '"C:\\venv\\Scripts\\octowright.EXE" serve --daemon-mode')]
+    assert port_owner.octowright_leader_on_port(6286, lambda: procs) == 444
+
+
 def test_octowright_leader_on_port_none_when_port_free(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(port_owner, "_pid_listening_on_port", lambda _port: None)
     assert port_owner.octowright_leader_on_port(6286, _procs) is None
@@ -185,7 +193,7 @@ class TestSpawnedDaemonArgv:
                 seen["kwargs"] = kw
 
         monkeypatch.setattr(restart_mod.subprocess, "Popen", _FakePopen)
-        monkeypatch.setattr(restart_mod, "_resolve_octowright_entry", lambda: "/x/bin/octowright")
+        monkeypatch.setattr(daemonize, "_resolve_daemon_entrypoint", lambda: ["/x/bin/octowright"])
         # The shared spawner writes the daemon's stderr to the user state log;
         # keep that in the test's tmp dir.
         monkeypatch.setattr(daemonize, "_open_daemon_log", lambda: (tmp_path / "daemon.log").open("ab"))

@@ -404,3 +404,21 @@ async def test_bridge_forwards_server_notification_to_local_client() -> None:
     assert root.method == "notifications/octowright/session_closed"
     assert (root.params or {})["instance_id"] == "bridge-test"
     assert (root.params or {})["reason"] == "user_close"
+
+
+def test_driver_died_notification_carries_the_ids_it_will_not_reopen() -> None:
+    event = DriverDiedEvent(
+        restart_count=2,
+        relaunch_mode="new-id",
+        lost_count=2,
+        lost_instance_ids=("a", "b"),
+        not_reopened_instance_ids=("a",),
+    )
+    params = notification_payload(event)["params"]
+    assert params["not_reopened_instance_ids"] == ["a"]
+    assert "a" in params["hint"] and "browser_launch" in params["hint"]
+
+
+def test_driver_died_notification_defaults_to_reopening_every_id() -> None:
+    event = DriverDiedEvent(restart_count=1, relaunch_mode="new-id", lost_count=1, lost_instance_ids=("b",))
+    assert notification_payload(event)["params"]["not_reopened_instance_ids"] == []

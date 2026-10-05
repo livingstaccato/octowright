@@ -388,3 +388,37 @@ def test_saturated_overflow_cache_is_lru_bounded(tmp_path: Path, monkeypatch: py
     _mtime, _index, saturated, overflow = discovery._recording_index[rec]
     assert saturated is True
     assert list(overflow) == ["missing00002", "missing00003"]
+
+
+def test_websocket_sidecar_is_not_a_recording(tmp_path: Path) -> None:
+    """A ``{stem}.websocket.jsonl`` sidecar shares the recording's ``.jsonl``
+    suffix but is not one: it must neither shadow the labelled recording in the
+    id index nor surface as a phantom ``<id>.websocket`` session."""
+    rec = tmp_path / "recordings"
+    rec.mkdir()
+    labelled = rec / "20260101T000000Z-chromium-labelledidab-tim-repo.jsonl"
+    labelled.write_text(
+        json.dumps({"action": "launch", "kind": "chromium", "ts": "2026-01-01T00:00:00Z"}) + "\n",
+        encoding="utf-8",
+    )
+    (rec / f"{labelled.stem}.websocket.jsonl").write_text("{}\n", encoding="utf-8")
+    plain = _write_recording(rec, "plainidabcde")
+    (rec / f"{plain.stem}.WebSocket.JSONL").write_text("{}\n", encoding="utf-8")
+    (rec / f"{plain.stem}.websocket.jsonl").write_text("{}\n", encoding="utf-8")
+
+    assert discovery._find_recording_for("labelledidab", rec) == labelled
+    ids = sorted(s["id"] for s in discovery._summaries_for(rec))
+    assert ids == ["labelledidab", "plainidabcde"]
+
+
+def test_numeric_opening_ts_does_not_break_the_listing(tmp_path: Path) -> None:
+    """An opening row whose ``ts`` is a number (a hand-edited or foreign
+    recording) must not make the listing's sort raise ``TypeError``."""
+    rec = tmp_path / "recordings"
+    _write_recording(rec, "isotsabcdefg")
+    numeric = rec / "20260101T000000Z-chromium-numerictsabc.jsonl"
+    numeric.write_text(json.dumps({"action": "launch", "ts": 1700000000}) + "\n", encoding="utf-8")
+
+    summaries = discovery._summaries_for(rec)
+    assert {s["id"] for s in summaries} == {"isotsabcdefg", "numerictsabc"}
+    assert all(isinstance(s["started_at"], str) for s in summaries)

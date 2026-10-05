@@ -20,7 +20,11 @@ class _Subscriber:
         self.loop = loop
         self.queue: asyncio.Queue[DashboardEvent] = asyncio.Queue(maxsize=32)
         self.lock = threading.Lock()
-        self.pending_event: DashboardEvent | None = None
+        # Distinct scopes awaiting the one scheduled delivery, in first-publish
+        # order. A single "last event wins" slot dropped every scope but the
+        # newest, so scenario_start's back-to-back "scenarios" + "sessions"
+        # never refreshed the scenarios panel.
+        self.pending_scopes: dict[str, None] = {}
         self.delivery_scheduled = False
 
 
@@ -74,9 +78,8 @@ class DashboardEventBus:
         self.publish_nowait(scope)
 
     def publish_nowait(self, scope: str) -> None:
-        event = {"scope": scope}
         for subscriber in tuple(self._subscribers):
-            if not self._mark_pending(subscriber, event):
+            if not self._mark_pending(subscriber, scope):
                 continue
             try:
                 subscriber.loop.call_soon_threadsafe(self._deliver, subscriber)
@@ -84,9 +87,9 @@ class DashboardEventBus:
                 self._clear_pending(subscriber)
 
     @staticmethod
-    def _mark_pending(subscriber: _Subscriber, event: DashboardEvent) -> bool:
+    def _mark_pending(subscriber: _Subscriber, scope: str) -> bool:
         with subscriber.lock:
-            subscriber.pending_event = event
+            subscriber.pending_scopes[scope] = None
             if subscriber.delivery_scheduled:
                 return False
             subscriber.delivery_scheduled = True
@@ -95,22 +98,21 @@ class DashboardEventBus:
     @staticmethod
     def _deliver(subscriber: _Subscriber) -> None:
         with subscriber.lock:
-            event = subscriber.pending_event
-            subscriber.pending_event = None
+            scopes = list(subscriber.pending_scopes)
+            subscriber.pending_scopes.clear()
             subscriber.delivery_scheduled = False
-        if event is None:
-            return
         queue = subscriber.queue
-        if queue.full():
-            with suppress(asyncio.QueueEmpty):
-                queue.get_nowait()
-        with suppress(asyncio.QueueFull):
-            queue.put_nowait(event)
+        for scope in scopes:
+            if queue.full():
+                with suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+            with suppress(asyncio.QueueFull):
+                queue.put_nowait({"scope": scope})
 
     @staticmethod
     def _clear_pending(subscriber: _Subscriber) -> None:
         with subscriber.lock:
-            subscriber.pending_event = None
+            subscriber.pending_scopes.clear()
             subscriber.delivery_scheduled = False
 
 

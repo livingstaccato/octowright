@@ -17,8 +17,8 @@ dispatch all happens in the run's own task.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -61,6 +61,28 @@ class FillAudit:
 
 
 _AUDIT: ContextVar[FillAudit | None] = ContextVar("octowright_credential_fill_audit", default=None)
+#: The credential-tier args every step of the enclosing ``macro_run_sequence``
+#: types (`sequence_credentials`). Each step is a run of its own, and a step's
+#: page code can read back what an earlier step typed, or install the listener
+#: a later step types into.
+_SEQUENCE: ContextVar[frozenset[str]] = ContextVar("octowright_sequence_credentials", default=frozenset())
+
+
+@contextmanager
+def sequence_credentials(names: frozenset[str]) -> Iterator[None]:
+    """Hold every run inside to the page-code refusal of *names*, the sequence's credential args."""
+    token = _SEQUENCE.set(names)
+    try:
+        yield
+    finally:
+        _SEQUENCE.reset(token)
+
+
+def written_credential_args(written: Any, credential_args: frozenset[str] = frozenset()) -> list[str]:
+    """The credential-tier args *written* expands anywhere; see `credential_sinks.credential_args_in`."""
+    return credential_args_in(
+        written, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, credential_args=credential_args
+    )
 
 
 def credential_run_args(
@@ -68,14 +90,13 @@ def credential_run_args(
 ) -> tuple[str, ...]:
     """The credential-tier args a run expands, refusing its page code up front.
 
-    Judged on the macro as *written*; the expanded *actions* are checked for
-    page code at every depth before any step runs, so a refusal leaves nothing
-    half done. A called macro's page code is refused as it is dispatched
-    (`credential_fill_guard`).
+    Judged on the macro as *written*, plus every other step's when the run is
+    a ``macro_run_sequence`` step (`sequence_credentials`); the expanded
+    *actions* are checked for page code at every depth before any step runs,
+    so a refusal leaves nothing half done. A called macro's page code is
+    refused as it is dispatched (`credential_fill_guard`).
     """
-    names = credential_args_in(
-        written, is_credential=is_credential_arg, placeholder=PLACEHOLDER_RE, credential_args=credential_args
-    )
+    names = sorted({*written_credential_args(written, credential_args), *_SEQUENCE.get()})
     refuse_page_code(actions, names)
     return tuple(names)
 

@@ -40,13 +40,13 @@ import asyncio
 import contextlib
 import functools
 import inspect
-import os
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright.defaults import env_float
 from octowright.server._request_context import current_meta_value, current_session
 
 log = get_logger(__name__)
@@ -54,16 +54,16 @@ log = get_logger(__name__)
 # Cadence of the keepalive pings. MUST be below the follower's flattest in-flight
 # budget (``BRIDGE_REQUEST_TIMEOUT_SECONDS``, default 20s) so the first ping re-arms
 # the deadline before it expires — that is what covers tools with no per-tool
-# override. Lives here, not defaults.py (at its LOC ceiling), mirroring how
+# override. Lives here, beside its consumer, mirroring how
 # proxy_supervisor keeps its own SUSPEND_THRESHOLD_SECONDS const.
-HEARTBEAT_INTERVAL_SECONDS = float(os.environ.get("OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS", "8"))
+HEARTBEAT_INTERVAL_SECONDS = env_float("OCTOWRIGHT_HEARTBEAT_INTERVAL_SECONDS", 8)
 # Absolute ceiling on how long the heartbeat keeps one call alive. Past this the
 # pings stop and the follower deadline finally expires — the backstop for a handler
 # wedged past its own internal timeout (a real bug), so a single tool call can hang
 # at most this long. MUST exceed the longest legitimate single tool call (a big
 # ``macro_run_sequence``) or a real long run would be cut and the agent's retry
 # would double-execute the side effect.
-HEARTBEAT_MAX_SECONDS = float(os.environ.get("OCTOWRIGHT_HEARTBEAT_MAX_SECONDS", "600"))
+HEARTBEAT_MAX_SECONDS = env_float("OCTOWRIGHT_HEARTBEAT_MAX_SECONDS", 600)
 
 
 def _current_progress_token() -> Any:

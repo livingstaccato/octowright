@@ -427,6 +427,40 @@ describe("bootDashboard dashboard invalidation stream", () => {
     expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
   });
 
+  it("refetches every slice when the stream reopens after an error", async () => {
+    // Invalidations published while the stream was down are gone for good:
+    // the server does not replay them. Polling covers part of the gap, but a
+    // reconnect inside one poll interval (an `octowright restart`) used to stop
+    // polling without a fetch, leaving pre-restart browsers listed as live.
+    vi.stubGlobal("EventSource", FakeEventSource);
+    await dashboard.bootDashboard(root);
+    const source = FakeEventSource.instances[0];
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+
+    source?.onerror?.(new Event("error"));
+    source?.options.onOpen?.();
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getScenarios).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getPersonas).toHaveBeenCalledTimes(2);
+    expect(apiMocks.getMacros).toHaveBeenCalledTimes(2);
+  });
+
+  it("refetches when the first open lands after polling had started", async () => {
+    dashboardEventMocks.openDashboardEventStream.mockImplementationOnce(
+      (options: DashboardEventStreamOptions) => new FakeEventSource(options, false),
+    );
+    await dashboard.bootDashboard(root);
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(1);
+
+    FakeEventSource.instances[0]?.options.onOpen?.();
+    await flushPromises();
+
+    expect(apiMocks.getSessions).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("returns a disposer that closes the stream and clears polling", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 

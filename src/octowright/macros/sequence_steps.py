@@ -8,7 +8,8 @@
 A failing step never raises out of a sequence (#248): with ``stop_on_failure``
 the walk stops after it and the result says where (``stopped_at``), so the
 caller keeps the steps that passed. What still raises is what means the
-sequence could not run at all -- malformed ``names``/``args_list``
+sequence could not run at all -- malformed ``names``/``args_list``, an
+``args_list`` longer than ``names``, or a name no macro could have
 (`resolve_sequence_args`), the operation gate (`GATE_ERRORS`), and
 cancellation, which is a ``BaseException`` and never reaches an
 ``except Exception``.
@@ -24,7 +25,9 @@ from provide.telemetry import get_logger
 from octowright._tracing import set_attrs
 from octowright.macros._redact import _REDACTED_MACRO_VALUE
 from octowright.macros.nesting import MacroLoader
+from octowright.macros.parameter_specs import macro_privacy
 from octowright.macros.privacy import MacroArgPrivacy
+from octowright.macros.storage import macro_path
 from octowright.mcp_types import MacroSequenceStep
 from octowright.session.operation.gate import (
     OperationGateInvariantError,
@@ -49,20 +52,65 @@ GATE_ERRORS: tuple[type[Exception], ...] = (
 log = get_logger(__name__)
 
 
+def sequence_credential_args(macros: MacroLoader, names: list[str]) -> frozenset[str]:
+    """The credential-tier args any step of the sequence types, for every step's page-code refusal.
+
+    Read before the first step runs, from the dicts the steps will run, with
+    each macro's ``parameter_specs``: a step's page code may run before the
+    step that types the credential (a listener) as well as after it. A step
+    whose macro cannot be loaded or classified adds nothing here; it fails at
+    its turn, as it always did.
+    """
+    from octowright.macros.credential_fill import written_credential_args
+    from octowright.macros.parameter_specs import resolve_macro_privacy
+
+    found: set[str] = set()
+    for name in dict.fromkeys(names):
+        try:
+            macro = macros(name)
+            view = resolve_macro_privacy(macro)
+            found.update(written_credential_args(macro.get("actions", []), view.credential_args))
+        except Exception as exc:
+            log.debug("octowright.macro.sequence_credentials_unavailable", macro=name, error_type=type(exc).__name__)
+    return frozenset(found)
+
+
 def resolve_sequence_args(names: Any, args_list: Any) -> list[dict[str, Any]]:
     """Each step's arguments, or ``ValueError`` before anything runs.
 
     A short *args_list* pads with ``{}`` and a ``None`` entry means ``{}``, as
     before. A malformed one used to surface as a failure of whichever step it
-    reached, after the steps before it had already acted on the browser.
+    reached, after the steps before it had already acted on the browser. A
+    longer one is refused (its extra entries used to be dropped without a
+    word, usually a caller's off-by-one), and so is a name ``macro_path``
+    would refuse: it, too, used to fail only when its step ran.
     """
     if not _list_of(names, str):
         raise ValueError("names must be a list of macro names")
     supplied = [] if args_list is None else args_list
     if not _list_of(supplied, (dict, type(None))):
         raise ValueError("args_list must be a list of argument objects (or null), one per name")
+    if len(supplied) > len(names):
+        raise ValueError(
+            f"args_list has {len(supplied)} entries but names has {len(names)}; "
+            "each args_list entry supplies the macro at the same index, so the extra ones would never run"
+        )
+    _check_names(names)
     padded = supplied + [None] * (len(names) - len(supplied))
     return [padded[index] or {} for index in range(len(names))]
+
+
+def _check_names(names: list[str]) -> None:
+    """Refuse a name no step could load (`storage.macro_path`) before the first step acts.
+
+    Only the name's shape: a macro that is merely not saved is still a failed
+    step, as it was, so the steps before it keep their results.
+    """
+    for index, name in enumerate(names):
+        try:
+            macro_path(name)
+        except ValueError as exc:
+            raise ValueError(f"names[{index}] cannot name a macro: {exc}") from None
 
 
 def _list_of(value: Any, kinds: type | tuple[type, ...]) -> bool:
@@ -85,11 +133,14 @@ def macro_failure_details(exc: BaseException) -> dict[str, Any] | None:
 def step_args_used(macros: MacroLoader, name: str, step_args: dict[str, Any]) -> dict[str, Any]:
     """A failed step's ``args_used``, redacted as the macro its run loaded classifies them.
 
-    A macro that never loaded (missing, unreadable, an unsafe name -- what
-    *macros* raises) substituted nothing, so redacting by name alone loses
-    nothing. A macro that DID load but cannot be classified may have
-    substituted anything, so every value is redacted: failing open there would
-    show an argument its own view would have hidden.
+    Resolved inside the step, from the dict its run loaded, ``parameter_specs``
+    included (`parameter_specs.resolve_macro_privacy`); a malformed spec falls
+    back to the name heuristic there rather than here. A macro that never
+    loaded (missing, unreadable, invalid JSON -- what *macros* raises)
+    substituted nothing, so redacting by name alone loses nothing. A macro
+    that DID load but cannot be classified may have substituted anything, so
+    every value is redacted: failing open there would show an argument its own
+    view would have hidden.
     """
     try:
         macro = macros(name)
@@ -97,7 +148,7 @@ def step_args_used(macros: MacroLoader, name: str, step_args: dict[str, Any]) ->
         log.debug("octowright.macro.assertion_args_unavailable", macro=name, error=repr(exc))
         return MacroArgPrivacy().redact(step_args, marker=_REDACTED_MACRO_VALUE)
     try:
-        return MacroArgPrivacy.for_macro(macro.get("actions", [])).redact(step_args, marker=_REDACTED_MACRO_VALUE)
+        return macro_privacy(macro).redact(step_args, marker=_REDACTED_MACRO_VALUE)
     except Exception as exc:
         log.debug("octowright.macro.assertion_args_unclassifiable", macro=name, error=repr(exc))
         return dict.fromkeys(step_args, _REDACTED_MACRO_VALUE)
@@ -109,6 +160,9 @@ def failed_step(name: str, exc: Exception, args_used: dict[str, Any]) -> MacroSe
     step: MacroSequenceStep = {"macro": name, "ok": False, "error": error, "args_used": args_used}
     if details is not None:
         step["failure"] = details
+        warnings = details.get("warnings")
+        if isinstance(warnings, list) and warnings:
+            step["warnings"] = [str(warning) for warning in warnings]
     return step
 
 

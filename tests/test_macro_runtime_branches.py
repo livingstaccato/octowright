@@ -907,3 +907,27 @@ class TestPassiveEventsAndUnknownActions:
             result = await _dispatch_via_simple(s, {"action": "totally_made_up"})
         assert result == (0, 1)
         assert any("unknown_action_kind" in r.message for r in caplog.records)
+
+
+class TestSemanticFallbackLogPrivacy:
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("echo", ["Fixture-Not-A-Real-Secret-Label", "FIXTURE-NOT-A-REAL-SECRET-LABEL"])
+    async def test_the_fallback_log_line_is_scrubbed_of_the_session_ledger(
+        self, monkeypatch: pytest.MonkeyPatch, echo: str
+    ) -> None:
+        """A semantic-path error can quote the label or value it was given; the debug log must not."""
+        from octowright.macros import runtime
+        from octowright.macros.privacy import DurableTextScrubber, PrivacyLedger
+
+        secret = "Fixture-Not-A-Real-Secret-Label"  # pragma: allowlist secret
+        s = _full_session()
+        s.durable_text_scrubber = DurableTextScrubber(PrivacyLedger([secret]))
+        s.fill_by.side_effect = RuntimeError(f"no field labelled {echo!r}")
+        fake_log = MagicMock()
+        monkeypatch.setattr(runtime, "log", fake_log)
+
+        await _dispatch_via_simple(s, {"action": "fill", "selector": "#f", "label": secret, "value": "v"})
+
+        (call,) = fake_log.debug.call_args_list
+        assert secret.lower() not in repr(call).lower()
+        assert call.kwargs["error_type"] == "RuntimeError"

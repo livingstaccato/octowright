@@ -160,12 +160,32 @@ class TestPageLevelHeaders:
         assert sorted(redact_header_values({"Authorization": "x"}, "all")) == ["Authorization"]
 
     @pytest.mark.parametrize(
-        "name", ["Authorization", "authorization", "Cookie", "X-Api-Key", "X-Session-Token", "proxy-authorization"]
+        "name",
+        [
+            "Authorization",
+            "authorization",
+            "Cookie",
+            "X-Api-Key",
+            "X-Session-Token",
+            "proxy-authorization",
+            # A ``*-key`` name is a key, whatever comes before it.
+            "Ocp-Apim-Subscription-Key",
+            "OCP-APIM-SUBSCRIPTION-KEY",
+            "X-Functions-Key",
+            "x-goog-api-key",
+            # Underscore spellings are the same name to the people who send them.
+            "X_API_KEY",
+            "x_api_key",
+            "Subscription_Key",
+            "Key",
+        ],
     )
     def test_credential_header_names_are_recognised(self, name: str) -> None:
         assert is_credential_header(name)
 
-    @pytest.mark.parametrize("name", ["X-Env", "Accept-Language", "X-Request-Id", "User-Agent"])
+    @pytest.mark.parametrize(
+        "name", ["X-Env", "Accept-Language", "X-Request-Id", "User-Agent", "X-Keyboard-Layout", "X-Monkey"]
+    )
     def test_benign_header_names_are_not(self, name: str) -> None:
         assert not is_credential_header(name)
 

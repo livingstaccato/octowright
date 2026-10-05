@@ -950,7 +950,7 @@ def test_screenshots_listing(client: TestClient, isolated_recordings: Path) -> N
 
 def test_screenshot_file_404(client: TestClient, isolated_recordings: Path) -> None:
     _write_recording(isolated_recordings, "screenshot02")
-    r = client.get("/api/sessions/screenshot02/screenshots/missing.png")
+    r = client.get("/api/sessions/screenshot02/screenshots/screenshot02-missing.png")
     assert r.status_code == 404
 
 
@@ -1282,13 +1282,117 @@ def test_console_since_cursor(
     assert [m["text"] for m in body["messages"]] == ["3"]
 
 
+def _live_console_session(empty_pool: dict[str, Any], rec_dir: Path, sid: str, console: list, count: int) -> None:
+    log_path = rec_dir / f"20260101T000000Z-chromium-{sid}.jsonl"
+    log_path.write_text(json.dumps({"action": "launch", "kind": "chromium"}) + "\n")
+    empty_pool["pool"]._sessions[sid] = SimpleNamespace(
+        instance_id=sid,
+        log_path=log_path,
+        video_path=None,
+        trace_path=None,
+        console=console,
+        console_count=count,
+        downloads=[],
+        list_downloads=lambda: [],
+    )
+
+
+def test_console_cursor_is_absolute_after_the_live_buffer_evicts(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """A full buffer used to stall the cursor: since=len(console) returned nothing forever.
+
+    The live console is a bounded deque, so a position in it is not a stable
+    cursor. 1003 messages were appended and the first three evicted: the
+    cursor is the absolute count, and a poller resuming from it gets exactly
+    the messages appended after it.
+    """
+    retained = [{"level": "log", "text": str(n), "page_index": None} for n in range(3, 1003)]
+    _live_console_session(empty_pool, isolated_recordings, "consevict0001", retained, 1003)
+
+    first = client.get("/api/sessions/consevict0001/console").json()
+    assert first["cursor"] == 1003
+    assert first["dropped"] == 3
+    assert first["messages"][0]["text"] == "3"
+
+    # Two more arrive and evict two more.
+    retained[:] = [*retained[2:], {"level": "log", "text": "1003"}, {"level": "error", "text": "1004"}]
+    empty_pool["pool"]._sessions["consevict0001"].console_count = 1005
+    nxt = client.get(f"/api/sessions/consevict0001/console?since={first['cursor']}").json()
+    assert [m["text"] for m in nxt["messages"]] == ["1003", "1004"]
+    assert nxt["cursor"] == 1005
+
+    # An evicted cursor starts at the head of what is retained.
+    old = client.get("/api/sessions/consevict0001/console?since=1").json()
+    assert old["messages"][0]["text"] == "5"
+
+
+def test_console_level_filter_does_not_move_the_cursor(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """The cursor used to index the level-filtered list, so a filtered poller skipped or repeated rows."""
+    console = [
+        {"level": "log", "text": "a"},
+        {"level": "error", "text": "b"},
+        {"level": "log", "text": "c"},
+        {"level": "log", "text": "d"},
+        {"level": "error", "text": "e"},
+    ]
+    _live_console_session(empty_pool, isolated_recordings, "conslevelcur1", console, 5)
+
+    body = client.get("/api/sessions/conslevelcur1/console?level=error&since=2").json()
+    assert [m["text"] for m in body["messages"]] == ["e"]
+    assert body["cursor"] == 5
+    assert body["total"] == 2  # retained messages matching the filter
+
+
+def test_console_level_filter_uses_the_canonical_level_mapping(
+    client: TestClient,
+    isolated_recordings: Path,
+    empty_pool: dict[str, Any],
+) -> None:
+    """``level=warn`` used to match nothing: every engine reports ``warning``, and the match was raw."""
+    console = [
+        {"level": "warning", "text": "a"},
+        {"level": "log", "text": "b"},
+        {"level": "Warn", "text": "c"},
+        {"level": "assert", "text": "d"},
+    ]
+    _live_console_session(empty_pool, isolated_recordings, "conslevelmap1", console, 4)
+
+    warn = client.get("/api/sessions/conslevelmap1/console?level=warn").json()
+    assert [m["text"] for m in warn["messages"]] == ["a", "c"]
+    assert warn["total"] == 2
+    upper = client.get("/api/sessions/conslevelmap1/console?level=WARNING").json()
+    assert [m["text"] for m in upper["messages"]] == ["a", "c"]
+    errors = client.get("/api/sessions/conslevelmap1/console?level=error").json()
+    assert [m["text"] for m in errors["messages"]] == ["d"]
+
+
+def test_console_level_filter_maps_closed_session_levels(client: TestClient, isolated_recordings: Path) -> None:
+    name = "20260101T000000Z-chromium-conslevelmap2"
+    rows = [
+        {"action": "launch", "kind": "chromium"},
+        {"action": "console", "level": "warning", "text": "deprecated API"},
+        {"action": "console", "level": "log", "text": "noise"},
+    ]
+    (isolated_recordings / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    body = client.get("/api/sessions/conslevelmap2/console?level=warn").json()
+    assert body["total"] == 1
+    assert body["messages"] == [{"level": "warning", "text": "deprecated API"}]
+
+
 def test_console_closed_session_returns_empty(client: TestClient, isolated_recordings: Path) -> None:
     """Closed-session console view is empty when the recording has no console rows."""
     _write_recording(isolated_recordings, "consclosed01x")
     r = client.get("/api/sessions/consclosed01x/console")
     assert r.status_code == 200
     body = r.json()
-    assert body == {"messages": [], "cursor": 0, "total": 0}
+    assert body == {"messages": [], "cursor": 0, "total": 0, "dropped": 0}
 
 
 def test_console_closed_session_reads_persisted_rows(client: TestClient, isolated_recordings: Path) -> None:

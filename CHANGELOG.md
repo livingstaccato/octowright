@@ -21,8 +21,370 @@ a section that is already tagged and on PyPI.
   off. An automatic launch the browser blames on Wayland retries once on X11
   and says why in the launch result; an explicit request fails instead.
   `octowright_status()` reports the effective setting.
+- **A macro can declare which parameters are sensitive.** `parameter_specs`
+  maps a top-level parameter to `{"sensitive": true}` or `{"sensitive":
+  false}`. `true` makes a parameter a credential whatever it is called:
+  redacted, scrubbed for the session and held to the credential checks.
+  `false` lets an identity or contextual parameter such as `username` be shown
+  and screenshotted. A credential-like name, a value passed as
+  `{"credential": ...}` and the text an `expect_no_text` checks for cannot be
+  declared not sensitive. An ignored declaration or a malformed spec never
+  stops a run: the parameter is classified by its name, and run results,
+  sequence steps, artifact run results and failure payloads report it in a new
+  `warnings` field, as `macro_lint` does. Exported scripts resolve the same
+  declarations and are stamped classifier version 7; regenerate one to pick
+  them up.
+- **Re-saving a macro keeps its `parameter_specs`.** `macro_save` rebuilds a
+  macro from the recording but now carries over the declarations of the
+  version it replaces. Macro saves, writes and deletes in the daemon are
+  serialised, and one that waits more than 10 seconds fails with
+  `MacroWriteLockTimeout` instead of hanging. The dashboard's macro validation
+  warns (`sensitive_parameters_shrank`) when an edit makes a parameter less
+  sensitive than the saved version, and the macro detail it loads carries
+  `parameter_specs`. The dashboard's macro save answers a held write lock with
+  `503` and a refused or colliding name with `400`, each naming the cause,
+  instead of a bare `500`. `macro_compile` with `write` keeps the saved version's
+  `parameter_specs` (unless the YAML declares its own) and `created_at`, and
+  returns `warnings` when the write makes a parameter less sensitive; the YAML
+  DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
+  engine reports `console.warn` as `warning`, and the filter compared the raw
+  level case-sensitively, so `level=warn` returned nothing. It now matches
+  case-insensitively through the same level groups the dashboard uses:
+  `warn`/`warning` match each other and `error` also returns `assert`.
+- **`GET /api/sessions/{id}/console` keeps its cursor once a live session's
+  console fills.** The cursor was a position in the 1000-message buffer, so
+  once it filled `since=1000` returned nothing forever and an eviction
+  skipped messages; and `level=` filtered before slicing, so the cursor
+  indexed the filtered list. `since`/`cursor` now count messages from the
+  start of the session, ignoring `level`, a new `dropped` field says how many
+  the buffer evicted, and `total` is the retained count matching the filter.
+  The session page polls from that cursor and appends, instead of
+  refetching the whole console on every batch of live events.
+- **A dropped live tail reconnects instead of freezing the session page.**
+  The tail WebSocket had no close handling beyond re-pairing, so a drop for
+  any other reason (a network blip, a server error) stopped the timeline
+  while the footer still said "Refreshing every 1s". The session page and the
+  plugin session view now reconnect from the last cursor with capped
+  exponential backoff, say "reconnecting" in the footer while down, and, if
+  the session closed in the meantime, fetch what it wrote from `/events`.
+- **The session page shows a large recording's whole timeline.** One
+  `/events` answer is bounded (8 MiB of JSONL by default) and says so with
+  `complete: false`, but the session page and the plugin session view fetched
+  it once and rendered that first page as the whole history, so a large
+  closed recording's timeline (and a terminal replay) stopped partway with
+  nothing saying it had. Both now follow the cursor to the end.
+- **The session page's console filter stays where you put it.** A live
+  session re-renders the console panel on every batch of new events, and each
+  re-render reset the level filter to All, so choosing Error lasted until the
+  next event. The chosen level is now carried across re-renders.
+- **The dashboard refetches after its event stream reconnects.** The server
+  does not replay invalidations published while the stream was down, and a
+  reconnect inside one poll interval (an `octowright restart`, say) stopped
+  polling without fetching, so the panels kept listing pre-restart browsers
+  as live. Any open that follows a polling spell now reloads every panel.
+- **The `driver_died` notification says which lost sessions will not be
+  reopened.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a session that was itself
+  an auto-reopen is not reopened a second time, but the notification gave one
+  `relaunch_mode` for every lost id, so a client could wait for a reopen that
+  never came. It now carries `not_reopened_instance_ids`, and its hint names
+  them.
+- **Terminal plugin: a mistyped `OCTOWRIGHT_SSH_PORT` no longer stops the
+  plugin loading.** It was parsed with a bare `int()` at import, so a value
+  like `22s` failed the import and took every `terminal_*` tool with it. A
+  value that is not a TCP port now falls back to 22 with a warning.
+- **Terminal plugin: a change to `OCTOWRIGHT_REDACT_INPUTS` reaches terminal
+  recordings without a restart.** Core reads the policy on every call, but
+  the plugin read a snapshot taken when the daemon started, so a policy
+  change applied to browser recordings and not to terminal ones.
+- **A browser labelled `something.websocket` no longer hides its own
+  recording.** The label named the file `...-something.websocket.jsonl`, the
+  shape of a WebSocket sidecar, so the dashboard, closed-session discovery and
+  cleanup all skipped it. Such a label's dots become hyphens in the filename.
+- **`recordings_cleanup` spares a live terminal session's recording.** The
+  sweep skipped files belonging to live and closing browsers but never asked
+  the plugin pools, so an idle terminal session's recording older than
+  `days` could be deleted while it was still being written.
+- **`macro_artifact_plan` withholds every argument of a macro that calls
+  another.** A plan has no run to learn what a called macro classifies, so an
+  argument the parent treats as plain but the called macro treats as secret
+  was written to `artifact.json` and returned in `args_used` in the clear.
+  With a `macro_call` anywhere, every value is now withheld until a run.
+- **The new-tab page's browser count works with dashboard pairing on.** It
+  polled the pairing-gated `/api/sessions` from a browser that holds no
+  bearer, so it always showed 0 browsers and put a failed request in the
+  session's network log every 3 seconds. It now polls `/new-tab/status`,
+  which returns only the count the page already shows.
+- **On an inline leader, `/api/mcp-events` ends when the dashboard bearer
+  that opened it expires.** The stream was admitted by dashboard pairing but
+  never checked the bearer again, so it kept delivering crash, close and
+  driver notifications after the bearer expired or was evicted. It now
+  revalidates before every frame, as the dashboard event stream does.
+- **`browser_export_script` refuses a recording it cannot render faithfully.**
+  A `macro_call` row whose macro would not load was dropped silently (the
+  script just skipped those steps), a recursive one recursed until Python
+  gave up, and an unbalanced or conditionless control block produced a script
+  that did not parse. Each is now refused before anything is written, and an
+  empty Python block renders as `pass`.
+- **The browser badge's links open the dashboard and the session.** With
+  `OCTOWRIGHT_DEFAULT_URL` set, the Alt+click overlay's "dashboard" and
+  "recording" links pointed at the operator's app (with the instance id in
+  the URL) instead of the daemon; and "recording" used an unrouted
+  `#session/<id>` fragment that opened the dashboard home. They now use the
+  daemon's own origin and `/sessions/<id>`.
+- **A mistyped `OCTOWRIGHT_PROFILE` warns once, not on every result.** Each
+  compact-discovery result re-parsed the profile spec to annotate its
+  `next_actions`, logging the unknown-profile warning hundreds of times per
+  call. The resolved filter is now reused, and a `next_actions` entry for a
+  plugin tool (`terminal_*`) names the plugin profile that provides it.
+- **Octowright Advisor's profile suggestions know about `goldens` and plugin
+  profiles.** Its hand-kept profile list had no `goldens`, so golden usage
+  under `core` recommended `OCTOWRIGHT_PROFILE=core` (no change), and
+  expanding `core,goldens` dropped `goldens`. The list is now derived from the
+  profile table plus enabled plugins' profiles.
+- **Terminal plugin: a quoted `"false"` no longer turns SSH host-key
+  verification off.** A scenario participant's (or persona `app.ssh` block's)
+  `insecure_no_host_check` was coerced with `bool()`, so the string `"false"`
+  skipped `known_hosts`. Anything but a real boolean is now refused at launch.
+- **Console cursors keep working after 1,000 messages.** `browser_console_messages`
+  and `browser_console_summary` cursors were positions in the session's
+  bounded console buffer, so once it filled, `since=1000` returned nothing
+  forever and an older cursor skipped messages. Cursors now count every
+  message the session has seen, as network cursors do, and the result carries
+  `dropped`.
+- **Cancelling `scenario_start` while its participants launch closes the ones
+  already open.** The rollback covered only fixtures and startup macros, so a
+  client that timed out or cancelled during a slow plugin launch left the
+  browsers and plugin sessions already opened running, attached to no
+  scenario. They are now closed before the cancel propagates.
+- **The dashboard's Live scenarios panel refreshes when a scenario starts.**
+  Dashboard invalidations published back to back were coalesced to the last
+  one, so `scenario_start`'s "scenarios" refresh was replaced by the
+  "sessions" one that followed it. Each distinct scope pending for a
+  dashboard is now delivered.
+- **`octowright scenario start --test` skips a participant that cannot run a
+  macro, as `scenario_run_as_test` does.** The CLI kept its own copy of the
+  verify loop without the capability check, so with the terminal plugin
+  enabled a terminal participant became a failing browser test case and the
+  command exited 1 where the MCP tool passed. Both now share one loop, and
+  the CLI creates the report's directory when `--out` points somewhere new.
+- **A golden snapshot notices an added or dropped duplicate sibling.** Two
+  siblings with the same role and name (two "More" links, say) were both
+  compared against the first live match, so removing or adding one produced no
+  diff and `golden_assert` passed. Duplicates are now matched by occurrence.
+- **A launch caught by daemon shutdown no longer starts a new Playwright
+  driver.** A launch that failed because shutdown had just stopped the driver
+  read as a dead driver. The pool then "healed" it: it recorded a driver
+  restart and retried on a newly started driver that nothing would stop. The
+  original error is now raised.
+- **A browser reopened after a driver death or browser crash keeps its close
+  protection reason.** A headed browser protected by default came back marked
+  as explicitly protected, so `browser_close` refused it with the wrong
+  explanation. The reopen now keeps the original reason, as a handoff already
+  did.
+- **A failed driver liveness check no longer breaks the next browser call.**
+  When the check failed for its own reasons, its exception was saved as
+  though a page event listener had raised it. The next unrelated call then
+  failed with it. Only a listener's own error is kept for the next call now,
+  and a check that fails this way counts as "cannot tell".
+- **A redirect to a malformed `Location` is refused at once.** Under an SSRF
+  policy, a `302` whose `Location` could not be parsed, such as
+  `http://[::1`, left the navigation unanswered. The tool then waited out its
+  whole timeout and reported a plain timeout. The redirect is now refused like
+  any other the policy blocks, and the error says why.
+- **The SSRF policy refuses a URL it cannot parse.** Under
+  `OCTOWRIGHT_SSRF_POLICY=block-private`, a URL Python could not split, such as
+  `http://x]@169.254.169.254/`, passed the check as having nothing to check.
+  A browser reads that example as userinfo `x]` on the metadata address. A
+  persona `default_url` is validated by this check alone. Such URLs are now
+  refused while a policy is on.
+- **`OCTOWRIGHT_REDACT_INPUTS=all` covers the answer given to `prompt()`.**
+  The `prompt_text` set with `browser_set_dialog_policy` was written to the
+  recording in clear twice, in the policy row and in every `dialog_handled`
+  row. That happened even under `all`, which scrubs every other value with no
+  field to classify it. It is now scrubbed there and in the tool's result. The
+  page still receives the real text.
+- **More credential header names are redacted.** A header named `*-key`,
+  such as `Ocp-Apim-Subscription-Key` or `X-Functions-Key`, and underscore
+  spellings such as `X_API_KEY`, were recorded and listed in `browser_list` in
+  clear. They are now classified as credentials, like `X-Api-Key`.
+- **Launch-failure hints name only tools that exist.** A missing engine
+  pointed the agent at `browser_engine_status` and `browser_engine_reinstall`,
+  and a closed browser at `browser_handoff`. No tool by any of those names was
+  ever registered. The hints now say `octowright doctor`,
+  `playwright install --force <engine>` and `browser_launch` with the same
+  profile. The unused engine-status and engine-install helpers behind the
+  first two names are removed.
+- **A host-relative `browser_navigate` records where the page landed.** After
+  `browser_navigate("/orders")` the browser's URL stayed `/orders`, which
+  `browser_list` showed. Because that is not an origin, the response body of a
+  failed same-origin request was never captured. The session now keeps the
+  page's resolved URL. The recording still holds `/orders`, so a replay
+  resolves it against each persona.
+- **Switching or closing the active page leaves the iframe it was in.** An
+  iframe chosen with `browser_switch_frame` stayed the target after
+  `page_switch`, so a later `browser_fill` or `browser_click` landed in the
+  previous page's iframe. After closing that page, or a crash recovery that
+  replaced it, every element action failed with `Frame was detached`. Any
+  change of the active page now returns to its top-level page.
+- **A browser reopened after a driver death is evicted when a later driver
+  dies too.** With `OCTOWRIGHT_DRIVER_RELAUNCH` on, a reopened session that
+  died with the next driver was skipped entirely, not only kept from reopening
+  a second time. It stayed in the pool as a dead handle: `browser_list` showed
+  it live, every call to it failed, and it was missing from `lost_sessions`
+  and the `driver_died` notification. It is now recorded lost and evicted like
+  any other session, with `relaunch_skipped: already_relaunched` on its lost
+  record, and still not reopened.
+- **A leader stopped by `octowright restart` exits about 2 seconds sooner.**
+  On its way out a leader waited up to 2 seconds for the election lock to
+  remove its lockfile, but restart holds that lock for the whole stop and
+  removes the lockfile itself, so the wait always ran out. It also pushed a
+  short `--timeout` into a SIGKILL. The wait is now a quarter of a second.
+- **`octowright restart` no longer brings the daemon back from another
+  install.** When this environment had no `octowright` console script beside
+  its interpreter, restart started whatever `octowright` came first on `PATH`.
+  That could be a different install and version, and it became the daemon
+  every client then talked to. Restart now resolves the command the way every
+  other daemon start does: the console script beside this interpreter, else
+  `python -m octowright` on it.
+- **A leader that closes its stream cleanly is handled like one that drops
+  it.** Only an error ended a session properly. After a clean close (a graceful
+  restart, a reaped session) the follower kept handing calls to the closed
+  session, so they failed instead of waiting for the reconnect. A call already
+  in flight got no answer until its deadline, and that expiry then cancelled
+  whatever session had replaced it. A clean close now retires the session the
+  same way: calls wait for the next one, and in-flight calls that cannot be
+  re-sent are answered at once.
+- **A call made while the follower reconnects no longer reaches the new
+  leader ahead of `initialize`.** On reconnect the follower released the calls
+  waiting for a connection before it replayed the MCP handshake on the new
+  session. A queued call could then reach an uninitialized session, which the
+  leader answered with an error during an ordinary restart and counted against
+  the follower's new-session rate limit. The handshake and any resumed calls
+  now go out first.
+- **A call the old leader never received is sent to its replacement instead
+  of failing.** When the leader is replaced, a call it might have run is
+  answered "outcome unknown" rather than run a second time on the new leader.
+  That answer also went to a call whose send had failed. Such a call never
+  left the follower, so it could not have run anywhere. It is now sent to the
+  new leader.
+- **A malformed numeric setting no longer stops every command.** About fifty
+  numeric `OCTOWRIGHT_*` settings (timeouts, counts, the HTTP port) were read
+  with a bare `int()` or `float()` when Octowright loaded, so one typo such as
+  `OCTOWRIGHT_NAV_TIMEOUT_MS=30s` raised an error from every command. Even the
+  stdio follower failed to start, and the MCP client saw a dead server. Such a
+  value now falls back to its default with a warning.
+- **`octowright doctor` no longer reports a recycled pid as a healthy
+  daemon.** Its `daemon` check trusted the lockfile's pid being alive. When a
+  killed daemon left its lockfile and the OS gave the pid to another process,
+  doctor said `ok` while the `followers` check found nothing answering. A live
+  pid must now also answer `/api/health`; one that does not is reported as a
+  stale lock or a wedged daemon.
+- **A bad "what's new" marker no longer stops the daemon from starting.** The
+  leader records the last version it announced in `upgrade.json` before its
+  HTTP server binds, without a guard. A marker holding valid JSON that is not
+  an object (`null`, a list, a bare string) or a read-only config directory
+  raised out of startup, and the inline fallback died the same way. Such a
+  marker now reads as unset, a failed write is logged, and any other failure
+  of the notice is logged and skipped.
+- **The orphan-browser sweep leaves macOS WebKit's helper processes alone.**
+  WebKit runs its page, network and GPU work in XPC services that launchd
+  starts, so their parent is always pid 1, which the sweep reads as "the
+  driver died". It would have killed a healthy WebKit session's page processes
+  on every housekeeping cycle. They are now excluded, as the browsers' crash
+  reporters already were. This is worked out from the bundle layout and has
+  not yet been seen on a Mac.
+- **On Windows, a running daemon's session-manifest entries are no longer
+  pruned, and `octowright restart` reclaims a split-brain leader's port.** Both
+  recognised a daemon by the text `octowright serve`, which never matches the
+  Windows console script (`...\octowright.EXE" serve`). The prune took a live
+  daemon for a recycled pid and deleted its entries, and the port reclaim left
+  a second leader holding the canonical port. Every such check now shares the
+  one that already handled Windows.
+- **`octowright takeover --apply` keeps the original config's backup.** The
+  backup name has one-second resolution, so disabling two servers in one config
+  replaced the first backup, the only copy of the original, with the already
+  rewritten text. Each backup is now a new file, with a counter added on a
+  clash.
+- **Concurrent video frame requests no longer fail at random.** The cache of
+  video durations was shared between worker threads without a lock, so one
+  request could evict another's entry before it was read back and answer
+  `500`.
+- **Scrubbing a session video in the dashboard no longer stalls the daemon's
+  other background work.** Frame requests waiting their turn for ffmpeg each
+  held one of the shared worker threads that file reads, probes and other
+  tool calls also use. They now wait in a pool of their own.
+- **The dashboard's screenshot file route serves only that session's PNGs.**
+  For a recording at the top of the recordings directory it served any file
+  there, so a paired caller could fetch another session's HAR, with its
+  cookies and authorization headers, or its raw JSONL, labelled as an image.
+  It now answers `400` for anything the screenshot listing would not offer.
+- **A download no longer blocks the browser while it transfers, and no longer
+  overwrites an earlier one.** Saving held the session for the whole transfer,
+  so a large download stalled every other tool call on that browser until it
+  timed out, and a refusal from the session's queue was lost without a
+  `download_save_error` row. Files were numbered by how many downloads the
+  session had seen, so two at once, or the first after a driver relaunch that
+  kept the instance id, reused a name and replaced a file an earlier recording
+  points to. Each download now claims a free name before the transfer starts.
+- **`scenario_run_as_test` without `out_path` writes its report instead of
+  failing at the end.** It defaulted to the daemon's working directory, which
+  the recordings-root check then refused, after every verify macro had run.
+  The default is now a timestamped `octowright-report-*.xml` under the
+  recordings root, and a refused `out_path` fails before anything runs.
+- **`profile_cleanup` no longer deletes a profile a browser is still using.**
+  It decided what was in use from open browsers only, so it removed the
+  profile of a browser that was closing (whose database files were still
+  open) or of a launch still preparing. It now counts closing browsers and
+  checks again under the profile's lifecycle lock before each delete, as
+  `profile_delete` does.
+- **`recordings_cleanup` no longer deletes the recording of a browser that is
+  still open.** It chose files by age alone, and an idle browser's recording
+  stops changing, so a short cutoff unlinked a live session's JSONL and its
+  later rows went nowhere. Every file a live or closing browser owns (its
+  recording and sidecars, video, downloads and failure dumps) is now skipped.
+  The `octowright cleanup` CLI runs outside the daemon and still goes by age
+  alone, as its help now says.
+- **A screenshot or macro CLI export can no longer overwrite a recording or a
+  macro artifact.** `browser_screenshot`, `browser_capture_and_close` and
+  `macro_export_cli` only checked that their path stayed under the recordings
+  root, so one could replace another session's `.jsonl` or HAR, or a macro's
+  `artifact.json`, with PNG bytes or generated Python. A screenshot path must
+  now end in `.png`, `.jpg` or `.jpeg` and stay out of `artifacts/` and
+  `session-artifacts/`; a macro export must end in `.py` and stay out of
+  `session-artifacts/`. `browser_export_script` already had these rules but
+  compared the directory case-sensitively, which a case-insensitive filesystem
+  (macOS, Windows) let a differently-cased `Artifacts/` slip past.
+- **A capture larger than the whole capture budget is refused instead of
+  reported as saved.** The cleanup after the write deleted it at once, while
+  the tool returned its `capture_id`, so the next `capture_get` failed. It now
+  fails up front naming `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES`.
+- **Saving a capture no longer fails when an expired capture was the only one
+  in its directory.** The cleanup that runs first deleted the expired file and
+  the directory it emptied, which was the one the new capture was about to be
+  written into, so `capture_create` and `browser_read_markdown` with
+  `response_mode='summary'` raised `FileNotFoundError`.
+- **A `session=True` launch works with any label.** The label went into the
+  temporary profile directory's name as-is, so the default `user/repo` label
+  failed the launch with `FileNotFoundError` and a label containing `..` could
+  place the profile outside the temp directory. The directory name now carries
+  a digest of the label; launches sharing a label still share the profile.
+- **A recording whose opening row carries a numeric `ts` no longer breaks the
+  dashboard's session list.** The closed-session listing sorted on it and
+  raised on the first non-string, so `GET /api/sessions` failed until the file
+  was removed. A non-string timestamp now falls back to the file's time.
+- **A recording's websocket sidecar is no longer listed as a session.** The
+  `{stem}.websocket.jsonl` file shares the recording's `.jsonl` suffix, so the
+  dashboard showed it as a phantom closed session, a labelled recording's
+  detail, events, video and delete resolved to the sidecar instead of the
+  recording, and `octowright_dashboard_url` counted it in `closed_sessions`.
+- **Editing or verifying a macro artifact's critical points keeps its
+  manifest intact.** `macro_artifact_critical_points_set` and
+  `macro_artifact_verify` wrote back the compacted view they had read, which
+  dropped `artifact_version` from `artifact.json` for good and added a `path`
+  key. They now update the manifest as stored.
 - **A browser dying at launch no longer closes every other browser.** Its
   error reads like a dead shared Playwright driver, and the pool used to reset
   the driver on the wording alone. It now confirms the driver is dead first,
@@ -59,14 +421,127 @@ a section that is already tagged and on PyPI.
 - `scenario_wait_for_sync` matches its regex while pages are still
   navigating, and a remapped scenario participant follows its replacement
   session's log and URL.
+- **`macro_run_sequence` checks every input before the first step acts.** An
+  `args_list` longer than `names` was silently cut short and is now refused,
+  and so is a name no macro can have (`..`), which used to fail only when its
+  step ran, after the steps before it had acted on the browser. A sequence
+  file with such a name is refused before `octowright test --sequence`
+  launches a browser. A name that is merely not saved is still a failed step.
+- **An artifact run bundle is checked once more before it is written, and
+  says when its privacy could not be confirmed.** A last check finds any value
+  the run or the session holds, in any spelling and case -- including one held
+  from earlier in the session, which the bundle's own scrub was not given --
+  removes it and marks the bundle `privacy_tripwire: true`. A bundle whose privacy view never resolved, was
+  not finished, or whose session's scrub set is saturated is still written,
+  with key-level redaction added, and marked `privacy_unresolved: true`. Both
+  flags also appear on the `macro_artifact_run` result.
+- **A credential holding quotes, a backslash or a control character is
+  scrubbed from error text too.** Python's `repr` escapes such a value in a way
+  no JSON spelling matches, so it reached a macro failure payload's `original`
+  and an exported script's `result.json` and error output in the clear. Every
+  scrub now also matches the value as `repr` spells it, up to twice over,
+  including the `repr` of its JSON-escaped spelling, which is what a locator
+  error quoting the value produces inside `repr(exc)`.
+- **A true/false macro argument no longer redacts every true and false.** A
+  boolean under a credential-like name (`accept_cookies: true`) was admitted to
+  the session's scrub ledger as `True`, and since scrubbing ignores case every
+  `true`/`false` in later rows, selectors and payloads became `<redacted>`. A
+  boolean is now left out of the ledger, live and in exported scripts; it is
+  still redacted by name in `args_used`. A numeric credential (`otp: 482193`)
+  is still scrubbed.
+- **A value a called macro classifies is hidden where the caller reports it.**
+  A macro passing an ordinary argument to a `macro_call` whose callee declares
+  that parameter sensitive returned it in the clear in `args_used`, a failed
+  sequence step's `args_used` and the artifact manifest's `parameters`, and
+  handed it to page JavaScript in the status pill's text when it sat in a field
+  the pill does not redact by key. All four are now scrubbed with what the run
+  admitted; the manifest withholds parameter values until the replay ends.
+- **`macro_save` no longer saves a scrubbed value as a literal.** A value the
+  session's scrub set replaced -- an OTP typed into an ordinary text field --
+  is recorded as `<redacted>`, and saving wrote that marker into the macro,
+  which replay then typed into the page. It is now handled like a redacted
+  password field: bound to the one credential-named parameter that matched
+  nothing else, or the save is refused naming the field.
+- **Snapshots are scrubbed of the session's privacy ledger, and reach into
+  open shadow roots.** An accessibility snapshot only blanked the values of
+  credential inputs on the page at that moment, so a value a macro typed and
+  the page then echoed as ordinary text was returned by `browser_snapshot` and
+  written to disk by `golden_save`, and a password inside a web component's
+  open shadow root was never read. The snapshot's tree, `url` and `title` are
+  now scrubbed of the ledger, and the credential scan recurses into open
+  shadow roots.
+- **The daemon's debug log no longer quotes a classified value when a
+  semantic locator falls back to its CSS selector.** The fallback line logged
+  the semantic path's error text verbatim, which can quote the label or value
+  it was given; it is now scrubbed of the session's privacy ledger and carries
+  the error type.
+- **Page code in any step of a credential-typing `macro_run_sequence` is
+  refused.** The refusal judged each step as its own run, so a later step's
+  constant `evaluate` could read back a password an earlier step typed, and an
+  earlier step could install the listener a later one typed into. The
+  credential arguments every step types now apply to every step.
+- **Scrubbing ignores case.** Only percent-encoded spellings used to be
+  matched case-insensitively, so a page that echoed a credential upper-, lower-
+  or mixed-cased put it in a macro failure payload's `original`, console tail
+  or failed requests, in recordings, and in an exported script's output, in the
+  clear. Every spelling (raw, JSON-escaped, HTML-escaped, percent-encoded,
+  repr) is now matched in any case, live and in exported scripts. A typed
+  password still matches only as a whole identifier. Each write is cheaper
+  than before, not dearer: about 9 µs instead of 21 µs with 8 held values, and
+  0.44 ms instead of 1.1 ms with 256.
 
 ### Changed
+- **Behaviour change: a macro credential in an `inject_headers` header now
+  needs `forward_on_redirect`, even to the session's own origin.** For a
+  `fetch`/XHR the pattern scopes only the first request. The browser re-sends
+  an injected header on every redirect that request follows, so an own-site
+  endpoint answering `302` to another host received the token there. This was measured on
+  Chromium and Firefox for every header name; WebKit drops only
+  `Authorization`. A step such as `{"Authorization": "Bearer {{token}}"}` to
+  `https://app.example.test/**` is now refused unless it also carries
+  `"forward_on_redirect": {"Authorization": true}`, and the refusal names
+  that field. The opt-in is per header and must be a literal `true` or
+  `false`. It must name a header the step sends, and it waives nothing else:
+  the pattern must still spell out the own origin. `macro_lint` reports a
+  malformed one as `bad_forward_on_redirect`. `mock_route` headers are a
+  response served to the page and need no opt-in.
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` still turns the whole check off.
+- **A URL-scoped header is matched at every redirect hop of a navigation.**
+  Headers from `extra_http_headers_urls`, `browser_inject_headers` or a macro
+  `inject_headers` step rode a page load's redirects: a matching URL that
+  answered `302` to another origin sent the header there too, with the SSRF
+  policy off (the default). A session with scoped headers now sends its
+  navigations through the same one-fetch-per-hop path the SSRF guard uses,
+  with or without a policy, so each hop is a new navigation and a header goes
+  only to hops its pattern matches. `page.url` is the final URL, relative
+  links resolve against it, and cookies set by a redirect still land. Measured
+  on Chromium, Firefox and WebKit. A session without scoped headers registers
+  nothing. Costs for sessions that have them: a redirecting navigation's
+  `goto` returns the redirect page's synthetic `200` rather than the 3xx
+  (each hop's real status stays in `browser_network_requests`); a `307`/`308`
+  redirect of a form `POST` is refused, as it is under the policy; every
+  request pays one route round trip; and a navigation's response is buffered
+  before the page gets it. A `fetch`/XHR still carries a scoped header across
+  a redirect, which is why `forward_on_redirect` is still required.
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
   relaunches keep `badge` and `record_video` instead of resetting them.
+- **Handoff and relaunch keep the browser `channel`.** A browser launched on
+  system Chrome or Edge was replaced on Playwright's bundled Chromium. If the
+  channel has been uninstalled since, the replacement launches on the bundled
+  build and says so: `warnings` on the handoff or fluid-relaunch result, and
+  `channel_dropped` on a driver-death relaunch's lost-session record. The
+  channel is still never read back from a recording.
 - A call in flight when the leader restarts fails with an "outcome unknown"
   error instead of being replayed; retry it if it is safe to repeat.
 - WebSocket handshakes to the dashboard require an Origin that matches the
   page exactly, not any loopback port.
+- **A failed macro run that holds a credential keeps its diagnostics, scrubbed.**
+  Its failure payload used to carry no diagnostic bundle at all
+  (`diagnostic_suppressed`), losing the console tail with it. Now only the
+  screenshot is skipped (`screenshot_suppressed: true`); the page HTML file,
+  console tail, URL and title are produced with every value the run and the
+  session hold scrubbed out before anything is written. This applies to every
+  later run on a session that holds a value, too.
 
 ## [0.26.0] - 2026-10-03
 

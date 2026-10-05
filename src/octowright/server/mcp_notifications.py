@@ -148,6 +148,11 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 f"auto-reopening them ({event.relaunch_mode}); see octowright_status().pool.lost_sessions for the "
                 "old→new instance_id mapping"
             )
+            if event.not_reopened_instance_ids:
+                driver_hint += (
+                    f". Not reopened (each was already an auto-reopen): {', '.join(event.not_reopened_instance_ids)}"
+                    " — relaunch those with browser_launch"
+                )
         return {
             "method": "notifications/octowright/driver_died",
             "params": {
@@ -155,6 +160,7 @@ def notification_payload(event: SessionEvent) -> dict[str, Any]:
                 "relaunch_mode": event.relaunch_mode,
                 "lost_count": event.lost_count,
                 "lost_instance_ids": list(event.lost_instance_ids),
+                "not_reopened_instance_ids": list(event.not_reopened_instance_ids),
                 "hint": driver_hint,
             },
         }

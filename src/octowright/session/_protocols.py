@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString, Protocol
@@ -136,6 +137,8 @@ class SessionLike(Protocol):
         console_tail: int = 0,
         html_preview_chars: int = 0,
         html_full: bool = False,
+        scrub: Callable[[Any], Any] | None = None,
+        screenshot: bool = True,
     ) -> dict[str, Any]: ...
 
     async def snapshot(self) -> dict[str, Any]: ...

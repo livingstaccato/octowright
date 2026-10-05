@@ -33,7 +33,7 @@ UNKNOWN_FOLLOWER_VERSION = "unknown"
 # Bound on the cross-process state-lock wait. Both callers run the locked
 # transaction on an asyncio event loop, so an unbounded wait lets one frozen
 # peer wedge every other process (see _acquire_bounded). Consts live here
-# rather than defaults.py, which is at its LOC ceiling — the same convention
+# beside their consumer — the same convention
 # recorder/sysresources/_heartbeat follow for their own knobs.
 STATE_LOCK_TIMEOUT_SECONDS = 2.0
 STATE_LOCK_POLL_SECONDS = 0.01

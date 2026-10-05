@@ -172,3 +172,40 @@ def test_the_shipped_example_scenario_parses_and_resolves_through_this_adapter()
     resolved = TerminalScenarioAdapter(pool=object()).resolve_participant(term, None)
     assert resolved["kind"] == "pty"
     assert resolved["connector_config"]["command"] == "/bin/bash"
+
+
+@pytest.mark.parametrize("value", ["false", "False", "FALSE", "no", "0", 0, 1, "true"])
+def test_a_non_bool_insecure_no_host_check_is_refused(value):
+    """A quoted ``"false"`` is truthy: coerced with ``bool()`` it turned SSH
+    host-key verification OFF while reading as "keep it on"."""
+    adapter = TerminalScenarioAdapter(pool=object())
+    p = Participant(
+        persona="t",
+        kind="terminal",
+        role="op",
+        options={"connector_type": "ssh", "host": "h", "insecure_no_host_check": value},
+    )
+    with pytest.raises(ValueError, match="insecure_no_host_check must be a boolean"):
+        adapter.resolve_participant(p, persona=None)
+
+
+@pytest.mark.parametrize("value", ["false", "False", "no", 0])
+def test_a_non_bool_persona_insecure_no_host_check_is_refused(value):
+    persona = SimpleNamespace(app={"ssh": {"host": "h", "insecure_no_host_check": value}})
+    adapter = TerminalScenarioAdapter(pool=object())
+    p = Participant(persona="t", kind="terminal", role="op", options={"connector_type": "ssh"})
+    with pytest.raises(ValueError, match="insecure_no_host_check must be a boolean"):
+        adapter.resolve_participant(p, persona=persona)
+
+
+@pytest.mark.parametrize(("value", "expected"), [(True, True), (False, None)])
+def test_a_real_bool_insecure_no_host_check_is_honoured(value, expected):
+    adapter = TerminalScenarioAdapter(pool=object())
+    p = Participant(
+        persona="t",
+        kind="terminal",
+        role="op",
+        options={"connector_type": "ssh", "host": "h", "insecure_no_host_check": value},
+    )
+    cfg = adapter.resolve_participant(p, persona=None)["connector_config"]
+    assert cfg.get("insecure_no_host_check") is expected

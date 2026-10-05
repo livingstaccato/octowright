@@ -142,6 +142,20 @@ def canonical_aliases(kind: str, fields: dict[str, Any]) -> dict[str, Any]:
 #: ``set_extra_http_headers`` is absent on purpose: it rides every request the
 #: page makes, third-party hosts included, so it has no destination to vet.
 PATTERN_SCOPED_HEADER_ACTIONS = frozenset({"inject_headers", "mock_route"})
+#: The ones whose headers are REQUEST headers, which the pattern scopes only on
+#: the first hop of a subresource: Playwright applies a routed header override
+#: to every redirect the request starts, so an own-site ``fetch`` answered
+#: ``302 -> elsewhere`` carries the header elsewhere (measured: chromium and
+#: firefox for every header name, webkit for all but ``Authorization``). A
+#: session matches its NAVIGATIONS per hop (``ssrf_guard``), but fetch/XHR and
+#: an exported script's routes do not. A credential in one needs
+#: `FORWARD_ON_REDIRECT_KEY` too. ``mock_route``'s are response headers.
+REDIRECT_FORWARDED_HEADER_ACTIONS = frozenset({"inject_headers"})
+#: ``{"Authorization": true}`` on such a step: per header, the macro author
+#: accepting that the own site may redirect that header onward. A literal
+#: bool only, never coerced -- ``"false"`` reading as true is the failure this
+#: kind of flag invites. An input to the guard, never to the call.
+FORWARD_ON_REDIRECT_KEY = "forward_on_redirect"
 
 #: An origin as the guard compares it: scheme, normalized host, effective port.
 Origin = tuple[str, str, int]
@@ -190,6 +204,43 @@ _LITERAL_PATTERN_ORIGIN = re.compile(r"^(https?://[^/?#*{}\[\]@\\\s]+)(?:/|$)", 
 def pattern_origin(pattern: object) -> Origin | None:
     match = _LITERAL_PATTERN_ORIGIN.match(pattern) if isinstance(pattern, str) else None
     return url_origin(match.group(1)) if match is not None else None
+
+
+def parse_forward_on_redirect(action: dict[str, Any]) -> frozenset[str]:
+    """The header names, casefolded, a step's `FORWARD_ON_REDIRECT_KEY` opts in.
+
+    Refused, not read leniently: a value that is not a literal ``true`` or
+    ``false``, or a name the step's ``headers`` does not carry (a typo would
+    otherwise opt nothing in and read as if it had)."""
+    value = action.get(FORWARD_ON_REDIRECT_KEY)
+    if value is None:
+        return frozenset()
+    shape = f'{FORWARD_ON_REDIRECT_KEY} must map a header name to true or false, such as {{"Authorization": true}}'
+    if not isinstance(value, dict):
+        raise CredentialRefusal(f"{shape}; got {type(value).__name__}")
+    headers = action.get("headers")
+    sent = {str(name).strip().casefold() for name in headers} if isinstance(headers, dict) else set()
+    chosen: set[str] = set()
+    for name, flag in value.items():
+        if not isinstance(flag, bool):
+            raise CredentialRefusal(f"{shape}; {str(name)[:80]!r} maps to {type(flag).__name__}")
+        folded = str(name).strip().casefold()
+        if folded not in sent:
+            raise CredentialRefusal(
+                f"{FORWARD_ON_REDIRECT_KEY} names {str(name)[:80]!r}, which this step's headers do not carry"
+            )
+        if flag:
+            chosen.add(folded)
+    return frozenset(chosen)
+
+
+def _redirect_refusal(key: str, header: str) -> CredentialRefusal:
+    return CredentialRefusal(
+        f"macro expands credential arg {{{{{key}}}}} into inject_headers header {header!r} for the session's "
+        "own origin, but the pattern scopes only the first request of a fetch/XHR: a redirect from that origin "
+        f'carries the header wherever it points. If the site will not redirect it elsewhere, add "{FORWARD_ON_REDIRECT_KEY}": '
+        f'{{"{header}": true}} to this step, or set {CREDENTIAL_SINKS_ENV}=allow.'
+    )
 
 
 def headers_reach_trusted_origin(action: dict[str, Any], trusted_origins: frozenset[Origin] | set[Origin]) -> bool:
@@ -327,6 +378,8 @@ def dispatch_fields(action: dict[str, Any]) -> dict[str, Any]:
     guard_only = {CREDENTIAL_FILL_MARKER, CREDENTIAL_CALL_MARKER}
     if action.get("action") in CREDENTIAL_FILL_FIELDS:
         guard_only.add(ALLOWED_ORIGINS_KEY)
+    if action.get("action") in REDIRECT_FORWARDED_HEADER_ACTIONS:
+        guard_only.add(FORWARD_ON_REDIRECT_KEY)
     return {key: value for key, value in action.items() if key not in guard_only}
 
 
@@ -417,7 +470,8 @@ def _sink_refusal(key: str) -> CredentialRefusal:
         f"macro expands credential arg {{{{{key}}}}} into a navigation or code sink; "
         "this would send the secret off-machine. A header may carry one through "
         "inject_headers whose pattern spells out the session's own origin -- scheme, host "
-        f"and port of its launch URL or persona base_url. Set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
+        f"and port of its launch URL or persona base_url -- with {FORWARD_ON_REDIRECT_KEY} set for that header. "
+        f"Set {CREDENTIAL_SINKS_ENV}=allow if that is intended."
     )
 
 
@@ -482,20 +536,42 @@ class _Expander:
         self._refuse_unchecked_input(kind, node)
         credentials = self._typed_credentials(kind, node)
         tainted = self._tainted_call_args(node) if kind == "macro_call" else []
-        headers_exempt = headers_reach_trusted_origin(node, self.trusted_origins)
+        own_site = headers_reach_trusted_origin(node, self.trusted_origins)
+        forwarded = kind in REDIRECT_FORWARDED_HEADER_ACTIONS
+        opted_in = parse_forward_on_redirect(node) if forwarded else frozenset()
         expanded = {
-            key: item
-            if key == "action"
-            else self.value(
-                item,
-                unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS and not (headers_exempt and key == "headers"),
-            )
+            key: item if key == "action" else self._field(key, item, own_site=own_site, opted_in=opted_in, kind=kind)
             for key, item in node.items()
         }
         if credentials:
             expanded[CREDENTIAL_FILL_MARKER] = credentials
         if tainted:
             expanded[CREDENTIAL_CALL_MARKER] = tainted
+        return expanded
+
+    def _field(self, key: str, item: Any, *, own_site: bool, opted_in: frozenset[str], kind: str) -> Any:
+        """One field of a step, expanded under the sink rule that applies to it."""
+        if key != "headers" or not own_site:
+            return self.value(item, unsafe_sink=key in CREDENTIAL_UNSAFE_KEYS)
+        if kind not in REDIRECT_FORWARDED_HEADER_ACTIONS:
+            return self.value(item, unsafe_sink=False)  # a response served to the page
+        if not isinstance(item, dict):
+            return self.value(item, unsafe_sink=True)
+        return self._headers(item, opted_in)
+
+    def _headers(self, headers: dict[str, Any], opted_in: frozenset[str]) -> dict[str, Any]:
+        """Own-site request headers: each exempt only if its name is opted in."""
+        expanded: dict[str, Any] = {}
+        for name, item in headers.items():
+            if str(name).strip().casefold() in opted_in:
+                expanded[name] = self.value(item, unsafe_sink=False)
+                continue
+            try:
+                expanded[name] = self.value(item, unsafe_sink=True)
+            except CredentialRefusal:
+                # Only the opt-in is missing: say so rather than "off-machine".
+                key = next((k for k in self.placeholder.findall(str(item)) if self.is_credential(k)), "?")
+                raise _redirect_refusal(key, str(name)) from None
         return expanded
 
     def _mentions_credential(self, value: Any) -> bool:

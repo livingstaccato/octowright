@@ -55,7 +55,7 @@ _DAEMON_LOG_TAIL_LINES = 20
 # How long to wait for a spawned daemon to bind and answer HTTP. The default
 # suits a warm dev machine; a cold container running ``uv run octowright serve``
 # routinely needs longer, and exceeding it silently degrades to fragile inline
-# mode. ``defaults.py`` is at its LOC ceiling, so the knob lives here (matching
+# mode. The knob lives beside its consumer (matching
 # how ``incidents``/``health`` keep their own OCTOWRIGHT_* vars).
 DAEMON_READY_TIMEOUT_ENV = "OCTOWRIGHT_DAEMON_READY_TIMEOUT"
 DAEMON_READY_TIMEOUT_SECONDS = 10.0
@@ -260,7 +260,6 @@ def spawn_daemon(
     http_port: int | None,
     idle_grace: float | None,
     keep_alive: bool = False,
-    entrypoint: list[str] | None = None,
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
@@ -274,11 +273,10 @@ def spawn_daemon(
     detached daemon, not the follower). Without forwarding ``--keep-alive`` the
     flag was silently dropped and the daemon kept its own default.
 
-    ``entrypoint`` overrides the resolved argv prefix (``restart`` passes the
-    console script beside this interpreter); detachment, the daemon log and
-    the argv shape stay shared, so every daemon spawner detaches the same way.
+    Every daemon spawner (``restart`` included) comes through here, so the
+    entrypoint, the detachment and the daemon log are the same for all of them.
     """
-    args: list[str] = [*(entrypoint or _resolve_daemon_entrypoint()), "serve", "--daemon-mode"]
+    args: list[str] = [*_resolve_daemon_entrypoint(), "serve", "--daemon-mode"]
     if http_host:
         args.extend(["--http-host", http_host])
     if http_port is not None:

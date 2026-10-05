@@ -32,6 +32,10 @@ def cleanup(days: float, apply: bool, browsers: bool) -> None:
     Macro artifacts live under the same root and are never pruned: they are
     curated rather than incidental, so age does not make them disposable.
 
+    Age is mtime only. This command runs outside the daemon and cannot see its
+    browsers, so an idle live browser's recording older than ``--days`` is
+    eligible; the ``recordings_cleanup`` MCP tool skips those.
+
     Pass ``--browsers`` to also reap orphaned playwright browser processes
     so they don't pile up in the Dock between sessions.
     """

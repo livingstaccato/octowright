@@ -24,6 +24,7 @@ from octowright.request_errors import InvalidRequestError
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import (
     REDACTION_MODES,
+    ledger_scrubbed,
     resolve_redaction_mode,
 )
 from octowright.session.aria_redaction import (
@@ -169,19 +170,6 @@ async def _release_shift(keyboard: Any) -> None:
         log.warning("core_page_mixin.shift_release_failed", error=repr(exc))
 
 
-#: ASCII tab / LF / CR. The WHATWG URL parser REMOVES these from a URL outright
-#: (they are not encoded, not rejected — deleted), so they can be used to hide
-#: the second slash of an authority from a naive string test.
-_URL_STRIPPED_CONTROLS = {0x09: None, 0x0A: None, 0x0D: None}
-
-#: Every C0 control or space (U+0000-U+0020). The WHATWG parser strips all of
-#: these from both ends BEFORE parsing; ``str.strip()`` removes only Python
-#: whitespace, so ``\x01file:///etc/passwd`` partitioned to a scheme of
-#: ``\x01file`` -- absent from the deny-list -- while Chromium stripped the
-#: control and loaded the file. Confirmed live against headless Chromium.
-_C0_OR_SPACE = "".join(chr(c) for c in range(0x21))
-
-
 def _canonicalize_for_guard(url: str) -> str:
     """Fold a URL into the one spelling the guard's string tests reason about.
 
@@ -193,7 +181,9 @@ def _canonicalize_for_guard(url: str) -> str:
     * ``\\`` is equivalent to ``/`` for a special scheme (http/https), so
       ``/\\evil.test/x`` is an authority — it resolves to host ``evil.test``;
     * tab/LF/CR are deleted before parsing, so ``/<TAB>/evil.test/x`` becomes
-      ``//evil.test/x`` — also host ``evil.test``.
+      ``//evil.test/x`` — also host ``evil.test``; and C0 controls and space
+      are stripped from both ends (``ssrf.whatwg_preclean``, shared with the
+      host policy so the two checks read one spelling).
 
     Both passed a ``startswith("//")`` test while reaching a different host, which
     turned the host-relative relaxation into an SSRF-policy bypass (a poisoned
@@ -204,7 +194,7 @@ def _canonicalize_for_guard(url: str) -> str:
     Note this is used ONLY to classify and check the URL; the original string is
     what gets handed to Playwright, so no caller's URL is rewritten.
     """
-    return url.strip(_C0_OR_SPACE).translate(_URL_STRIPPED_CONTROLS).replace("\\", "/")
+    return ssrf.whatwg_preclean(url).replace("\\", "/")
 
 
 def _check_url_shape(url: str) -> str | None:
@@ -402,7 +392,12 @@ class SessionPageMixin(SessionLike):
                 self._last_mcp_navigation = prior_mcp_navigation
                 raise
             title = await bounded(self.page.title(), operation="browser_navigate")
-            self.url = url
+            # Where the page IS, not the caller's string: a host-relative
+            # "/orders" (resolved against the persona's base_url) stored raw
+            # made every same-origin comparison against session.url fail.
+            # The recording below keeps the caller's form, which replays per persona.
+            landed = self.page.url
+            self.url = landed if isinstance(landed, str) and landed else url
             self._schedule_markdown_capture()
             self.recorder.record("navigate", url=url)
             _NAVIGATE_DURATION.record(time.perf_counter() - t0, attributes={"kind": kind or "unknown"})
@@ -689,10 +684,13 @@ class SessionPageMixin(SessionLike):
         self.recorder.record("snapshot", **record_kwargs)
         # url comes from the snapshotted document (frame when active); title is
         # page-level — Playwright Frames have no title().
+        # The aria text is ledger-scrubbed by redacted_aria_snapshot; the url
+        # and title can echo a classified value too, and golden_save persists
+        # all three.
         return {
             "aria": aria_yaml,
-            "url": target.url,
-            "title": await bounded(self.page.title(), operation="browser_snapshot"),
+            "url": ledger_scrubbed(self, target.url),
+            "title": ledger_scrubbed(self, await bounded(self.page.title(), operation="browser_snapshot")),
         }
 
     @gated_operation("browser_evaluate")

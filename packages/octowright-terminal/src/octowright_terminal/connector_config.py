@@ -15,13 +15,38 @@ owns its own defaults entirely.
 
 from __future__ import annotations
 
+import logging
 import os
+from collections.abc import Mapping
 from typing import Any
+
+_log = logging.getLogger(__name__)
+
+
+def _ssh_default_port(env: Mapping[str, str] | None = None) -> int:
+    """``OCTOWRIGHT_SSH_PORT`` as a TCP port, or 22 with a warning.
+
+    Read at import, so a bare ``int()`` turned one typo (``22s``) into an
+    ImportError for the whole plugin. Parsed here rather than with core's
+    ``defaults.env_int``, which the plugin's declared core floor predates.
+    """
+    raw = (os.environ if env is None else env).get("OCTOWRIGHT_SSH_PORT")
+    if raw is None:
+        return 22
+    try:
+        port = int(raw.strip())
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        _log.warning("OCTOWRIGHT_SSH_PORT=%r is not a TCP port; using 22", raw)
+        return 22
+    return port
+
 
 #: Default SSH port for terminal SSH connectors (scenario participants /
 #: terminal_launch). Overridable so a deployment behind a jump host or a
 #: nonstandard sshd can set it once instead of passing port= everywhere.
-SSH_DEFAULT_PORT: int = int(os.environ.get("OCTOWRIGHT_SSH_PORT", "22"))
+SSH_DEFAULT_PORT: int = _ssh_default_port()
 
 #: Connector types for a terminal scenario participant (its kind is "terminal").
 SUPPORTED_TERMINAL_KINDS = ("pty", "ssh")

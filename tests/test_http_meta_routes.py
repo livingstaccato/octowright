@@ -267,3 +267,41 @@ def test_persona_detail_sizes_the_profile_tree_off_the_event_loop(
     assert r.status_code == 200
     assert r.json()["engine_bytes"] == {"chromium": 10}
     assert on_loop == [False]
+
+
+def _raise(exc: BaseException):  # type: ignore[no-untyped-def]
+    def _boom(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise exc
+
+    return _boom
+
+
+_VALID_MACRO = {"name": "login", "parameters": [], "actions": [{"action": "press_key", "key": "Escape"}]}
+
+
+def test_macro_update_reports_a_held_write_lock_as_503(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.macros.storage import MacroWriteLockTimeout
+
+    monkeypatch.setattr(_meta_routes.state._macros, "write_macro", _raise(MacroWriteLockTimeout("lock held")))
+    r = client.put("/api/macros/login", json={"macro": _VALID_MACRO})
+    assert r.status_code == 503
+    assert "lock held" in r.json()["error"]
+
+
+@pytest.mark.parametrize("message", ["macro name 'login' collides with existing macro 'Login'", "resolves outside"])
+def test_macro_update_reports_a_refused_name_as_400(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    from octowright.request_errors import InvalidRequestError
+
+    monkeypatch.setattr(_meta_routes.state._macros, "write_macro", _raise(InvalidRequestError(message)))
+    r = client.put("/api/macros/login", json={"macro": _VALID_MACRO})
+    assert r.status_code == 400
+    assert message in r.json()["error"]
+
+
+def test_macro_detail_reports_a_refused_name_as_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(_meta_routes.state._macros, "load_macro", _raise(ValueError("resolves outside")))
+    r = client.get("/api/macros/x")
+    assert r.status_code == 400
+    assert "resolves outside" in r.json()["error"]

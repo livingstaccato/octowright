@@ -26,6 +26,7 @@ empty subdirectories under ``videos/`` are best-effort removed.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -93,6 +94,12 @@ def _classify(path: Path, recordings_dir: Path) -> str:
 #: this same rule. Kept past that row, it would be referenced by nothing.
 PRESERVED_SUBDIRS = ("artifacts",)
 
+#: Recordings-root subdirectories a tool-chosen write path (a screenshot, a
+#: script export) may never land in: macro artifacts, which are
+#: person-authored, and plugins' committed per-session artifacts. Consumed by
+#: ``_paths.checked_write_target``'s callers.
+TOOL_WRITE_FORBIDDEN_SUBDIRS = (*PRESERVED_SUBDIRS, "session-artifacts")
+
 
 def find_stale_files(
     recordings_dir: Path,
@@ -134,6 +141,41 @@ def find_stale_files(
             )
         )
     return stale
+
+
+def session_file_matcher(sessions: Iterable[Any]) -> Callable[[Path], bool]:
+    """A predicate: does a path belong to one of ``sessions``?
+
+    Each session contributes its JSONL and the sidecars beside it (by the
+    allowlist in ``http.recording_sidecars``), its failure dumps, and its
+    per-session directories (video, downloads, frame cache). Used to keep the
+    MCP sweep off files a live or closing browser still writes: age is mtime,
+    and an idle browser's recording stops changing. The CLI sweep is a separate
+    process with no view of the pool and stays mtime-only.
+    """
+    from octowright.http.recording_sidecars import is_failure_dump, is_recording_sidecar, session_artifact_dirs
+
+    owned: list[tuple[Path, str, str]] = []
+    dirs: list[Path] = []
+    for session in sessions:
+        log_path = getattr(session, "log_path", None)
+        instance_id = getattr(session, "instance_id", None)
+        if not log_path or not instance_id:
+            continue
+        log_path = Path(log_path).resolve()
+        owned.append((log_path.parent, log_path.stem, str(instance_id)))
+        dirs.extend(session_artifact_dirs(log_path.parent, str(instance_id), log_path.stem))
+
+    def _matches(path: Path) -> bool:
+        resolved = path.resolve()
+        for parent, stem, instance_id in owned:
+            if resolved.parent == parent and (
+                is_recording_sidecar(resolved.name, stem) or is_failure_dump(resolved.name, instance_id)
+            ):
+                return True
+        return any(resolved.is_relative_to(d) for d in dirs)
+
+    return _matches
 
 
 def _is_preserved(path: Path, recordings_dir: Path) -> bool:

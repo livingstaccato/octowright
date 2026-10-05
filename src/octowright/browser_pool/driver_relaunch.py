@@ -37,7 +37,8 @@ from provide.telemetry import get_logger
 
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
-from octowright.browser_pool.replacement import ReplacementSource
+from octowright.browser_pool.replacement import ReplacementSource, launch_replacement
+from octowright.defaults import env_int
 
 log = get_logger(__name__)
 
@@ -55,7 +56,7 @@ _DRIVER_LOST = counter(
 
 # Bounded recent-lost-session ring surfaced in status. Sized like the incident
 # ring; a long-lived daemon can't grow it without bound.
-_LOST_SIZE = int(os.environ.get("OCTOWRIGHT_LOST_SESSION_RING_SIZE", "25"))
+_LOST_SIZE = env_int("OCTOWRIGHT_LOST_SESSION_RING_SIZE", 25)
 _LOST: deque[dict[str, Any]] = deque(maxlen=_LOST_SIZE)
 
 
@@ -73,7 +74,7 @@ def parse_mode(raw: str | None) -> str:
 # reopening changes instance_ids and silently re-runs navigation across every
 # connected client, so it's a deliberate opt-in. Lost sessions are ALWAYS
 # captured + surfaced (status.pool.lost_sessions) regardless of this mode. Read
-# here (not defaults.py, which is at its LOC ceiling), mirroring incidents/health.
+# here, beside its consumer, mirroring incidents/health.
 DRIVER_RELAUNCH_MODE = parse_mode(os.environ.get("OCTOWRIGHT_DRIVER_RELAUNCH"))
 
 # Live relaunch tasks, kept referenced so they aren't GC'd mid-flight (RUF006).
@@ -115,8 +116,12 @@ def _descriptor(session: Any) -> dict[str, Any]:
 
 
 def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
-    """Capture + record + evict the sessions lost with the dead driver. Sessions
-    this module previously relaunched are skipped (loop guard).
+    """Capture + record + evict the sessions lost with the dead driver.
+
+    A session this module previously relaunched is captured and evicted like
+    any other -- it died with the driver too, and left in the pool it would
+    list as live and fail every call -- but its descriptor carries
+    ``reopen=False``: the loop guard stops a second reopen, never the eviction.
 
     Routes eviction through the same synchronous acceptance seam
     (``pool._accept_external_close_nowait``, reason ``external_disconnect``)
@@ -126,8 +131,7 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
     identity's profile."""
     descriptors: list[dict[str, Any]] = []
     for session in pool.iter_sessions():
-        if getattr(session, "_auto_relaunched", False):
-            continue
+        reopen = not getattr(session, "_auto_relaunched", False)
         desc = _descriptor(session)
         inc = incidents.record(
             incidents.CATEGORY_DRIVER_LOST,
@@ -138,12 +142,22 @@ def _snapshot_and_evict(pool: Any, reason: str | None) -> list[dict[str, Any]]:
             outcome="lost",
         )
         record = {"ts": inc["ts"], "reason": reason, **desc, "relaunched_to": None}
+        if not reopen:
+            record["relaunch_skipped"] = "already_relaunched"
         _LOST.append(record)
         _DRIVER_LOST.add(1, attributes={"outcome": "surfaced", "kind": desc["kind"]})
         closing = pool._accept_external_close_nowait(
             desc["instance_id"], expected_session=session, reason="external_disconnect"
         )
-        descriptors.append({**desc, "lost_record": record, "closing": closing, "replacement": _replacement_of(session)})
+        descriptors.append(
+            {
+                **desc,
+                "lost_record": record,
+                "closing": closing,
+                "replacement": _replacement_of(session) if reopen else None,
+                "reopen": reopen,
+            }
+        )
     return descriptors
 
 
@@ -177,9 +191,10 @@ def on_driver_reset(pool: Any, *, reason: str | None) -> asyncio.Task[None] | No
     mode = _mode()
     if descriptors:
         _publish_driver_died(pool, descriptors, mode)
-    if not descriptors or mode == "off":
+    to_reopen = [d for d in descriptors if d["reopen"]]
+    if not to_reopen or mode == "off":
         return None
-    return _schedule_relaunch(pool, descriptors, mode)
+    return _schedule_relaunch(pool, to_reopen, mode)
 
 
 def relaunch_planned(session: Any) -> bool:
@@ -235,6 +250,7 @@ def _publish_driver_died(pool: Any, descriptors: list[dict[str, Any]], mode: str
                 relaunch_mode=mode,
                 lost_count=len(descriptors),
                 lost_instance_ids=tuple(d["instance_id"] for d in descriptors),
+                not_reopened_instance_ids=tuple(d["instance_id"] for d in descriptors if not d.get("reopen", True)),
             )
         )
 
@@ -324,8 +340,11 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     if source is None:
         raise RuntimeError(f"session {desc['instance_id']!r} kept no launch options to reopen it with")
     # Everything the original was launched with (replacement.ReplacementSource),
-    # reopened at its last URL.
-    result = await pool.launch(**source.launch_kwargs(url=desc["url"]))
+    # reopened at its last URL. A browser channel gone from the host since is
+    # dropped for the bundled build, and the lost record says which.
+    result, dropped = await launch_replacement(pool.launch, source.launch_kwargs(url=desc["url"]))
+    if dropped is not None:
+        desc["lost_record"]["channel_dropped"] = dropped
     new_id = result["instance_id"]
     old_id = desc["instance_id"]
     final_id = await _finalize_id(pool, new_id, old_id, mode)
@@ -333,6 +352,13 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     if fresh is None:
         raise RuntimeError(f"replacement session {final_id!r} closed before relaunch completed")
     fresh._auto_relaunched = True
+    # The reopen passes ``protected`` as an explicit bool, which the launch
+    # stamps reason "explicit"; put back why the original was protected
+    # ("headed_default" ...), which the close-refusal message keys off --
+    # through the gate, as the handoff path (relaunch.py) does.
+    set_protected_state = getattr(fresh, "set_protected_state", None)
+    if set_protected_state is not None:
+        await set_protected_state(source.protected, reason=source.protected_reason)
     desc["lost_record"]["relaunched_to"] = final_id
     crash_incident = desc.get("crash_incident")
     if crash_incident is not None:

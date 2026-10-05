@@ -35,13 +35,11 @@ import contextlib
 import csv
 import io
 import os
-import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Iterator, Sequence
-from pathlib import Path
 
 import click
 
@@ -51,6 +49,7 @@ from octowright.cli import port_owner
 from octowright.cli._root import cli
 from octowright.defaults import HTTP_HOST, HTTP_PORT
 from octowright.process_reaper import browser_pids_owned_by, reap_daemon_browsers
+from octowright.serve_command import command_names_octowright_serve
 
 # Poll interval while waiting for graceful shutdown or health-probe success.
 _POLL_INTERVAL_S = 0.25
@@ -60,41 +59,9 @@ _POLL_INTERVAL_S = 0.25
 # escalation pattern in ``process_reaper.KILL_SIGNAL``.
 _FORCE_KILL: int = getattr(signal, "SIGKILL", signal.SIGTERM)
 
-# A bare substring check for "octowright serve" matches the POSIX command
-# line (``octowright serve --daemon-mode``) but NEVER the Windows one: Windows
-# console-script invocation is ``...\octowright.EXE" serve --daemon-mode`` --
-# an extension plus a closing quote sit between the name and "serve". Found
-# live: a genuinely running daemon's lockfile pid was reported as "not an
-# octowright daemon (stale lock or recycled pid)" and left untouched by
-# `restart`, on a process whose command line visibly WAS `octowright.EXE"
-# serve --daemon-mode`. This tolerates an optional `.exe`/`.EXE` and an
-# optional closing quote between the two words, so it matches on both
-# platforms.
-_OCTOWRIGHT_SERVE_RE = re.compile(r"octowright(\.exe)?[\"']?\s+serve", re.IGNORECASE)
-
-
-def _command_names_octowright_serve(command: str) -> bool:
-    return _OCTOWRIGHT_SERVE_RE.search(command) is not None
-
-
-def _resolve_octowright_entry() -> str:
-    """Path to the installed ``octowright`` console script for this interpreter.
-
-    Windows console scripts are always named ``<name>.exe`` -- ``sys.executable``
-    is ``...\\Scripts\\python.exe``, so the venv-neighbour candidate needs the
-    same suffix, or ``.exists()`` is always False there and this silently falls
-    through to the PATH lookup below on every Windows machine, never actually
-    preferring the current venv (which matters: a stale/different version on
-    PATH would then respawn the daemon from the wrong install).
-    """
-    suffix = ".exe" if sys.platform == "win32" else ""
-    venv_bin = Path(sys.executable).parent / f"octowright{suffix}"
-    if venv_bin.exists():
-        return str(venv_bin)
-    import shutil
-
-    on_path = shutil.which("octowright")
-    return on_path or str(venv_bin)
+# Shared with the manifest prune and the port reclaim; see ``serve_command``
+# for why a bare substring check never matched on Windows.
+_command_names_octowright_serve = command_names_octowright_serve
 
 
 def _leader_pid_from_lock() -> int | None:
@@ -465,17 +432,14 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     # election. Without it the child blocks acquiring the election lock this
     # very command holds across spawn and health-confirm -- a guaranteed stall
     # (observed live) that reported "daemon did not become healthy" and started
-    # the daemon ~10s late. The entrypoint stays restart's own: the console
-    # script beside this interpreter, so a different version on PATH is not
-    # what comes back.
+    # the daemon ~10s late. The entrypoint is the shared resolver's too: the
+    # console script beside this interpreter, else ``python -m octowright`` on
+    # it. Restart once had its own resolver that fell back to ``octowright`` on
+    # PATH, which can be another install -- and a different version then came
+    # back as the daemon every follower talks to.
     from octowright import daemonize
 
-    pid = daemonize.spawn_daemon(
-        http_host=http_host,
-        http_port=http_port,
-        idle_grace=None,
-        entrypoint=[_resolve_octowright_entry()],
-    )
+    pid = daemonize.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=None)
     click.echo(f"spawned octowright serve (launcher pid={pid}) on {http_host}:{http_port}")
     return pid
 

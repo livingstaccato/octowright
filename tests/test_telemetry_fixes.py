@@ -497,7 +497,11 @@ def _make_navigate_subject() -> Any:
     subj._last_mcp_navigation = None
     page = MagicMock()
     page.url = "https://octowright.com"
-    page.goto = AsyncMock()
+
+    async def _goto(url: str, **_kw: Any) -> None:
+        page.url = url  # a real goto lands the page there
+
+    page.goto = AsyncMock(side_effect=_goto)
     page.title = AsyncMock(return_value="t")
     subj.page = page
     subj.pages = [page]

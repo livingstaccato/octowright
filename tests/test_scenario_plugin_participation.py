@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
@@ -214,6 +215,51 @@ async def test_a_plugin_launch_failure_closes_already_launched_browsers_and_rais
         with pytest.raises(RuntimeError, match="failed to launch"):
             await sp.start(spec=spec, browser_pool=bp)
         assert bp.closed == ["br0000000000"], "the already-launched browser must be rolled back"
+    finally:
+        plugin_state.set_registry(original)
+
+
+class _HangingRefPool(_RefPool):
+    """Launches the first participant, then blocks on the second until cancelled."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.blocked = asyncio.Event()
+
+    async def launch(self, **kwargs: Any) -> dict[str, Any]:
+        if self._n >= 1:
+            self.blocked.set()
+            await asyncio.Event().wait()
+        return await super().launch(**kwargs)
+
+
+async def test_cancelling_start_during_the_plugin_launches_closes_everything_already_open():
+    """A cancel during the launch phase rolls back the roster's browsers AND
+    the plugin sessions that already launched, then re-raises the cancel."""
+    original = plugin_state.registry()
+    reg = PluginRegistry()
+    hanging = _HangingRefPool()
+    reg.register(_Descriptor(), pool=hanging, adapter=_RefAdapter(hanging), discovered=None)
+    plugin_state.set_registry(reg)
+    try:
+        spec = Scenario(
+            name="mixed",
+            participants=[
+                Participant(persona="tanuki-tim", kind="chromium", role="player"),
+                Participant(persona="ref-rita", kind="refkind", role="monitor"),
+                Participant(persona="ref-ralf", kind="refkind", role="spectator"),
+            ],
+        )
+        sp = ScenarioPool()
+        bp = _BrowserPool()
+        task = asyncio.create_task(sp.start(spec=spec, browser_pool=bp))
+        await asyncio.wait_for(hanging.blocked.wait(), 2.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert bp.closed == ["br0000000000"]
+        assert hanging.closed == ["ref000000001"]
+        assert sp._live == {}
     finally:
         plugin_state.set_registry(original)
 

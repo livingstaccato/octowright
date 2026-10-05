@@ -124,3 +124,76 @@ def test_the_frame_cache_is_bounded_per_session(
 
     cache_dir = isolated_recordings / ".frame-cache" / "frmbound0005"
     assert len(list(cache_dir.glob("*.png"))) <= 3
+
+
+@pytest.mark.asyncio
+async def test_waiting_extractions_do_not_occupy_the_default_executor(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Extractions queued behind the concurrency bound used to sit in default
+    executor threads blocked on a semaphore, starving every other
+    ``to_thread``/``run_in_executor(None, ...)`` user in the daemon."""
+    import asyncio
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    release = threading.Event()
+
+    def blocking_extract(_video: Path, out_dir: Path, *, at_times: list[float], **_kw: Any) -> None:
+        release.wait(5)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"frame-000-t{at_times[0]:.3f}.png").write_bytes(_TINY_PNG)
+
+    monkeypatch.setattr(_http_state._video, "extract_frames", blocking_extract)
+    loop = asyncio.get_running_loop()
+    small = ThreadPoolExecutor(max_workers=2)
+    loop.set_default_executor(small)
+    video = tmp_path / "v.webm"
+    video.write_bytes(b"\x00")
+    try:
+        pending = [
+            asyncio.create_task(media._extract_into_cache(video, tmp_path / f"c{i}" / "f.png", float(i)))
+            for i in range(4)
+        ]
+        await asyncio.sleep(0.05)
+        assert await asyncio.wait_for(asyncio.to_thread(lambda: "free"), 1) == "free"
+    finally:
+        release.set()
+        await asyncio.gather(*pending, return_exceptions=True)
+        small.shutdown(wait=False)
+
+
+def test_a_duration_evicted_by_another_thread_is_still_returned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``_video_duration`` runs in executor threads. It read its result back
+    from the shared cache, which another thread's insert may already have
+    evicted it from (KeyError); two evictions could also pop the same key."""
+    import threading
+
+    monkeypatch.setattr(media, "_VIDEO_DURATIONS_MAX", 1)
+    media._VIDEO_DURATIONS.clear()
+    first, second = tmp_path / "a.webm", tmp_path / "b.webm"
+    first.write_bytes(b"\x00")
+    second.write_bytes(b"\x00\x00")
+    durations = {first: 3.0, second: 7.0}
+    monkeypatch.setattr(_http_state._video, "probe_video", lambda p: {"duration_seconds": durations[Path(p)]})
+    other_result: list[float | None] = []
+
+    class _Interleaving(dict):
+        """Runs another thread's lookup right after this thread's insert."""
+
+        def __setitem__(self, key: Any, value: Any) -> None:
+            super().__setitem__(key, value)
+            if key[0] == str(first):
+                other = threading.Thread(target=lambda: other_result.append(media._video_duration(second)))
+                other.start()
+                other.join(0.5)
+                self._other = other
+
+    cache = _Interleaving()
+    monkeypatch.setattr(media, "_VIDEO_DURATIONS", cache)
+
+    assert media._video_duration(first) == 3.0
+    cache._other.join(5)
+    assert other_result == [7.0]

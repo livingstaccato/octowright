@@ -29,7 +29,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from octowright.macros import execution, privacy
+from octowright.macros import execution, parameter_specs, privacy
 from tests._macro_artifact_fixtures import _CapturingSession, _reload, restore_reloaded_defaults
 
 NESTED = "nested-credential-9f3k"  # pragma: allowlist secret
@@ -267,9 +267,10 @@ async def test_a_step_whose_classification_fails_redacts_every_argument(monkeypa
     monkeypatch.setattr(execution, "load_macro", lambda _name: {"actions": [{"action": "click", "selector": "#go"}]})
 
     def broken(*_args: Any, **_kwargs: Any) -> Any:
-        raise TypeError("spec shape the classifier cannot read")
+        raise TypeError("an input the classifier cannot read")
 
-    monkeypatch.setattr(execution.MacroArgPrivacy, "for_macro", classmethod(broken))
+    # Every view -- the run's and the failed step's -- resolves through here.
+    monkeypatch.setattr(parameter_specs, "assertion_text_args", broken)
     session = MagicMock()
     session.instance_id = "instance-safe"
     session.kind = "chromium"

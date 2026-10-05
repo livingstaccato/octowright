@@ -52,7 +52,7 @@ from urllib.parse import urlsplit
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from provide.telemetry import get_logger
 
-from octowright import ssrf, ssrf_guard
+from octowright import ssrf_guard
 from octowright._tracing import counter
 from octowright.browser_pool import incidents
 from octowright.browser_pool.events import RecoveryOutcome
@@ -595,7 +595,8 @@ async def _load_replacement(
                 raise
             navigation_error = str(exc)
             unreached = not _is_timeout(exc) or (
-                ssrf.policy_enabled() and ssrf_guard.frame_chain(new_page.main_frame).refused.is_set()
+                ssrf_guard.guards_frame(new_page.main_frame)
+                and ssrf_guard.frame_chain(new_page.main_frame).refused.is_set()
             )
             await _settle_crash_signal(session, new_page)
         if _REPLACEMENTS.get(new_page):

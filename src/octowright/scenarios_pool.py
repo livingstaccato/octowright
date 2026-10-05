@@ -269,15 +269,32 @@ class ScenarioPool:
         browser_ids: list[str] = []
         errors: list[Any] = []
 
-        if browser_specs:
-            roster = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for _, p in browser_specs])
-            browser_ids = [launched["instance_id"] for launched in roster["launched"]]
-            errors.extend(roster["errors"])
-            if not roster["errors"]:
-                for (i, _p), launched in zip(browser_specs, roster["launched"], strict=True):
-                    launched_by_index[i] = launched
+        try:
+            if browser_specs:
+                roster = await browser_pool.spawn_roster([resolve_launch_kwargs(p) for _, p in browser_specs])
+                browser_ids = [launched["instance_id"] for launched in roster["launched"]]
+                errors.extend(roster["errors"])
+                if not roster["errors"]:
+                    for (i, _p), launched in zip(browser_specs, roster["launched"], strict=True):
+                        launched_by_index[i] = launched
 
-        plugin_ids_by_kind = await self._launch_plugin_group(plugin_specs, launched_by_index, errors)
+            plugin_ids_by_kind = await self._launch_plugin_group(plugin_specs, launched_by_index, errors)
+        except BaseException:
+            # A cancel (or any BaseException the plugin group does not fold
+            # into ``errors``) landing after the roster returned, or between
+            # plugin launches, used to skip every rollback: start()'s own
+            # rollback only covers fixtures and startup macros, and its id
+            # variables were never assigned. The roster closes its own partial
+            # launches on cancel; everything that completed is recovered from
+            # ``browser_ids`` and ``launched_by_index`` (mutated in place) and
+            # closed, shielded, before the exception propagates.
+            await self._rollback_start(
+                None,
+                browser_pool,
+                browser_ids,
+                self._plugin_ids_by_kind(plugin_specs, launched_by_index),
+            )
+            raise
 
         if errors:
             await self._close_launched(browser_pool, browser_ids, plugin_ids_by_kind)
@@ -310,6 +327,14 @@ class ScenarioPool:
             await ScenarioPool._launch_plugin_participants(plugin_specs, launched_by_index, errors)
         except Exception as exc:
             errors.append(f"plugin participant launch aborted: {exc!r}")
+        return ScenarioPool._plugin_ids_by_kind(plugin_specs, launched_by_index)
+
+    @staticmethod
+    def _plugin_ids_by_kind(
+        plugin_specs: list[tuple[int, Any]],
+        launched_by_index: dict[int, dict[str, Any]],
+    ) -> dict[str, list[str]]:
+        """The plugin sessions that actually launched, grouped by kind for rollback."""
         plugin_ids_by_kind: dict[str, list[str]] = {}
         for i, p in plugin_specs:
             entry = launched_by_index.get(i)
@@ -399,7 +424,7 @@ class ScenarioPool:
 
     async def _rollback_start(
         self,
-        scenario_id: str,
+        scenario_id: str | None,
         browser_pool: Any,
         browser_ids: list[str],
         plugin_ids_by_kind: dict[str, list[str]] | None = None,
@@ -407,10 +432,12 @@ class ScenarioPool:
         """Shielded teardown for a scenario that failed or was cancelled during
         fixture application / startup macros: drop bookkeeping and close every
         launched session (browser + plugin) before the original exception
-        re-propagates."""
+        re-propagates. ``scenario_id`` is ``None`` when the launch phase itself
+        was interrupted, before the scenario was registered."""
         with anyio.CancelScope(shield=True):
-            async with self._live_lock:
-                self._live.pop(scenario_id, None)
+            if scenario_id is not None:
+                async with self._live_lock:
+                    self._live.pop(scenario_id, None)
             await shielded_rollback_close(browser_pool, browser_ids, logger=log, event="scenario.rollback.close_failed")
             if plugin_ids_by_kind:
                 for pool, ids in self._plugin_pool_groups(plugin_ids_by_kind):

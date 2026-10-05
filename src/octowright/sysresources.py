@@ -52,8 +52,8 @@ def parse_min_free_memory_mb(raw: str | None) -> int | None:
 # Memory-pressure launch governor (H4b). OFF by default: a Mac reports most RAM
 # as "used" (cache/purgeable), so a default floor would false-refuse launches.
 # When set, the user-facing launch tools refuse while available_memory_bytes()
-# is below it — heading off the low-memory → renderer-crash cascade. Read here
-# (not defaults.py, which is at its LOC ceiling), mirroring incidents/health.
+# is below it — heading off the low-memory → renderer-crash cascade. Read here,
+# beside its consumer, mirroring incidents/health.
 MIN_FREE_MEMORY_BYTES: int | None = parse_min_free_memory_mb(os.environ.get("OCTOWRIGHT_MIN_FREE_MEMORY_MB"))
 
 # vm_stat page buckets that count as reclaimable/available.

@@ -20,6 +20,8 @@ import subprocess
 import sys
 from collections.abc import Callable
 
+from octowright.serve_command import command_names_octowright_serve
+
 
 def _pid_listening_on_port_posix(port: int) -> int | None:
     """Lowest pid with a LISTEN socket on ``port`` (POSIX, via ``lsof``)."""
@@ -84,6 +86,6 @@ def octowright_leader_on_port(
     holder = _pid_listening_on_port(port)
     if holder is None:
         return None
-    if any(pid == holder and "octowright serve" in cmd for pid, cmd in list_processes()):
+    if any(pid == holder and command_names_octowright_serve(cmd) for pid, cmd in list_processes()):
         return holder
     return None

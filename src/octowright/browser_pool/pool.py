@@ -37,7 +37,7 @@ from octowright.browser_pool.refusals import RefusalTracker
 from octowright.browser_pool.relaunch import handoff_browser, relaunch_fluid_browser
 from octowright.browser_pool.roster import close_all as _close_all
 from octowright.browser_pool.roster import spawn_roster as _spawn_roster
-from octowright.browser_pool.session_dirs import SESSION_TMPDIR_PREFIX
+from octowright.browser_pool.session_dirs import session_tmpdir_prefix
 from octowright.browser_pool.visuals import (
     VIEWPORT_TOKEN_ACTIONS,
     _tile_args_for_chromium,
@@ -85,6 +85,9 @@ class BrowserPool:
         # re-reading the env var at construction time.
         self._operation_queue_timeout_seconds = resolve_operation_queue_timeout_seconds(operation_queue_timeout_seconds)
         self._pw: Playwright | None = None
+        #: Set by ``lifecycle.shutdown_pool`` as it stops the driver, so a
+        #: launch failing because of that stop is not "healed" with a new one.
+        self._driver_shut_down = False
         self._pw_lock = asyncio.Lock()
         # Count of shared-driver rebuilds after a death (surfaced in status).
         self._driver_restarts: int = 0
@@ -276,6 +279,13 @@ class BrowserPool:
                 if self._driver_restarts != generation:
                     log.info("octowright.pool.driver_already_replaced_retrying", error=repr(exc))
                     return await self._launch_impl(options, sp)
+                if self._driver_shut_down:
+                    # Shutdown stopped the driver and cleared the handle
+                    # without a new generation. The probe would read "no
+                    # handle" as dead, and the retry would start a fresh driver
+                    # on a pool that has shut down.
+                    log.info("octowright.pool.driver_cleared_by_shutdown", error=repr(exc))
+                    raise
                 used = self._pw
                 if not await driver_health.driver_confirmed_dead(used):
                     log.info("octowright.pool.driver_death_suspected_but_alive", error=repr(exc))
@@ -379,6 +389,15 @@ class BrowserPool:
 
     def iter_sessions(self) -> Iterable[BrowserSession]:
         return tuple(self._sessions.values())
+
+    def iter_sessions_including_closing(self) -> Iterable[BrowserSession]:
+        """Live sessions plus those still draining in ``_closing_sessions``.
+
+        A closing session has left ``_sessions`` but still holds its profile
+        and its recording files open until teardown finishes.
+        """
+        closing = tuple(entry.session for entry in tuple(self._closing_sessions.values()))
+        return closing + tuple(s for s in tuple(self._sessions.values()) if s not in closing)
 
     def active_count(self) -> int:
         return len(self._sessions)
@@ -698,7 +717,7 @@ class BrowserPool:
         async with self._sessions_lock:
             existing = self._session_profile_dirs.get(session_key)
             if existing is None or not existing.exists():
-                tmp = Path(tempfile.mkdtemp(prefix=f"{SESSION_TMPDIR_PREFIX}{session_name}-{kind}-"))
+                tmp = Path(tempfile.mkdtemp(prefix=session_tmpdir_prefix(session_name, kind)))
                 self._session_profile_dirs[session_key] = tmp
                 existing = tmp
         return str(existing)

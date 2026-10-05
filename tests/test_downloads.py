@@ -383,3 +383,105 @@ async def test_wait_for_download_is_ungated_and_stays_concurrent(
 
     rec = await asyncio.wait_for(wait_task, timeout=2.0)
     assert rec["suggested_filename"] == "late.csv"
+
+
+# ---------------------------------------------------------------------------
+# lease scope and destination reservation
+# ---------------------------------------------------------------------------
+
+
+def _rows(session: BrowserSession, action: str) -> list[dict[str, Any]]:
+    import json
+
+    lines = session.log_path.read_text(encoding="utf-8").splitlines()
+    return [row for row in map(json.loads, filter(None, lines)) if row.get("action") == action]
+
+
+class BlockingDownload(FakeDownload):
+    """A transfer that does not finish until released."""
+
+    def __init__(self, filename: str = "report.pdf") -> None:
+        super().__init__(filename=filename)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def _do_save(self, path: str) -> None:
+        self.started.set()
+        await self.release.wait()
+        await super()._do_save(path)
+
+
+@pytest.mark.anyio
+async def test_a_gate_error_is_recorded_as_a_save_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lease was entered outside the try, so a gate refusal escaped as an
+    unretrieved task exception and nothing was recorded."""
+    from octowright.session import downloads as _downloads
+
+    s = _make_session(tmp_path)
+
+    class _Refusing:
+        async def __aenter__(self) -> None:
+            raise RuntimeError("Fixture-Gate-Refusal")
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(s, "operation", lambda _name, **_kw: _Refusing())
+    assert await _downloads.save_download(s, FakeDownload()) == {}
+    rows = _rows(s, "download_save_error")
+    assert rows and "Fixture-Gate-Refusal" in rows[0]["error"]
+
+
+@pytest.mark.anyio
+async def test_the_lease_is_not_held_across_the_transfer(tmp_path: Path) -> None:
+    """A large download must not block every tool call on the session."""
+    from octowright.session import downloads as _downloads
+
+    s = _make_session(tmp_path)
+    dl = BlockingDownload()
+    save = asyncio.create_task(_downloads.save_download(s, dl))
+    await asyncio.wait_for(dl.started.wait(), 1)
+
+    async with asyncio.timeout(1):
+        async with s.operation("browser_click"):
+            pass
+
+    dl.release.set()
+    record = await save
+    assert Path(record["path"]).read_bytes() == b"data"
+    assert s.downloads == [record]
+
+
+@pytest.mark.anyio
+async def test_concurrent_downloads_of_one_name_get_distinct_files(tmp_path: Path) -> None:
+    from octowright.session import downloads as _downloads
+
+    s = _make_session(tmp_path)
+    first, second = BlockingDownload(), BlockingDownload()
+    tasks = [asyncio.create_task(_downloads.save_download(s, d)) for d in (first, second)]
+    await asyncio.wait_for(asyncio.gather(first.started.wait(), second.started.wait()), 1)
+    first.release.set()
+    second.release.set()
+    records = await asyncio.gather(*tasks)
+
+    paths = {r["path"] for r in records}
+    assert len(paths) == 2
+
+
+@pytest.mark.anyio
+async def test_a_keep_id_relaunch_does_not_overwrite_an_earlier_download(tmp_path: Path) -> None:
+    """A keep-id driver relaunch starts ``downloads`` empty under the same
+    ``downloads/<instance_id>/``; indexing by ``len(downloads)`` reused
+    ``000-report.pdf`` and replaced the file the earlier recording names."""
+    from octowright.session import downloads as _downloads
+
+    s = _make_session(tmp_path)
+    earlier = tmp_path / "downloads" / s.instance_id / "000-report.pdf"
+    earlier.parent.mkdir(parents=True)
+    earlier.write_bytes(b"EARLIER")
+
+    record = await _downloads.save_download(s, FakeDownload(filename="report.pdf"))
+
+    assert earlier.read_bytes() == b"EARLIER"
+    assert Path(record["path"]) != earlier
+    assert Path(record["path"]).name.endswith("-report.pdf")

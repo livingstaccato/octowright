@@ -75,3 +75,35 @@ def test_ssh_config_insecure_flag_and_password() -> None:
     assert cfg["password"] == "pw"  # pragma: allowlist secret
     assert cfg["insecure_no_host_check"] is True
     assert "known_hosts" not in cfg  # omitted args dropped
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("raw", ["22s", "", "  ", "0", "70000", "-1", "2.5"])
+def test_an_unusable_ssh_port_env_falls_back_to_22(raw: str) -> None:
+    """A bare ``int()`` at import turned one typo in OCTOWRIGHT_SSH_PORT into
+    an ImportError for the whole plugin -- and with it every terminal tool."""
+    from octowright_terminal.connector_config import _ssh_default_port
+
+    assert _ssh_default_port({"OCTOWRIGHT_SSH_PORT": raw}) == 22
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(" 2222 ", 2222), ("65535", 65535), ("1", 1)])
+def test_a_valid_ssh_port_env_is_used(raw: str, expected: int) -> None:
+    from octowright_terminal.connector_config import _ssh_default_port
+
+    assert _ssh_default_port({"OCTOWRIGHT_SSH_PORT": raw}) == expected
+
+
+def test_the_module_imports_with_a_bad_ssh_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    import importlib
+
+    import octowright_terminal.connector_config as cc
+
+    monkeypatch.setenv("OCTOWRIGHT_SSH_PORT", "twenty-two")
+    try:
+        assert importlib.reload(cc).SSH_DEFAULT_PORT == 22
+    finally:
+        monkeypatch.delenv("OCTOWRIGHT_SSH_PORT")
+        importlib.reload(cc)

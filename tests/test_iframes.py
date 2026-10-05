@@ -330,3 +330,62 @@ async def test_switch_frame_raises_on_multiple_args(tmp_path: Path) -> None:
     s = _make_session(tmp_path)
     with pytest.raises(ValueError, match="exactly one"):
         await s.switch_frame(name="a", url_pattern="b")
+
+
+# ---------------------------------------------------------------------------
+# The active frame belongs to the page it was chosen on
+# ---------------------------------------------------------------------------
+#
+# A frame is a child of one page. Kept across a page switch, element actions
+# kept landing in the OLD page's iframe; kept across a close or a crash
+# replacement, every action failed with "Frame was detached".
+
+
+def _two_page_session(tmp_path: Path) -> BrowserSession:
+    s = _make_session(tmp_path)
+    second = FakePage()
+    second.close = AsyncMock()  # type: ignore[attr-defined]
+    s.page.close = AsyncMock()  # type: ignore[attr-defined]
+    s.pages.append(second)  # type: ignore[arg-type]
+    inner = FakeFrame(name="inner")
+    s.page.frames = [FakeFrame(), inner]  # type: ignore[attr-defined]
+    return s
+
+
+@pytest.mark.anyio
+async def test_switch_page_drops_the_old_pages_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.session import core_page_mixin
+
+    monkeypatch.setattr(core_page_mixin, "notify_active_page", AsyncMock())
+    s = _two_page_session(tmp_path)
+    await s.switch_frame(name="inner")
+    await s.switch_page(1)
+    assert s.active_frame is None
+    assert s._target() is s.pages[1]
+
+
+@pytest.mark.anyio
+async def test_closing_the_active_page_drops_its_frame(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from octowright.session import core_page_mixin
+
+    monkeypatch.setattr(core_page_mixin, "notify_active_page", AsyncMock())
+    s = _two_page_session(tmp_path)
+    await s.switch_frame(name="inner")
+    await s.close_page(0)
+    assert s.active_frame is None
+
+
+def test_any_reassignment_of_the_page_drops_the_frame(tmp_path: Path) -> None:
+    """Crash recovery and the screencast rebind assign ``session.page`` directly."""
+    s = _make_session(tmp_path)
+    s.active_frame = FakeFrame(name="inner")
+    s.page = FakePage()  # type: ignore[assignment]
+    assert s.active_frame is None
+
+
+def test_reassigning_the_same_page_keeps_the_frame(tmp_path: Path) -> None:
+    s = _make_session(tmp_path)
+    frame = FakeFrame(name="inner")
+    s.active_frame = frame
+    s.page = s.page
+    assert s.active_frame is frame

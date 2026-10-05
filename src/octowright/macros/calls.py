@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from octowright.credential_sinks import CREDENTIAL_CALL_MARKER
 from octowright.macros.nesting import MacroLoader, iter_nested_actions
+from octowright.macros.parameter_specs import declared_sensitive_names
 from octowright.macros.runtime import dispatch_simple as runtime_dispatch_simple
 from octowright.macros.substitution import own_site_origins
 
@@ -98,10 +99,14 @@ async def dispatch_macro_call(
     called = load_macro(called_name)
     # Taint follows the value: an arg the caller's credential was substituted
     # into stays credential-tier in the callee, whatever the callee calls it.
+    # The callee's own parameter_specs add the args it declares sensitive.
     marked = action.get(CREDENTIAL_CALL_MARKER)
     tainted = frozenset(str(name) for name in marked) if isinstance(marked, list) else frozenset()
     called_actions = substitute(
-        called.get("actions", []), call_args, trusted_origins=own_site_origins(session), credential_args=tainted
+        called.get("actions", []),
+        call_args,
+        trusted_origins=own_site_origins(session),
+        credential_args=tainted | declared_sensitive_names(called),
     )
 
     executed, skipped = 1, 0

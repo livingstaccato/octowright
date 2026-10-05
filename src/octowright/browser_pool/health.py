@@ -14,13 +14,14 @@ Pure function — the caller gathers the inputs and decides whether to log.
 
 from __future__ import annotations
 
-import os
 from typing import Any
+
+from octowright.defaults import env_int
 
 # Thresholds at which a recurring failure stops being a blip and becomes a
 # "something is structurally wrong" signal. Overridable for tuning.
-CRITICAL_DRIVER_RESTARTS = int(os.environ.get("OCTOWRIGHT_HEALTH_CRITICAL_DRIVER_RESTARTS", "3"))
-CRITICAL_RECOVERY_FAILURES = int(os.environ.get("OCTOWRIGHT_HEALTH_CRITICAL_RECOVERY_FAILURES", "5"))
+CRITICAL_DRIVER_RESTARTS = env_int("OCTOWRIGHT_HEALTH_CRITICAL_DRIVER_RESTARTS", 3)
+CRITICAL_RECOVERY_FAILURES = env_int("OCTOWRIGHT_HEALTH_CRITICAL_RECOVERY_FAILURES", 5)
 
 _OK = "ok"
 _DEGRADED = "degraded"

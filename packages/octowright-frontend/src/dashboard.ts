@@ -358,8 +358,19 @@ export async function bootDashboard(root: HTMLElement): Promise<DashboardDispose
   loadPersonaSizes();
   source = openDashboardEventStream({
     onOpen: () => {
+      // Polling running means the stream was down (or not yet up) after the
+      // last full load, and the server does not replay invalidations published
+      // meanwhile. A reconnect inside one poll interval -- `octowright
+      // restart` -- used to stop polling without fetching, so the panels kept
+      // listing pre-restart browsers as live until the next unrelated event.
+      const missedInvalidations = intervalId !== null;
       streamHealthy = true;
       stopPolling();
+      if (missedInvalidations) {
+        tick().catch((err: unknown) => {
+          log.warn({ event: "dashboard_stream_reopen_refresh_failed", error: String(err) });
+        });
+      }
     },
     onInvalidate: (data) => {
       const scopes = parseInvalidateScopes(data);

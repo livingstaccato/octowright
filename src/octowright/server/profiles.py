@@ -176,6 +176,14 @@ PROFILES: dict[str, list[str]] = {
 #: is computed — the ordering is load-bearing, see build_allowed_set.
 _PLUGIN_PROFILES: dict[str, frozenset[str]] = {}
 
+#: Resolved allow-lists keyed by (profile spec, plugin profiles). Every
+#: compact-discovery result annotates its next_actions through
+#: active_filter(), and re-resolving the spec each time logged a typo'd
+#: profile's warning per call -- hundreds per web_site_links. The plugin
+#: profiles are part of the key, so a registration after the first lookup is
+#: not hidden by a stale entry.
+_FILTER_CACHE: dict[tuple[str, frozenset[tuple[str, frozenset[str]]]], frozenset[str]] = {}
+
 
 def register_plugin_profile(name: str, tool_names: Iterable[str]) -> None:
     """Register a plugin's capability profile.
@@ -203,6 +211,11 @@ def unregister_plugin_profile(name: str) -> None:
 
 def plugin_profile_names() -> list[str]:
     return sorted(_PLUGIN_PROFILES)
+
+
+def plugin_profile_tools(name: str) -> frozenset[str]:
+    """The tools a registered plugin profile names (empty when it is not registered)."""
+    return _PLUGIN_PROFILES.get(name, frozenset())
 
 
 def reset_plugin_profiles() -> None:
@@ -270,11 +283,20 @@ def active_filter(env: dict[str, str] | None = None) -> set[str] | None:
     raw = (env if env is not None else os.environ).get("OCTOWRIGHT_PROFILE", "").strip()
     if not raw or raw.lower() == "all":
         return None
-    return build_allowed_set(raw)
+    key = (raw, frozenset(_PLUGIN_PROFILES.items()))
+    cached = _FILTER_CACHE.get(key)
+    if cached is None:
+        if len(_FILTER_CACHE) >= 32:
+            _FILTER_CACHE.clear()
+        cached = _FILTER_CACHE[key] = frozenset(build_allowed_set(raw))
+    # A copy: callers own the set they are handed.
+    return set(cached)
 
 
 def profiles_for_tool(tool_name: str) -> list[str]:
-    return sorted(name for name, tools in PROFILES.items() if tool_name in tools)
+    """Every profile -- core's, then enabled plugins' -- that registers ``tool_name``."""
+    core = sorted(name for name, tools in PROFILES.items() if tool_name in tools)
+    return core + sorted(name for name, tools in _PLUGIN_PROFILES.items() if tool_name in tools)
 
 
 def annotate_next_actions_for_profile(

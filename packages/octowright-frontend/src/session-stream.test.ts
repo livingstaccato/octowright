@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bootStreamSession, importRenderer } from "./session-stream.js";
 import type { StreamHandle } from "./plugin-contract.js";
@@ -185,6 +185,32 @@ describe("bootStreamSession", () => {
     ]);
   });
 
+  it("feeds a recording larger than one /events page in full", async () => {
+    // The server bounds an /events answer and marks it complete:false; the
+    // first page used to be fed as the whole history.
+    const { getEvents } = await import("./api.js");
+    vi.mocked(getEvents)
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-08-24T00:00:00Z", action: "first_page" }],
+        cursor: 10,
+        total_bytes: 20,
+        complete: false,
+      })
+      .mockResolvedValueOnce({
+        events: [{ ts: "2026-08-24T00:00:01Z", action: "second_page" }],
+        cursor: 20,
+        total_bytes: 20,
+        complete: true,
+      });
+
+    const root = document.createElement("div");
+    const { mount, fed } = recordingMount();
+    await bootStreamSession(root, "s1", detail, mount);
+
+    expect(fed[0]?.map((e) => (e as { action: string }).action)).toEqual(["first_page", "second_page"]);
+    expect(vi.mocked(getEvents)).toHaveBeenLastCalledWith("s1", 10);
+  });
+
   it("does not open a tail for a closed (non-live) session", async () => {
     const root = document.createElement("div");
     const { mount } = recordingMount();
@@ -214,6 +240,54 @@ describe("bootStreamSession", () => {
     });
 
     expect(fed).toEqual([[], [{ ts: "2026-08-24T00:00:09Z", action: "ref_delta" }]]);
+  });
+});
+
+describe("bootStreamSession live tail recovery", () => {
+  beforeEach(() => {
+    FakeWebSocket.instances = [];
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reconnects a dropped tail from the last cursor and says so in the footer", async () => {
+    const root = document.createElement("div");
+    const { mount } = recordingMount();
+    await bootStreamSession(root, "s1", liveDetail, mount, {
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    const footer = root.querySelector('[data-testid="session-footer"]');
+    FakeWebSocket.instances[0]?.emit("message", { data: JSON.stringify({ events: [], cursor: 77 }) });
+    FakeWebSocket.instances[0]?.emit("close", { code: 1006, reason: "", wasClean: false });
+    expect(footer?.textContent).toContain("reconnecting");
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    FakeWebSocket.instances[1]?.emit("open", new Event("open"));
+    expect(footer?.textContent).toBe("Refreshing every 1s");
+  });
+
+  it("feeds what the session wrote while the tail was down once it has closed", async () => {
+    const { getEvents } = await import("./api.js");
+    const root = document.createElement("div");
+    const { mount, fed } = recordingMount();
+    await bootStreamSession(root, "s1", liveDetail, mount, {
+      webSocketCtor: FakeWebSocket as unknown as typeof WebSocket,
+    });
+    vi.mocked(getEvents).mockResolvedValueOnce({
+      events: [{ ts: "2026-08-24T00:00:30Z", action: "ref_tail_end" }],
+      cursor: 99,
+      total_bytes: 99,
+      complete: true,
+    });
+    FakeWebSocket.instances[0]?.emit("close", { code: 1003, reason: "closed", wasClean: true });
+
+    await vi.waitFor(() => expect(fed.at(-1)).toEqual([{ ts: "2026-08-24T00:00:30Z", action: "ref_tail_end" }]));
+    expect(vi.mocked(getEvents)).toHaveBeenLastCalledWith("s1", 42);
+    expect(root.querySelector('[data-testid="session-footer"]')?.textContent).toBe("Session closed");
   });
 });
 

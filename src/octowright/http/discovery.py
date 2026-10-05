@@ -31,6 +31,7 @@ from octowright.http.artifacts import (
 from octowright.http.artifacts import (
     kind_from_recording_name as _kind_from_recording_name,
 )
+from octowright.http.recording_sidecars import is_session_recording
 from octowright.http.session_artifacts import session_artifact_cache
 from octowright.recorder import tail_log
 
@@ -61,7 +62,7 @@ def _read_first_launch(jsonl_path: Path) -> dict[str, Any] | None:
 def _iter_recordings(recordings_dir: Path) -> list[Path]:
     if not recordings_dir.exists():
         return []
-    return sorted(recordings_dir.glob("*.jsonl"))
+    return sorted(p for p in recordings_dir.glob("*.jsonl") if is_session_recording(p.name))
 
 
 def _read_first_opening(jsonl_path: Path) -> dict[str, Any] | None:
@@ -97,7 +98,10 @@ def _summarise_recording(jsonl_path: Path) -> dict[str, Any] | None:
         return None
     opening = _read_first_opening(jsonl_path) or {}
     stat = jsonl_path.stat()
-    started = opening.get("ts") or _iso(stat.st_ctime)
+    # The listing sorts on this string; a numeric or other non-string ``ts``
+    # (a hand-edited or foreign recording) would make that sort raise.
+    opening_ts = opening.get("ts")
+    started = opening_ts if isinstance(opening_ts, str) and opening_ts else _iso(stat.st_ctime)
     # The opening row names its own kind -- generic across every plugin, since
     # core's launch transaction writes ``session_start`` with ``kind`` before a
     # plugin does anything else. The filename answers for anything that row
@@ -182,7 +186,7 @@ def _live_summary_from_launch(result: dict[str, Any]) -> dict[str, Any]:
 _SummaryEntry = tuple[tuple[int, int], dict[str, Any]]
 
 #: Recordings past which the assembled listing is not snapshotted.
-#: Lives here rather than in defaults.py, which is at its LOC ceiling.
+#: Lives here, beside its only reader.
 SESSION_LIST_SNAPSHOT_MAX = 50_000
 
 # Guards ``_closed_list_cache`` and ``_recording_index`` against concurrent

@@ -16,6 +16,7 @@ from provide.telemetry import get_logger
 import octowright.macros as macro_mod
 from octowright._json_text import dumps_utf8_safe
 from octowright._tracing import counter, set_attrs, span
+from octowright.artifacts.bundle_privacy import bundle_guard
 from octowright.artifacts.digest import digest_macro, digest_recording_text
 from octowright.artifacts.evidence import EvidenceBuilder
 from octowright.artifacts.models import new_manifest, new_run_result
@@ -25,8 +26,10 @@ from octowright.artifacts.reports import refresh_run_summary, write_artifact_man
 from octowright.artifacts.script_export import write_macro_cli
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from octowright.macros import safe_screenshot
-from octowright.macros.nesting import RunMacros
+from octowright.macros.nesting import RunMacros, iter_nested_actions
+from octowright.macros.parameter_specs import macro_privacy, resolve_macro_privacy
 from octowright.macros.privacy import (
+    REDACTED,
     MacroArgPrivacy,
     run_privacy_ledger,
     scrub_saturation_fields,
@@ -68,13 +71,18 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
     existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
     if existing_manifest_path is not None:
         manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+    # A plan has no run to learn what a called macro classifies (a run's
+    # ledger does), so with a macro_call anywhere every value is withheld.
+    calls = any(a.get("action") == "macro_call" for a in iter_nested_actions(macro.get("actions", [])))
+    shown = dict.fromkeys(args_used, REDACTED) if calls else privacy.redact(args_used)
+    manifest["parameters"] = shown
     write_artifact_manifest(manifest_path, manifest)
 
     return {
         "ok": not missing_args,
         "macro": name,
         "missing_args": missing_args,
-        "args_used": privacy.redact(args_used),
+        "args_used": shown,
         "paths": {
             "macro_path": str(macro_path(name)),
             "artifact_dir": str(artifact_dir),
@@ -131,7 +139,14 @@ def export_macro_cli(
     privacy.blind_scrub(args_used)
     store = ArtifactStore()
     target = store.resolve_macro_export_path(name, out_path)
-    write_macro_cli(path=target, name=name, macro=macro, args=args_used, include_evidence=include_evidence)
+    write_macro_cli(
+        path=target,
+        name=name,
+        macro=macro,
+        args=args_used,
+        include_evidence=include_evidence,
+        root=store.recordings_dir,
+    )
 
     manifest_path = store.macro_manifest_path(name)
     artifact_dir = manifest_path.parent
@@ -201,13 +216,16 @@ async def run_macro_artifact(
             macros = RunMacros(load_macro)
             macro = macros(name)
             args_used = dict(args or {})
-            # The view macro_run builds: an expect_no_text argument is secret
-            # whatever it is named, so every record below uses it, not the name alone.
-            privacy = _privacy(macro)
+            # The view macro_run uses -- passed to it below, not rebuilt: an
+            # expect_no_text argument is secret whatever it is named, and the
+            # macro's parameter_specs say what else is, so every record below
+            # uses it, not the name alone.
+            view = resolve_macro_privacy(macro)
+            privacy = view.privacy
             # Admitted into the one ledger the replay also uses, before the manifest
             # or run dir is written: a run that would add to a full scrub set is
             # refused with nothing on disk (#248). The replay does not admit it again.
-            run_ledger.admit(name, privacy.admission(args_used))
+            run_ledger.admit(name, privacy.admission(args_used), warnings=view.warnings)
             store = ArtifactStore()
             artifact_dir = store.macro_dir(name)
             runs_dir = artifact_dir / "runs"
@@ -225,6 +243,9 @@ async def run_macro_artifact(
             existing_manifest_path = _safe_existing_manifest_path(store, manifest_path)
             if existing_manifest_path is not None:
                 manifest = _merge_existing_manifest(existing_manifest_path, manifest)
+            # Every value withheld until the replay has run: a called macro can
+            # classify one this macro's view shows, and only its ledger knows (#248).
+            manifest["parameters"] = dict.fromkeys(manifest.get("parameters") or {}, REDACTED)
             write_artifact_manifest(manifest_path, manifest)
 
             run_dir = store.next_run_dir(artifact_dir)
@@ -250,6 +271,7 @@ async def run_macro_artifact(
                     slowmo_ms=slowmo_ms,
                     _macros=macros,
                     _run_ledger=run_ledger,
+                    _privacy=view,
                 )
                 if isinstance(replay, dict):
                     executed = int(replay.get("executed", 0))
@@ -263,6 +285,8 @@ async def run_macro_artifact(
                     preview=traceback.format_exc(limit=8),
                 )
 
+            # The replay is over, pass or fail: no further site joins the view.
+            run_ledger.seal()
             # From here on, everything written scrubs against what the run admitted,
             # nested calls included -- not the pre-run tuple, which never held them.
             sensitive_values = run_ledger.values
@@ -293,25 +317,22 @@ async def run_macro_artifact(
                     sensitive_values,
                 )
             )
+            guard = bundle_guard(session, run_ledger)
             paths = write_run_bundle(
                 run_dir=run_dir,
                 result=run_result,
                 evidence=evidence.records,
                 summary=summary,
                 sensitive_values=sensitive_values,
+                privacy=guard,
             )
 
             manifest["latest_run"] = {"run_id": run_dir.name, "path": str(run_dir)}
+            manifest["parameters"] = scrub_sensitive_values(privacy.redact(args_used), sensitive_values)
             write_artifact_manifest(manifest_path, manifest)
 
-            verification_status = "not_configured"
-            verification_paths = {}
             critical_points = manifest.get("critical_points", [])
-            if verify and critical_points:
-                v_res = macro_artifact_verify(name, run_dir.name)
-                if v_res.get("ok"):
-                    verification_status = v_res.get("status", "unknown")
-                    verification_paths = v_res.get("paths", {})
+            verification_status, verification_paths = _verify_run(name, run_dir.name, verify and bool(critical_points))
 
             with span("octowright.macro.artifact.run") as s:
                 set_attrs(s, macro=name, run_id=run_dir.name, verify=verify)
@@ -330,7 +351,7 @@ async def run_macro_artifact(
                 "ok": status == "ok",
                 "macro": name,
                 "run_id": run_dir.name,
-                "summary": summary,
+                "summary": guard.summary if guard.summary is not None else summary,
                 "verification_status": verification_status,
                 "paths": {
                     "run_dir": str(run_dir),
@@ -343,7 +364,21 @@ async def run_macro_artifact(
                 # What the #247 floor/list left visible, nested calls included.
                 **run_ledger.exempt_fields(),
                 **scrub_saturation_fields(session),
+                # An ignored parameter_specs unmark or a malformed spec, by name.
+                **run_ledger.warning_fields(),
+                # privacy_unresolved / privacy_tripwire, as result.json carries them.
+                **guard.flags,
             }
+
+
+def _verify_run(name: str, run_id: str, enabled: bool) -> tuple[str, dict[str, Any]]:
+    """The run's verification status and paths: ``not_configured`` without critical points."""
+    if not enabled:
+        return "not_configured", {}
+    v_res = macro_artifact_verify(name, run_id)
+    if not v_res.get("ok"):
+        return "not_configured", {}
+    return v_res.get("status", "unknown"), v_res.get("paths", {})
 
 
 async def _capture_screenshot(
@@ -464,7 +499,8 @@ def _merge_existing_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, 
     return merged
 
 
-def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+def _stored_manifest(store: ArtifactStore, path: Path) -> tuple[Path, dict[str, Any]] | None:
+    """The manifest as it is on disk, and its contained path; what a read-modify-write writes back."""
     try:
         contained_path = store._contained(path, label="macro artifact manifest")
         contained_path.relative_to(store.root.resolve())
@@ -474,8 +510,25 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
         manifest = json.loads(contained_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-    if not isinstance(manifest, dict):
+    return (contained_path, manifest) if isinstance(manifest, dict) else None
+
+
+def _writable_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+    """`_stored_manifest` with its parameters redacted as a listing shows them (one may predate that redaction)."""
+    stored = _stored_manifest(store, path)
+    if stored is None:
         return None
+    manifest = stored[1]
+    manifest["parameters"] = _listing_privacy(manifest.get("name")).redact(manifest.get("parameters") or {})
+    return manifest
+
+
+def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None:
+    """The manifest for a response: never written back, since it drops ``artifact_version`` and adds ``path``."""
+    stored = _stored_manifest(store, path)
+    if stored is None:
+        return None
+    contained_path, manifest = stored
     return {
         "artifact_type": manifest.get("artifact_type"),
         "name": manifest.get("name"),
@@ -492,7 +545,8 @@ def _compact_manifest(store: ArtifactStore, path: Path) -> dict[str, Any] | None
 
 
 def _privacy(macro: dict[str, Any]) -> MacroArgPrivacy:
-    return MacroArgPrivacy.for_macro(macro.get("actions", []))
+    """The macro's own view, ``parameter_specs`` included, as macro_run resolves it."""
+    return macro_privacy(macro)
 
 
 def _listing_privacy(name: Any) -> MacroArgPrivacy:
@@ -570,7 +624,7 @@ def _normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, An
 def macro_artifact_critical_points_set(name: str, critical_points: list[dict[str, Any]]) -> dict[str, Any]:
     store = ArtifactStore()
     manifest_path = store.macro_manifest_path(name)
-    manifest = _compact_manifest(store, manifest_path)
+    manifest = _writable_manifest(store, manifest_path)
     if not manifest:
         macro = load_macro(name)
         manifest = _manifest_for_plan(
@@ -633,8 +687,7 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
 
     atomic_write_text(verification_path, dumps_utf8_safe(v_res, indent=2), encoding="utf-8")
 
-    manifest["critical_points"] = apply_verification_rollup(critical_points, v_res["critical_points"])
-    write_artifact_manifest(manifest_path, manifest)
+    _store_rollup(store, manifest_path, apply_verification_rollup(critical_points, v_res["critical_points"]))
 
     # The run bundle is written before this verification can run, so its
     # summary.md carries no verdict until it is re-rendered here.
@@ -645,6 +698,14 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
         "status": v_res["status"],
         "paths": {"verification": str(verification_path), "summary": str(summary_path)},
     }
+
+
+def _store_rollup(store: ArtifactStore, manifest_path: Path, critical_points: list[dict[str, Any]]) -> None:
+    """Write *critical_points* back onto the manifest as stored, not the compacted view a caller read."""
+    stored = _writable_manifest(store, manifest_path)
+    if stored is not None:
+        stored["critical_points"] = critical_points
+        write_artifact_manifest(manifest_path, stored)
 
 
 def delete_macro_artifact(name: str) -> dict[str, Any]:

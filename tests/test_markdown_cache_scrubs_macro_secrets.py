@@ -153,14 +153,17 @@ async def test_markitdown_is_given_the_html_as_a_stream(
 
 def test_scrub_patterns_are_compiled_once_per_ledger_state() -> None:
     """The durable scrubber runs on every capture; variants and regexes are derived once."""
-    from octowright.macros import privacy
+    from octowright.macros import privacy, scrub_engine
 
     privacy._scrub_patterns.cache_clear()
+    scrub_engine._scrub_plan.cache_clear()
     values = (ENTITY_SECRET, SECRET)
     for _ in range(5):
         privacy.scrub_sensitive_values(f"a {SECRET} b", values)
-    info = privacy._scrub_patterns.cache_info()
-    assert info.misses == 1 and info.hits == 4
+    plan = scrub_engine._scrub_plan.cache_info()
+    assert plan.misses == 1 and plan.hits == 4
+    # The plan is the patterns' one caller: they are compiled once, too.
+    assert privacy._scrub_patterns.cache_info().misses == 1
 
 
 # --- markitdown's own escaping ------------------------------------------------------------

@@ -147,6 +147,10 @@ class DriverDiedEvent:
     relaunch_mode: str  # off | new-id | keep-id
     lost_count: int
     lost_instance_ids: tuple[str, ...]
+    # Lost ids that will NOT be reopened whatever ``relaunch_mode`` says: a
+    # session that was itself an auto-reopen (the loop guard). Without it a
+    # client waited for a reopen that never came.
+    not_reopened_instance_ids: tuple[str, ...] = ()
 
 
 # Anything the session event bus may carry.

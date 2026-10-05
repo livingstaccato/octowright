@@ -173,8 +173,10 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "plus arbitrary argv) and are DISABLED BY DEFAULT — passing either raises ValueError "
         "unless the operator has set OCTOWRIGHT_ALLOW_EXECUTABLE_PATH=1 on the daemon; channel "
         "alone (fixed allowlist) needs no opt-in. "
-        "All three are launch-time only: never persisted into the recording, so macro replay, "
-        "handoff, and fluid relaunch of this instance do NOT carry them forward. "
+        "None of the three is read back from the recording. executable_path/launch_args are "
+        "launch-time only: handoff and fluid relaunch of this instance do NOT carry them forward. "
+        "channel IS carried by handoff/relaunch; if that channel is no longer installed, the "
+        "replacement launches on the bundled build and its result carries a 'warnings' entry naming it. "
         "disable_automation_controlled=True is Chromium-only and disables Blink's "
         "AutomationControlled feature for this launch, which changes the exposed "
         "navigator.webdriver signal. It is off by default and is not a general stealth "
@@ -197,7 +199,9 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "requests too, and on Chromium that makes them CORS-preflighted, so a CDN or font "
         "host that does not echo Access-Control-Allow-Headers rejects them outright and the "
         "page never finishes rendering (Firefox and WebKit are unaffected). Scoping moves "
-        "the headers onto context routes that still follow popups and new tabs. "
+        "the headers onto context routes that still follow popups and new tabs. Navigations "
+        "are matched per redirect hop, but a fetch/XHR redirected to another origin still "
+        "carries the headers there (Chromium, Firefox; WebKit drops Authorization only). "
         "Verify either with browser_network_requests(include_headers=True)."
     ),
 )

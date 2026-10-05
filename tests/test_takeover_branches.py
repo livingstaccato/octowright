@@ -660,6 +660,28 @@ class TestApplyTakeoverSuccess:
         m = re.match(r"\.mcp\.json\.bak\.\d{8}-\d{6}$", bp.name)
         assert m is not None, f"unexpected backup name: {bp.name}"
 
+    def test_two_applies_in_one_second_keep_the_original_backup(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Disabling two servers in one config within the same second must not
+        overwrite the first backup (the pre-takeover text) with the second
+        (already rewritten) one -- the backup name has 1s resolution."""
+        from octowright import takeover as takeover_mod
+
+        monkeypatch.setattr(takeover_mod.time, "strftime", lambda *_a: "20260101-000000")
+        cfg = tmp_path / ".mcp.json"
+        original = json.dumps({"mcpServers": {"playwright": {"command": "x"}, "puppeteer": {"command": "y"}}})
+        cfg.write_text(original)
+        first = apply_takeover(
+            Detection(scope="project", config_path=cfg, server_name="playwright", command="x", reason="r")
+        )
+        second = apply_takeover(
+            Detection(scope="project", config_path=cfg, server_name="puppeteer", command="y", reason="r")
+        )
+        assert first["backup_path"] != second["backup_path"]
+        assert Path(first["backup_path"]).read_text() == original
+        assert "playwright" not in json.loads(Path(second["backup_path"]).read_text())["mcpServers"]
+
     def test_order_of_other_servers_preserved(self, tmp_path: Path) -> None:
         """Renamed entry stays in its original position, other servers don't shuffle."""
         cfg = tmp_path / ".mcp.json"

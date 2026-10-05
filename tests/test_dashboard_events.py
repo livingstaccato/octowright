@@ -235,13 +235,18 @@ async def test_dashboard_event_bus_coalesces_scheduled_delivery_per_subscriber(
     monkeypatch.setattr(loop, "call_soon_threadsafe", fake_call_soon_threadsafe)
 
     async with bus.subscribe() as subscription:
-        for scope in ("sessions", "scenarios", "macros"):
+        for scope in ("scenarios", "sessions", "scenarios", "macros"):
             bus.publish_nowait(scope)
 
+        # One scheduled delivery, but no scope is lost to the coalescing: a
+        # scenario_start publishes "scenarios" then "sessions" back to back,
+        # and keeping only the last left the Live scenarios panel stale.
         assert len(scheduled) == 1
         callback, args = scheduled[0]
         callback(*args)
-        assert await subscription.get() == {"scope": "macros"}
+        got = [await asyncio.wait_for(subscription.get(), 1.0) for _ in range(3)]
+        assert got == [{"scope": "scenarios"}, {"scope": "sessions"}, {"scope": "macros"}]
+        assert subscription._subscriber.queue.empty()
 
 
 def test_dashboard_events_route_is_guarded() -> None:

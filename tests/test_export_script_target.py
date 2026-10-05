@@ -43,6 +43,8 @@ def recordings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         ("artifacts/macros/login/artifact.json", "a macro artifact manifest"),
         ("artifacts/macros/login/replay.py", "anything under artifacts/"),
         ("session-artifacts/abc123/x.py", "a plugin's committed session artifact"),
+        ("Artifacts/macros/login/replay.py", "artifacts/ in another case"),
+        ("SESSION-ARTIFACTS/abc123/x.py", "session-artifacts/ in another case"),
         ("out.txt", "not a script suffix"),
         ("out.ts", "the wrong suffix for format=python"),
     ],

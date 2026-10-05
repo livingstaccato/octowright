@@ -800,3 +800,39 @@ class TestScreenshotsListing:
             f"FileResponse got {passed_path} but expected the resolved path {shot_path.resolve()}; "
             "passing the unresolved path leaves a TOCTOU window for a symlink swap."
         )
+
+
+class TestScreenshotFileScope:
+    """The file route serves only what the listing offers: this session's PNGs.
+
+    For a root-level recording the "screenshot dir" is the recordings root, and
+    the route used to serve ANY file there -- another session's HAR (cookies,
+    Authorization headers) or raw JSONL, labelled ``image/png``. No other route
+    serves a HAR at all.
+    """
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "otherss00001.har",  # another session's HAR
+            "20260101T000000Z-chromium-otherss00001.jsonl",  # another session's recording
+            "otherss00001-shot.png",  # another session's screenshot
+            "scopess00001.har",  # this session's HAR: not a screenshot
+            "scopess00001-notes.PNG.txt",
+        ],
+    )
+    def test_a_file_that_is_not_this_sessions_png_is_refused(
+        self, client: TestClient, isolated_recordings: Path, filename: str
+    ) -> None:
+        _write_recording(isolated_recordings, "scopess00001")
+        (isolated_recordings / filename).write_bytes(b"Fixture-Not-A-Real-Secret-cookie")
+        r = client.get(f"/api/sessions/scopess00001/screenshots/{filename}")
+        assert r.status_code == 400
+        assert b"Fixture-Not-A-Real-Secret" not in r.content
+
+    def test_this_sessions_png_is_still_served(self, client: TestClient, isolated_recordings: Path) -> None:
+        _write_recording(isolated_recordings, "scopess00002")
+        (isolated_recordings / "scopess00002-shot.png").write_bytes(_TINY_PNG)
+        r = client.get("/api/sessions/scopess00002/screenshots/scopess00002-shot.png")
+        assert r.status_code == 200
+        assert r.content == _TINY_PNG

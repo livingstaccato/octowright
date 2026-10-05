@@ -133,6 +133,11 @@ export interface MacroAction {
   [key: string]: unknown;
 }
 
+/** One parameter's declared sensitivity; see docs/macros.md "Declaring sensitivity". */
+export interface MacroParameterSpec {
+  sensitive?: boolean;
+}
+
 export interface MacroDetail {
   name: string;
   description: string | null;
@@ -140,6 +145,8 @@ export interface MacroDetail {
   created_at: string | null;
   updated_at: string | null;
   actions: MacroAction[];
+  /** Present when the macro declares any; kept across a re-save from a recording. */
+  parameter_specs?: Record<string, MacroParameterSpec>;
   path?: string;
 }
 
@@ -209,8 +216,12 @@ export interface ConsoleMessage {
 
 export interface ConsoleListResponse {
   messages: ConsoleMessage[];
+  /** Absolute: messages appended since the session began, ignoring `level`. */
   cursor: number;
+  /** Retained messages matching the `level` filter. */
   total: number;
+  /** Live sessions: messages evicted from the bounded buffer before the first retained one. */
+  dropped?: number;
 }
 
 export interface DownloadEntry {

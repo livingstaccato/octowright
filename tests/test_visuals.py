@@ -101,7 +101,7 @@ async def test_wire_init_scripts_substitutes_dashboard_url(monkeypatch: pytest.M
         lambda name: "const d=__DASHBOARD_URL__;const i=__INSTANCE_ID__;" if name == "badge.js" else "",
     )
     vis._badge_script.cache_clear()
-    monkeypatch.setattr(vis, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
+    monkeypatch.setattr(vis, "new_tab_url", lambda: "http://127.0.0.1:6286/new-tab")
 
     scripts: list[str] = []
 
@@ -123,6 +123,56 @@ async def test_wire_init_scripts_substitutes_dashboard_url(monkeypatch: pytest.M
     badge_script = next(s for s in scripts if "fakeid000001" in s or "6286" in s)
     assert "http://127.0.0.1:6286" in badge_script
     assert "fakeid000001" in badge_script
+
+
+def test_badge_recording_link_targets_the_session_route() -> None:
+    """The dashboard routes a session at ``/sessions/<id>``; ``#session/<id>``
+    was never routed and opened the dashboard home instead."""
+    from octowright.browser_pool.visuals import _badge_script
+
+    src = _badge_script()
+    assert "#session/" not in src
+    assert '"/sessions/" + encodeURIComponent(INSTANCE_ID)' in src
+
+
+@pytest.mark.anyio
+async def test_badge_dashboard_url_ignores_the_operator_default_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """OCTOWRIGHT_DEFAULT_URL is the operator's landing page (their app), not
+    the dashboard: the badge linked the app and leaked the instance id to it."""
+    import octowright.browser_pool.visuals as vis
+
+    vis._title_tag_script()
+    vis._macro_status_script()
+    vis._viewport_pill_script()
+    monkeypatch.setattr(
+        vis,
+        "_read_asset",
+        lambda name: "const d=__DASHBOARD_URL__;const i=__INSTANCE_ID__;" if name == "badge.js" else "",
+    )
+    vis._badge_script.cache_clear()
+    monkeypatch.setenv("OCTOWRIGHT_DEFAULT_URL", "https://staging.example.com/app")
+    scripts: list[str] = []
+
+    class FakeCtx:
+        async def add_init_script(self, *, script: str) -> None:
+            scripts.append(script)
+
+    try:
+        await vis.wire_init_scripts(
+            FakeCtx(),
+            profile=None,
+            label="x",
+            instance_id="fakeid000002",
+            kind="chromium",
+            badge=True,
+            badge_position="bottom-right",
+            stabilize=False,
+        )
+    finally:
+        vis._badge_script.cache_clear()
+    badge_script = next(s for s in scripts if "fakeid000002" in s)
+    assert "staging.example.com" not in badge_script
+    assert "http://127.0.0.1:" in badge_script
 
 
 @pytest.mark.anyio

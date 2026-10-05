@@ -39,7 +39,7 @@ POST   /api/sessions/{id}/navigate               → {"ok": true, "url": str} (2
 POST   /api/sessions/{id}/selector/validate      → {"ok": true, "count": int} (200) — CSS selector match count against the live page, bounded by OCTOWRIGHT_DASHBOARD_OPERATION_TIMEOUT_SECONDS. 400 if selector missing/empty; 404 if not live; 409 if the session's operation gate is closing/closed; 503 if the gate is busy past the dashboard timeout
 POST   /api/sessions/{id}/relaunch                → SessionSummary (201) for a NEW instance_id launched with the same kind/profile/label/url/viewport as the original. 404 if no recording on disk; 409 if the session is still live; 422 if the JSONL has no parseable launch record, or one the launch options refuse (the error names the field).
 GET    /api/sessions/{id}/events?since=N         → {"events": [...], "cursor": int, "total_bytes": int, "complete": bool}
-GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int}
+GET    /api/sessions/{id}/console?level=L&since=N → {"messages": [ConsoleMessage, ...], "cursor": int, "total": int, "dropped": int}
 GET    /api/sessions/{id}/downloads?since=N      → {"downloads": [DownloadRecord, ...], "cursor": int, "total": int}
 WS     /api/sessions/{id}/tail                   → server pushes {"events": [...], "cursor": int, "complete": bool} every ~1s for LIVE sessions; closed/unknown sessions are rejected at connect time (see WS semantics below)
 WS     /api/sessions/{id}/screencast?fps=N       → binary JPEG frames for LIVE browser sessions. Requested fps is clamped to the configured backend cap; closed/unknown sessions are rejected at connect time (see WS semantics below)
@@ -59,10 +59,10 @@ GET    /api/personas/sizes                       → {<persona_name>: <bytes>, .
 GET    /api/personas/{name}                      → PersonaDetail; 404 if no `profile.yaml` for that persona
 PUT    /api/personas/{name}                      → {"ok": true, "name": str} (200); 400 if `yaml` field missing/non-string or fails `yaml.safe_load`; 404 if persona not found
 GET    /api/macros                               → [MacroSummary, ...]
-GET    /api/macros/{name:path}                   → MacroDetail (the full macro JSON: name, description, parameters, actions, created_at, updated_at). 404 if not found.
-PUT    /api/macros/{name:path}                   → {"ok": true, "name": str} (200) on save. 400 if `macro` field missing/non-object or fails validation (response includes the validation issue list); 404 if not found.
+GET    /api/macros/{name:path}                   → MacroDetail (the full macro JSON: name, description, parameters, actions, created_at, updated_at, and `parameter_specs` when the macro declares any). 404 if not found; 400 `{"error": str}` for a name outside the macros directory or an unreadable macro file.
+PUT    /api/macros/{name:path}                   → {"ok": true, "name": str} (200) on save. 400 if `macro` field missing/non-object or fails validation (response includes the validation issue list), or `{"error": str}` when the name is refused or collides with another macro's file; 503 `{"error": str}` when another macro save, write or delete held the write lock past its bounded wait (`MacroWriteLockTimeout`); 404 if not found.
 GET    /api/macros/{name:path}/repair_preview    → {"original": [...], "repaired": [...], "diff": [...]} preview of auto-repair suggestions without applying them. 404 if not found.
-POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body. 400 if `macro` field missing/non-object.
+POST   /api/macros/{name:path}/validate          → {"error_count": int, "warning_count": int, "issues": [LintIssue, ...]} for the supplied macro body; when a macro of that name is saved, `sensitive_parameters_shrank` warns about a parameter the body makes less sensitive than the saved version. 400 if `macro` field missing/non-object.
 POST   /api/sessions/{id}/trace/open             → {"pid": int, "trace_path": str}
 GET    /api/health                               → {"ok": true, "version": str,
                                                     "installed_version"?: str}
@@ -83,12 +83,13 @@ GET    /api/plugins                              → {<kind>: {moduleUrl, ...}} 
                                                  that declare a frontend; a kind without one is absent.
 GET    /plugins/{name}/{path}                    → one static file from an enabled plugin's frontend asset dir.
 GET    /new-tab                                  → HTML landing page for browser_launch with no URL (version, uptime, browser count).
+GET    /new-tab/status                           → {browsers: N} live browser count polled by /new-tab.
 GET    /otto.svg                                 → image/svg+xml logo used by /new-tab.
 ```
 
 The pairing routes are exempt from dashboard pairing (they are its bootstrap) but
 not from the loopback/Host/cross-origin guard; so are `/api/plugins`, `/plugins/{name}/{path}`
-and `/new-tab`, which the dashboard shell needs before pairing completes. `/api/mcp-events`
+and `/new-tab` with its `/new-tab/status` count, which a launched browser (holding no bearer) and the dashboard shell need before pairing completes. `/api/mcp-events`
 is gated by the capability token instead (on a leader that has one). Every other `/api/*`
 route above except `/api/health` answers `401` + `WWW-Authenticate: Bearer` without a
 paired bearer or the capability token while `OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING` is on
@@ -342,16 +343,40 @@ DownloadRecord = {
 
 ## `/console` and `/downloads` cursor semantics
 
-Both endpoints share the same shape: ``{<plural>: [...], "cursor": int, "total": int}``.
+Both endpoints answer ``{<plural>: [...], "cursor": int, "total": int}``;
+``/console`` adds ``"dropped": int``.
 
-- ``since`` is an optional 0-based index into the messages/downloads list.
-  Items at index ``>= since`` are returned. Out-of-range values are clamped
-  into ``[0, total]``.
-- ``cursor`` returned is always the new ``total`` so callers can pass it back
-  on the next poll without tracking offsets manually.
-- ``/console`` accepts an optional ``level=`` filter (case-sensitive match
-  against ``ConsoleMessage.level``) — the filter applies BEFORE the ``since``
-  slice, so the ``cursor``/``total`` values reflect only the filtered view.
+`/console`:
+
+- ``since`` and the returned ``cursor`` are **absolute**: they count console
+  messages from the start of the session, before any ``level`` filter. Pass
+  the returned ``cursor`` back as ``since`` to get exactly the messages
+  appended after it.
+- A live session's console is a bounded buffer (1000 messages). ``dropped``
+  is how many were evicted before the oldest one still held (always ``0`` for
+  a closed session, whose rows come from the recording). A ``since`` inside
+  the evicted range starts at the oldest retained message. Cursors used to be
+  positions in that buffer, so once it filled ``since=1000`` returned nothing
+  forever and an eviction skipped messages.
+- ``level=`` filters what is returned, matched case-insensitively through the
+  canonical level groups (``console_levels.console_level_matches``): ``warn``
+  and ``warning`` match each other, ``error`` matches ``assert``. It was a raw
+  case-sensitive comparison, so ``level=warn`` matched nothing (every engine
+  reports ``warning``). The filter **never moves the cursor**, so a filtered poller
+  resumes where it left off. It used to filter before slicing, which made the
+  cursor an index into the filtered list.
+- ``total`` is how many retained messages match the filter.
+- A returned ``cursor`` lower than the ``since`` sent means the id now names a
+  different console (a relaunch under the same id); start over from ``0``.
+
+`/downloads`:
+
+- ``since`` is a 0-based index into the downloads list. Items at index
+  ``>= since`` are returned; out-of-range values are clamped into
+  ``[0, total]``, and ``cursor`` is the new ``total``.
+
+Both:
+
 - For LIVE sessions the data is read directly off the in-memory session
   (``BrowserSession.console`` and ``BrowserSession.list_downloads()``).
 - For CLOSED sessions the data is reconstructed by scanning the JSONL

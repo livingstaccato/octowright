@@ -49,8 +49,16 @@ _CREDENTIAL_HEADER_HINTS = ("token", "secret", "api-key", "apikey", "auth", "pas
 
 def is_credential_header(name: str) -> bool:
     """Whether a header name marks its value as a credential."""
-    lowered = name.strip().lower()
-    return lowered in _CREDENTIAL_HEADER_NAMES or any(hint in lowered for hint in _CREDENTIAL_HEADER_HINTS)
+    # ``X_API_KEY`` and ``X-Api-Key`` are one name to whoever sends them.
+    lowered = name.strip().lower().replace("_", "-")
+    return (
+        lowered in _CREDENTIAL_HEADER_NAMES
+        or any(hint in lowered for hint in _CREDENTIAL_HEADER_HINTS)
+        # A ``*-key`` name is a key whatever precedes it (Ocp-Apim-Subscription-Key,
+        # X-Functions-Key). Over-matching Idempotency-Key costs one scrubbed value.
+        or lowered == "key"
+        or lowered.endswith("-key")
+    )
 
 
 def validate_one_header(name: Any, value: Any) -> None:

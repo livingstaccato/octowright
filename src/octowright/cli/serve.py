@@ -501,7 +501,7 @@ async def _run_leader(
     from octowright import upgrade as _upgrade
     from octowright.server._state import set_upgrade_notice
 
-    _upgrade.announce_upgrade_if_changed(set_notice=set_upgrade_notice, echo=lambda b: click.echo(b, err=True))
+    _upgrade.announce_upgrade_safely(set_notice=set_upgrade_notice, echo=lambda b: click.echo(b, err=True))
 
     # Generate the bridge capability token once: the SAME value is written to the
     # 0600 lockfile (for the follower to read) and handed to the /mcp guard. A

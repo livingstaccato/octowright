@@ -154,6 +154,40 @@ def test_macro_usage_suggests_expanding_core_profile(tmp_path: Path, monkeypatch
     assert suggestions[0]["recommended_action"] == "Restart Octowright with OCTOWRIGHT_PROFILE=core,macros."
 
 
+def test_golden_usage_under_core_suggests_adding_goldens(tmp_path: Path, monkeypatch) -> None:
+    """``goldens`` was missing from the advisor's profile order, so this
+    recommended OCTOWRIGHT_PROFILE=core -- the profile already active."""
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core")
+    advisor.record_tool_call("browser_launch")
+    advisor.record_tool_call("golden_assert")
+
+    suggestion = advisor.current_suggestions()[0]
+    assert suggestion["profile"] == "core,goldens"
+
+
+def test_expanding_a_profile_keeps_an_active_goldens(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core,goldens")
+    advisor.record_tool_call("golden_assert")
+    advisor.record_tool_call("macro_run")
+
+    suggestion = advisor.current_suggestions()[0]
+    assert suggestion["profile"] == "core,macros,goldens"
+
+
+def test_plugin_profile_usage_suggests_the_plugin_profile(tmp_path: Path, monkeypatch) -> None:
+    from octowright.server import profiles as _profiles
+
+    _profiles.register_plugin_profile("refterms", {"refterm_launch"})
+    try:
+        monkeypatch.setenv("OCTOWRIGHT_PROFILE", "core,refterms")
+        advisor.record_tool_call("refterm_launch")
+        advisor.record_tool_call("macro_run")
+        suggestion = advisor.current_suggestions()[0]
+        assert suggestion["profile"] == "core,macros,refterms"
+    finally:
+        _profiles.unregister_plugin_profile("refterms")
+
+
 def test_full_surface_non_core_usage_does_not_suggest_profile_reduction(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OCTOWRIGHT_PROFILE", "")
     advisor.record_tool_call("macro_run")

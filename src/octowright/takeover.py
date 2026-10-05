@@ -28,6 +28,7 @@ original entry (safer than deletion) and avoids having to invent a new
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -266,6 +267,29 @@ def disabled_key_for(server_name: str) -> str:
     return f"{DISABLED_PREFIX}{server_name}{DISABLED_SUFFIX}"
 
 
+def _write_backup(config_path: Path, text: str) -> Path:
+    """Write ``text`` to a NEW ``<config>.bak.<timestamp>[.<n>]`` and return it.
+
+    The timestamp has one-second resolution, and disabling two servers in one
+    config is two applies: replacing an existing backup let the second (already
+    rewritten) text overwrite the first, losing the only copy of the original.
+    Each backup is created exclusively instead, with a counter on collision.
+    ``O_EXCL`` also refuses a symlink planted at the name rather than following
+    it, which is what the atomic write used here before guaranteed.
+    """
+    stem = config_path.with_suffix(config_path.suffix + f".bak.{time.strftime('%Y%m%d-%H%M%S')}")
+    for attempt in range(1000):
+        candidate = stem if attempt == 0 else stem.with_name(f"{stem.name}.{attempt}")
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        return candidate
+    raise FileExistsError(f"no free backup name beside {config_path}")
+
+
 def apply_takeover(
     detection: Detection,
     *,
@@ -352,10 +376,7 @@ def apply_takeover(
 
     backup_path: Path | None = None
     if backup:
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        backup_path = config_path.with_suffix(config_path.suffix + f".bak.{ts}")
-        # symlink replaced, not followed (see atomic_write_text).
-        atomic_write_text(backup_path, original_text, encoding="utf-8")
+        backup_path = _write_backup(config_path, original_text)
 
     # Preserve insertion order: rebuild the dict so the renamed entry sits
     # where the old one did, rather than getting appended at the end.

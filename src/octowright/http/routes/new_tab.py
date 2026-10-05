@@ -8,7 +8,8 @@ GET /otto.svg  — Otto the Octowright logo served locally.
 
 Self-contained; no external network requests, no JS frameworks. Version and
 commit hash are baked server-side at request time; uptime and browser count
-are refreshed client-side every 10 s via fetch(/api/sessions).
+are refreshed client-side: uptime from the server-rendered start time, the
+browser count every 3 s via fetch(/new-tab/status).
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 from starlette.requests import Request
 from starlette.responses import FileResponse, HTMLResponse
 
+from octowright.http.json_response import SafeJSONResponse
 from octowright.version import VERSION
 
 _OTTO_SVG = Path(__file__).resolve().parent.parent / "otto.svg"
@@ -193,10 +195,10 @@ _HTML_TMPL = """\
 
     // --- browser count ---
     function refreshBrowsers() {{
-      fetch('/api/sessions')
+      fetch('/new-tab/status')
         .then(function(r) {{ return r.json(); }})
         .then(function(d) {{
-          var n = (d.live || []).length;
+          var n = d.browsers || 0;
           document.getElementById('browser-count').textContent = n;
           document.getElementById('browser-s').textContent = n === 1 ? '' : 's';
         }})
@@ -220,6 +222,19 @@ async def new_tab(_: Request) -> HTMLResponse:
         started_at=_started_at(),
     )
     return HTMLResponse(html)
+
+
+async def new_tab_status(_: Request) -> SafeJSONResponse:
+    """The live browser count for the page's status strip, and nothing else.
+
+    The strip used to poll ``/api/sessions``, which is pairing-gated; a
+    launched browser holds no dashboard bearer, so it always read 0 and put a
+    401 in the session's own network log every 3 s. The count is the one
+    figure the page needs and the one ``/new-tab`` already discloses.
+    """
+    from octowright.http import state
+
+    return SafeJSONResponse({"browsers": sum(1 for _ in state.pool.iter_sessions())})
 
 
 async def otto_svg(_: Request) -> FileResponse:

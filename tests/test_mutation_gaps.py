@@ -217,7 +217,7 @@ def test_a_usable_parameter_name_becomes_the_identifier_rather_than_the_fallback
     arguments -- and a name that cleans to nothing raises ``IndexError`` on
     ``cleaned[0]`` instead of falling back.
     """
-    from octowright.artifacts.script_export import _identifier
+    from octowright.artifacts.script_export_args import _identifier
 
     assert _identifier("email") == "email"
     assert _identifier("user email") == "user_email"
@@ -234,7 +234,7 @@ def test_a_cli_flag_is_derived_from_the_parameter_name_not_the_identifier() -> N
     Taking the identifier's spelling silently renames the exported script's
     CLI away from what the macro author wrote.
     """
-    from octowright.artifacts.script_export import _parser_line
+    from octowright.artifacts.script_export_args import _parser_line
     from octowright.macros.privacy import MacroArgPrivacy
 
     line = _parser_line(("2fa code", "arg_2fa_code"), None, MacroArgPrivacy())

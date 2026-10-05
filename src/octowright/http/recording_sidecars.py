@@ -51,6 +51,25 @@ RECORDING_SIDECAR_SUFFIXES: frozenset[str] = frozenset(
 RECORDING_SIDECAR_ROTATIONS: re.Pattern[str] = re.compile(r"^\.\d+\.(har|png)$")
 
 
+# The sidecars that share the recording's own ``.jsonl`` suffix, derived from
+# the allowlist above so a new one cannot be added in one place and missed in
+# the other. A ``*.jsonl`` glob matches them too, and every reader that walks
+# the recordings root for sessions has to skip them.
+_JSONL_SIDECAR_SUFFIXES: tuple[str, ...] = tuple(
+    sorted(s for s in RECORDING_SIDECAR_SUFFIXES if s != ".jsonl" and s.endswith(".jsonl"))
+)
+
+
+def is_session_recording(filename: str) -> bool:
+    """Whether ``filename`` is a session's main JSONL rather than a sidecar.
+
+    Compared casefolded, so a case-insensitive filesystem that hands back a
+    ``.WebSocket.JSONL`` spelling classifies the same as Linux does.
+    """
+    folded = filename.casefold()
+    return folded.endswith(".jsonl") and not folded.endswith(_JSONL_SIDECAR_SUFFIXES)
+
+
 def is_recording_sidecar(filename: str, stem: str) -> bool:
     if not filename.startswith(stem):
         return False

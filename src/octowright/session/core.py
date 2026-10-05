@@ -10,7 +10,7 @@ import secrets
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, LiteralString
 from weakref import WeakKeyDictionary, WeakSet
@@ -325,6 +325,16 @@ class BrowserSession(
 
             self.started_at = datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        # A frame is a child of ONE page. Every path that changes the active
+        # page -- page_switch, close_page, crash recovery, the screencast
+        # rebind -- assigns ``page``, so the frame is dropped here once rather
+        # than at each of them: kept, element actions landed in the old page's
+        # iframe, or failed with "Frame was detached" after a close or crash.
+        if name == "page" and self.__dict__.get("page", value) is not value:
+            object.__setattr__(self, "active_frame", None)
+        object.__setattr__(self, name, value)
+
     def _target(self) -> Any:
         return self.active_frame if self.active_frame is not None else self.page
 
@@ -457,6 +467,11 @@ class BrowserSession(
         def _commit() -> dict[str, object]:
             self.protected = protected
             self.protected_reason = reason
+            # launch_options is what a replacement is built from; left alone it
+            # kept resolve_protected's stamp ("explicit") after a reopen
+            # restored the original reason, a stale copy of this same fact.
+            if self.launch_options is not None:
+                self.launch_options = replace(self.launch_options, protected=protected, protected_reason=reason)
             return {"instance_id": self.instance_id, "protected": protected}
 
         return await self._operation_gate.control_update("browser_set_protected", _commit)

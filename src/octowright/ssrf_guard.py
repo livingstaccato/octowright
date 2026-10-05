@@ -96,7 +96,21 @@ Range requests, the HTTP cache and large media would all pay the same
 buffering. A deployment that must stop a subresource redirect needs
 network-layer egress control, as for DNS rebinding below.
 
-Known costs, deliberately accepted (this only runs under an opt-in policy):
+URL-scoped headers, with the policy off
+----------------------------------------
+A scoped header route's ``fallback(headers=...)`` override is re-applied to
+every redirect the engine follows, so a header scoped to one origin rode a
+navigation's ``302`` to another. A context whose session carries scoped
+headers is therefore routed through this same single-fetch path even with the
+policy off (``install_navigation_guard(..., scope_headers=True)``): each hop is
+its own navigation, which the header routes -- registered after this one, so
+run before it -- match afresh. Only header scoping applies then: no host is
+checked, subresources fall straight back, and no WebSocket route is added. The
+scheme, method and hop-count refusals stay, as they protect the client
+redirect itself. A subresource's redirect still carries the header.
+
+Known costs, deliberately accepted (only under an opt-in policy, or for a
+session with scoped headers):
 
 * **A redirecting navigation's ``goto`` returns the client-redirect document's
   synthetic 200**, not the 3xx chain, and ``response.request.redirected_from``
@@ -130,8 +144,8 @@ Known costs, deliberately accepted (this only runs under an opt-in policy):
   fetched by the guard, but Playwright's fetch resolves too; neither can be
   pinned to the validated address -- see ``ssrf``'s module docstring.
 
-With the default ``off`` policy nothing is registered, so none of this
-touches a default deployment.
+With the default ``off`` policy and no scoped headers nothing is registered,
+so none of this touches a default deployment.
 """
 
 from __future__ import annotations
@@ -139,7 +153,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import html
-import itertools
 import json
 import re
 import weakref
@@ -151,6 +164,16 @@ from provide.telemetry import get_logger
 
 from octowright import ssrf
 from octowright.session.timeouts import bounded
+from octowright.ssrf_guard_served import (
+    _note_served,
+    _watch_page,
+)
+from octowright.ssrf_guard_served import (
+    note_frame_navigated as note_frame_navigated,
+)
+from octowright.ssrf_guard_served import (
+    served_client_redirect_last as served_client_redirect_last,
+)
 
 log = get_logger(__name__)
 
@@ -229,111 +252,6 @@ def client_redirect_of(request: Any) -> dict[str, Any] | None:
         return _CLIENT_REDIRECTS.get(request)
     except TypeError:  # a request double that cannot be weakly referenced
         return None
-
-
-#: What the guard last served each frame's navigation: ``(seq, state)``.
-#: ``state`` is ``"real"`` for a real document, ``"stub"`` for its
-#: client-redirect document not yet committed, and ``"stub_committed"`` once
-#: it has; the frame's next commit replaces it (:func:`note_frame_navigated`).
-#: Per frame, so heavy navigation elsewhere cannot evict a popup's entry;
-#: ``seq`` orders it against entries that were parked while their request had
-#: no frame (``_SERVED_UNFRAMED``). Read by :func:`served_client_redirect_last`.
-_SERVED_LAST: weakref.WeakKeyDictionary[Any, tuple[int, str]] = weakref.WeakKeyDictionary()
-
-#: The same for a navigation whose request had no frame when it was served --
-#: a popup's first request (see ``_UNFRAMED``) -- until the frame appears.
-#: Bounded like ``_UNFRAMED``.
-_SERVED_UNFRAMED: weakref.WeakKeyDictionary[Any, tuple[int, str]] = weakref.WeakKeyDictionary()
-_MAX_SERVED_UNFRAMED = 64
-
-_served_seq = itertools.count(1)
-
-#: What the frame's next commit makes of a record (:func:`note_frame_navigated`).
-_AFTER_COMMIT = {"stub": "stub_committed", "stub_committed": "real"}
-
-
-def _record_served(frame: Any, entry: tuple[int, str]) -> None:
-    """Record *entry* for *frame* unless a later one is already there."""
-    current = _SERVED_LAST.get(frame)
-    if current is None or current[0] < entry[0]:
-        _SERVED_LAST[frame] = entry
-
-
-def _adopt_served_unframed() -> None:
-    """Hand every parked served entry whose request now has a frame to that frame."""
-    for request in list(_SERVED_UNFRAMED):
-        try:
-            frame = request.frame
-        except Exception as exc:  # still no page for it: keep it parked for the next look
-            log.debug("octowright.ssrf.served_document_still_unframed", error=repr(exc))
-            continue
-        entry = _SERVED_UNFRAMED.pop(request, None)
-        if entry is not None:
-            _record_served(frame, entry)
-
-
-def _note_served(request: Any, *, client_redirect: bool) -> None:
-    entry = (next(_served_seq), "stub" if client_redirect else "real")
-    try:
-        frame = request.frame
-    except Exception:  # a popup's first request: no frame until its page exists
-        frame = None
-    try:
-        if frame is not None:
-            _record_served(frame, entry)
-            return
-        while len(_SERVED_UNFRAMED) >= _MAX_SERVED_UNFRAMED:
-            _SERVED_UNFRAMED.pop(next(iter(_SERVED_UNFRAMED)), None)
-        _SERVED_UNFRAMED[request] = entry
-    except TypeError:  # a frame or request double that cannot be weakly referenced
-        log.debug("octowright.ssrf.served_document_untracked")
-
-
-def note_frame_navigated(frame: Any) -> None:
-    """A document committed in *frame*: the stub's own commit, or the document that replaced it.
-
-    Counted, not compared by URL: chromium reports a popup's committed stub as
-    ``chrome-error://chromewebdata/`` (measured, Playwright 1.62), so the URL
-    does not say which document committed. The commit after the stub's own
-    replaces it, whoever served it -- the guard, a service worker the route
-    never sees, or the browser's error page for a refused hop. Registered for
-    every page of a guarded context (:func:`install_navigation_guard`).
-    """
-    if _SERVED_UNFRAMED:
-        _adopt_served_unframed()
-    try:
-        entry = _SERVED_LAST.get(frame)
-        if entry is not None and entry[1] in _AFTER_COMMIT:
-            _SERVED_LAST[frame] = (entry[0], _AFTER_COMMIT[entry[1]])
-    except TypeError:  # a frame double that cannot be weakly referenced
-        log.debug("octowright.ssrf.frame_navigation_untracked")
-
-
-def _watch_page(page: Any) -> None:
-    try:
-        page.on("framenavigated", note_frame_navigated)
-    except Exception as exc:
-        log.debug("octowright.ssrf.frame_navigation_unwatched", error=repr(exc))
-
-
-def served_client_redirect_last(frame: Any) -> bool:
-    """Whether *frame* is showing the guard's client-redirect document, as far as the guard knows.
-
-    What a caller that only saw load states cannot tell after the fact: a
-    ``domcontentloaded`` it awaited may have been the redirect document's, and
-    a page that has since closed can no longer be asked. Readable after the
-    page closed (measured on all three engines). True once the guard served
-    the frame a client-redirect document, until it serves the frame a real
-    one or the frame commits another document after the stub's own
-    (:func:`note_frame_navigated`).
-    """
-    if _SERVED_UNFRAMED:
-        _adopt_served_unframed()
-    try:
-        entry = _SERVED_LAST.get(frame)
-    except TypeError:  # a frame double that cannot be weakly referenced
-        return False
-    return entry is not None and entry[1] != "real"
 
 
 class FrameChain:
@@ -430,8 +348,38 @@ def frame_chain(frame: Any) -> FrameChain:
     return _chain_for(frame)
 
 
+#: Contexts the navigation route is registered on. With the policy on that is
+#: every context; with it off, only those whose session carries URL-scoped
+#: headers (:func:`install_navigation_guard`).
+_GUARDED_CONTEXTS: weakref.WeakSet[Any] = weakref.WeakSet()
+
+
+def guards_context(context: Any) -> bool:
+    """Whether navigations in *context* go through the guard's single-fetch path."""
+    return ssrf.policy_enabled() or _is_guarded(context)
+
+
+def _is_guarded(context: Any) -> bool:
+    """Whether the navigation route is already registered on *context*."""
+    try:
+        return context in _GUARDED_CONTEXTS
+    except TypeError:  # a context double that cannot be weakly referenced
+        return False
+
+
+def guards_frame(frame: Any) -> bool:
+    """:func:`guards_context` for *frame*'s context; False when the frame cannot say."""
+    if ssrf.policy_enabled():
+        return True
+    try:
+        context = frame.page.context
+    except Exception:  # a detached frame, or a double without a page
+        return False
+    return guards_context(context)
+
+
 def begin_navigation(frame: Any) -> FrameChain | None:
-    """A fresh record for a navigation about to start in *frame*; ``None`` with the policy off.
+    """A fresh record for a navigation about to start in *frame*; ``None`` when the guard is not routing it.
 
     Only :func:`guarded_navigation` calls this, and it is what reads the
     record: on chromium a ``goto`` whose LATER hop the guard refused resolves
@@ -441,7 +389,7 @@ def begin_navigation(frame: Any) -> FrameChain | None:
     so it cannot end this one, and that navigation's redirects are not counted
     against this one's bound (:attr:`FrameChain.hops`).
     """
-    if not ssrf.policy_enabled():
+    if not guards_frame(frame):
         return None
     if _UNFRAMED:
         # An earlier navigation's parked ending belongs to that one, not this.
@@ -568,8 +516,39 @@ def chain_at_start(request: Any) -> FrameChain | None:
     return None if frame is None else frame_chain(frame)
 
 
-async def _serve_navigation(route: Any, request: Any, chain: FrameChain | None) -> None:
-    """Fetch a navigation once and hand the page only what was validated."""
+async def _redirect_target(url: str, method: str, status: int, location: str, *, enforce: bool) -> str:
+    """The absolute URL the navigation of *url* may be redirected to, or raise :class:`RedirectBlocked`."""
+    try:
+        target = urljoin(url, location)
+    except ValueError as exc:
+        # ``http://[::1`` raises here. Let loose it escaped the RedirectBlocked
+        # handler, the outer one swallowed it as a dead route, and the
+        # navigation was never answered -- ``goto`` timed out instead.
+        raise RedirectBlocked(f"redirect to a malformed Location refused ({exc})") from exc
+    scheme = target.partition(":")[0].strip().lower()
+    if scheme not in _REDIRECT_SCHEMES:
+        raise RedirectBlocked(f"redirect to a {scheme!r} URL refused; only http(s) redirects are followed")
+    if enforce:
+        await _check_hop(target)
+    verb = method.upper()
+    becomes_get = verb == "GET" or status == 303 or (status in {301, 302} and verb == "POST")
+    if not becomes_get:
+        raise RedirectBlocked(
+            f"{status} redirect of a {method} navigation to {target!r} would re-send the "
+            "request body to a hop this guard could only check by submitting it again; refused "
+            + ("under block-private" if enforce else "while URL-scoped headers are active")
+        )
+    return target
+
+
+async def _serve_navigation(route: Any, request: Any, chain: FrameChain | None, *, enforce: bool = True) -> None:
+    """Fetch a navigation once and hand the page only what was validated.
+
+    *enforce* is whether the SSRF policy applies. Without it the guard is
+    routing navigations only so URL-scoped headers are matched per hop: no
+    host is checked, but the scheme, method and hop-count rules still hold,
+    since they protect the client redirect itself.
+    """
     try:
         response = await route.fetch(max_redirects=0)
     except Exception as exc:
@@ -585,18 +564,7 @@ async def _serve_navigation(route: Any, request: Any, chain: FrameChain | None) 
         _note_served(request, client_redirect=False)
         await route.fulfill(response=response)
         return
-    target = urljoin(request.url, location)
-    scheme = target.partition(":")[0].strip().lower()
-    if scheme not in _REDIRECT_SCHEMES:
-        raise RedirectBlocked(f"redirect to a {scheme!r} URL refused; only http(s) redirects are followed")
-    await _check_hop(target)
-    method = request.method.upper()
-    becomes_get = method == "GET" or response.status == 303 or (response.status in {301, 302} and method == "POST")
-    if not becomes_get:
-        raise RedirectBlocked(
-            f"{response.status} redirect of a {request.method} navigation to {target!r} would re-send the "
-            "request body to a hop this guard could only check by submitting it again; refused under block-private"
-        )
+    target = await _redirect_target(request.url, request.method, response.status, location, enforce=enforce)
     _step(chain, target)
     _CLIENT_REDIRECTS[request] = {"status": response.status, "status_text": response.status_text, "location": target}
     _note_served(request, client_redirect=True)
@@ -618,15 +586,23 @@ async def _handle_subresource(route: Any, request: Any) -> None:
 async def _handle_route(route: Any, request: Any) -> None:
     """Abort a request the policy refuses; serve a navigation from its own validated fetch."""
     try:
+        # Read per request, as every other policy check is.
+        enforce = ssrf.policy_enabled()
         if not request.is_navigation_request():
-            await _handle_subresource(route, request)
+            if enforce:
+                await _handle_subresource(route, request)
+            else:
+                # Routed only for scoped headers: a subresource is the
+                # engine's to fetch, redirects and all (see the module docstring).
+                await route.fallback()
             return
         # Taken before any await: a tool navigation that begins while this one
         # is still being checked or fetched gets its own record.
         chain = chain_at_start(request)
         try:
-            await _check_hop(request.url)
-            await _serve_navigation(route, request, chain)
+            if enforce:
+                await _check_hop(request.url)
+            await _serve_navigation(route, request, chain, enforce=enforce)
         except RedirectBlocked as exc:
             log.warning("octowright.ssrf.redirect_blocked", url=request.url, method=request.method, error=str(exc))
             _end_chain(request, chain, refusal=str(exc))
@@ -655,18 +631,29 @@ async def _handle_websocket(ws: Any) -> None:
     ws.connect_to_server()
 
 
-async def install_navigation_guard(context: Any) -> None:
-    """Register the per-request check on *context*.
+async def install_navigation_guard(context: Any, *, scope_headers: bool = False) -> None:
+    """Register the per-request check on *context*, once.
 
-    No-op unless the SSRF policy is enabled, so the default deployment keeps
-    an uninstrumented context.
+    With the SSRF policy on, every request is checked. With it off, nothing is
+    registered unless *scope_headers* says the session carries URL-scoped
+    headers; then only navigations are routed (each hop fetched once and
+    served as its own navigation, so the header routes re-match it), with no
+    host refused and no WebSocket route. A default deployment keeps an
+    uninstrumented context.
     """
-    if not ssrf.policy_enabled():
+    enforce = ssrf.policy_enabled()
+    if not enforce and not scope_headers:
+        return
+    if _is_guarded(context):
         return
     await bounded(
         context.route("**/*", _handle_route),
         operation="browser_install_navigation_guard",
     )
+    try:
+        _GUARDED_CONTEXTS.add(context)
+    except TypeError:  # a context double that cannot be weakly referenced
+        log.debug("octowright.ssrf.guarded_context_untracked")
     # Every commit clears a stale stub record (note_frame_navigated),
     # including the popups this context opens later.
     try:
@@ -676,7 +663,7 @@ async def install_navigation_guard(context: Any) -> None:
     except Exception as exc:
         log.debug("octowright.ssrf.frame_navigation_unwatched", error=repr(exc))
     route_web_socket = getattr(context, "route_web_socket", None)
-    if route_web_socket is not None:
+    if enforce and route_web_socket is not None:
         # A glob does not match ws:// URLs (measured); a pattern that matches
         # everything does.
         await bounded(

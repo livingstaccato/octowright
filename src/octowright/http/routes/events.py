@@ -20,6 +20,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from octowright._json_text import dumps_utf8_safe
+from octowright.console_levels import console_level_matches
 from octowright.dashboard_events import dashboard_events
 from octowright.defaults import (
     DASHBOARD_DISCONNECT_POLL_SECONDS,
@@ -159,14 +160,36 @@ def _read_downloads_from_jsonl(jsonl_path: Path) -> list[dict[str, Any]]:
     return session_artifact_cache.get_download_rows(jsonl_path)
 
 
+def _live_console_window(live: Any) -> tuple[list[dict[str, Any]], int]:
+    """A live session's retained console and how many messages were evicted before it.
+
+    ``session.console`` is a bounded deque, so a position in it is not a
+    cursor: once it filled, ``since=len(console)`` returned nothing forever and
+    an eviction skipped messages. ``console_count`` counts every message ever
+    appended; the difference is what fell off. Same arithmetic as
+    ``server/browser/inspect_console._console_window``, which the MCP tools use.
+    """
+    msgs = list(live.console)
+    count = getattr(live, "console_count", None)
+    dropped = count - len(msgs) if isinstance(count, int) and count > len(msgs) else 0
+    return msgs, dropped
+
+
 async def session_console(request: Request) -> SafeJSONResponse:
-    """Return paginated console messages for a session.
+    """Return console messages for a session after an absolute cursor.
 
     Live sessions read straight from ``pool.get(id).console``. Closed sessions
-    scan the JSONL recording for persisted ``action: "console"`` rows. Optional
-    ``level=`` filters by log level (case-sensitive). Optional ``since=`` is a
-    0-based index; the response's ``cursor`` is always the new total so callers
-    can pass it on the next poll.
+    scan the JSONL recording for persisted ``action: "console"`` rows.
+
+    ``since`` and the returned ``cursor`` count messages from the start of the
+    session, unfiltered: a live session's buffer is bounded, so ``dropped``
+    says how many were evicted before the first one still held, and a
+    ``since`` inside the evicted range starts at the oldest retained message.
+    ``level=`` filters what is returned, matched case-insensitively through
+    :func:`octowright.console_levels.console_level_matches` (``warn`` matches
+    the engines' ``warning``, ``error`` matches ``assert``), and never moves the
+    cursor, so a filtered poller resumes exactly where it left off. ``total``
+    is how many retained messages match the filter.
 
     404 when the id is not in the live pool AND no recording is on disk.
     """
@@ -177,8 +200,9 @@ async def session_console(request: Request) -> SafeJSONResponse:
     assert since is not None  # nosec B101  # narrow for type-checker
 
     live = _live_session_or_none(sid)
+    dropped = 0
     if live is not None:
-        messages: list[dict[str, Any]] = list(live.console)
+        messages, dropped = _live_console_window(live)
     else:
         jsonl = _find_recording_for(sid, state.RECORDINGS_DIR)
         if jsonl is None:
@@ -186,11 +210,19 @@ async def session_console(request: Request) -> SafeJSONResponse:
         messages = _read_console_from_jsonl(jsonl)
 
     level = request.query_params.get("level")
-    if level is not None:
-        messages = [m for m in messages if m.get("level") == level]
 
-    sliced, total, cursor = _paginate(messages, since)
-    return SafeJSONResponse({"messages": sliced, "cursor": cursor, "total": total})
+    def _matches(message: dict[str, Any]) -> bool:
+        return level is None or console_level_matches(message, level)
+
+    start = min(max(0, since - dropped), len(messages))
+    return SafeJSONResponse(
+        {
+            "messages": [m for m in messages[start:] if _matches(m)],
+            "cursor": dropped + len(messages),
+            "total": sum(1 for m in messages if _matches(m)),
+            "dropped": dropped,
+        }
+    )
 
 
 async def session_downloads(request: Request) -> SafeJSONResponse:

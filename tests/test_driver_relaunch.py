@@ -321,7 +321,7 @@ def test_relaunch_failure_is_swallowed_per_session(monkeypatch: pytest.MonkeyPat
     assert calls["n"] == 2
 
 
-def test_already_relaunched_sessions_are_not_recaptured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_already_relaunched_sessions_are_evicted_but_not_reopened(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_mode(monkeypatch, "new-id")
     tagged = _session("a")
     tagged._auto_relaunched = True
@@ -331,11 +331,54 @@ def test_already_relaunched_sessions_are_not_recaptured(monkeypatch: pytest.Monk
         await driver_relaunch.on_driver_reset(pool, reason="x")
 
     asyncio.run(_run())
-    # "a" was an auto-relaunched session; it is skipped (loop guard), only "b"
-    # is captured and relaunched.
-    lost_ids = {r["instance_id"] for r in driver_relaunch.recent_lost()}
-    assert lost_ids == {"b"}
-    assert tagged.instance_id == "a"  # untouched
+    # "a" was an auto-relaunched session: the loop guard stops a SECOND reopen,
+    # but it died with the driver all the same, so it is still recorded lost
+    # and evicted -- a dead handle left in the pool would list as live and
+    # fail every call. Only "b" is reopened.
+    lost = {r["instance_id"]: r for r in driver_relaunch.recent_lost()}
+    assert set(lost) == {"a", "b"}
+    assert lost["a"]["relaunched_to"] is None
+    assert lost["a"]["relaunch_skipped"] == "already_relaunched"
+    assert "a" not in pool._sessions
+    assert len(pool.launched) == 1
+    assert pool.launched[0]["label"] == "label-b"
+    lost_incidents = [i for i in incidents.recent() if i.get("category") == incidents.CATEGORY_DRIVER_LOST]
+    assert {i["instance_id"] for i in lost_incidents if i.get("outcome") == "lost"} == {"a", "b"}
+
+
+def test_only_already_relaunched_sessions_lost_still_publishes_and_evicts(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_mode(monkeypatch, "new-id")
+    tagged = _session("a")
+    tagged._auto_relaunched = True
+    pool = _FakePool([tagged])
+    published: list[Any] = []
+    monkeypatch.setattr(driver_relaunch, "_publish_driver_died", lambda _p, descs, _m: published.extend(descs))
+
+    task = driver_relaunch.on_driver_reset(pool, reason="x")
+
+    assert task is None  # nothing to reopen
+    assert pool._sessions == {}
+    assert [d["instance_id"] for d in published] == ["a"]
+    assert pool.launched == []
+
+
+def test_driver_died_names_the_sessions_it_will_not_reopen(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With reopen on, one ``relaunch_mode`` for every lost id told a client to
+    wait for a reopen that never comes for a session already reopened once."""
+    from octowright.browser_pool import session_event_bus as _bus
+
+    _set_mode(monkeypatch, "new-id")
+    events: list = []
+    monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    monkeypatch.setattr(driver_relaunch, "_schedule_relaunch", lambda *_a: None)
+    tagged = _session("a")
+    tagged._auto_relaunched = True
+    pool = _FakePool([tagged, _session("b")])
+
+    driver_relaunch.on_driver_reset(pool, reason="x")
+
+    died = [e for e in events if type(e).__name__ == "DriverDiedEvent"]
+    assert died[0].not_reopened_instance_ids == ("a",)
 
 
 def test_finalize_id_keep_id_missing_session_returns_new_id() -> None:
@@ -495,3 +538,40 @@ def test_reopen_trusts_the_launch_url_not_the_page_it_navigated_to(monkeypatch: 
     assert kw["url"] == "https://elsewhere.example/b"
     assert kw["trusted_launch_url"] == "https://app.example/a"
     assert kw["base_url"] == "https://app.example/"
+
+
+@pytest.mark.parametrize("mode", ["new-id", "keep-id"])
+def test_reopen_keeps_why_the_original_was_protected(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    """The reopen carries ``protected`` as an explicit bool, which the launch
+    stamps ``protected_reason="explicit"``. A headed browser protected by
+    default then refused a close with the wrong message. Handoff restored the
+    reason already; a driver relaunch did not."""
+    _set_mode(monkeypatch, mode)
+    pool = _FakePool([_session("a", protected=True, protected_reason="headed_default")])
+    applied: list[tuple[bool, str]] = []
+    real_launch = pool.launch
+
+    async def _launch(**kwargs: Any) -> dict[str, Any]:
+        result = await real_launch(**kwargs)
+        fresh = pool._sessions[result["instance_id"]]
+        fresh.protected, fresh.protected_reason = kwargs["protected"], "explicit"
+
+        async def _set_protected_state(protected: bool, *, reason: str = "explicit") -> dict[str, object]:
+            applied.append((protected, reason))
+            fresh.protected, fresh.protected_reason = protected, reason
+            return {}
+
+        fresh.set_protected_state = _set_protected_state
+        return result
+
+    pool.launch = _launch  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        task = driver_relaunch.on_driver_reset(pool, reason="driver died")
+        assert task is not None
+        await task
+
+    asyncio.run(_run())
+    fresh_id = "a" if mode == "keep-id" else "new1"
+    assert applied == [(True, "headed_default")]
+    assert pool._sessions[fresh_id].protected_reason == "headed_default"

@@ -87,6 +87,8 @@ def test_counts_reflect_pool_and_recordings(
     # Two on-disk recordings = two closed sessions.
     (reset_runtime / "20260101T000000Z-chromium-aaa.jsonl").write_text("")
     (reset_runtime / "20260101T000000Z-firefox-bbb.jsonl").write_text("")
+    # A websocket sidecar is not a session of its own.
+    (reset_runtime / "20260101T000000Z-firefox-bbb.websocket.jsonl").write_text("")
     # One live session.
     fake_session = SimpleNamespace(instance_id="live01")
     from octowright.server import meta as _meta

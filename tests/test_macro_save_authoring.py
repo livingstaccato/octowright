@@ -193,3 +193,46 @@ def test_distinct_values_still_map_one_to_one(monkeypatch: pytest.MonkeyPatch, t
     )
 
     assert _fills(saved) == {"#username": "{{username}}", "#password": "{{password}}"}
+
+
+# ---------------------------------------------------------------------------
+# A value the session's scrub ledger replaced
+# ---------------------------------------------------------------------------
+
+SCRUBBED = "<redacted>"
+OTP_VALUE = "Fixture-Not-A-Real-Secret-Otp"  # pragma: allowlist secret
+
+
+def test_a_ledger_scrubbed_field_binds_to_the_single_credential_parameter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An OTP typed into a text field is recorded as the scrub marker, not as the value."""
+    storage = _import_storage(monkeypatch, tmp_path)
+    rec = _recording(tmp_path, [("#email", "buyer@example.test"), ("#otp", SCRUBBED)])
+
+    saved = storage.save_macro(
+        recording_path=rec, name="verify", parameters={"email": "buyer@example.test", "otp": OTP_VALUE}
+    )
+
+    assert _fills(saved) == {"#email": "{{email}}", "#otp": "{{otp}}"}
+    assert SCRUBBED not in saved.read_text(encoding="utf-8")
+
+
+def test_a_ledger_scrubbed_field_nothing_can_fill_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    storage = _import_storage(monkeypatch, tmp_path)
+    rec = _recording(tmp_path, [("#otp", SCRUBBED)])
+
+    with pytest.raises(ValueError, match=r"#otp"):
+        storage.save_macro(recording_path=rec, name="verify", parameters={"nickname": "zed"})
+
+    assert not storage.macro_path("verify").exists()
+
+
+def test_a_scrubbed_field_and_a_redacted_password_are_two_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    storage = _import_storage(monkeypatch, tmp_path)
+    rec = _recording(tmp_path, [("#password", MARKER), ("#otp", SCRUBBED)])
+
+    with pytest.raises(ValueError, match=r"#password.*#otp|#otp.*#password"):
+        storage.save_macro(recording_path=rec, name="verify", parameters={"otp": OTP_VALUE})

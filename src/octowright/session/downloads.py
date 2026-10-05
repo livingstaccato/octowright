@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,29 +39,73 @@ def _safe_download_name(suggested: str | None) -> str:
     return safe or "download"
 
 
+#: Upper bound on the index search for a free destination name. Each step is
+#: one ``O_EXCL`` create in the session's own downloads directory.
+_MAX_NAME_ATTEMPTS = 10_000
+
+
+def _reserve_target(target_dir: Path, recordings_root: Path, first_index: int, name: str) -> Path:
+    """Claim a destination that no earlier or concurrent download holds.
+
+    The index used to be ``len(session.downloads)``, which is not unique: a
+    keep-id driver relaunch starts ``downloads`` empty under the same
+    ``downloads/<instance_id>/`` and two saves in flight read the same length.
+    Each candidate is created exclusively (``O_EXCL``, never following a
+    symlink), so the first free ``NNN-<name>`` wins and a held one is skipped.
+    """
+    from octowright._paths import reject_unsafe_path
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    for index in range(first_index, first_index + _MAX_NAME_ATTEMPTS):
+        target = target_dir / f"{index:03d}-{name}"
+        # Belt-and-suspenders: the sanitized basename has no separators, but run
+        # the containment helper so the write provably stays under the root.
+        reject_unsafe_path(target, recordings_root, label="download path")
+        try:
+            os.close(os.open(target, flags, 0o600))
+        except FileExistsError:
+            continue
+        return target
+    raise FileExistsError(f"no free download name for {name!r} in {str(target_dir)!r}")
+
+
+def _release_reservation(target: Path) -> None:
+    """Drop an unfilled reservation after a failed transfer (best effort)."""
+    try:
+        if target.stat().st_size == 0:
+            target.unlink()
+    except OSError:
+        pass
+
+
 async def save_download(session: BrowserSession, download: Any) -> dict[str, Any]:
     """Save a Playwright Download to disk under <recordings_root>/downloads/<instance_id>/.
     Appends the record to session.downloads and signals any pending waiters.
-    Records download_save_error on failure.
+    Records download_save_error on failure -- including a refusal from the
+    session's operation gate.
+
+    The session lease is held only to reserve the destination and to publish
+    the record, not across ``save_as``: a large transfer would otherwise block
+    every tool call on the session until the gate timed out. The reservation
+    is what keeps concurrent saves apart once the lease is released.
 
     The recordings root is the parent of ``session.log_path`` — i.e. the root
     the owning pool was configured with (new_log_path writes the JSONL directly
     under it), so a pool given a custom recordings_dir keeps its downloads
     beside its recordings instead of leaking into the process-global root."""
-    from octowright._paths import reject_unsafe_path
-
     recordings_root = session.log_path.parent
     target_dir = recordings_root / "downloads" / session.instance_id
-    target_dir.mkdir(parents=True, exist_ok=True)
+    suggested = download.suggested_filename
+    target: Path | None = None
     failure: Exception | None = None
-    async with session.operation("download_save"):
-        suggested = download.suggested_filename
-        target = target_dir / f"{len(session.downloads):03d}-{_safe_download_name(suggested)}"
-        try:
-            # Belt-and-suspenders: the sanitized basename has no separators, but run
-            # the containment helper so the write provably stays under the root.
-            reject_unsafe_path(target, recordings_root, label="download path")
-            await download.save_as(str(target))
+    try:
+        async with session.operation("download_save"):
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = _reserve_target(
+                target_dir, recordings_root, len(session.downloads), _safe_download_name(suggested)
+            )
+        await download.save_as(str(target))
+        async with session.operation("download_save"):
             record = {
                 "url": download.url,
                 "suggested_filename": suggested,
@@ -74,8 +119,10 @@ async def save_download(session: BrowserSession, download: Any) -> dict[str, Any
                 event.set()
             session._pending_download_events.clear()
             return record
-        except Exception as e:
-            failure = e
+    except Exception as e:
+        failure = e
+    if target is not None:
+        _release_reservation(target)
     # Outside the lease: waiting for the close verdict must not hold the gate.
     await _record_save_error(session, download, failure)
     return {}

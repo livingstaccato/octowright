@@ -192,7 +192,8 @@ async def page_close(instance_id: str, index: int) -> dict[str, Any]:
     description=(
         "Switch the active target to an iframe. Subsequent click/fill/type/evaluate/wait_for "
         "calls target the frame instead of the top-level page. Exactly one of selector, name, "
-        "or url_pattern. Use browser_reset_frame to switch back. Pass response_mode='outline' "
+        "or url_pattern. Use browser_reset_frame to switch back; switching, closing or "
+        "recovering the active page also returns to its top-level page. Pass response_mode='outline' "
         "to include a compact browser_page_outline for the active frame."
     ),
 )

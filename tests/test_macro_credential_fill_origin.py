@@ -112,7 +112,9 @@ async def test_a_credential_typed_on_a_foreign_origin_is_refused(
     assert "allowed_origins" in message
     assert "OCTOWRIGHT_MACRO_CREDENTIAL_FILL_ORIGINS" in message
     assert SECRET not in message
-    assert "/login" not in message  # the origin, never the path
+    # The refusal names the origin, never the path. (The payload's diagnostic
+    # bundle, scrubbed, still reports the page's own URL, as for any failure.)
+    assert "/login" not in caught.value.args[0]["original"]
     _typed(session, kind).assert_not_awaited()
 
 

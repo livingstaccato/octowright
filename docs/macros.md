@@ -347,6 +347,11 @@ manifests and argument dictionaries never expose values stored under `email`,
 provenance: it replaces an admitted value wherever that text occurs in a
 diagnostic, recording row, artifact or page prepared for a screenshot. The
 default admits only credential-tier values. See **Blind-scrub policy** below.
+A run's `args_used` (and a failed sequence step's) and the artifact manifest's
+`parameters` are also scrubbed of what the run admitted, so a value a called
+macro classifies -- a `macro_call` passing an ordinary argument to a parameter
+its callee declares sensitive -- is hidden there too. The manifest withholds
+every parameter value while the replay runs.
 
 **Screenshots of a blind-scrub-protected run.** A screenshot of a page a
 credential was typed into is a durable copy of it, which no text scrub can
@@ -499,17 +504,92 @@ and the payload carries
 The refusal is correct by design: the page drew the value, so the pixels would
 hold it. The ways out are to keep the value off the screen (sign in as a user whose
 name the page does not show, or screenshot a page without it) or to stop
-classifying it. Declaring an argument not sensitive is not available yet: that is
-the open Part B (`parameter_specs`) of #248, and this reporting adds no
-declassify mechanism of its own.
+classifying it: declare the parameter `"sensitive": false` in the macro's
+`parameter_specs` (below) and pass it as a plain value, not as
+`{"credential": ...}`, which stays credential-tier whatever the macro declares.
+
+**Declaring sensitivity: `parameter_specs`.** A name says too little in both
+directions -- `display` holding a national id is not recognised, and
+`username`, which an application's header draws on every page, cannot be
+shown. A macro can say so per top-level parameter:
+
+```json
+{"parameters": ["email", "password", "display", "username"],
+ "parameter_specs": {"display": {"sensitive": true}, "username": {"sensitive": false}}}
+```
+
+- Resolution, per top-level argument: `parameter_specs[name].sensitive` when it
+  is present and a real `true`/`false`, otherwise the name classification
+  above. Only top-level parameters are declared; a nested key inherits its
+  branch, and a key under a public parameter (`{"username": {"password": ...}}`)
+  is still classified by its own name.
+- `"sensitive": true` makes the parameter **credential-tier**, exactly as a
+  `{"credential": ...}` sequence argument is: redacted from `args_used` and
+  every record of the arguments, scrubbed session-wide, never baked into an
+  exported script's defaults, held to the credential sink guards and the
+  fill-origin check, and a run that types it runs no page code. It applies in a
+  called macro too: a `macro_call` callee's own declarations hold there.
+- `"sensitive": false` unmarks an identity or contextual name (`username`,
+  `email`, `session` and the like): it is not redacted from the run result's
+  `args_used`, not blind-scrubbed, and not counted by a screenshot. It has a
+  floor it cannot go below. A name that reads as a credential (`password`,
+  `api_key`, `authToken`...), a value the caller passed as a credential
+  (`{"credential": ...}`, or a caller's credential handed to a `macro_call`),
+  and an argument an `expect_no_text` checks for all stay credential-tier. So
+  `sensitive: false` never loosens a sink guard; only
+  `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` does. Artifact bundles on disk keep
+  their key-level redaction by name, so a public `username` is still
+  `<redacted>` in `result.json` and `artifact.json`.
+- An ignored unmark, and a spec that is not shaped as above (a non-object
+  `parameter_specs`, a spec that is not an object, a `sensitive` that is not a
+  boolean), never stop a run: the parameter keeps its name classification and
+  the run says why in `warnings` -- on the `macro_run` result, each
+  `macro_run_sequence` step, a `macro_artifact_run` result, and a failure
+  payload -- naming the macro and the parameter, never a value. `macro_lint`
+  reports the same (`ignored_public_declaration`, `bad_parameter_specs`), and
+  `unknown_parameter_spec` for a spec naming no parameter.
+- A `macro_run_sequence` resolves each step from the macro that step loaded;
+  a step whose macro is missing or not valid JSON is still a failed step with
+  name-only redaction.
+- **Kept across a re-save.** `macro_save` composes a macro afresh from the
+  recording, but keeps the `parameter_specs` of the version it replaces, so
+  re-recording a flow does not quietly loosen what its author declared. The
+  read of the saved version and the write are one step: every macro save,
+  write (`macro_compile` with `write`, the dashboard editor, `macro_repair_apply`)
+  and delete in the daemon is serialised by one lock, and one that waits more
+  than 10 seconds for it fails with `MacroWriteLockTimeout` rather than
+  hanging. The dashboard editor replaces the whole macro, specs included; its
+  validation warns with `sensitive_parameters_shrank` when the new version
+  makes a parameter it still takes less sensitive than the saved one.
+  `macro_compile` with `write` keeps the saved version's `created_at`, and its
+  `parameter_specs` unless the YAML declares a `parameter_specs` of its own;
+  when the write makes a parameter less sensitive, the result carries the same
+  finding in `warnings`.
 
 Automatic artifact screenshots follow the same rule, with one exception: they are
 never taken on a session whose application installed its own handler. A mistyped
 policy value suppresses them rather than failing the artifact run. When one is not
-taken, the evidence manifest records `screenshot_suppressed`. The generic diagnostic
-producer, which saves raw page HTML and a screenshot, is not called for a failed run
-when the run or the session ledger (below) holds any value; the payload records
-`diagnostic_suppressed` instead.
+taken, the evidence manifest records `screenshot_suppressed`. That decision is
+made per run, from the run's own values.
+
+**A failed run's diagnostics are split by sink kind.** The generic diagnostic
+producer saves the page's HTML beside the recording and, normally, a
+screenshot. When the run or the session ledger (below) holds any value -- the
+run's own arguments, or a value an earlier run or a typed password left in the
+session -- text and pixels are treated differently, because text can be
+scrubbed and pixels cannot:
+
+- no diagnostic screenshot is taken, and the payload's `bundle` says
+  `screenshot_suppressed: true`;
+- the HTML file is still written, and its preview, hash and size, the console
+  tail, the page URL and title are still reported, every one scrubbed of all
+  of those values (each anywhere, in every spelling the scrub knows) before it
+  is written or returned. The console tail is scrubbed before each message is
+  cut to size, so a cut cannot leave the start of a value behind.
+
+A run on a session that holds nothing gets the producer's output unchanged,
+screenshot included. Before this, a run holding values got no bundle at all
+(`diagnostic_suppressed`), so its failure lost its console tail too.
 
 **Screenshots outside a protected run.** Once the session ledger holds a value, every
 other screenshot of that session -- `browser_screenshot`, `browser_each`,
@@ -540,6 +620,27 @@ than four characters only on a word boundary); a typed password is scrubbed only
 where it stands as a whole identifier, because it is
 often an ordinary word (`admin`) and replacing it inside `#admin-menu` broke the
 selectors of a macro saved from the recording.
+
+**Every spelling of a value.** Each scrub matches a value raw, JSON-escaped
+(ASCII and not), HTML-escaped, percent-encoded up to three times over,
+markdown-escaped, and as Python's `repr` spells it -- twice over, for an error
+message's `{value!r}` inside a failure payload's `repr(exc)`. Without the last
+one, a value holding both quotes, a backslash or a control character reached
+a failure payload, and an exported script's `result.json`, in the clear: repr
+escapes `'` as `\'` and a control character as `\xNN`, which no JSON
+spelling does. Running an exported script against a real browser
+(`tests/test_macro_export_run_privacy_live.py`) is what found it.
+
+Every one of those spellings is matched **ignoring case**, by the live scrub
+and by an exported script alike. A page that echoes a credential upper-,
+lower- or mixed-cased (a header that capitalises a name, a log line that
+shouts) used to put it in a failure payload's `original`, console tail or
+failed requests in the clear, because only percent-encoded spellings were
+case-folded. A typed password is still matched only as a whole identifier,
+now in any case, so `#Admin-menu` survives a typed `admin` and `pw=ADMIN`
+does not. Folding case costs nothing per write: for ASCII text the scrub
+first looks for the lower-cased variants in the lower-cased text, which is
+cheaper than the case-sensitive search it replaces.
 
 A failure payload goes back to the MCP client, and its fields follow two rules.
 The text the page produced -- `original` (the exception), the console tail,
@@ -644,7 +745,29 @@ session's own origin: `inject_headers` whose `pattern` spells out the scheme,
 host and port of the launch URL or persona `base_url` may carry
 `Bearer {{token}}` (`https://app.example.test/**` for a launch at
 `https://app.example.test`, but not `http://localhost:45678/**` for a launch at
-`http://localhost:3000`). See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
+`http://localhost:3000`) -- but only for a header the step also names in
+`forward_on_redirect`:
+
+```json
+{"action": "inject_headers", "pattern": "https://app.example.test/**",
+ "headers": {"Authorization": "Bearer {{token}}"},
+ "forward_on_redirect": {"Authorization": true}}
+```
+
+A navigation is matched against the pattern at every redirect hop, so a page
+load that an own-site URL redirects elsewhere does not carry the header there.
+A `fetch`/XHR is not: the pattern scopes only its first request, and the
+browser re-sends the header on every redirect that request follows, so an
+own-site endpoint that answers `302` to another host hands it the token
+(measured on Chromium and Firefox for every header; WebKit drops only
+`Authorization`). An exported macro CLI does not match navigations per hop
+either. `forward_on_redirect` is
+the step's statement that the site will not redirect that header anywhere it
+should not go. It waives nothing else: the pattern must still name the own
+origin, each value must be a literal `true` or `false`, and the name must be
+one of the step's `headers` (any case). Without it the step is refused with a
+message naming the field. `mock_route` headers are a response served to the
+page, so they need no opt-in. See `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS` in
 [env-vars.md](env-vars.md) for the full name list, match rules and opt-out.
 
 **A run that types a credential runs no page code.** Page code needs no
@@ -658,7 +781,11 @@ wherever it likes. So when a run expands a credential-named argument anywhere
 refused -- before the fill or after it, in a nested body or a called macro --
 naming the step and the argument, never the value. Split such a check into a
 macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
-Each `macro_run_sequence` step is its own run.
+A `macro_run_sequence` is judged as one run: the credential arguments any of
+its steps types, read from every step's macro before the first runs, refuse
+page code in every step, since a step's page code can read back what an
+earlier step typed or install the listener a later step types into. A
+separate `macro_run` on the same session afterwards is not held to it.
 
 **Credentials are typed only onto the session's own origin.** A `fill`,
 `fill_by` or `type` whose value comes from a credential-named argument checks,
@@ -761,7 +888,8 @@ on an origin passed as `--trusted-origin` (or listed in the step's
 the same source.
 
 **Exported scripts** carry their own copy of the classifier, stamped
-`_ARG_PRIVACY_CLASSIFIER_VERSION = 6`, and resolve the same blind-scrub policy,
+`_ARG_PRIVACY_CLASSIFIER_VERSION = 7` (7: the macro's `parameter_specs`,
+resolved at export with the floor applied), and resolve the same blind-scrub policy,
 length floor and common-value list when they run (a script is one run, so run
 scoping does not arise there). A script exported by an older Octowright keeps the classifier
 and policy behavior it was generated with; regenerate it to pick up the current
@@ -770,8 +898,9 @@ default.
 **Not covered.** These writers are not scrubbed:
 
 - the page HTML and screenshot the generic diagnostic producer saves when a run
-  fails while neither it nor the session ledger holds a value -- which can still
-  show a secret the ledger never learned, such as one typed with
+  fails while neither it nor the session ledger holds a value, and the HTML it
+  saves (scrubbed of what they do hold) otherwise -- either can still show a
+  secret the ledger never learned, such as one typed with
   `OCTOWRIGHT_REDACT_INPUTS=off` or into a field not classified as a password;
 - a HAR file, when HAR recording is enabled at launch;
 - a Playwright trace, when `browser_launch` is called with `trace=true`, saved
@@ -797,8 +926,17 @@ The linter catches:
 - Empty conditional branches that would silently no-op.
 - An `allowed_origins` entry replay would refuse (`bad_allowed_origins`): a
   wildcard, path or `{{placeholder}}` instead of an exact origin.
+- An `inject_headers` `forward_on_redirect` replay would refuse
+  (`bad_forward_on_redirect`): a value that is not a literal `true`/`false`,
+  or a header name the step does not send.
 - An `expect_no_text` whose text is still the recording's redaction marker
   (`redacted_assertion_text`), which replay refuses.
+- `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):
+  a malformed spec (`bad_parameter_specs`), a `"sensitive": false` the floor
+  ignores (`ignored_public_declaration`), and a spec naming no parameter
+  (`unknown_parameter_spec`). Linted against the saved version (the
+  dashboard's validation does this), a parameter the new version makes less
+  sensitive is `sensitive_parameters_shrank`.
 
 ## Test suite mode
 
@@ -871,6 +1009,8 @@ octowright test --kind chromium --persona buyer --sequence sequences/smoke.json 
   [where the report goes](#test-suite-mode)).
 - The sequence stops at the first failing macro; later steps are reported as
   skipped. One JUnit testcase per step. `--sequence` and `--tag` are exclusive.
+- A step whose `macro` no macro could be named (`..`, say) is refused when the
+  file is loaded, before any browser launches.
 
 ### Recording a video of the run
 
@@ -956,6 +1096,28 @@ stay on disk under `RECORDINGS_DIR/artifacts/macros/<macro>/`.
 | `macro_digest` | Return a bounded summary of a macro or recording. |
 | `macro_export_cli` | Export a saved macro as an import-safe Python CLI script. |
 
+**What a run bundle is checked for before it is written.** A
+`macro_artifact_run` bundle is scrubbed of every value the run admitted,
+nested calls included. A green bundle must not mean the privacy policy never
+arrived, so two checks follow the scrub (`artifacts.bundle_privacy`):
+
+- **`privacy_unresolved: true`** when the run's privacy view admitted no
+  macro, was not sealed when the bundle was written (its replay had not
+  finished resolving), or the session's scrub set is saturated
+  (`scrub_saturated`). The bundle is still written -- nothing raises once the
+  run directory exists -- with key-level redaction by name applied to every
+  record on top of the scrub.
+- **`privacy_tripwire: true`** when a value the run or the session holds is
+  still found, in any serialized spelling and ignoring case, after the scrub.
+  The scrub itself now ignores case, so this is a backstop for a spelling
+  it does not know; the tripwire removes such a match (a string that still
+  holds one is replaced whole) and says so. A password the session saw
+  typed is matched only as a whole identifier, as the recording matches it.
+
+Both flags are written into `result.json` and returned on the
+`macro_artifact_run` result, and are absent when they do not apply. Neither
+names a value.
+
 ## Watching execution
 
 Every page rendered by a launched browser gets a faint **status pill** injected at
@@ -970,6 +1132,9 @@ the bottom-center. While a macro runs, the pill shows:
 - After a macro finishes the pill stays visible with `<name> | done` (or
   `| failed`) until the next macro starts or `visible: false` is pushed.
 - The pill is `pointer-events: none` by default — clicks fall through to the page.
+- The text is pushed into the page, so it is scrubbed of every value the run
+  and the session classified first, including one a called macro's
+  `parameter_specs` made sensitive.
 
 **Alt-click** (Option-click on Mac) the pill to open a themed run-history modal
 listing every push for the run with timestamps. Dismiss with the X button, by
@@ -1021,8 +1186,12 @@ It returns one shape whatever happens to the steps:
   of the whole call: the steps before it already ran against the browser, and
   the point of the result is to keep them.
 - The call still **errors** when it cannot run at all: an unknown instance,
-  malformed `names` or `args_list` (refused before any step runs), the
-  session's operation gate refusing or breaking, and cancellation.
+  malformed `names` or `args_list`, an `args_list` longer than `names` (its
+  extra entries would never run, which is usually an off-by-one), a name no
+  macro can have (one `macro_path` refuses, such as `..`), the session's
+  operation gate refusing or breaking, and cancellation. Each of these is
+  refused before the first step acts on the browser; a name that is merely
+  not saved stays a failed step.
 
 **Breaking change.** `macro_run_sequence` used to raise the failing step's
 error when `stop_on_failure` was on, losing the steps that had passed. A caller

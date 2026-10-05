@@ -25,6 +25,12 @@ log = get_logger(__name__)
 # caller-supplied label can never inject path separators, NUL bytes, or
 # other characters that would escape base_dir on disk.
 _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+#: Label endings that, followed by ``.jsonl``, spell a JSONL sidecar's suffix
+#: (``http.recording_sidecars._JSONL_SIDECAR_SUFFIXES`` minus ``.jsonl``).
+#: Not imported from there: that would pull the HTTP stack into the recorder.
+#: tests/test_recorder_branches.py walks the real list, so a new sidecar
+#: suffix fails the test until it is added here.
+_SIDECAR_SHAPED_LABEL_TAILS: tuple[str, ...] = (".websocket",)
 
 # Falsey tokens that opt OUT of owner-only recording permissions.
 _PRIVATE_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
@@ -227,7 +233,7 @@ class Recorder:
 #: A recording may legitimately reach its 512 MiB ceiling
 #: (``OCTOWRIGHT_RECORDING_MAX_BYTES``), or have none, so that does not bound it. Every caller already loops on the returned
 #: cursor, so a window costs an extra round trip, not correctness. 8 MiB is
-#: ~40k typical events per call. (defaults.py is at its LOC ceiling.)
+#: ~40k typical events per call.
 _TAIL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024
 _TAIL_DISABLE_TOKENS = frozenset({"", "0", "off", "false", "no", "never", "none", "disabled"})
 
@@ -427,5 +433,9 @@ def tail_log(path: Path, cursor: int, max_bytes: int | None = -1) -> tuple[list[
 def new_log_path(base_dir: Path, instance_id: str, label: str | None, kind: str) -> Path:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     safe_label = _LABEL_UNSAFE_RE.sub("-", label).strip("-.") if label else ""
+    if safe_label.casefold().endswith(_SIDECAR_SHAPED_LABEL_TAILS):
+        # ``x.websocket`` would name the recording ``...-x.websocket.jsonl``,
+        # which every reader skips as a sidecar (``is_session_recording``).
+        safe_label = safe_label.replace(".", "-")
     suffix = f"-{safe_label}" if safe_label else ""
     return base_dir / f"{stamp}-{kind}-{instance_id}{suffix}.jsonl"

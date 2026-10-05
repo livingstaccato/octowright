@@ -17,6 +17,7 @@ from octowright._tracing import span
 from octowright.credential_sinks import REPLAY_RENAME_KEYS, canonical_aliases
 from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
 from octowright.macros.assertion_results import observe
+from octowright.session.input_redaction import live_scrubbed
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
@@ -226,11 +227,14 @@ async def _dispatch_click_or_fill(
         except Exception as exc:
             if "selector" not in kwargs:
                 raise
+            # The error can quote the label or value it was given; scrubbed of
+            # the session ledger, which holds what the run classified.
             log.debug(
                 "octowright.macros.semantic_fallback",
                 kind=kind,
                 instance_id=session.instance_id,
-                error=str(exc),
+                error_type=type(exc).__name__,
+                error=live_scrubbed(session, str(exc)),
                 hint="semantic locator path failed, falling back to CSS selector",
             )
 

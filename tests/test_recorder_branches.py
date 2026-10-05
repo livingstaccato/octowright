@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -401,6 +402,24 @@ class TestNewLogPath:
         from datetime import datetime
 
         datetime.strptime(stamp, "%Y%m%dT%H%M%SZ")
+
+    @pytest.mark.parametrize("case", [str.lower, str.upper, str.title])
+    def test_a_label_cannot_make_the_recording_read_as_a_sidecar(
+        self, tmp_path: Path, case: Callable[[str], str]
+    ) -> None:
+        """A label ending in ``.websocket`` named the recording
+        ``...-x.websocket.jsonl``, which every reader skips as a sidecar: the
+        session vanished from discovery, cleanup and the dashboard."""
+        from octowright.http.recording_sidecars import _JSONL_SIDECAR_SUFFIXES, is_session_recording
+
+        for suffix in _JSONL_SIDECAR_SUFFIXES:
+            label = "x" + case(suffix.removesuffix(".jsonl"))
+            result = new_log_path(tmp_path, instance_id="abc123", label=label, kind="chromium")
+            assert is_session_recording(result.name), result.name
+
+    def test_an_ordinary_dotted_label_keeps_its_dots(self, tmp_path: Path) -> None:
+        result = new_log_path(tmp_path, instance_id="abc123", label="v1.2", kind="chromium")
+        assert result.stem.endswith("-abc123-v1.2")
 
     def test_returns_path_object(self, tmp_path: Path) -> None:
         """Result is a Path, not a str."""

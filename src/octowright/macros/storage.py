@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import re
+import threading
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -18,7 +21,8 @@ from octowright import defaults
 from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text, reject_unsafe_path
 from octowright.drawn_text import NO_TEXT_OBSERVATION_KEYS
-from octowright.macros.privacy import assertion_digest_matches, is_credential_key
+from octowright.macros.parameter_specs import SPECS_KEY
+from octowright.macros.privacy import REDACTED, assertion_digest_matches, is_credential_key
 from octowright.macros.recording_import import iter_macro_actions
 from octowright.macros.substitution import normalise_parameters, substitute_in_action
 from octowright.mcp_types import MacroListEntry
@@ -31,6 +35,41 @@ SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 # module (after setenv'ing OCTOWRIGHT_MACROS_DIR + reloading defaults) see
 # a fresh value here too.
 MACROS_DIR: Path = defaults.MACROS_DIR
+
+
+#: How long a macro save, write or delete waits for another one to finish.
+#: Each holds the lock only for a read, a compose and one atomic write, so a
+#: wait this long means something is stuck, and saying so beats hanging.
+MACRO_WRITE_LOCK_TIMEOUT_SECONDS = 10.0
+
+#: Serialises every write to MACROS_DIR in this process -- `save_macro`'s
+#: read-modify-write above all, which now keeps the ``parameter_specs`` of the
+#: version on disk (#248) and must not lose a concurrent write between its read
+#: and its write. Re-entrant, so a read-modify-write that ends in
+#: `write_macro` (``repair_apply``) can hold it across both. One daemon serves
+#: every client, so a process lock covers the writers there are.
+_WRITE_LOCK = threading.RLock()
+
+
+class MacroWriteLockTimeout(TimeoutError):
+    """Another macro save, write or delete held the lock past the bounded wait."""
+
+
+@contextlib.contextmanager
+def macro_write_lock() -> Iterator[None]:
+    """Hold the macro write lock, or raise `MacroWriteLockTimeout` after a bounded wait.
+
+    Blocking: an async caller runs whatever takes it in a worker thread.
+    """
+    limit = MACRO_WRITE_LOCK_TIMEOUT_SECONDS
+    if not _WRITE_LOCK.acquire(timeout=limit):
+        raise MacroWriteLockTimeout(
+            f"timed out after {limit:g}s waiting for another macro save, write or delete to finish; retry"
+        )
+    try:
+        yield
+    finally:
+        _WRITE_LOCK.release()
 
 
 def slug(name: str) -> str:
@@ -78,8 +117,11 @@ def _value_to_name(param_map: dict[str, str]) -> dict[str, str]:
 
 
 def _redacted_fields(actions: list[dict[str, Any]]) -> list[tuple[int, str]]:
-    marker = defaults.REDACTED_INPUT_PLACEHOLDER
-    return [(i, key) for i, action in enumerate(actions) for key, value in action.items() if value == marker]
+    # The input classification's placeholder, and the scrub marker the session
+    # ledger writes over a classified value typed into an ordinary field (an
+    # OTP in a text box): replay would type either literally.
+    markers = (defaults.REDACTED_INPUT_PLACEHOLDER, REDACTED)
+    return [(i, key) for i, action in enumerate(actions) for key, value in action.items() if value in markers]
 
 
 def _field_label(action: dict[str, Any], index: int) -> str:
@@ -157,8 +199,8 @@ def _bind_assertion(action: dict[str, Any], param_map: dict[str, str]) -> dict[s
 def _redaction_refusal(fields: str, field_count: int, candidates: list[str]) -> str:
     lead = (
         f"the recording holds {field_count} input field(s) redacted at record time ({fields}), because "
-        "OCTOWRIGHT_REDACT_INPUTS hid the typed value; saving would write the redaction marker into the "
-        "macro and replay would type it into the page. "
+        "OCTOWRIGHT_REDACT_INPUTS or the session's scrub set hid the typed value; saving would write the "
+        "redaction marker into the macro and replay would type it into the page. "
     )
     if not candidates:
         return lead + (
@@ -182,6 +224,13 @@ def save_macro(
     parameters: list[str] | dict[str, str] | None = None,
     include_launch: bool = False,
 ) -> Path:
+    """Save a recording as macro *name*, keeping what its author declared on the version on disk.
+
+    The macro is composed fresh from the recording, except its
+    ``parameter_specs``: re-saving used to drop them, silently loosening the
+    sensitivity the author had declared (#248). The read of the version on
+    disk and the write are one step under `macro_write_lock`.
+    """
     param_map = normalise_parameters(parameters)
     value_to_name = _value_to_name(param_map)
     entries = list(iter_macro_actions(recording_path, include_launch=include_launch, strict_json=True))
@@ -190,41 +239,52 @@ def save_macro(
     )
 
     dest = macro_path(name)
-    created_at = now_iso()
-    if dest.exists():
-        try:
-            existing = json.loads(dest.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            existing = None
-        if existing is not None:
-            # slug() collapses distinct names onto the same file (e.g.
-            # "report sync" and "report-sync" → report-sync.json). Re-saving
-            # under the SAME display name is an update; a DIFFERENT name would
-            # silently clobber an unrelated macro, so reject it.
-            existing_name = existing.get("name")
-            if existing_name is not None and existing_name != name:
-                raise ValueError(
-                    f"macro name {name!r} collides with existing macro {existing_name!r} "
-                    f"(both map to {dest.name}); choose a distinct name or delete the existing "
-                    f"macro first with `macro_delete name={existing_name!r}`"
-                )
-            created_at = existing.get("created_at", created_at)
+    with macro_write_lock():
+        existing = _existing_macro(dest, name)
+        now = now_iso()
+        macro: dict[str, Any] = {
+            "name": name,
+            "description": description,
+            "parameters": list(param_map.keys()),
+            "created_at": (existing or {}).get("created_at", now),
+            "updated_at": now,
+            "actions": actions,
+        }
+        if existing is not None and SPECS_KEY in existing:
+            macro[SPECS_KEY] = copy.deepcopy(existing[SPECS_KEY])
 
-    now = now_iso()
-    macro: dict[str, Any] = {
-        "name": name,
-        "description": description,
-        "parameters": list(param_map.keys()),
-        "created_at": created_at,
-        "updated_at": now,
-        "actions": actions,
-    }
-
-    MACROS_DIR.mkdir(parents=True, exist_ok=True)
-    secure_artifact_tree(MACROS_DIR, MACROS_DIR)
-    atomic_write_text(dest, dumps_utf8_safe(macro, indent=2), encoding="utf-8", root=MACROS_DIR)
+        MACROS_DIR.mkdir(parents=True, exist_ok=True)
+        secure_artifact_tree(MACROS_DIR, MACROS_DIR)
+        atomic_write_text(dest, dumps_utf8_safe(macro, indent=2), encoding="utf-8", root=MACROS_DIR)
     log.info("octowright.macro.saved", name=name, path=str(dest), action_count=len(actions))
     return dest
+
+
+def _existing_macro(dest: Path, name: str) -> dict[str, Any] | None:
+    """The macro saved at *dest*, or ``None``; refuses one saved under a different display name.
+
+    slug() collapses distinct names onto the same file (e.g. "report sync" and
+    "report-sync" both map to report-sync.json). Re-saving under the SAME
+    display name is an update; a DIFFERENT name would silently clobber an
+    unrelated macro, so it is refused. An unreadable file is overwritten, as
+    it always was.
+    """
+    if not dest.exists():
+        return None
+    try:
+        existing = json.loads(dest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(existing, dict):
+        return None
+    existing_name = existing.get("name")
+    if existing_name is not None and existing_name != name:
+        raise ValueError(
+            f"macro name {name!r} collides with existing macro {existing_name!r} "
+            f"(both map to {dest.name}); choose a distinct name or delete the existing "
+            f"macro first with `macro_delete name={existing_name!r}`"
+        )
+    return existing
 
 
 def list_macros() -> list[MacroListEntry]:
@@ -262,41 +322,55 @@ def load_macro(name: str) -> dict[str, Any]:
 
 
 def write_macro(*, name: str, macro: dict[str, Any]) -> Path:
+    """Replace macro *name* with *macro* exactly, specs included: its caller passes the macro it means."""
+    return _write(name, macro, keep_existing=False)[0]
+
+
+def write_compiled_macro(*, name: str, macro: dict[str, Any]) -> tuple[Path, list[tuple[str, str]]]:
+    """Write a macro compiled from the YAML DSL, keeping what the version on disk declared.
+
+    A compiled document carries no ``created_at``, and ``parameter_specs``
+    only when the YAML declares them, so writing it as-is reset the creation
+    time and silently dropped the sensitivity the author had declared (#248).
+    Both are carried over from the version on disk -- the specs only when the
+    document declares none -- in the same step as the write, under
+    `macro_write_lock`. Returns the path and the `lint_sensitivity_shrink`
+    findings against that version, as ``(code, message)`` pairs.
+    """
+    return _write(name, macro, keep_existing=True)
+
+
+def _write(name: str, macro: dict[str, Any], *, keep_existing: bool) -> tuple[Path, list[tuple[str, str]]]:
+    from octowright.macros.lint_specs import lint_sensitivity_shrink
+
     now = now_iso()
     to_write = copy.deepcopy(macro)
     to_write["name"] = name
-    to_write.setdefault("created_at", now)
     to_write["updated_at"] = now
     dest = macro_path(name)
-    if dest.exists():
-        try:
-            existing = json.loads(dest.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            existing = None
-        if existing is not None:
-            # Same collision guard as save_macro: slug() collapses distinct
-            # display names onto the same file (e.g. "nightly backup" and
-            # "nightly!backup" both -> nightly-backup.json). Re-writing under
-            # the SAME display name is an update; a DIFFERENT name would
-            # silently clobber an unrelated macro, so reject it.
-            existing_name = existing.get("name")
-            if existing_name is not None and existing_name != name:
-                raise ValueError(
-                    f"macro name {name!r} collides with existing macro {existing_name!r} "
-                    f"(both map to {dest.name}); choose a distinct name or delete the existing "
-                    f"macro first with `macro_delete name={existing_name!r}`"
-                )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    secure_artifact_tree(dest.parent, MACROS_DIR)
-    atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8", root=MACROS_DIR)
+    findings: list[tuple[str, str]] = []
+    with macro_write_lock():
+        # Same collision guard as save_macro (_existing_macro).
+        existing = _existing_macro(dest, name)
+        if keep_existing and existing is not None:
+            if "created_at" in existing:
+                to_write["created_at"] = existing["created_at"]
+            if SPECS_KEY not in to_write and SPECS_KEY in existing:
+                to_write[SPECS_KEY] = copy.deepcopy(existing[SPECS_KEY])
+            findings = lint_sensitivity_shrink(to_write, existing)
+        to_write.setdefault("created_at", now)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        secure_artifact_tree(dest.parent, MACROS_DIR)
+        atomic_write_text(dest, dumps_utf8_safe(to_write, indent=2), encoding="utf-8", root=MACROS_DIR)
     log.info("octowright.macro.written", name=name, path=str(dest), action_count=len(to_write.get("actions", [])))
-    return dest
+    return dest, findings
 
 
 def delete_macro(name: str) -> Path:
     path = macro_path(name)
-    if not path.exists():
-        raise FileNotFoundError(f"no macro named {name!r} at {path}; list saved macros with `macro_list`")
-    path.unlink()
+    with macro_write_lock():
+        if not path.exists():
+            raise FileNotFoundError(f"no macro named {name!r} at {path}; list saved macros with `macro_list`")
+        path.unlink()
     log.info("octowright.macro.deleted", name=name, path=str(path))
     return path

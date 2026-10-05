@@ -68,6 +68,41 @@ def reject_unsafe_path(candidate: Path, root: Path, *, label: str) -> Path:
     return candidate.resolve()
 
 
+def checked_write_target(
+    target: Path,
+    root: Path,
+    *,
+    label: str,
+    allowed_suffixes: tuple[str, ...],
+    forbidden_subdirs: tuple[str, ...] = (),
+) -> Path:
+    """``target`` resolved, if a tool may write a file of its own kind there.
+
+    Containment under ``root`` is not enough for a tool-chosen write path: the
+    writes are atomic REPLACEs, so a contained path could overwrite another
+    session's ``.jsonl`` recording or a macro's ``artifact.json`` with PNG bytes
+    or generated source. So the suffix must be one the operation produces --
+    the only file it may replace is an earlier one of its own -- and nothing is
+    written under ``forbidden_subdirs`` (first component below ``root``).
+
+    Both checks compare casefolded: on a case-insensitive filesystem (APFS,
+    NTFS) ``Artifacts/`` IS ``artifacts/`` and ``x.JSONL`` is a recording, so a
+    case-sensitive comparison let the spelling choose the answer. On Linux this
+    refuses a distinct ``Artifacts/`` directory as well, which costs nothing.
+    """
+    resolved = reject_unsafe_path(target, root, label=label)
+    allowed = tuple(suffix.casefold() for suffix in allowed_suffixes)
+    if resolved.suffix.casefold() not in allowed:
+        raise InvalidRequestError(f"{label} {str(target)!r} must end in one of {', '.join(allowed_suffixes)}")
+    relative = resolved.relative_to(root.resolve())
+    forbidden = {name.casefold() for name in forbidden_subdirs}
+    if len(relative.parts) > 1 and relative.parts[0].casefold() in forbidden:
+        raise InvalidRequestError(
+            f"{label} {str(target)!r} is inside {relative.parts[0]!r}, which this tool never writes"
+        )
+    return resolved
+
+
 #: Whether the parent directory can be held open and written through, so the
 #: temp file and the final rename cannot be redirected by swapping a path
 #: component for a symlink. POSIX; on Windows the helpers fall back to names.

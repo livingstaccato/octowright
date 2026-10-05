@@ -378,19 +378,30 @@ def check_orphan_browsers() -> Check:
     )
 
 
-def check_daemon() -> Check:
-    """Whether a leader is recorded, and whether that record is still true."""
-    from octowright.singleton import is_stale, pid_is_alive, read_lock
+async def check_daemon() -> Check:
+    """Whether a leader is recorded, and whether that record is still true.
 
-    info = read_lock()
+    A live pid is not enough: the OS recycles a dead daemon's pid, so the
+    recorded leader must also answer ``/api/health``.
+    """
+    from octowright import singleton
+
+    info = singleton.read_lock()
     if info is None:
         return Check("daemon", "ok", "no daemon running (no lockfile)", {"running": False})
-    alive = pid_is_alive(info.pid)
-    if not alive or is_stale(info):
+    if not singleton.pid_is_alive(info.pid):
         return Check(
             "daemon",
             "warn",
             f"lockfile names pid {info.pid}, which is not a live daemon — stale lock",
+            {"running": False, "pid": info.pid, "stale": True},
+        )
+    if not await singleton.probe_http_alive(info):
+        return Check(
+            "daemon",
+            "warn",
+            f"lockfile names live pid {info.pid}, but nothing answers at {info.http_host}:{info.http_port} "
+            "— stale lock (recycled pid) or a wedged daemon",
             {"running": False, "pid": info.pid, "stale": True},
         )
     return Check(
@@ -687,7 +698,7 @@ async def run_checks(
 ) -> list[Check]:
     """Every check, engine probes last because they are the slow ones."""
     checks = [
-        check_daemon(),
+        await check_daemon(),
         check_browser_installs(),
         check_dashboard_bundle(),
         check_stray_drivers(),

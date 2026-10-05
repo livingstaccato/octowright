@@ -455,7 +455,6 @@ class RelaunchSnapshot:
 
     source: ReplacementSource
     target_url: str
-    user_data_dir: Any = None
 
     @property
     def kind(self) -> str:
@@ -489,6 +488,7 @@ async def shutdown_pool(pool: BrowserPool) -> None:
             await entry.reservation.wait()
         except Exception as exc:
             log.warning("octowright.pool.shutdown_straggler_close_failed", error=repr(exc))
+    pool._driver_shut_down = True
     if pool._pw is not None:
         pw, pool._pw = pool._pw, None
         # Bounded, killing the driver on timeout: an unbounded stop of a hung

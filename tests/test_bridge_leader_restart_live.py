@@ -127,14 +127,14 @@ async def _recv_id(recv: Any, want_id: int, timeout: float) -> Any:
 async def test_follower_survives_leader_restart_and_meters_recovery(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    from octowright.cli.restart import _resolve_octowright_entry
+    from octowright.daemonize import console_script_beside_interpreter
 
     # Not a bare `.with_name("octowright")`: Windows console scripts are
     # `<name>.exe`, so that always missed on Windows and this test silently
     # self-skipped on every Windows run -- confirmed live on 2026-09-08.
-    octowright_bin = Path(_resolve_octowright_entry())
-    if not octowright_bin.exists():
-        pytest.skip(f"octowright executable not found at {octowright_bin}")
+    octowright_bin = console_script_beside_interpreter()
+    if octowright_bin is None:
+        pytest.skip("no octowright console script beside this interpreter")
 
     from octowright import proxy_runtime as runtime
     from tests._metric_recorders import RecordingCounter

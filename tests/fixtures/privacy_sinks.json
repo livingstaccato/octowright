@@ -1,0 +1,230 @@
+[
+  {
+    "module": "octowright.artifacts.reports",
+    "function": "_json_write",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.artifacts.reports",
+    "function": "refresh_run_summary",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.artifacts.reports",
+    "function": "write_artifact_manifest",
+    "callee": "_json_write",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.artifacts.reports",
+    "function": "write_run_bundle",
+    "callee": "_json_write",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.artifacts.reports",
+    "function": "write_run_bundle",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.artifacts.script_export",
+    "function": "write_macro_cli",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "_capture_screenshot",
+    "callee": "screenshot",
+    "shape": ".evidence"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "_capture_screenshot",
+    "callee": "screenshot",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "_store_rollup",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "_verify_run",
+    "callee": "macro_artifact_verify",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "export_macro_cli",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "export_macro_cli",
+    "callee": "write_macro_cli",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "macro_artifact_critical_points_set",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "macro_artifact_verify",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "macro_artifact_verify",
+    "callee": "refresh_run_summary",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "plan_macro_artifact",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "run_macro_artifact",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
+    "function": "run_macro_artifact",
+    "callee": "write_run_bundle",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.failure_context",
+    "function": "_diagnostic_bundle",
+    "callee": "diagnostic_bundle",
+    "shape": ".session"
+  },
+  {
+    "module": "octowright.macros.privacy_ledger",
+    "function": "SensitiveRecorder.record",
+    "callee": "record",
+    "shape": "._recorder"
+  },
+  {
+    "module": "octowright.macros.privacy_ledger",
+    "function": "SensitiveRecorder.record_control",
+    "callee": "record_control",
+    "shape": "._recorder"
+  },
+  {
+    "module": "octowright.macros.repair",
+    "function": "repair_apply",
+    "callee": "write_macro",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.safe_screenshot",
+    "function": "_capture",
+    "callee": "atomic_write_via_writer",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.safe_screenshot",
+    "function": "_capture.write",
+    "callee": "write_bytes",
+    "shape": ".temporary"
+  },
+  {
+    "module": "octowright.macros.safe_screenshot",
+    "function": "redacted_screenshot",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.macros.storage",
+    "function": "_write",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.storage",
+    "function": "save_macro",
+    "callee": "atomic_write_text",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin._capture_diagnostic_html",
+    "callee": "write_text",
+    "shape": ".h_path"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin._capture_diagnostic_screenshot",
+    "callee": "screenshot",
+    "shape": ".page"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin._teardown_after_close_cutoff",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.a11y_dragdrop",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.drag",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.hover",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.navigate_back",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.open_url",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.reset_frame",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.select_option",
+    "callee": "record",
+    "shape": ".recorder"
+  },
+  {
+    "module": "octowright.session.core_ops_mixin",
+    "function": "SessionOpsMixin.switch_frame",
+    "callee": "record",
+    "shape": ".recorder"
+  }
+]

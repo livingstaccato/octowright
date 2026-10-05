@@ -13,6 +13,14 @@ by hand from session attributes, and each copy list had drifted from
 the badge were lost everywhere, and the driver path also lost ``protected``,
 ``disable_automation_controlled``, ``wayland_native`` and ``headed``.
 
+The browser ``channel`` is carried too. It used to be named below as
+launch-time only, because a carried channel cannot notice that the named build
+became unavailable; that case is handled where it happens instead
+(`launch_replacement`): a replacement whose channel cannot be found relaunches
+on Playwright's bundled build and says so. The channel comes only from the
+live session's own options, never from a JSONL recording
+(``LaunchOptions.from_launch_record`` still drops it).
+
 The session now keeps the options it was launched with
 (``BrowserSession.launch_options``, written by ``recorded_launch_options``),
 and the replacement is DERIVED from them: every caller-settable field is
@@ -24,18 +32,20 @@ neither carried nor named.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
+from provide.telemetry import get_logger
+
 from octowright.browser_pool.options import LaunchOptions
+
+log = get_logger(__name__)
 
 #: Options a replacement deliberately does NOT take from the original.
 NOT_CARRIED: Final[dict[str, str]] = {
-    # LaunchOptions.channel: browser selection is launch-time only, since a
-    # carried setting cannot notice the named channel became unavailable.
-    "channel": "browser selection is launch-time only",
     # Arbitrary binary and argv: a code-execution opt-in the caller makes per
     # launch (OCTOWRIGHT_ALLOW_EXECUTABLE_PATH), never implied by a relaunch.
     "executable_path": "an arbitrary local binary is chosen per launch, never implied",
@@ -102,10 +112,6 @@ class ReplacementSource:
     def profile(self) -> str | None:
         return self.options.profile
 
-    @property
-    def stateful(self) -> bool:
-        return self.options.profile is not None or self.options.session
-
     def launch_kwargs(
         self, *, url: str, headed: bool | None = None, overrides: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -125,3 +131,56 @@ class ReplacementSource:
             changes["headed"] = headed
         changes.update(overrides or {})
         return replace(self.options, **changes).with_har_rotated().to_pool_kwargs()
+
+
+#: Playwright's refusal of a channel it cannot find on this host (its own
+#: wording, from ``_createChromiumChannel``): "Chromium distribution 'msedge'
+#: is not found at ..." or "... is not supported on linux".
+_CHANNEL_UNAVAILABLE = re.compile(r"distribution '([^']+)' is not (?:found|supported)")
+
+#: How far down ``__cause__``/``__context__`` a launch failure is searched.
+_CAUSE_DEPTH = 8
+
+
+def channel_unavailable(exc: BaseException, channel: str) -> bool:
+    """Whether *exc* is Playwright refusing *channel* itself as not installed here.
+
+    Only that channel: a failure naming any other distribution, or none, is
+    a real launch failure and is not retried.
+    """
+    seen: BaseException | None = exc
+    for _ in range(_CAUSE_DEPTH):
+        if seen is None:
+            return False
+        if any(match == channel for match in _CHANNEL_UNAVAILABLE.findall(str(seen))):
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False
+
+
+def channel_dropped_warning(channel: str, kind: str) -> str:
+    return (
+        f"browser channel {channel!r} is not available on this host any more, so the replacement "
+        f"launched on Playwright's bundled {kind} build instead"
+    )
+
+
+async def launch_replacement(
+    launch: Callable[..., Awaitable[dict[str, Any]]], kwargs: Mapping[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """Launch a replacement with *kwargs*; returns the result and the channel it dropped, if any.
+
+    The original's ``channel`` is carried, and the one way that goes wrong is
+    the named build having been uninstalled since. Then, and only then, the
+    replacement is launched again with no channel, on the bundled build, and
+    the dropped channel is returned so the caller can say so. Any other
+    failure propagates untouched.
+    """
+    channel = kwargs.get("channel")
+    try:
+        return await launch(**kwargs), None
+    except Exception as exc:
+        if not isinstance(channel, str) or not channel or not channel_unavailable(exc, channel):
+            raise
+    log.warning("octowright.browser.replacement.channel_dropped", channel=channel, kind=kwargs.get("kind"))
+    return await launch(**{**kwargs, "channel": None}), channel

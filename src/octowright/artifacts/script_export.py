@@ -7,18 +7,25 @@ from __future__ import annotations
 
 import inspect
 import json
-import keyword
-import re
 from pathlib import Path
 from typing import Any
 
 from octowright import credential_input, credential_sinks, drawn_text
 from octowright._paths import atomic_write_text
 from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.artifacts.script_export_args import (
+    _args_dict,
+    _call_args,
+    _function_name,
+    _parameters,
+    _parser_lines,
+    _signature,
+)
 from octowright.config_paths import upload_staging_dir, user_config_dir
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.macros import scrub_admission
 from octowright.macros.calls import actions_assert_network_clean
+from octowright.macros.parameter_specs import macro_privacy
 from octowright.macros.privacy import (
     ARG_PRIVACY_CLASSIFIER_VERSION,
     BLIND_SCRUB_POLICY_ENV,
@@ -32,10 +39,7 @@ from octowright.macros.privacy import (
     SENSITIVE_KEY_PAIRS,
     SUBSTRING_TOKENS,
     TOKEN_TOKENS,
-    MacroArgPrivacy,
     _serialized_variants,
-    is_sensitive_arg_key,
-    scrub_sensitive_values,
 )
 from octowright.session.upload_paths import check_upload_path, upload_roots
 
@@ -62,10 +66,14 @@ def render_macro_cli(
     fn_name = _function_name(name)
     signature = _signature(parameters, include_evidence)
     action_json = json.dumps(macro.get("actions", []), indent=2)
-    # The macro's positional privacy -- the same view live replay builds -- so
-    # ``args_used`` and the script's own log agree about one macro.
-    privacy = MacroArgPrivacy.for_macro(macro.get("actions", []))
+    # The macro's own view -- positional and parameter_specs, resolved as live
+    # replay resolves it -- so ``args_used`` and the script's own log agree
+    # about one macro. A script has no credential-origin arguments, so the
+    # declared sets are final here, the floor already applied.
+    privacy = macro_privacy(macro)
     hard_redacted_args = sorted(privacy.assertion_args)
+    declared_sensitive_args = sorted(privacy.credential_args)
+    declared_public_args = sorted(privacy.public_args)
     # Decided at render time by the predicate replay uses; a text search of
     # ACTIONS_JSON also matched the string inside a selector or a typed value.
     watch_network = actions_assert_network_clean(macro.get("actions", []))
@@ -129,6 +137,11 @@ ACTIONS_JSON = {action_json!r}
 # Arguments substituted into an expect_no_text's text: they ARE the forbidden
 # text, so they are redacted whatever they are named (as live replay does).
 _HARD_REDACTED_ARGS = frozenset({hard_redacted_args!r})
+# The macro's parameter_specs, resolved at export: declared sensitive is
+# credential-tier under any name; declared public unmarks an identity or
+# contextual name (never a credential-like one, which the floor kept out).
+_DECLARED_SENSITIVE_ARGS = frozenset({declared_sensitive_args!r})
+_DECLARED_PUBLIC_ARGS = frozenset({declared_public_args!r})
 ACTIONS: list[dict[str, Any]] = json.loads(ACTIONS_JSON)
 _ARG_PRIVACY_CLASSIFIER_VERSION = {ARG_PRIVACY_CLASSIFIER_VERSION!r}
 _SUBSTRING_TOKENS = {tuple(sorted(SUBSTRING_TOKENS))!r}
@@ -203,6 +216,23 @@ def _privacy_tier(key: object) -> str | None:
     return None
 
 
+def _top_level_tier(key: object) -> str | None:
+    # A top-level argument, as live replay's MacroArgPrivacy._tier resolves it.
+    if key in _HARD_REDACTED_ARGS or key in _DECLARED_SENSITIVE_ARGS:
+        return "credential"
+    if key in _DECLARED_PUBLIC_ARGS and _privacy_tier(key) != "credential":
+        return None
+    return _privacy_tier(key)
+
+
+def _top_level_redacted(key: object) -> bool:
+    if key in _HARD_REDACTED_ARGS or key in _DECLARED_SENSITIVE_ARGS:
+        return True
+    if key in _DECLARED_PUBLIC_ARGS and _privacy_tier(key) != "credential":
+        return False
+    return _is_sensitive_arg_key(key)
+
+
 def _redact_nested_args(value: Any) -> Any:
     if isinstance(value, dict):
         return {{
@@ -220,9 +250,7 @@ def _redact_nested_args(value: Any) -> Any:
 
 def _redact_args(args: dict[str, Any]) -> dict[str, Any]:
     redacted = {{
-        str(key): "<redacted>"
-        if _is_sensitive_arg_key(key) or key in _HARD_REDACTED_ARGS
-        else _redact_nested_args(value)
+        str(key): "<redacted>" if _top_level_redacted(key) else _redact_nested_args(value)
         for key, value in args.items()
     }}
     policy = _blind_scrub_policy()
@@ -282,7 +310,7 @@ def _collect_classified_values(
                     path=f"{{path}}[{{index}}]",
                 )
             )
-    elif inherited is not None and value not in (None, ""):
+    elif inherited is not None and value not in (None, "") and not isinstance(value, bool):
         values.add((str(value), path, inherited))
     return values
 
@@ -293,7 +321,7 @@ def _classified_arg_values(args: dict[str, Any]) -> list[tuple[str, str, str]]:
         values.update(
             _collect_classified_values(
                 value,
-                inherited=_privacy_tier(key),
+                inherited=_top_level_tier(key),
                 path=str(key),
             )
         )
@@ -350,7 +378,9 @@ def _blind_scrub_arg_values(args: dict[str, Any], *, policy: str | None = None) 
 
 
 def _is_credential_arg(key: str) -> bool:
-    return _privacy_tier(key) == "credential"
+    # What the sink guards and fill-origin check treat as a credential: a
+    # credential-like name, or one the macro's parameter_specs declare sensitive.
+    return key in _DECLARED_SENSITIVE_ARGS or _privacy_tier(key) == "credential"
 
 
 def _upload_paths(paths: Any) -> list[str]:
@@ -366,7 +396,8 @@ def _redact_value(value: Any, sensitive_values: list[str]) -> Any:
         for sensitive in sensitive_values:
             variants = _serialized_variants(sensitive)
             for variant in variants:
-                flags = re.IGNORECASE if "%" in variant else 0
+                # Every spelling ignores case, as the live scrub does.
+                flags = re.IGNORECASE
                 if len(sensitive) < 4:
                     redacted = re.sub(
                         rf"(?<![A-Za-z0-9]){{re.escape(variant)}}(?![A-Za-z0-9])",
@@ -606,123 +637,24 @@ def write_macro_cli(
     macro: dict[str, Any],
     args: dict[str, Any] | None = None,
     include_evidence: bool = True,
+    root: Path | None = None,
 ) -> Path:
+    """Write the macro's CLI script; ``root`` is the containment root ``path``
+    was validated against, so the write re-walks it without following symlinks."""
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         path,
         render_macro_cli(name=name, macro=macro, args=args, include_evidence=include_evidence),
         encoding="utf-8",
+        root=root,
     )
     return path
-
-
-def _function_name(name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9]+", "_", name.strip().lower()).strip("_") or "macro"
-    if cleaned[0].isdigit():
-        cleaned = f"macro_{cleaned}"
-    return f"run_{cleaned}"
-
-
-def _parameters(macro: dict[str, Any]) -> list[tuple[str, str]]:
-    raw = macro.get("parameters", [])
-    if isinstance(raw, dict):
-        raw = list(raw)
-    if not isinstance(raw, list):
-        return []
-    seen: set[str] = set()
-    parameters = []
-    for param in raw:
-        if not isinstance(param, str):
-            continue
-        ident = _identifier(param)
-        base = ident
-        index = 2
-        while ident in seen:
-            ident = f"{base}_{index}"
-            index += 1
-        seen.add(ident)
-        parameters.append((param, ident))
-    return parameters
-
-
-def _identifier(value: str) -> str:
-    cleaned = re.sub(r"\W+", "_", value.strip()).strip("_") or "arg"
-    if cleaned[0].isdigit():
-        cleaned = f"arg_{cleaned}"
-    if keyword.iskeyword(cleaned):
-        cleaned = f"{cleaned}_"
-    return cleaned
-
-
-def _parser_line(parameter: tuple[str, str], args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
-    original, ident = parameter
-    flag = re.sub(r"[^A-Za-z0-9-]+", "-", original.strip()).strip("-") or ident.replace("_", "-")
-    default = _safe_default(original, args, privacy)
-    return f"    parser.add_argument('--{flag}', dest='{ident}', default={default!r})"
-
-
-def _signature(parameters: list[tuple[str, str]], include_evidence: bool) -> str:
-    fn_params = [f"{ident}: str = ''" for _original, ident in parameters]
-    if include_evidence:
-        fn_params.append("evidence_dir: str = ''")
-    fn_params.append("trusted_origins: tuple[str, ...] = ()")
-    return ", ".join(fn_params)
-
-
-def _parser_lines(
-    parameters: list[tuple[str, str]],
-    args: dict[str, Any] | None,
-    include_evidence: bool,
-    privacy: MacroArgPrivacy,
-) -> str:
-    parser_lines = "\n".join(_parser_line(param, args, privacy) for param in parameters)
-    if include_evidence:
-        parser_lines = _append_parser_line(
-            parser_lines,
-            "    parser.add_argument('--evidence-dir', default='', help='Optional directory for result/evidence logs')",
-        )
-    return _append_parser_line(
-        parser_lines,
-        "    parser.add_argument('--trusted-origin', action='append', default=[], "
-        "help='Origin (scheme://host[:port]) the macro may send a credential header to and type a "
-        "credential on; repeatable')",
-    )
-
-
-def _call_args(parameters: list[tuple[str, str]], include_evidence: bool) -> list[str]:
-    call_args = [f"{ident}=ns.{ident}" for _original, ident in parameters]
-    if include_evidence:
-        call_args.append("evidence_dir=ns.evidence_dir")
-    call_args.append("trusted_origins=tuple(ns.trusted_origin)")
-    return call_args
 
 
 def _evidence_render_parts(include_evidence: bool) -> tuple[str, str, str]:
     if not include_evidence:
         return "", "    evidence = None\n", ""
     return _evidence_helpers(), "    evidence = _Evidence(evidence_dir)\n", "            evidence.finish(result)\n"
-
-
-def _append_parser_line(existing: str, line: str) -> str:
-    return f"{existing}\n{line}" if existing else line
-
-
-def _safe_default(param: str, args: dict[str, Any] | None, privacy: MacroArgPrivacy) -> str:
-    """A default the script may carry in its source: never a classified value.
-
-    Classified the way live replay classifies it (``privacy``), so an argument
-    the macro feeds to ``expect_no_text`` is never baked in, whatever its name.
-    """
-    if is_sensitive_arg_key(param) or param in privacy.assertion_args:
-        return ""
-    value = (args or {}).get(param, "")
-    rendered = str(value) if value is not None else ""
-    scrubbed = scrub_sensitive_values(rendered, privacy.blind_scrub(args or {}))
-    return rendered if scrubbed == rendered else ""
-
-
-def _args_dict(parameters: list[tuple[str, str]]) -> str:
-    return "{" + ", ".join(f"{original!r}: {ident}" for original, ident in parameters) + "}"
 
 
 def _evidence_helpers() -> str:

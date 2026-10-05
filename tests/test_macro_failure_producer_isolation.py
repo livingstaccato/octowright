@@ -5,7 +5,7 @@
 
 """One failing diagnostic producer must not cost the caller the other two.
 
-``_build_failure_payload`` asks three independently-fallible producers for
+``failure_context.build_failure_payload`` asks three independently-fallible producers for
 evidence about a macro step that already failed: the diagnostic bundle, the
 healing suggestion, and the failed-request tail. Each is wrapped separately so
 its own failure is recorded IN the payload rather than raised over the dispatch
@@ -133,20 +133,23 @@ async def test_a_failing_network_tail_is_reported_and_degrades_to_an_empty_list(
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("failing_step")
-async def test_a_classified_macro_suppresses_the_bundle_rather_than_producing_one(
+async def test_a_classified_macro_gets_a_scrubbed_bundle_without_a_screenshot(
     session: _FakeSession,
 ) -> None:
-    """The generic producer persists raw HTML and a raw screenshot."""
+    """Pixels cannot be scrubbed, text can: the producer runs, scrubbed, with no screenshot (#248)."""
     payload = await _payload(session)  # unclassified first, for contrast
     assert payload["bundle"]["url"] == "https://x"
+    assert session.diagnostic_bundle.await_args.kwargs.get("screenshot", True) is True
 
     session.diagnostic_bundle.reset_mock()
     with pytest.raises(RuntimeError) as excinfo:
         await run_macro(session, "m", {"password": "A4-CLASSIFIED-CANARY"})  # pragma: allowlist secret
 
     classified = excinfo.value.args[0]
-    assert classified["bundle"] == {"diagnostic_suppressed": "classified macro arguments"}
-    session.diagnostic_bundle.assert_not_awaited()
+    assert classified["bundle"] == {"url": "https://x"}
+    kwargs = session.diagnostic_bundle.await_args.kwargs
+    assert kwargs["screenshot"] is False
+    assert kwargs["scrub"]("A4-CLASSIFIED-CANARY") == "<redacted>"  # pragma: allowlist secret
 
 
 @pytest.mark.asyncio

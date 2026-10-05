@@ -10,6 +10,7 @@ from typing import Any
 
 from octowright._json_text import dumps_utf8_safe
 from octowright._paths import atomic_write_text
+from octowright.artifacts.bundle_privacy import BundlePrivacy, guard_documents
 from octowright.artifacts.evidence import redact_preview
 from octowright.artifacts.models import now_iso
 from octowright.artifacts.redaction import redact_mapping
@@ -37,7 +38,15 @@ def write_run_bundle(
     summary: str,
     verification: dict[str, Any] | None = None,
     sensitive_values: tuple[str, ...] = (),
+    privacy: BundlePrivacy | None = None,
 ) -> dict[str, Path]:
+    """Write a run's bundle, scrubbed of *sensitive_values*.
+
+    With *privacy*, the scrubbed bundle then goes through `guard_documents`
+    (the tripwire, and key-level redaction for an unresolved view), and the
+    flags it raises are written into ``result.json`` and left on
+    ``privacy.flags``.
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     result_path = run_dir / "result.json"
     evidence_path = run_dir / "evidence.json"
@@ -54,6 +63,15 @@ def write_run_bundle(
     result_payload = scrub_sensitive_values(result_payload, sensitive_values)
     evidence_payload = scrub_sensitive_values(_redact_evidence(evidence), sensitive_values)
     summary = str(scrub_sensitive_values(summary, sensitive_values))
+    verification = scrub_sensitive_values(verification, sensitive_values) if verification is not None else None
+    if privacy is not None:
+        documents, flags = guard_documents(
+            {"result": result_payload, "evidence": evidence_payload, "summary": summary, "verification": verification},
+            privacy,
+        )
+        result_payload = {**documents["result"], **flags}
+        evidence_payload, summary, verification = documents["evidence"], documents["summary"], documents["verification"]
+        privacy.summary = summary
 
     _json_write(result_path, result_payload)
     _json_write(evidence_path, {"records": evidence_payload})
@@ -61,10 +79,7 @@ def write_run_bundle(
     paths = {"result": result_path, "evidence": evidence_path}
     if verification is not None:
         verification_path = run_dir / "verification.json"
-        _json_write(
-            verification_path,
-            scrub_sensitive_values(verification, sensitive_values),
-        )
+        _json_write(verification_path, verification)
         paths["verification"] = verification_path
 
     atomic_write_text(

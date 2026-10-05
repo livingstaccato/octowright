@@ -38,11 +38,21 @@ the bundled Playwright binary isn't what you want:
   chromium args (new-tab extension, tiling, `--disable-dev-shm-usage`), so a
   user-supplied flag can deliberately override one of those if it conflicts.
 
-All three apply to every engine (`chromium`/`firefox`/`webkit`). They are
-**launch-time only**: never written to the JSONL recording, never read back
-from a saved launch record, and never carried across handoff/relaunch — a
-poisoned recording can't turn into an `executable_path` code-execution
-primitive, and replay can't silently weaken sandboxing via `launch_args`.
+All three apply to every engine (`chromium`/`firefox`/`webkit`). None of them
+is ever read back from a saved launch record — a poisoned recording can't turn
+into an `executable_path` code-execution primitive, and replay can't silently
+weaken sandboxing via `launch_args`. `executable_path` and `launch_args` are
+**launch-time only** and are never carried across handoff/relaunch either.
+
+`channel` **is** carried across handoff, fluid relaunch and the driver-death
+relaunch, from the live browser's own launch options, so a browser launched on
+system Chrome is replaced on system Chrome. If the channel has been
+uninstalled since (Playwright reports `Chromium distribution '<channel>' is not
+found`), the replacement launches on the bundled build instead and says so: a
+handoff or fluid-relaunch result carries `warnings` naming the dropped
+channel, a driver-death relaunch records it as `channel_dropped` on its
+lost-session record, and both log `octowright.browser.replacement.channel_dropped`.
+Any other launch failure is not retried.
 
 ## Chromium's automation-controlled signal
 
@@ -122,9 +132,9 @@ The persona/profile preserves practical continuity (cookies, localStorage,
 service workers) without requiring Octowright to mutate a running Playwright
 process.
 
-The `browser_handoff` behavior is implemented through close/relaunch semantics:
-preserve state by reusing the same profile between launches instead of mutating
-an existing Playwright process.
+Moving a browser between modes is close/relaunch, not a live switch: preserve
+state by reusing the same profile between launches instead of mutating an
+existing Playwright process.
 
 ## Safari caveat
 

@@ -21,7 +21,7 @@ the real error.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from provide.telemetry import get_logger
@@ -29,12 +29,18 @@ from provide.telemetry import get_logger
 from octowright import conditional
 from octowright.artifacts.digest import sanitize_url
 from octowright.macros._redact import _REDACTED_MACRO_VALUE, _redact_action
-from octowright.macros.privacy import MacroArgPrivacy, with_session_values
+from octowright.macros.privacy import MacroArgPrivacy, scrub_sensitive_values, with_session_values
 
 if TYPE_CHECKING:
     from octowright.session._protocols import SessionLike
 
 log = get_logger(__name__)
+
+# Console messages attached to a macro failure payload. Half the window is
+# kept for the plain tail and the rest goes to the newest diagnostic-level
+# messages (see ``_select_console_tail``), so a chatty page cannot flush the
+# useful line out of it.
+MACRO_FAILURE_CONSOLE_TAIL = 10
 
 # Per-message cap: the count above bounds the number of messages, not their
 # SIZE, and one console.log of a stringified response would otherwise push
@@ -92,8 +98,10 @@ def register_written_steps(
     """Let a ``try``/``try_each`` that suppresses a step of *expanded* report it as written.
 
     The `written_actions` form, so the record gets the payload's redactions too.
+    Skipped for a macro with no ``try``: nothing would ever look its steps up.
     """
-    conditional.register_written_steps(written_actions(actions, privacy_for), expanded)
+    if conditional.has_try(actions):
+        conditional.register_written_steps(written_actions(actions, privacy_for), expanded)
 
 
 def tracking_substitute(substitute: Any, privacy_for: Callable[[Any], MacroArgPrivacy]) -> Any:
@@ -189,3 +197,106 @@ def _truncate_bundle_console(bundle: dict[str, Any]) -> dict[str, Any]:
         return bundle
     bundle["console_tail"] = [_truncate_console_message(message) for message in messages]
     return bundle
+
+
+async def _diagnostic_bundle(session: SessionLike, sensitive_values: tuple[str, ...]) -> dict[str, Any]:
+    """The diagnostic producer's bundle, split by sink kind (#248).
+
+    The page may render a value this run or the session ledger holds (a
+    classified argument, a password typed earlier). Text can be scrubbed and
+    pixels cannot: with any value held, the producer writes its HTML file and
+    returns its console tail scrubbed of them all, and takes no screenshot.
+    Composition roots can retain their own explicitly safe evidence at the
+    authorized screenshot boundary. The returned bundle is scrubbed once more
+    here, for a producer that did not apply the scrub, and then cut to size --
+    in that order, so a cut cannot leave the start of a value behind.
+    """
+    try:
+        if sensitive_values:
+            raw = await session.diagnostic_bundle(
+                console_tail=MACRO_FAILURE_CONSOLE_TAIL,
+                scrub=lambda value: _scrubbed(value, sensitive_values),
+                screenshot=False,
+            )
+        else:
+            raw = await session.diagnostic_bundle(console_tail=MACRO_FAILURE_CONSOLE_TAIL)
+    except Exception as secondary:
+        return {"diagnostic_error": _scrubbed(repr(secondary), sensitive_values)}
+    bundle = _scrubbed(raw, sensitive_values) if isinstance(raw, dict) else {}
+    return _truncate_bundle_console(bundle)
+
+
+def _scrubbed(value: Any, sensitive_values: tuple[str, ...]) -> Any:
+    """*value* scrubbed of every one of *sensitive_values*, anywhere, flat: see `failure_scrub_values`."""
+    return scrub_sensitive_values(value, sensitive_values, marker=_REDACTED_MACRO_VALUE)
+
+
+async def build_failure_payload(
+    session: SessionLike,
+    *,
+    name: str,
+    index: int,
+    written: list[dict[str, Any]],
+    privacy_for: Callable[[Any], MacroArgPrivacy],
+    executed: int,
+    safe_original: str,
+    sensitive_values: tuple[str, ...],
+    suggest_fix: Callable[..., Awaitable[Any]],
+) -> dict[str, Any]:
+    """Assemble the failure payload from three independently-fallible producers.
+
+    Each producer is tried separately so one failing does not cost the caller
+    the other two: its own error is recorded IN the payload rather than raised
+    over the dispatch failure the payload exists to explain. *written* is the
+    macro's steps before substitution: the fields echoing them are not
+    scrubbed of *sensitive_values*, the page-derived ones are.
+    """
+    bundle = await _diagnostic_bundle(session, sensitive_values)
+
+    shown = written_actions(written[: index + 1], privacy_for)
+    try:
+        fix_suggestion = await suggest_fix(
+            session, shown[index], scrub_page=lambda text: _scrubbed(text, sensitive_values)
+        )
+    except Exception as secondary:
+        fix_suggestion = None
+        bundle["healing_error"] = _scrubbed(repr(secondary), sensitive_values)
+    try:
+        failed_requests = _scrubbed(failed_requests_tail(session), sensitive_values)
+        page_errors = _scrubbed(page_errors_tail(session), sensitive_values)
+    except Exception as secondary:  # defensive around injected session implementations
+        failed_requests, page_errors = [], []
+        bundle["network_error"] = _scrubbed(repr(secondary), sensitive_values)
+
+    payload: dict[str, Any] = {
+        "macro": name,
+        "failed_at_step": index,
+        # Partial-state signal: a multi-step macro that fails midway has
+        # already applied steps 0..index-1 to the live browser. Surface both
+        # the count and the steps that landed, as the macro wrote them, so the
+        # agent can reason about the half-applied state instead of seeing an
+        # opaque error.
+        "executed": executed,
+        "executed_actions": shown[:index],
+        "failed_action": shown[index],
+        "original": safe_original,
+        "bundle": bundle,
+        # The console tail and final URL were already in `bundle`; the failing
+        # requests were not, so a payload could report "timed out waiting for
+        # #foo" while the 409 that explains it sat unread. Carries the response
+        # body for a failed same-origin request (see
+        # session/core_network_mixin), which is usually the whole diagnosis --
+        # a status code alone is not actionable.
+        #
+        # A sibling of `bundle` rather than a key inside it: `bundle` is what
+        # diagnostic_bundle() returned, and folding another producer's data into
+        # it makes that claim false for every reader (a whole-record assertion
+        # caught exactly this).
+        "failed_requests": failed_requests,
+        # What an ``N page error(s)`` failure counted: uncaught exceptions are
+        # not console messages, so the console tail never shows them.
+        "page_errors": page_errors,
+    }
+    if fix_suggestion:
+        payload["healing_suggestion"] = fix_suggestion
+    return payload

@@ -168,6 +168,48 @@ async def _drain(session: BrowserSession) -> None:
         await asyncio.gather(*session._bg_tasks, return_exceptions=True)
 
 
+class TestDialogPromptTextRedaction:
+    """``prompt_text`` is typed into the page and has no element to classify it.
+
+    It is a selector-less sink like ``press_key``: scrubbed in the recording
+    under the blanket ``all`` mode, while the page still gets the real answer.
+    Recorded raw, a PIN answered to a ``prompt()`` landed in the JSONL twice.
+    """
+
+    FAKE_PIN = "Fixture-Not-A-Real-Secret-pin"
+
+    @pytest.mark.anyio
+    @pytest.mark.parametrize("mode", ["all", "ALL", " All "])
+    async def test_all_mode_scrubs_both_records_and_the_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        from octowright.defaults import REDACTED_INPUT_PLACEHOLDER
+
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", mode)
+        session = _make_session(tmp_path)
+        captured = _record_calls(session)
+        result = await session.set_dialog_policy("accept", self.FAKE_PIN)
+        dialog = _FakeDialog(dtype="prompt")
+        session._handle_dialog(dialog)
+        await _drain(session)
+        assert dialog.accept_arg == self.FAKE_PIN  # the page still gets the answer
+        assert self.FAKE_PIN not in repr(captured)
+        assert self.FAKE_PIN not in repr(result)
+        recorded = {name: fields.get("prompt_text") for name, fields in captured if "prompt_text" in fields}
+        assert recorded == {
+            "set_dialog_policy": REDACTED_INPUT_PLACEHOLDER,
+            "dialog_handled": REDACTED_INPUT_PLACEHOLDER,
+        }
+
+    @pytest.mark.anyio
+    async def test_passwords_mode_keeps_it_readable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_REDACT_INPUTS", "passwords")
+        session = _make_session(tmp_path)
+        captured = _record_calls(session)
+        await session.set_dialog_policy("accept", "ok")
+        assert ("set_dialog_policy", {"policy": "accept", "prompt_text": "ok"}) in captured
+
+
 class TestHandleDialog:
     @pytest.mark.anyio
     async def test_accept_alert_calls_accept_no_arg(self, tmp_path: Path) -> None:

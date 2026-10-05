@@ -38,6 +38,28 @@ def _serialized_variants(value: str) -> tuple[str, ...]:
         html.escape(value, quote=True),
         html.escape(value, quote=False),
     }
+    # Python's repr, which every ``{value!r}`` error message and every
+    # ``repr(exc)`` uses -- so twice over for a failure payload's ``original``:
+    # inside a single-quoted literal a ``'`` is escaped (repr picks that form
+    # whenever the text holds both quotes), inside a double-quoted one it is
+    # not; backslashes double and a control character becomes ``\xNN``, unlike
+    # JSON. Appending both quotes forces the first form. Seeded with the JSON
+    # spellings too: a locator error quotes the value as JSON and ``repr(exc)``
+    # then doubles that spelling's backslashes, which no repr of the raw value
+    # produces. Bounded: three seeds, two spellings each, two levels.
+    reprs = {
+        value,
+        json.dumps(value, ensure_ascii=True)[1:-1],
+        json.dumps(value, ensure_ascii=False)[1:-1],
+    }
+    for _ in range(2):
+        reprs = {
+            spelling
+            for item in reprs
+            for single in (repr(item + "'\"")[1:-4],)
+            for spelling in (single, single.replace("\\'", "'"))
+        }
+        variants.update(reprs)
     frontier = set(variants)
     for _ in range(_MAX_ENCODING_DEPTH):
         frontier = {encoded for item in frontier for encoded in (quote(item, safe=""), quote_plus(item, safe=""))}
@@ -119,6 +141,7 @@ def _scrub_patterns(
     depth) and their regexes were re-derived on each call. The ledger only
     grows, so each state is compiled once. *word_bounded* values match only as
     a whole identifier (`_identifier_bounded`); the rest keep the length rule.
+    Every pattern ignores case.
     """
     patterns: list[re.Pattern[str]] = []
     for sensitive in sensitive_values:
@@ -129,16 +152,48 @@ def _scrub_patterns(
                 pattern = rf"(?<![A-Za-z0-9]){re.escape(variant)}(?![A-Za-z0-9])"
             else:
                 pattern = re.escape(variant)
-            # Percent-encoded spellings vary in hex case between producers.
-            patterns.append(re.compile(pattern, re.IGNORECASE if "%" in variant else 0))
+            # Every spelling ignores case (#248): a page that echoes a value
+            # upper-, lower- or mixed-cased -- a capitalising header, a
+            # shouting log line -- put it in a failure payload in the clear,
+            # and percent-encoded spellings vary in hex case between producers.
+            patterns.append(re.compile(pattern, re.IGNORECASE))
     return tuple(patterns)
+
+
+@functools.lru_cache(maxsize=64)
+def _scrub_plan(
+    sensitive_values: tuple[str, ...], word_bounded: frozenset[str] = frozenset()
+) -> tuple[tuple[str | None, re.Pattern[str]], ...]:
+    """`_scrub_patterns`, each with the lower-cased literal it can only match around.
+
+    Case-insensitive matching made every pattern slower to run; skipping the
+    ones that cannot match wins that back. For ASCII text and an ASCII
+    variant, a case-insensitive match implies the lower-cased variant occurs in
+    the lower-cased text (the boundary guards only narrow it), so the literal
+    rules a pattern out exactly. A non-ASCII variant gets ``None`` and always
+    runs: Unicode case folding matches across scripts (the long s U+017F and ``s``, the
+    Kelvin sign and ``k``), which no lower-casing reproduces.
+    """
+    plan: list[tuple[str | None, re.Pattern[str]]] = []
+    patterns = iter(_scrub_patterns(sensitive_values, word_bounded))
+    for sensitive in sensitive_values:
+        for variant in _serialized_variants(sensitive):
+            plan.append((variant.lower() if variant.isascii() else None, next(patterns)))
+    return tuple(plan)
 
 
 def _scrub_text(
     text: str, sensitive_values: tuple[str, ...], marker: str, word_bounded: frozenset[str] = frozenset()
 ) -> str:
-    for pattern in _scrub_patterns(tuple(sensitive_values), word_bounded):
-        text = pattern.sub(marker, text)
+    """Every pattern applied in turn, case-insensitively; one that cannot match ASCII text is skipped."""
+    folded = text.lower() if text.isascii() else None
+    for needle, pattern in _scrub_plan(tuple(sensitive_values), word_bounded):
+        if folded is not None and needle is not None and needle not in folded:
+            continue
+        replaced = pattern.sub(marker, text)
+        if replaced != text:
+            text = replaced
+            folded = text.lower() if folded is not None else None
     return text
 
 
@@ -178,12 +233,9 @@ def _any_value_pattern(patterns: tuple[re.Pattern[str], ...]) -> re.Pattern[str]
     position than a longer one that overlaps it, and a later pattern sees the
     markers an earlier one wrote). But a string it does not match is a string
     none of them matches, so the sequential scrub would return it unchanged.
-    Each alternative keeps its own case-folding.
+    Every pattern ignores case, so the alternation does as a whole.
     """
-    alternatives = (
-        f"(?i:{pattern.pattern})" if pattern.flags & re.IGNORECASE else f"(?:{pattern.pattern})" for pattern in patterns
-    )
-    return re.compile("|".join(alternatives))
+    return re.compile("|".join(f"(?:{pattern.pattern})" for pattern in patterns), re.IGNORECASE)
 
 
 def filtered_text_scrubber(
@@ -191,11 +243,34 @@ def filtered_text_scrubber(
 ) -> Callable[[str], str]:
     """`_scrub_text` for one ledger state, behind a single search that rules most strings out.
 
-    Almost every string a page produces holds no value, so one search with the
-    combined pattern settles it; only a string that does hold one pays for the
-    per-variant passes, and gets exactly the sequential result.
+    Almost every string a page produces holds no value, so one search settles
+    it; only a string that does hold one pays for the per-variant passes, and
+    gets exactly the sequential result. For ASCII text that search is a plain,
+    case-sensitive one for the lower-cased ASCII variants over the lower-cased
+    text, which is as fast as the case-sensitive filter was (see `_scrub_plan`
+    for why it is exact); non-ASCII variants, and non-ASCII text, use the
+    case-insensitive alternation.
     """
-    present = _any_value_pattern(_scrub_patterns(sensitive_values, word_bounded)).search
+    plan = _scrub_plan(sensitive_values, word_bounded)
+    needles = sorted({needle for needle, _ in plan if needle is not None}, key=len, reverse=True)
+    folded_search = re.compile("|".join(map(re.escape, needles))).search if needles else None
+    unfoldable = tuple(pattern for needle, pattern in plan if needle is None)
+    unfoldable_search = _any_value_pattern(unfoldable).search if unfoldable else None
+    # Built on first need: page text is almost always ASCII, and compiling the
+    # whole case-insensitive alternation is most of a new ledger state's cost.
+    full: list[Callable[[str], re.Match[str] | None]] = []
+
+    def full_search(text: str) -> bool:
+        if not full:
+            full.append(_any_value_pattern(tuple(pattern for _, pattern in plan)).search)
+        return full[0](text) is not None
+
+    def present(text: str) -> bool:
+        if not text.isascii():
+            return bool(plan) and full_search(text)
+        if folded_search is not None and folded_search(text.lower()) is not None:
+            return True
+        return unfoldable_search is not None and unfoldable_search(text) is not None
 
     def scrub_text(text: str) -> str:
         return _scrub_text(text, sensitive_values, REDACTED, word_bounded) if present(text) else text

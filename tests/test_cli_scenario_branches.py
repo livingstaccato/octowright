@@ -463,6 +463,54 @@ class TestScenarioStartTestMode:
         assert captured["results"][0]["ok"] is False
         assert "no verify macro for role 'monitor'" in captured["results"][0]["error"]
 
+    def test_test_mode_skips_a_participant_with_no_macro_capability(
+        self,
+        patched_pools: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A plugin participant (no ``run_macro``) is not a test target, as in ``scenario_run_as_test``."""
+        live = _live(
+            participants=[
+                {"role": "player", "persona": "dante", "kind": "webkit", "instance_id": "i1"},
+                {"role": "shell", "persona": "ops", "kind": "terminal", "instance_id": "t1"},
+            ],
+            verify={"player": "vm"},
+        )
+        patched_pools["spool"].start.return_value = live
+
+        from octowright import macros as _m
+        from octowright import runner as _r
+
+        run_macro = AsyncMock()
+        monkeypatch.setattr(_m, "run_macro", run_macro)
+        captured: dict[str, Any] = {}
+        monkeypatch.setattr(_r, "_write_junit", lambda results, path, *, kind: captured.setdefault("results", results))
+
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo", "--test", "--out", str(tmp_path / "r.xml")])
+        assert result.exit_code == 0, result.output
+        assert "1/1 verify passed" in result.output
+        assert [r["name"] for r in captured["results"]] == ["player:dante"]
+        patched_pools["pool"].get.assert_called_once_with("i1")
+
+    def test_test_mode_creates_the_report_directory(
+        self,
+        patched_pools: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """``--out`` into a directory that does not exist yet writes the report there."""
+        live = _live(verify={"player": "vm"})
+        patched_pools["spool"].start.return_value = live
+
+        from octowright import macros as _m
+
+        monkeypatch.setattr(_m, "run_macro", AsyncMock())
+        out_path = tmp_path / "not-yet" / "r.xml"
+        result = CliRunner().invoke(cli, ["scenario", "start", "demo", "--test", "--out", str(out_path)])
+        assert result.exit_code == 0, result.output
+        assert out_path.is_file()
+
     def test_test_mode_default_out_path_used_when_not_provided(
         self,
         patched_pools: dict[str, Any],

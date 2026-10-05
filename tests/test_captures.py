@@ -524,3 +524,38 @@ def test_save_capture_refuses_a_host_directory_symlinked_outside_the_root(tmp_pa
     # mode bits; Windows ignores mkdir's mode and reports 0o777 either way.
     if os.name != "nt":
         assert outside.stat().st_mode & 0o777 == 0o755
+
+
+def test_save_capture_survives_cleanup_emptying_its_own_directory(tmp_path: Path) -> None:
+    """An expired capture alone in ``<root>/<host>/<session>/`` is pruned by the
+    pre-write cleanup, which also removes the emptied directory. That must not
+    be the directory the new capture is about to be written into."""
+    first = captures.save_capture(
+        kind="text", content="old", url="https://example.com/", instance_id="sess1", root=tmp_path
+    )
+    first_path = Path(first["path"])
+    stale = time.time() - 10_000
+    os.utime(first_path, (stale, stale))
+
+    second = captures.save_capture(
+        kind="text",
+        content="new",
+        url="https://example.com/",
+        instance_id="sess1",
+        root=tmp_path,
+        ttl_seconds=60,
+    )
+
+    assert not first_path.exists()
+    assert Path(second["path"]).exists()
+    assert Path(second["path"]).parent == first_path.parent
+
+
+def test_save_capture_refuses_a_capture_larger_than_the_budget(tmp_path: Path) -> None:
+    """A capture that alone exceeds ``max_total_bytes`` would be deleted by the
+    post-write cleanup; it is refused up front instead of returned as saved."""
+    import pytest
+
+    with pytest.raises(ValueError, match="OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES"):
+        captures.save_capture(kind="text", content="x" * 5000, root=tmp_path, max_total_bytes=1000)
+    assert list(tmp_path.rglob("*.json")) == []

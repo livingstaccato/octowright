@@ -64,8 +64,12 @@ def test_new_tab_contains_commit_placeholder_or_value() -> None:
     assert "commit" in text or "rev-parse" in text or "browser-count" in text
 
 
-def test_new_tab_fetches_sessions_api() -> None:
-    assert "/api/sessions" in _client().get("/new-tab").text
+def test_new_tab_polls_its_own_status_endpoint() -> None:
+    """``/api/sessions`` is pairing-gated, and a launched browser holds no
+    bearer: the strip showed 0 browsers and logged a 401 every 3s."""
+    text = _client().get("/new-tab").text
+    assert "/new-tab/status" in text
+    assert "/api/sessions" not in text
 
 
 def test_new_tab_has_dashboard_link() -> None:
@@ -92,3 +96,20 @@ def test_new_tab_rejects_dns_rebinding_host() -> None:
 def test_new_tab_allowed_for_explicit_loopback_host() -> None:
     response = _client().get("/new-tab", headers={"host": "127.0.0.1:6286"})
     assert response.status_code == 200
+
+
+def test_new_tab_status_needs_no_bearer_and_counts_live_browsers(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from octowright.http import state
+
+    monkeypatch.delenv("OCTOWRIGHT_DASHBOARD_REQUIRE_PAIRING", raising=False)
+    monkeypatch.setattr(state, "pool", SimpleNamespace(iter_sessions=lambda: iter([object(), object()])))
+    response = _client().get("/new-tab/status")
+    assert response.status_code == 200
+    assert response.json() == {"browsers": 2}
+
+
+def test_new_tab_status_rejects_dns_rebinding_host() -> None:
+    response = _client().get("/new-tab/status", headers={"host": "malicious.example:6286"})
+    assert response.status_code == 403

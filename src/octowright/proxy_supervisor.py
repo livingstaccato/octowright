@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import itertools
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -31,7 +30,7 @@ from octowright._bridge_message_helpers import (
 )
 from octowright._trace_propagation import build_tracing_http_client
 from octowright._tracing import counter, histogram, span
-from octowright.defaults import BRIDGE_TOOL_TIMEOUTS
+from octowright.defaults import BRIDGE_TOOL_TIMEOUTS, env_float
 
 _BRIDGE_RECONNECT = counter(
     "octowright_bridge_reconnect_total",
@@ -59,8 +58,8 @@ _BRIDGE_SUSPENSION = counter(
 # more than this is a process *suspension* (the MCP client SIGSTOPped the
 # follower — e.g. Codex compaction freezing it), not normal scheduling jitter.
 # The frozen time would otherwise blow monotonic-based in-flight deadlines and
-# strand the now-stale leader session. (defaults.py is at its LOC ceiling.)
-SUSPEND_THRESHOLD_SECONDS = float(os.environ.get("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", "5.0"))
+# strand the now-stale leader session.
+SUSPEND_THRESHOLD_SECONDS = env_float("OCTOWRIGHT_BRIDGE_SUSPEND_THRESHOLD_SECONDS", 5.0)
 
 # Reserved namespace for progressTokens the BRIDGE invents (see _inject_meta).
 # A token bearing it is bridge-internal by construction and must never reach the
@@ -72,7 +71,7 @@ SYNTHETIC_PROGRESS_PREFIX = "owpt-"
 
 # Answer for an in-flight call whose leader was replaced before it responded.
 LEADER_REPLACED_REASON = (
-    "the octowright leader was replaced while this call was in flight; its outcome is unknown "
+    "the Octowright leader was replaced while this call was in flight; its outcome is unknown "
     "(it may already have taken effect). Check the current state before retrying."
 )
 
@@ -119,6 +118,10 @@ class InFlightRequest:
     # was first sent to. Its idempotency cache is process-local, so a resume is
     # only safe on a session to that same leader -- see ``resume_in_flight``.
     leader_generation: str | None = None
+    # Whether a send of this request to a leader ever succeeded. One that never
+    # left the follower cannot have run anywhere, so it is safe to send to a
+    # replacement leader -- see ``resume_in_flight``.
+    delivered: bool = False
     # Guards against the watchdog and the remote reader both popping the
     # same id concurrently — without this, a response arriving in the same
     # asyncio tick as deadline expiry produces two outbound frames for one
@@ -227,6 +230,12 @@ class BridgeSupervisor:
                 await remote_write.send(self._outgoing_frame(request_id, message))
             except Exception as exc:
                 await self._handle_forward_failure(message, request_id, method, remote_write, remote_write_slot, exc)
+            else:
+                self._mark_delivered(request_id)
+
+    def _mark_delivered(self, request_id: str | int | None) -> None:
+        if request_id is not None and (tracked := self._in_flight.get(request_id)) is not None:
+            tracked.delivered = True
 
     def _outgoing_frame(self, request_id: str | int | None, message: SessionMessage) -> SessionMessage:
         """The frame to forward: the tracked one (bridge ``_meta`` injected) when
@@ -585,11 +594,16 @@ class BridgeSupervisor:
             if item.responded or not self._is_resumable(item) or item.outgoing is None:
                 continue
             if item.leader_generation != self.leader_generation:
-                # The leader that received this call is gone and its dedup cache
-                # with it: the replacement would run the call again. It may or may
-                # not have committed on the old leader, so say exactly that.
-                await self._fail_in_flight(item, LEADER_REPLACED_REASON, outcome="unknown")
-                continue
+                if item.delivered:
+                    # The leader that received this call is gone and its dedup
+                    # cache with it: the replacement would run the call again. It
+                    # may or may not have committed on the old leader, so say
+                    # exactly that.
+                    await self._fail_in_flight(item, LEADER_REPLACED_REASON, outcome="unknown")
+                    continue
+                # Never left the follower, so it ran nowhere: the replacement
+                # leader is now the one it belongs to.
+                item.leader_generation = self.leader_generation
             item.resume_count += 1
             item.deadline = now + (item.timeout or self.request_timeout_seconds)
             _BRIDGE_RESUME.add(1, attributes={"method": item.method or "unknown"})
@@ -600,3 +614,4 @@ class BridgeSupervisor:
                 # next reconnect cycle (or eventual budget exhaustion).
                 log.debug("octowright.bridge.resume_failed", request_id=item.request_id, error=repr(exc))
                 return
+            item.delivered = True

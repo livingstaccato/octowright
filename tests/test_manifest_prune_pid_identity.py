@@ -200,3 +200,19 @@ def test_no_table_read_when_there_is_nothing_to_check(tmp_path: Path, monkeypatc
     monkeypatch.setattr(process_reaper, "_list_processes", _boom)
 
     assert sm.prune_dead_daemon_entries(current_pid=os.getpid(), path=path) == []
+
+
+WINDOWS_DAEMON_CMD = '"C:\\Users\\u\\.venv\\Scripts\\octowright.EXE" serve --daemon-mode'
+
+
+def test_a_windows_console_script_daemon_keeps_its_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows runs the console script as ``...\\octowright.EXE" serve``: an
+    extension and a closing quote sit between the two words, so the bare
+    ``"octowright serve"`` substring never matched and a LIVE daemon's entries
+    were pruned as a recycled pid's."""
+    path = tmp_path / "manifest.json"
+    _write(path, {"live": _entry("live", OTHER)})
+    _alive(monkeypatch, {OTHER})
+    _stub_table(monkeypatch, [(OTHER, 1, WINDOWS_DAEMON_CMD)])
+
+    assert sm.prune_dead_daemon_entries(current_pid=os.getpid(), path=path) == []

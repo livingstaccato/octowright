@@ -11,6 +11,7 @@ import asyncio
 import math
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -27,11 +28,6 @@ from octowright.http.discovery import (
 )
 from octowright.http.exposure import guard_sensitive_http
 from octowright.http.json_response import SafeJSONResponse
-from octowright.http.pairing import (
-    dashboard_pairing_state,
-    pairing_anchor_available,
-    pairing_required,
-)
 from octowright.http.routes._common import _dashboard_operation_timeout_seconds, _parse_bool
 from octowright.session.operation.gate import (
     SessionBusyTimeoutError,
@@ -72,11 +68,17 @@ def _valid_session_id(sid: str) -> bool:
 FRAME_TIME_MAX_SECONDS = 24 * 3600.0
 FRAME_TIME_STEP_SECONDS = 0.1
 FRAME_CACHE_MAX_FILES = 256
-#: ffmpeg runs at once across every session; a thread semaphore because the
-#: extraction runs in executor threads, and an asyncio one binds to one loop.
-_FRAME_EXTRACTIONS = threading.BoundedSemaphore(2)
+#: ffmpeg runs at once across every session. A dedicated two-thread executor,
+#: not a semaphore inside the default one: a request queued behind the bound
+#: then waits in this executor's queue, not in a default-executor thread that
+#: every other ``to_thread`` in the daemon needs. Not loop-bound, unlike an
+#: asyncio semaphore, so it survives the test suite's many loops.
+FRAME_EXTRACTION_WORKERS = 2
+_FRAME_EXECUTOR = ThreadPoolExecutor(max_workers=FRAME_EXTRACTION_WORKERS, thread_name_prefix="octowright-frame")
 #: (path, size, mtime_ns) -> duration seconds, or None when ffprobe could not say.
+#: Read and written from executor threads, so every access holds the lock.
 _VIDEO_DURATIONS: dict[tuple[str, int, int], float | None] = {}
+_VIDEO_DURATIONS_LOCK = threading.Lock()
 _VIDEO_DURATIONS_MAX = 64
 
 
@@ -91,25 +93,33 @@ def _parse_frame_time(raw_t: str) -> float | None:
 
 
 def _video_duration(video_path: Path) -> float | None:
-    """The video's duration, probed once per file version; ``None`` if unknown."""
+    """The video's duration, probed once per file version; ``None`` if unknown.
+
+    The probe runs outside the lock (it is a subprocess); the result is
+    returned from the local, not read back from the cache, which another
+    thread's insert may already have evicted it from.
+    """
     st = video_path.stat()
     key = (str(video_path), st.st_size, st.st_mtime_ns)
-    if key not in _VIDEO_DURATIONS:
-        try:
-            duration = float(state._video.probe_video(video_path).get("duration_seconds") or 0.0)
-        except Exception as exc:
-            # No ffprobe, or a file it cannot read: the absolute ceiling still applies.
-            state.log.debug("octowright.http.frame_duration_unknown", path=str(video_path), error=repr(exc))
-            duration = 0.0
-        if len(_VIDEO_DURATIONS) >= _VIDEO_DURATIONS_MAX:
+    with _VIDEO_DURATIONS_LOCK:
+        if key in _VIDEO_DURATIONS:
+            return _VIDEO_DURATIONS[key]
+    try:
+        probed = float(state._video.probe_video(video_path).get("duration_seconds") or 0.0)
+    except Exception as exc:
+        # No ffprobe, or a file it cannot read: the absolute ceiling still applies.
+        state.log.debug("octowright.http.frame_duration_unknown", path=str(video_path), error=repr(exc))
+        probed = 0.0
+    duration = probed if probed > 0 else None
+    with _VIDEO_DURATIONS_LOCK:
+        while _VIDEO_DURATIONS and len(_VIDEO_DURATIONS) >= _VIDEO_DURATIONS_MAX and key not in _VIDEO_DURATIONS:
             _VIDEO_DURATIONS.pop(next(iter(_VIDEO_DURATIONS)))
-        _VIDEO_DURATIONS[key] = duration if duration > 0 else None
-    return _VIDEO_DURATIONS[key]
+        _VIDEO_DURATIONS[key] = duration
+    return duration
 
 
-def _extract_frame_bounded(video_path: Path, cache_dir: Path, t: float) -> None:
-    with _FRAME_EXTRACTIONS:
-        state._video.extract_frames(video_path, cache_dir, at_times=[t])
+def _extract_frame(video_path: Path, cache_dir: Path, t: float) -> None:
+    state._video.extract_frames(video_path, cache_dir, at_times=[t])
 
 
 def _prune_frame_cache(cache_dir: Path, keep: Path) -> None:
@@ -141,7 +151,7 @@ async def _extract_into_cache(video_path: Path, cached: Path, t: float) -> SafeJ
     """Extract the frame at ``t`` into ``cached``; an error response, or ``None`` on success."""
     # Run ffmpeg in a thread — extract_frames is sync subprocess, blocks the loop.
     try:
-        await asyncio.get_running_loop().run_in_executor(None, _extract_frame_bounded, video_path, cached.parent, t)
+        await asyncio.get_running_loop().run_in_executor(_FRAME_EXECUTOR, _extract_frame, video_path, cached.parent, t)
     except Exception as e:
         return SafeJSONResponse(
             {"error": f"frame extraction failed: {e}"},
@@ -210,22 +220,13 @@ async def session_video(request: Request) -> Response:
             {"error": "no video recorded for this session"},
             status_code=404,
         )
-    # Starlette's FileResponse handles HTTP Range automatically. When pairing
-    # is enabled, however, the bytes are authorization-scoped: neither a
-    # browser cache nor an intermediary may reuse one tab's authenticated
-    # 200/206 response for an unpaired caller. Keep pairing-off playback
-    # cacheable for backwards-compatible local performance.
-    headers = None
-    if pairing_required() and pairing_anchor_available(dashboard_pairing_state(request)):
-        headers = {
-            "Cache-Control": "private, no-store",
-            "Vary": "Authorization, X-Octowright-Token",
-        }
+    # Starlette's FileResponse handles HTTP Range automatically. Under
+    # pairing, the guard marks the 200/206 private/no-store and Vary on the
+    # credentials, as for every admitted response -- one policy, not a copy.
     return FileResponse(
         path=str(video_path),
         media_type="video/webm",
         filename=video_path.name,
-        headers=headers,
     )
 
 
@@ -410,6 +411,11 @@ async def session_screenshots(request: Request) -> SafeJSONResponse:
     return SafeJSONResponse({"screenshots": out})
 
 
+def _is_session_screenshot_name(filename: str, sid: str) -> bool:
+    """A single basename the screenshot listing would offer for ``sid``."""
+    return "/" not in filename and "\\" not in filename and sid in filename and filename.endswith(".png")
+
+
 async def session_screenshot_file(request: Request) -> Response:
     sid = request.path_params["id"]
     filename = request.path_params["filename"]
@@ -418,6 +424,11 @@ async def session_screenshot_file(request: Request) -> Response:
     sdir = _screenshot_dir_for(sid)
     if sdir is None:
         return SafeJSONResponse({"error": f"no session with id {sid!r}"}, status_code=404)
+    # Only what the listing offers (``*{sid}*.png``): for a root-level
+    # recording ``sdir`` IS the recordings root, so without this the route
+    # served another session's HAR or JSONL, labelled ``image/png``.
+    if not _is_session_screenshot_name(filename, sid):
+        return SafeJSONResponse({"error": "invalid filename"}, status_code=400)
     target = sdir / filename
     # Defence-in-depth: the resolved file AND its parent dir must both live
     # under RECORDINGS_DIR. Symlink-resolving only the file isn't enough — a

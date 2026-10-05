@@ -188,3 +188,36 @@ class TestWiredIntoRejectUnsafeUrl:
 
         monkeypatch.delenv(POLICY, raising=False)
         _reject_unsafe_url("http://169.254.169.254/")  # no raise when policy off
+
+
+class TestUnparsableUrlUnderPolicy:
+    """A URL Python cannot split is not one the browser refuses.
+
+    ``http://x]@169.254.169.254/`` raises in ``urlsplit`` but a browser reads
+    ``x]`` as userinfo and goes to the metadata address. Returning "nothing to
+    check" there failed open; with a policy on it is refused instead.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://x]@169.254.169.254/latest/meta-data/",
+            "HTTP://x]@169.254.169.254/",
+            "https://[::1/",
+            "ws://x]@10.0.0.5/",
+        ],
+    )
+    def test_refused_when_the_policy_is_on(self, monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+        monkeypatch.setenv(POLICY, "block-private")
+        with pytest.raises(ssrf.SsrfRefusal, match="could not be parsed"):
+            ssrf.check_navigation_url(url)
+
+    def test_still_untouched_when_the_policy_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(POLICY, raising=False)
+        ssrf.check_navigation_url("http://x]@169.254.169.254/")
+
+    @pytest.mark.anyio
+    async def test_the_resolving_check_refuses_it_too(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(POLICY, "block-private")
+        with pytest.raises(ssrf.SsrfRefusal):
+            await ssrf.check_navigation_url_resolved("http://x]@169.254.169.254/")

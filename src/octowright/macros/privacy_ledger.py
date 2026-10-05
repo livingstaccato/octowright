@@ -281,6 +281,18 @@ def refuse_if_scrub_set_full(session: Any, admission: ScrubAdmission) -> None:
         ledger.refuse_if_full(admission.persistent)
 
 
+def session_scrub_set(session: Any) -> tuple[frozenset[str], frozenset[str]]:
+    """The session ledger's values: those scrubbed anywhere, and those only as whole identifiers.
+
+    Reads the ledger without creating one; a session without one holds nothing.
+    """
+    ledger = _existing_session_ledger(session)
+    if ledger is None:
+        return frozenset(), frozenset()
+    bounded = ledger.word_bounded
+    return frozenset(ledger.values) - bounded, bounded
+
+
 def scrub_saturation_fields(session: Any) -> dict[str, bool]:
     """``{"scrub_saturated": True}`` for a run result or failure payload; empty otherwise."""
     ledger = _existing_session_ledger(session)
@@ -308,6 +320,19 @@ def with_session_values(session: Any, values: Iterable[str]) -> tuple[str, ...]:
     if isinstance(ledger, SessionPrivacyLedger):
         merged.add(ledger.values)
     return merged.values
+
+
+def scrub_with_session(session: Any, value: Any, run_ledger: PrivacyLedger | None = None) -> Any:
+    """*value* scrubbed of *run_ledger*'s values and then the session ledger's, each with its own word bounds.
+
+    For text a run hands to the page or returns after a nested call may have
+    classified more than the caller's own view knew. Reads the session
+    ledger without creating one.
+    """
+    if run_ledger is not None:
+        value = run_ledger.scrub(value)
+    ledger = _existing_session_ledger(session)
+    return ledger.scrub(value) if ledger is not None else value
 
 
 def install_sensitive_recorder(session: Any, sensitive_values: Iterable[str] = ()) -> SessionPrivacyLedger:
@@ -388,8 +413,19 @@ class RunPrivacyLedger(PrivacyLedger):
         self._session_ledger: SessionPrivacyLedger | None = None
         self._scope: object | None = None
         self._exempt: list[dict[str, str]] = []
+        self._warnings: list[str] = []
+        self._sites: list[str] = []
+        self._sealed = False
 
-    def admit(self, macro: str, admission: ScrubAdmission) -> None:
+    def admit(self, macro: str, admission: ScrubAdmission, *, warnings: Iterable[str] = ()) -> None:
+        """Admit one macro's (or nested call's) arguments; *warnings* are its view's, by name only.
+
+        The warnings are kept first, so a refused admission still reports why
+        its declarations were ignored. *macro* becomes a resolved site.
+        """
+        self._warnings.extend(warning for warning in warnings if warning not in self._warnings)
+        if macro not in self._sites:
+            self._sites.append(macro)
         try:
             refuse_if_scrub_set_full(self._session, admission)
         except InvalidRequestError:
@@ -409,6 +445,24 @@ class RunPrivacyLedger(PrivacyLedger):
             row for row in (item.as_dict(macro) for item in admission.exempt) if row not in self._exempt
         )
 
+    @property
+    def resolved_sites(self) -> list[str]:
+        """The macros, top-level and called, whose privacy view this run resolved and admitted."""
+        return list(self._sites)
+
+    def seal(self) -> None:
+        """The run is over: no further site will be resolved into this view."""
+        self._sealed = True
+
+    @property
+    def sealed(self) -> bool:
+        return self._sealed
+
+    @property
+    def saturated(self) -> bool:
+        """Whether the session's scrub set is full (`scrub_capacity`)."""
+        return bool(scrub_saturation_fields(self._session))
+
     def close(self) -> None:
         if self._session_ledger is not None and self._scope is not None:
             self._session_ledger.close_run_scope(self._scope)
@@ -422,6 +476,15 @@ class RunPrivacyLedger(PrivacyLedger):
     def exempt_fields(self) -> dict[str, list[dict[str, str]]]:
         """`exempt_args` for a failure payload: absent when nothing was exempt."""
         return {"scrub_exempt_args": self.exempt_args} if self._exempt else {}
+
+    @property
+    def warnings(self) -> list[str]:
+        """What the run's privacy views reported (an ignored ``parameter_specs`` unmark, a malformed spec)."""
+        return list(self._warnings)
+
+    def warning_fields(self) -> dict[str, list[str]]:
+        """``{"warnings": [...]}`` for a run result or failure payload; absent when there are none."""
+        return {"warnings": self.warnings} if self._warnings else {}
 
 
 @contextmanager
@@ -441,14 +504,17 @@ def run_privacy_ledger(session: Any, supplied: RunPrivacyLedger | None = None) -
         ledger.close()
 
 
-def admit_call_privacy(session: Any, run_ledger: PrivacyLedger, macro: str, admission: ScrubAdmission) -> None:
+def admit_call_privacy(
+    session: Any, run_ledger: PrivacyLedger, macro: str, admission: ScrubAdmission, *, warnings: Iterable[str] = ()
+) -> None:
     """A nested ``macro_call``'s admission, scoped to the run it executes in.
 
     With no run to scope to -- a call dispatched outside `run_privacy_ledger`
-    -- every admitted value joins the session ledger, the side that scrubs more.
+    -- every admitted value joins the session ledger, the side that scrubs
+    more, and there is no run result for *warnings* to reach.
     """
     if isinstance(run_ledger, RunPrivacyLedger):
-        run_ledger.admit(macro, admission)
+        run_ledger.admit(macro, admission, warnings=warnings)
         return
     run_ledger.add(admission.values)
     refuse_if_scrub_set_full(session, admission)

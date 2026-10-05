@@ -1,7 +1,6 @@
 import {
   getConsole,
   getDownloads,
-  getEvents,
   getScreenshots,
   getSession,
   markdownUrl,
@@ -21,6 +20,7 @@ import {
 } from "./dashboard-auth.js";
 import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboard-media-auth.js";
 import { renderDownloadsPanel } from "./downloads-panel.js";
+import { getAllEvents } from "./events-pager.js";
 import { formatDateTime } from "./format.js";
 import { mountLivePreview } from "./live-preview.js";
 import { renderPairingGate } from "./pairing-gate.js";
@@ -28,12 +28,13 @@ import type { MountStream, StreamContext } from "./plugin-contract.js";
 import { loadPluginRegistry, resolveRenderer } from "./plugin-registry.js";
 import { disposeScreenshotsPanel, renderScreenshotsPanel } from "./screenshots-panel.js";
 import { mountFallbackStream } from "./session-fallback.js";
-import { openTail } from "./tail.js";
+import { openTail, type TailStatus } from "./tail.js";
 import { bindContext, getLogger, initTelemetry, tabSwitchesCounter, userActionsCounter } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";
 import type {
   CacheComponent,
   CacheComponentList,
+  ConsoleListResponse,
   ConsoleMessage,
   DownloadEntry,
   RecordingEvent,
@@ -590,6 +591,20 @@ export function renderFooter(target: HTMLElement, detail: SessionDetail): void {
   }
 }
 
+/**
+ * Say in the footer what the live tail is doing. A dropped tail used to leave
+ * "Refreshing every 1s" up over a timeline that had stopped moving.
+ */
+export function renderTailStatus(target: HTMLElement, detail: SessionDetail, status: TailStatus | "closed"): void {
+  if (status === "reconnecting") {
+    target.textContent = "Live tail disconnected; reconnecting...";
+  } else if (status === "closed") {
+    target.textContent = "Session closed";
+  } else if (status === "connected") {
+    renderFooter(target, detail);
+  }
+}
+
 export function installDashboardAuthRequiredNotice(root: HTMLElement, sessionId?: string): () => void {
   const onAuthRequired = (event: Event): void => {
     if (root.querySelector('[data-testid="pairing-gate"]')) return;
@@ -612,17 +627,48 @@ interface BootOptions {
 
 interface PanelData {
   console: ConsoleMessage[];
+  /** The absolute console cursor already shown; null until the first load. */
+  consoleCursor: number | null;
   downloads: DownloadEntry[];
   screenshots: ScreenshotEntry[];
 }
 
-async function loadConsole(sessionId: string): Promise<ConsoleMessage[]> {
+/**
+ * The most console messages a live session keeps (`BrowserSession.console`'s
+ * bound). Appending past it would show more history than the server holds.
+ */
+const LIVE_CONSOLE_RETAINED = 1000;
+
+/**
+ * Bring `data.console` up to date from the server's absolute cursor.
+ *
+ * Every live-tail batch used to refetch the whole console from `since=0`.
+ * The cursor counts messages from the start of the session, so it stays
+ * valid after the server's bounded buffer evicts; only what arrived since
+ * the last poll is fetched and appended. A cursor that went backwards means
+ * the server is describing a different console (a relaunch under the same
+ * id), so the panel starts over. Returns whether anything changed.
+ */
+async function loadConsole(sessionId: string, data: PanelData): Promise<boolean> {
+  const since = data.consoleCursor ?? 0;
+  let res: ConsoleListResponse;
   try {
-    const res = await getConsole(sessionId);
-    return res.messages;
+    res = await getConsole(sessionId, since);
+    if (res.cursor < since) {
+      res = await getConsole(sessionId, 0);
+      data.console = [];
+    }
   } catch {
-    return [];
+    if (data.consoleCursor !== null) return false;
+    data.console = [];
+    return true;
   }
+  const first = data.consoleCursor === null;
+  data.consoleCursor = res.cursor;
+  if (!first && res.messages.length === 0 && data.console.length > 0) return false;
+  const merged = first ? res.messages : [...data.console, ...res.messages];
+  data.console = !first && merged.length > LIVE_CONSOLE_RETAINED ? merged.slice(-LIVE_CONSOLE_RETAINED) : merged;
+  return true;
 }
 
 async function loadDownloads(sessionId: string): Promise<DownloadEntry[]> {
@@ -652,10 +698,10 @@ async function refreshPanels(
   const tasks: Array<Promise<void>> = [];
   if (which.includes("console")) {
     tasks.push(
-      loadConsole(sessionId).then((msgs) => {
-        data.console = msgs;
-        renderConsolePanel(refs.consolePanel, msgs);
-        setTabCount(refs.consoleTabBtn, msgs.length);
+      loadConsole(sessionId, data).then((changed) => {
+        if (!changed) return;
+        renderConsolePanel(refs.consolePanel, data.console);
+        setTabCount(refs.consoleTabBtn, data.console.length);
       }),
     );
   }
@@ -776,7 +822,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     disposeScreenshotsPanel(refs.screenshotsPanel);
   });
 
-  const data: PanelData = { console: [], downloads: [], screenshots: [] };
+  const data: PanelData = { console: [], consoleCursor: null, downloads: [], screenshots: [] };
 
   // initial empty renders so counts/labels appear immediately
   renderConsolePanel(refs.consolePanel, data.console);
@@ -814,7 +860,9 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
     if (videoEl) videoEl.currentTime = seconds;
   };
 
-  const initial = await getEvents(sessionId, 0);
+  // Every page: one /events answer is bounded, and a large closed recording
+  // rendered only its first page as the whole timeline.
+  const initial = await getAllEvents(sessionId, 0);
   let baseIso = initial.events[0]?.ts ?? new Date().toISOString();
   renderTimeline(refs.timeline, initial.events, { onSeek: seek });
 
@@ -844,6 +892,25 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
         if (msg.complete) {
           livePreview.markClosed();
         }
+      },
+      reconnect: {
+        urlFor: (cursor) => tailWebSocketUrl(sessionId, cursor),
+        initialCursor: initial.cursor,
+        onStatus: (status) => renderTailStatus(refs.footer, detail, status),
+        // The session closed while the tail was down, and the server will not
+        // tail a closed session: what it wrote meanwhile comes from /events.
+        onSessionClosed: (cursor) => {
+          getAllEvents(sessionId, cursor)
+            .then((rest) => {
+              if (rest.events.length > 0) appendTimelineEvents(refs.timeline, rest.events, baseIso, { onSeek: seek });
+              livePreview.markClosed();
+              renderTailStatus(refs.footer, detail, "closed");
+              return refreshPanels(sessionId, refs, data, ["console", "downloads"]);
+            })
+            .catch((err: unknown) => {
+              log.warn({ event: "tail_catch_up_failed", session_id: sessionId, error: String(err) });
+            });
+        },
       },
       ...(opts.webSocketCtor ? { webSocketCtor: opts.webSocketCtor } : {}),
     });

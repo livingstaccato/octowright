@@ -93,7 +93,7 @@ class _FakeBrowserType:
 
 
 def _install_route_steps(monkeypatch: pytest.MonkeyPatch, script: _Script) -> None:
-    async def guard(_context: Any) -> None:
+    async def guard(_context: Any, **_kwargs: Any) -> None:
         await script.at("navigation_guard")
 
     async def header_routes(_context: Any, _headers: Any, _patterns: Any) -> None:
@@ -307,11 +307,11 @@ async def test_live_a_failed_route_install_releases_the_profile(
     real_guard = launch_helpers.install_navigation_guard
     calls = {"n": 0}
 
-    async def guard_fails_once(context: Any) -> None:
+    async def guard_fails_once(context: Any, **kwargs: Any) -> None:
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("route install failed")
-        await real_guard(context)
+        await real_guard(context, **kwargs)
 
     monkeypatch.setattr(launch_helpers, "install_navigation_guard", guard_fails_once)
     pool = BrowserPool(recordings_dir=tmp_path / "rec")

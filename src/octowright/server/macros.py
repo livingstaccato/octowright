@@ -37,7 +37,8 @@ from octowright.server._state import mcp, pool
         "`parameters` is a dict mapping parameter NAME to its literal VALUE in this "
         "recording — those values get replaced by {{name}} placeholders in the saved "
         'macro. Example: parameters={"email":"me@octowright.test","password":"hunter2"}. '
-        "Drops launch/close/snapshot entries by default. Returns the saved macro path."
+        "Drops launch/close/snapshot entries by default. Re-saving over an existing macro keeps "
+        "its parameter_specs. Returns the saved macro path."
     ),
 )
 def macro_save(
@@ -169,7 +170,10 @@ def macro_export_cli(
         "expect_no_text: what each saw, with a `warning` on a pass that judged less than asked "
         "(requests still in flight, a selector that matched nothing). A step can set "
         "`require_settled: true` (expect_network_clean) or `require_match: true` "
-        "(expect_no_text) to fail on that caveat instead."
+        "(expect_no_text) to fail on that caveat instead. A macro's parameter_specs "
+        '({"name": {"sensitive": true|false}}) declare which parameters are sensitive; '
+        "`warnings` names any declaration that was ignored (a credential-like name cannot be "
+        "declared not sensitive)."
     ),
 )
 async def macro_run(
@@ -204,8 +208,9 @@ def macro_delete(name: str) -> MacroDeleteResult:
         "it (a failed step carries ok: false, error, and `failure` with the macro's structured "
         "failure details such as failed_at_step). Pass False to run every step and collect "
         "per-step outcomes; stopped_at is then null. A missing macro is a failed step. The call "
-        "still errors when it cannot run at all: unknown instance, malformed names/args_list, "
-        "or the session's operation gate refusing."
+        "still errors, before any step acts, when it cannot run at all: unknown instance, "
+        "malformed names/args_list, an args_list longer than names, a name no macro can have "
+        "(such as '..'), or the session's operation gate refusing."
     ),
 )
 async def macro_run_sequence(
@@ -234,8 +239,9 @@ async def macro_run_sequence(
     description=(
         "Static-analysis pass on a saved macro. Catches missing required fields, unknown "
         "action types, lifecycle actions that don't belong in macros, empty conditional "
-        "branches, and string literals that look like credentials (email/password patterns) "
-        "but aren't parameterized. Returns errors + warnings with per-action indices. Run "
+        "branches, string literals that look like credentials (email/password patterns) "
+        "but aren't parameterized, and parameter_specs that are malformed or ignored. Returns "
+        "errors + warnings with per-action indices. Run "
         "this whenever you hand-edit a macro JSON file."
     ),
 )
@@ -292,7 +298,10 @@ def macro_repair_apply(name: str, action_index: int) -> MacroRepairApplyResult:
     description=(
         "Compile a friendly YAML macro DSL document into canonical macro JSON. "
         "By default this is a dry-run preview. Pass write=True to save the compiled "
-        "macro to the normal macro JSON location. The runtime still uses JSON macros."
+        "macro to the normal macro JSON location; a write keeps the saved version's "
+        "created_at, and its parameter_specs unless the YAML declares its own, and "
+        "returns `warnings` when the write makes a parameter less sensitive. "
+        "The runtime still uses JSON macros."
     ),
 )
 def macro_compile(
@@ -306,10 +315,12 @@ def macro_compile(
     compiled = macro_dsl.compile_macro_yaml(yaml_text, name=name, strict=strict)
     result: MacroCompileResult = {"compiled": compiled, "written": False}
     if write:
-        path = macro_mod.write_macro(name=compiled["name"], macro=compiled)
+        path, findings = macro_mod.write_compiled_macro(name=compiled["name"], macro=compiled)
         publish_dashboard_invalidation_nowait("macros")
         result["written"] = True
         result["path"] = str(path)
+        if findings:
+            result["warnings"] = [message for _code, message in findings]
     return result
 
 
@@ -358,6 +369,20 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
     return macro_artifacts.delete_macro_artifact(name)
 
 
+def _live_plugin_sessions() -> list[Any]:
+    """Every live session of every enabled plugin pool.
+
+    Not guarded per pool, unlike the dashboard listing: a pool that cannot
+    say which sessions it holds would let the sweep delete a live recording,
+    so its error fails the cleanup instead.
+    """
+    from octowright.server import plugin_state
+
+    return [
+        session for plugin_pool in plugin_state.registry().pools().values() for session in plugin_pool.iter_sessions()
+    ]
+
+
 @mcp.tool(
     structured_output=False,
     description=(
@@ -367,14 +392,20 @@ def macro_artifact_delete(name: str) -> dict[str, Any]:
         "breakdown so you can see what would be freed before committing. Macro "
         "artifacts (manifests, critical points, run bundles, exports) live under the "
         "same root but are never swept -- they are curated, not incidental, so age "
-        "does not make them disposable. Use macro_artifact_* tools to manage those."
+        "does not make them disposable. Use macro_artifact_* tools to manage those. "
+        "Files belonging to a live or closing browser, or a live plugin session such as "
+        "a terminal, are skipped whatever their age."
     ),
 )
 def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
     import octowright.recording_cleanup as _rc
     from octowright.defaults import RECORDINGS_DIR
 
-    stale = _rc.find_stale_files(RECORDINGS_DIR, days)
+    # Files a live or closing browser -- or a live plugin session, such as a
+    # terminal -- still writes are never swept, however old their mtime: an
+    # idle session's recording stops changing.
+    in_use = _rc.session_file_matcher([*pool.iter_sessions_including_closing(), *_live_plugin_sessions()])
+    stale = [entry for entry in _rc.find_stale_files(RECORDINGS_DIR, days) if not in_use(entry.path)]
     summary = _rc.cleanup_stale(stale, dry_run=dry_run)
     return {
         "recordings_dir": str(RECORDINGS_DIR),
@@ -392,6 +423,32 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResul
     }
 
 
+async def _delete_unused_profiles(stale: list[Any]) -> tuple[dict[str, Any], int]:
+    """Delete each stale profile no browser holds; ``(summary, skipped)``.
+
+    Decided again under the profile's lifecycle lock, as ``profile_delete``
+    does: a launch still preparing holds that lock before its session is
+    registered, and a browser may have opened the profile since the scan.
+    """
+    import asyncio
+
+    import octowright.profile_cleanup as _pc
+    from octowright.profile_lifecycle import profile_lifecycle_lock
+
+    summary: dict[str, Any] = {"removed_count": 0, "removed_bytes": 0, "errors": []}
+    skipped = 0
+    for entry in stale:
+        async with profile_lifecycle_lock(entry.engine, entry.persona):
+            if pool.profile_users(entry.persona, kind=entry.engine):
+                skipped += 1
+                continue
+            one = await asyncio.to_thread(_pc.cleanup_stale, [entry], dry_run=False)
+        summary["removed_count"] += one["removed_count"]
+        summary["removed_bytes"] += one["removed_bytes"]
+        summary["errors"].extend(one["errors"])
+    return summary, skipped
+
+
 @mcp.tool(
     structured_output=False,
     description=(
@@ -404,20 +461,25 @@ def recordings_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResul
         "size + age info so you can see what would be freed before committing."
     ),
 )
-def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
+async def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
+    from pathlib import Path as _Path
+
     import octowright.profile_cleanup as _pc
     from octowright.defaults import PROFILES_DIR
 
-    in_use_dirs: list[Any] = []
-    for session in pool.iter_sessions():
-        udd = getattr(session, "user_data_dir", None)
-        if udd:
-            from pathlib import Path as _Path
-
-            in_use_dirs.append(_Path(udd))
+    # Closing sessions count: one has left ``_sessions`` once its close ticket
+    # owns the gate, but still holds its profile's database files open.
+    in_use_dirs = [
+        _Path(udd)
+        for session in pool.iter_sessions_including_closing()
+        if (udd := getattr(session, "user_data_dir", None))
+    ]
 
     stale = _pc.find_stale_profiles(PROFILES_DIR, days, in_use=in_use_dirs)
-    summary = _pc.cleanup_stale(stale, dry_run=dry_run)
+    summary: dict[str, Any] = {"removed_count": 0, "removed_bytes": 0, "errors": []}
+    skipped_at_delete = 0
+    if not dry_run:
+        summary, skipped_at_delete = await _delete_unused_profiles(stale)
     return {
         "profiles_dir": str(PROFILES_DIR),
         "days": days,
@@ -426,7 +488,7 @@ def profile_cleanup(days: float = 30.0, dry_run: bool = True) -> CleanupResult:
         "removed": summary["removed_count"] if not dry_run else 0,
         "would_remove": len(stale) if dry_run else 0,
         "freed_bytes": summary["removed_bytes"] if not dry_run else sum(s.size_bytes for s in stale),
-        "skipped_in_use": len(in_use_dirs),
+        "skipped_in_use": len(in_use_dirs) + skipped_at_delete,
         "details": [
             {
                 "persona": s.persona,

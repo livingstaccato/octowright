@@ -10,6 +10,7 @@ from pathlib import Path
 
 from octowright import defaults
 from octowright._paths import reject_unsafe_path
+from octowright.write_targets import checked_macro_export_target
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _RUN_RE = re.compile(r"^run_(\d{4})$")
@@ -72,7 +73,7 @@ class ArtifactStore:
             target = Path(out_path).expanduser()
             if not target.is_absolute():
                 target = self.root / target
-            target = reject_unsafe_path(target, self.recordings_dir, label="macro export path")
+            target = checked_macro_export_target(target, self.recordings_dir)
             target.parent.mkdir(parents=True, exist_ok=True)
             return target
         macro_slug = slug(name)

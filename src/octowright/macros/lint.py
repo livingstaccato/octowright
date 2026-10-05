@@ -25,7 +25,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from octowright.credential_sinks import ALLOWED_ORIGINS_KEY, CREDENTIAL_FILL_FIELDS, parse_allowed_origins
+from octowright.credential_sinks import (
+    ALLOWED_ORIGINS_KEY,
+    CREDENTIAL_FILL_FIELDS,
+    FORWARD_ON_REDIRECT_KEY,
+    REDIRECT_FORWARDED_HEADER_ACTIONS,
+    parse_allowed_origins,
+    parse_forward_on_redirect,
+)
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 
 from .lint_credentials import (
@@ -35,6 +42,7 @@ from .lint_credentials import (
     _looks_like_password,
 )
 from .lint_fields import ambiguous_rename_fields, unknown_fields
+from .lint_specs import lint_parameter_specs, lint_sensitivity_shrink
 from .lint_urls import code_carries_credential, url_carries_credential
 from .runtime import _ACTION_MAP
 from .substitution import SEMANTIC_FINDER_KEYS
@@ -234,6 +242,18 @@ def _check_unknown_fields(action: dict[str, Any], kind: str, outer_index: int, i
                 ),
                 action_index=outer_index,
             )
+        )
+
+
+def _check_forward_on_redirect(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Report a ``forward_on_redirect`` that replay would refuse, at save time rather than mid-run."""
+    if kind not in REDIRECT_FORWARDED_HEADER_ACTIONS or FORWARD_ON_REDIRECT_KEY not in action:
+        return
+    try:
+        parse_forward_on_redirect(action)
+    except ValueError as exc:
+        issues.append(
+            Issue(severity="error", code="bad_forward_on_redirect", message=str(exc), action_index=outer_index)
         )
 
 
@@ -590,6 +610,7 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     _check_unknown_fields(action, kind, outer_index, issues)
     _check_ambiguous_fields(action, kind, outer_index, issues)
     _check_allowed_origins(action, kind, outer_index, issues)
+    _check_forward_on_redirect(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)
@@ -617,12 +638,14 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def lint_macro(macro: dict) -> list[Issue]:
+def lint_macro(macro: dict, *, previous: dict | None = None) -> list[Issue]:
     """Return zero or more Issues. Pure — no I/O.
 
     Whole-macro issues use ``action_index=None``; per-action issues use the
     index into the top-level ``actions`` list. Issues found inside nested
     conditional branches are still reported under the OUTER action's index.
+    *previous* is the version on disk, when *macro* is about to replace it:
+    a parameter it makes less sensitive is reported.
     """
     issues: list[Issue] = []
 
@@ -652,4 +675,8 @@ def lint_macro(macro: dict) -> list[Issue]:
     for i, action in enumerate(actions):
         _lint_action(action, i, issues)
 
+    issues.extend(
+        Issue(severity="warning", code=code, message=message, action_index=None)
+        for code, message in (*lint_parameter_specs(macro), *lint_sensitivity_shrink(macro, previous))
+    )
     return issues

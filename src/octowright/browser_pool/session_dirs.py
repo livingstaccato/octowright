@@ -19,6 +19,7 @@ cheap to test.
 
 from __future__ import annotations
 
+import hashlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -27,6 +28,19 @@ from typing import Any
 # Shared by pool._resolve_session_dir (mint) and the reaper (sweep) so the
 # naming contract lives in exactly one place.
 SESSION_TMPDIR_PREFIX = "octowright-session-"
+
+
+def session_tmpdir_prefix(session_name: str, kind: str) -> str:
+    """The ``mkdtemp`` prefix for one ``(session_name, kind)`` session profile.
+
+    The session name is the caller's label (or an instance id), and a label is
+    free text: the default ``user/repo`` shape carries a ``/`` that made
+    ``mkdtemp`` fail, and ``..`` placed the profile outside the temp dir. Only
+    a digest of it reaches the filesystem; the readable name stays the pool's
+    reuse key.
+    """
+    digest = hashlib.sha256(session_name.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    return f"{SESSION_TMPDIR_PREFIX}{digest}-{kind}-"
 
 
 def reap_stale_session_dirs(

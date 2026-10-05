@@ -205,3 +205,43 @@ def test_a_blank_description_is_replaced_like_a_missing_one(monkeypatch: pytest.
     )["critical_points"][0]
 
     assert stored["description"] == "Unknown claim"
+
+
+def _on_disk(tmp_path: Path) -> dict:
+    import json
+
+    return json.loads((tmp_path / "recordings" / "artifacts" / "macros" / "login" / "artifact.json").read_text())
+
+
+def test_setting_critical_points_keeps_the_manifest_as_stored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The write-back used the compacted read view: it dropped ``artifact_version`` and added ``path``."""
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    macro_artifacts.plan_macro_artifact("login", args={})
+    before = _on_disk(tmp_path)
+    assert "artifact_version" in before
+
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+
+    after = _on_disk(tmp_path)
+    assert after["artifact_version"] == before["artifact_version"]
+    assert "path" not in after
+    assert set(after) == set(before)
+
+
+@pytest.mark.asyncio
+async def test_verifying_keeps_the_manifest_as_stored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from tests._macro_artifact_fixtures import _FakeSession
+
+    storage, macro_artifacts = _reload(monkeypatch, tmp_path)
+    _write_macro(storage)
+    _stub_replay(monkeypatch, macro_artifacts)
+    macro_artifacts.macro_artifact_critical_points_set("login", _passing_critical_point())
+    await macro_artifacts.run_macro_artifact(_FakeSession(tmp_path), "login", {}, capture=False, verify=False)
+    before = _on_disk(tmp_path)
+
+    assert macro_artifacts.macro_artifact_verify("login")["ok"] is True
+
+    after = _on_disk(tmp_path)
+    assert after["artifact_version"] == before["artifact_version"]
+    assert "path" not in after

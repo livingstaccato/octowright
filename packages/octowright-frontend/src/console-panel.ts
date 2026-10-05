@@ -50,6 +50,9 @@ export function renderConsolePanel(
   messages: ConsoleMessage[],
   opts: ConsolePanelOptions = {},
 ): void {
+  // A live session re-renders this panel on every tail batch. Without carrying
+  // the reader's choice across, the filter snapped back to All each time.
+  const previousLevel = container.querySelector<HTMLSelectElement>('[data-testid="console-filter"]')?.value;
   container.innerHTML = "";
   container.classList.add("console-panel");
   container.setAttribute("data-testid", "console-panel");
@@ -67,7 +70,8 @@ export function renderConsolePanel(
     optionEl.textContent = opt.label;
     select.append(optionEl);
   }
-  const initialLevel = opts.initialLevel ?? "all";
+  const carried = LEVEL_OPTIONS.some((opt) => opt.value === previousLevel) ? previousLevel : undefined;
+  const initialLevel = opts.initialLevel ?? carried ?? "all";
   select.value = initialLevel;
 
   const count = document.createElement("span");

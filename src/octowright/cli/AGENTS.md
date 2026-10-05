@@ -35,7 +35,8 @@ one process the second probe would inherit the first one's wreckage, which is
 exactly the confusion the command exists to remove. A child can simply be
 killed, and its driver and browsers die with it.
 
-The other checks are `daemon` (is the lockfile's leader real, or stale),
+The other checks are `daemon` (is the lockfile's leader real, or stale: its pid
+must be alive AND answer `/api/health`, since the OS recycles a dead daemon's pid),
 `daemon:canonical-port`, `browsers:installed`, `processes:drivers`,
 `processes:browsers`, `storage`
 (recordings and profiles at 0700 -- they hold typed input and live session

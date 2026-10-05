@@ -134,7 +134,7 @@ def _start_probe(connection: Any) -> asyncio.Future[Any]:
     if stored is not None:
         connection._error = None
     try:
-        task = asyncio.ensure_future(connection.local_utils._channel.send("traceDiscarded", None, {"stacksId": ""}))
+        task = asyncio.ensure_future(_probe_send(connection))
     except BaseException:
         _restore_error(connection, stored)
         raise
@@ -143,6 +143,23 @@ def _start_probe(connection: Any) -> asyncio.Future[Any]:
     task.add_done_callback(_consume)
     task.add_done_callback(lambda _t: _restore_error(connection, stored))
     return task
+
+
+#: What the probe task returns when a listener stored an error between the
+#: lift-off and the send. A string, not an ``object()``: tests reload modules.
+_LISTENER_ERROR_PENDING = "listener-error-pending"
+
+
+async def _probe_send(connection: Any) -> Any:
+    """The round trip, refusing to be the call that consumes a listener error.
+
+    ``Channel.send`` reaches ``_inner_send``'s ``_error`` check with no await
+    in between, so checking here first leaves nothing for it to consume: an
+    exception the send raises is then always the send's own, never a listener's.
+    """
+    if getattr(connection, "_error", None) is not None:
+        return _LISTENER_ERROR_PENDING
+    return await connection.local_utils._channel.send("traceDiscarded", None, {"stacksId": ""})
 
 
 def _restore_error(connection: Any, stored: BaseException | None) -> None:
@@ -165,9 +182,10 @@ async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> boo
        a transport error (``Connection closed while reading from the driver``,
        measured after SIGKILL, <1ms; it always leaves ``_flagged_dead`` true)
        is dead. An answer -- success, or a protocol error the driver sent
-       back -- is alive. Any other exception is a listener error that reached
-       the send in the window before it started (see ``_start_probe``); it is
-       put back and the round trip tried once more.
+       back -- is alive. A listener error that arrived after the lift-off is
+       left in place and the round trip tried once more (``_probe_send``);
+       any other exception is the probe failing on internals -> ``True``, as
+       in step 1.
     4. **No answer in time is NOT confirmed death** -> ``False``. Every real
        death measured leaves a local flag (step 2) -- after SIGKILL, after
        ``stop()`` -- so a silent driver is one that is busy (a trace zip or HAR
@@ -200,25 +218,39 @@ async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> boo
         if not done or task.cancelled():
             log.info("octowright.pool.driver_probe_unanswered", timeout_s=bound, cancelled=bool(done))
             return False
-        verdict = _answer_verdict(task.exception(), connection)
+        verdict = _finished_verdict(task, connection)
         if verdict is not None:
             return verdict
     return False
 
 
-def _answer_verdict(error: BaseException | None, connection: Any) -> bool | None:
-    """Confirmed-dead verdict for a probe that finished; ``None`` = try again.
+def _finished_verdict(task: asyncio.Future[Any], connection: Any) -> bool | None:
+    """The verdict of a probe that finished; ``None`` = a listener's error got
+    there first (``_probe_send``), so it stays for the caller and the round
+    trip is tried again."""
+    error = task.exception()
+    if error is None and task.result() == _LISTENER_ERROR_PENDING:
+        return None
+    return _answer_verdict(error, connection)
 
-    ``None`` is a listener error that reached the send in the window before it
-    started (see ``_start_probe``): it is put back for the caller's next call."""
+
+def _answer_verdict(error: BaseException | None, connection: Any) -> bool:
+    """Confirmed-dead verdict for a probe that finished.
+
+    A listener's error never reaches here (``_probe_send``), so anything that
+    is neither the driver's answer nor a closed target is the probe failing on
+    Playwright internals it cannot drive. That is "cannot tell", which reads as
+    the pre-probe behaviour, like internals it cannot read at all. It is NOT
+    stored on ``Connection._error``: that would hand the probe's own failure to
+    the caller's next, unrelated call."""
     if error is None:
         return False
     if _is_target_closed(error) or _flagged_dead(connection):
         return True
     if isinstance(error, PlaywrightError):
         return False  # the driver answered, with a refusal
-    connection._error = error  # newest wins, as in Playwright's own handler
-    return None
+    log.warning("octowright.pool.driver_probe_unavailable", error=repr(error))
+    return True
 
 
 async def stop_driver(pw: Any) -> None:

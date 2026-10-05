@@ -26,6 +26,17 @@ from click.testing import CliRunner
 from octowright import doctor as _doctor
 
 
+@pytest.fixture(autouse=True)
+def _no_real_leader_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``check_daemon`` probes the lockfile's leader over HTTP, and the lockfile
+    is the developer's real one here: never let a test reach a running daemon."""
+
+    async def _unanswered(_info: Any, timeout: float = 2.0) -> bool:
+        return False
+
+    monkeypatch.setattr("octowright.singleton.probe_http_alive", _unanswered)
+
+
 class TestProbeOutputParsing:
     def test_reads_the_last_json_line_not_the_first(self) -> None:
         """Engines write their own noise to stdout; the result is always last."""
@@ -175,8 +186,12 @@ class TestCoreAudioCheck:
     ) -> None:
         """A SKIP line on every Linux run is noise a reader learns to ignore."""
         monkeypatch.setattr(_doctor.sys, "platform", "linux")
+
+        async def _daemon() -> Any:
+            return _doctor.Check("x", "ok", "")
+
+        monkeypatch.setattr(_doctor, "check_daemon", _daemon)
         for name in (
-            "check_daemon",
             "check_browser_installs",
             "check_stray_drivers",
             "check_orphan_browsers",
@@ -689,3 +704,52 @@ class TestJsonOutputPurity:
         for name in _root._HTTP_CLIENT_LOGGERS:
             module = importlib.import_module(name)
             assert module.__name__ == name, f"{name} does not name a real client module"
+
+
+class TestDaemonCheck:
+    """``check_daemon`` must not call a recycled pid a healthy leader."""
+
+    @staticmethod
+    def _leader(pid: int = 4242) -> Any:
+        from octowright.singleton import LeaderInfo
+
+        return LeaderInfo(
+            pid=pid,
+            http_host="127.0.0.1",
+            http_port=6286,
+            mcp_url="http://127.0.0.1:6286/mcp/",
+            started_at=0.0,
+            token="t",
+        )
+
+    def _patch(self, monkeypatch: pytest.MonkeyPatch, *, alive: bool, answers: bool) -> None:
+        from octowright import singleton
+
+        monkeypatch.setattr(singleton, "read_lock", lambda *_a, **_k: self._leader())
+        monkeypatch.setattr(singleton, "pid_is_alive", lambda _pid: alive)
+
+        async def _probe(_info: Any, timeout: float = 2.0) -> bool:
+            return answers
+
+        monkeypatch.setattr(singleton, "probe_http_alive", _probe)
+
+    async def test_a_live_pid_whose_http_never_answers_is_stale(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Killed daemon, lockfile left behind, pid handed to another process:
+        liveness alone said "ok" while check_followers found nothing answering."""
+        self._patch(monkeypatch, alive=True, answers=False)
+        check = await _doctor.check_daemon()
+        assert check.status == "warn"
+        assert check.data["running"] is False
+        assert check.data["stale"] is True
+
+    async def test_a_live_pid_that_answers_is_the_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, alive=True, answers=True)
+        check = await _doctor.check_daemon()
+        assert check.status == "ok"
+        assert check.data["running"] is True
+
+    async def test_a_dead_pid_is_stale_without_probing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._patch(monkeypatch, alive=False, answers=True)
+        check = await _doctor.check_daemon()
+        assert check.status == "warn"
+        assert check.data["stale"] is True

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.http_headers import (
     REDACTED_HEADER_PLACEHOLDER,
@@ -115,6 +116,18 @@ def _upload_locator_fields(
     }
 
 
+def _redact_prompt_text(value: str | None) -> str | None:
+    """What a recording or result shows of ``prompt_text``.
+
+    The answer typed into ``prompt()`` has no element to classify it, so it is
+    a selector-less sink like ``press_key``: scrubbed under the blanket ``all``
+    mode. Only the record and the result see this; the page gets the real text.
+    """
+    from octowright.session.core_page_mixin import _redact_sink_value
+
+    return _redact_sink_value(value)
+
+
 class SessionInteractionMixin(SessionLike):
     # ------------------------------------------------------------------
     # Downloads
@@ -170,7 +183,7 @@ class SessionInteractionMixin(SessionLike):
                     dtype=dialog.type,
                     message=dialog.message,
                     policy=self._dialog_policy,
-                    prompt_text=self._dialog_prompt_text,
+                    prompt_text=_redact_prompt_text(self._dialog_prompt_text),
                 )
             except Exception as e:
                 self.recorder.record("dialog_handler_error", error=repr(e))
@@ -186,8 +199,9 @@ class SessionInteractionMixin(SessionLike):
             raise ValueError(f"policy must be accept|dismiss|manual, got {policy!r}")
         self._dialog_policy = policy
         self._dialog_prompt_text = prompt_text
-        self.recorder.record("set_dialog_policy", policy=policy, prompt_text=prompt_text)
-        return {"ok": True, "policy": policy, "prompt_text": prompt_text}
+        shown = _redact_prompt_text(prompt_text)
+        self.recorder.record("set_dialog_policy", policy=policy, prompt_text=shown)
+        return {"ok": True, "policy": policy, "prompt_text": shown}
 
     # ------------------------------------------------------------------
     # Route mocking
@@ -281,6 +295,13 @@ class SessionInteractionMixin(SessionLike):
         an injector on an overlapping pattern suppresses it completely and the
         injector never runs. An exact-pattern collision is warned about here;
         an overlapping-glob collision cannot be detected and is documented.
+
+        Navigations are matched PER HOP: the first injection routes the
+        context's navigations through the SSRF guard's single-fetch path (with
+        the policy off too), registered before this route so this route runs
+        first. A route's header override otherwise rides every redirect the
+        engine follows. Subresources (fetch/XHR) still forward the header on
+        redirect -- see ``credential_sinks.parse_forward_on_redirect``.
         """
         validate_url_pattern(url_pattern, field="url_pattern")
         _reject_redacted_headers(headers)
@@ -296,6 +317,7 @@ class SessionInteractionMixin(SessionLike):
         async def _handler(route: Any) -> None:
             await route.fallback(headers={**route.request.headers, **headers})
 
+        await ssrf_guard.install_navigation_guard(self.context, scope_headers=True)
         if url_pattern in self._header_routes:
             await bounded(
                 self.context.unroute(url_pattern, self._header_routes[url_pattern]),
