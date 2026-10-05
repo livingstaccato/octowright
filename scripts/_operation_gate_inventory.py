@@ -141,6 +141,13 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "close-race fallback snapshot in _close_with_fallback_snapshot where the gate is by "
         "definition no longer available",
     ),
+    "session/route_carry.py:RouteCarry.of": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the page each "
+        "mock was installed on -- no Playwright I/O; called from ReplacementSource.of, which runs "
+        "both inside a close lease and as the close-race / driver-death capture where the gate "
+        "is no longer available",
+    ),
     "session/screencast.py:ScreencastManager._stop_bound_owned_locked": (
         "cached-property-only",
         "reads and clears the cached _bound_page reference (no I/O) purely to decide whether "

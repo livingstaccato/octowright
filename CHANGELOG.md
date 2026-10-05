@@ -49,6 +49,18 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A handoff, relaunch or crash recovery keeps the headers and mocks you
+  set after launch.** A replacement browser from `browser_handoff`,
+  `browser_relaunch_fluid` or a driver-death / browser-process-crash reopen
+  used to arrive without the original's `browser_inject_headers`,
+  `browser_mock_route` and `browser_set_extra_http_headers`, and a page
+  replaced after a renderer crash lost its mocks and page headers, all
+  without a word. They are now installed on the replacement before its first
+  navigation, in the order they were registered, and the replacement's
+  recording shows them. Anything that cannot be carried, such as a mock on a
+  page other than the one the replacement reopens, is named in the handoff or
+  relaunch result's `warnings`, as `route_warnings` on the lost-session
+  record, or on the crash incident.
 - **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
   engine reports `console.warn` as `warning`, and the filter compared the raw
   level case-sensitively, so `level=warn` returned nothing. It now matches

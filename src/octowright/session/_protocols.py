@@ -50,6 +50,8 @@ class SessionLike(Protocol):
     #: them, and the dataclass that actually owns them is not its base.
     _injected_headers: dict[str, dict[str, str]]
     _page_extra_headers: dict[str, str] | None
+    _page_extra_headers_page: Any | None
+    _mock_specs: dict[str, Any]
     extra_http_headers: dict[str, str] | None
     extra_http_headers_urls: list[str] | None
     _network_requests: deque[dict[str, Any]]

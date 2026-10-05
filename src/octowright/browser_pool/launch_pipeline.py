@@ -49,7 +49,9 @@ from octowright.browser_pool.launch_publish import (
     _prepare_session_before_publication,
     _redirect_tasks,
 )
+from octowright.browser_pool.replacement import pending_route_carry
 from octowright.recorder import Recorder
+from octowright.session.route_carry import replay_onto_session
 
 if TYPE_CHECKING:
     from octowright.browser_pool.options import LaunchOptions
@@ -310,6 +312,12 @@ async def post_context_setup(
             # an SSRF policy, the guard refusing (or failing to fetch) a LATER
             # hop of target_url's redirect chain -- guarded_navigation raises
             # that verdict rather than letting the launch read as a success.
+            # A replacement (handoff, fluid relaunch, a driver-death or
+            # process-crash reopen) replays the original's post-launch routes
+            # and headers first, so its first navigation already carries them.
+            carry = pending_route_carry()
+            route_warnings = await replay_onto_session(new_session, carry) if carry else []
+
             nav_error: str | None = None
             try:
                 await ssrf_guard.guarded_navigation(page.main_frame, page.goto(target_url))
@@ -351,6 +359,8 @@ async def post_context_setup(
             )
             if nav_error is not None:
                 result["nav_warning"] = nav_error
+            if route_warnings:
+                result["route_warnings"] = route_warnings
             return result
     except asyncio.CancelledError:
         # Join a detached rollback task despite persistent AnyIO cancellation

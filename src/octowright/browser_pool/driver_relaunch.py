@@ -319,6 +319,17 @@ def _record_relaunch_failure(desc: dict[str, Any], exc: Exception) -> None:
         )
 
 
+def _record_what_was_not_carried(desc: dict[str, Any], result: dict[str, Any], dropped: str | None) -> None:
+    """Say on the lost record (and a process crash's incident) what the reopen could not carry."""
+    if dropped is not None:
+        desc["lost_record"]["channel_dropped"] = dropped
+    route_warnings = list(result.get("route_warnings") or ())
+    if route_warnings:
+        desc["lost_record"]["route_warnings"] = route_warnings
+        if desc.get("crash_incident") is not None:
+            desc["crash_incident"]["route_warnings"] = route_warnings
+
+
 async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     # Await the retained teardown BEFORE reusing a persistent/session-scoped
     # profile or launching a replacement at all: the old context, manifest
@@ -342,9 +353,11 @@ async def _relaunch_one(pool: Any, desc: dict[str, Any], mode: str) -> None:
     # Everything the original was launched with (replacement.ReplacementSource),
     # reopened at its last URL. A browser channel gone from the host since is
     # dropped for the bundled build, and the lost record says which.
-    result, dropped = await launch_replacement(pool.launch, source.launch_kwargs(url=desc["url"]))
-    if dropped is not None:
-        desc["lost_record"]["channel_dropped"] = dropped
+    # Its post-launch routes and headers too, replayed before the reopen's
+    # first navigation; what could not be carried is said on the lost record
+    # and, for a process crash, on its incident.
+    result, dropped = await launch_replacement(pool.launch, source.launch_kwargs(url=desc["url"]), routes=source.routes)
+    _record_what_was_not_carried(desc, result, dropped)
     new_id = result["instance_id"]
     old_id = desc["instance_id"]
     final_id = await _finalize_id(pool, new_id, old_id, mode)
