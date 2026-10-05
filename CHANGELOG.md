@@ -120,6 +120,12 @@ a section that is already tagged and on PyPI.
   page other than the one the replacement reopens, is named in the handoff or
   relaunch result's `warnings`, as `route_warnings` on the lost-session
   record, or on the crash incident.
+- **A follower no longer loads the browser stack before it connects.**
+  `octowright serve` imported the server module on every path, so each MCP
+  client's follower loaded Playwright, the browser pool and the whole tool
+  registry (about 50MB) before electing a leader or opening its stdio, though
+  a follower only bridges to the leader. Only the daemon and inline leader
+  paths load it now.
 - **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
   engine reports `console.warn` as `warning`, and the filter compared the raw
   level case-sensitively, so `level=warn` returned nothing. It now matches

@@ -271,14 +271,19 @@ async def _serve_async(
         "idle_grace": idle_grace,
     }
     # Direct-leader paths: daemon-mode (the spawned daemon runs leader code
-    # directly) and --no-singleton (inline mode: no daemon, no follower).
-    from octowright.server import _state
-
+    # directly) and --no-singleton (inline mode: no daemon, no follower). Only
+    # these import the server: the follower path below must not, or every
+    # connected client pays for Playwright and the whole tool registry before
+    # its stdio is even open (tests/test_follower_import_weight.py).
     if daemon_mode:
+        from octowright.server import _state
+
         _state.set_leader_mode("daemon")
         await _run_leader(**leader_kwargs, no_singleton=False, arm_watchdog_immediately=True)
         return
     if no_singleton:
+        from octowright.server import _state
+
         _state.set_leader_mode("inline", inline_reason="no_singleton")
         await _run_leader(**leader_kwargs, no_singleton=True)
         return
