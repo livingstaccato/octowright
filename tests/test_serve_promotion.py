@@ -7,8 +7,9 @@
 
 These exercise the leader-vs-follower election plus the promotion path that
 fires when a previously-healthy leader dies mid-session. The actual
-``_run_leader`` and ``_run_follower`` are stubbed; we only verify which one
-gets called and how many times.
+``_run_leader`` and ``_run_follower`` are stubbed (the follower stub runs the
+leader source it is handed, as the real bridge does once stdio is open); we
+only verify which one gets called and how many times.
 """
 
 from __future__ import annotations
@@ -50,7 +51,9 @@ def call_log(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     async def fake_leader(**_kwargs: Any) -> None:
         log.append("leader")
 
-    async def fake_follower(_url: str) -> None:
+    async def fake_follower(leader_source: Any) -> None:
+        # The bridge runs the election as its leader source, after stdio opens.
+        await leader_source()
         log.append("follower")
 
     def fake_spawn(**_kwargs: Any) -> int:
@@ -235,7 +238,8 @@ async def test_follower_spawns_replacement_when_leader_dies_during_session(
     async def fake_wait(timeout: float = 10.0, poll_seconds: float = 0.2) -> singleton.LeaderInfo | None:
         return info
 
-    async def dying_follower(_url: str) -> None:
+    async def dying_follower(leader_source: Any) -> None:
+        await leader_source()
         log.append("follower")
         raise ConnectionError("leader vanished")
 
@@ -280,7 +284,8 @@ async def test_follower_does_not_spawn_daemon_if_leader_still_healthy_on_recheck
     async def fake_wait(timeout: float = 10.0, poll_seconds: float = 0.2) -> singleton.LeaderInfo | None:
         return info
 
-    async def clean_follower(_url: str) -> None:
+    async def clean_follower(leader_source: Any) -> None:
+        await leader_source()
         log.append("follower")
         # clean exit, no exception
 

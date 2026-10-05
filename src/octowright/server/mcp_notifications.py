@@ -345,9 +345,26 @@ async def run_stdio_with_notifications(mcp: Any) -> None:
     from mcp.server.stdio import stdio_server
 
     async with stdio_server() as (read_stream, write_stream):
-        low = mcp._lowlevel_server
-        server_run = low.run(read_stream, write_stream, low.create_initialization_options())
-        await run_with_notifications(server_run, write_stream)
+        await run_streams_with_notifications(mcp, read_stream, write_stream)
+
+
+async def serve_mcp(mcp: Any, streams: tuple[Any, Any] | None = None) -> None:
+    """Serve ``mcp`` with notifications on stdio, or on ``streams`` when given."""
+    if streams is None:
+        await run_stdio_with_notifications(mcp)
+    else:
+        await run_streams_with_notifications(mcp, *streams)
+
+
+async def run_streams_with_notifications(mcp: Any, read_stream: Any, write_stream: Any) -> None:
+    """The same server and emitter on streams the caller already owns.
+
+    An inline leader started from a follower bridge gets an in-memory pair
+    here instead of stdio, which the bridge holds (see ``proxy_inline``).
+    """
+    low = mcp._lowlevel_server
+    server_run = low.run(read_stream, write_stream, low.create_initialization_options())
+    await run_with_notifications(server_run, write_stream)
 
 
 def get_emit_task_or_none() -> asyncio.Task[None] | None:
@@ -363,5 +380,7 @@ __all__ = [
     "notification_payload",
     "payload_to_message",
     "run_stdio_with_notifications",
+    "run_streams_with_notifications",
     "run_with_notifications",
+    "serve_mcp",
 ]

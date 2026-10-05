@@ -251,3 +251,33 @@ async def test_sigterm_translates_to_graceful_stdio_close(stubs: _Stubs, isolate
 
     stubs.watchdog_done.set()
     await asyncio.wait_for(leader_task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_given_streams_are_served_instead_of_stdio(
+    stubs: _Stubs, isolated_lockfile: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inline fallback reached from the follower bridge serves MCP on the
+    bridge's in-memory streams; opening stdio again would compete with the
+    bridge that owns it."""
+    from octowright.server import mcp_notifications as _mcp_notif_mod
+
+    served: list[tuple[Any, Any]] = []
+
+    async def fake_streams(_mcp: Any, read_stream: Any, write_stream: Any) -> None:
+        served.append((read_stream, write_stream))
+        await stubs.stdio_done.wait()
+
+    def no_stdio(_mcp: Any) -> Any:
+        raise AssertionError("stdio must not be opened when streams are given")
+
+    monkeypatch.setattr(_mcp_notif_mod, "run_streams_with_notifications", fake_streams)
+    monkeypatch.setattr(_mcp_notif_mod, "run_stdio_with_notifications", no_stdio)
+    streams = (object(), object())
+    kwargs = _kwargs()
+    kwargs["no_http"] = True  # not discoverable: the streams closing ends the leader
+    leader_task = asyncio.create_task(_serve._run_leader(**kwargs, stdio_streams=streams))
+    await asyncio.wait_for(stubs.watchdog_started.wait(), timeout=2.0)
+    stubs.stdio_done.set()
+    await asyncio.wait_for(leader_task, timeout=2.0)
+    assert served == [streams]

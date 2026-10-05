@@ -57,6 +57,8 @@ def test_importing_cli_does_not_pull_the_browser_stack() -> None:
 # at that moment and then hard-exit. Importing `octowright.cli` lean is not
 # enough on its own: a function on the follower path can import the server
 # lazily, and every client then pays for it before its stdio is even open.
+# Starlette is not checked here: the MCP SDK's own HTTP client imports it, and
+# the bridge needs that client.
 _RUNTIME_PROBE = textwrap.dedent(
     """
     import asyncio
@@ -72,9 +74,9 @@ _RUNTIME_PROBE = textwrap.dedent(
             if m.startswith("playwright")
             or m.startswith("octowright.browser_pool")
             or m.startswith("octowright.server")
-            or m == "starlette"
         )
-        print("HEAVY:" + ",".join(heavy), flush=True)
+        # stderr: by now stdout may be the MCP stdio transport.
+        print("HEAVY:" + ",".join(heavy), file=sys.stderr, flush=True)
         os._exit(0)
 
     election.elect_leader = report_and_exit
@@ -101,7 +103,7 @@ def test_follower_path_reaches_the_election_without_the_browser_stack() -> None:
         timeout=60,
         check=False,
     )
-    line = next((ln for ln in result.stdout.splitlines() if ln.startswith("HEAVY:")), "HEAVY:<no output>")
+    line = next((ln for ln in result.stderr.splitlines() if ln.startswith("HEAVY:")), "HEAVY:<no output>")
     heavy = line.removeprefix("HEAVY:")
     assert heavy == "", (
         "the follower path loaded heavy modules before electing a leader -- every "

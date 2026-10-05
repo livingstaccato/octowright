@@ -120,6 +120,15 @@ a section that is already tagged and on PyPI.
   page other than the one the replacement reopens, is named in the handoff or
   relaunch result's `warnings`, as `route_warnings` on the lost-session
   record, or on the crash incident.
+- **An MCP client connects without waiting for the leader election.**
+  `octowright serve` elected a leader -- waiting on the election lock, a
+  daemon spawn and its readiness budget -- before it opened stdio, so a cold
+  start, a contended election or a raised `--ready-timeout` could outlast the
+  client's own connect timeout. It now opens stdio first and answers
+  `initialize` and `ping` itself while the election runs; the first tool call
+  waits for the leader (up to the election's own budget) and is then
+  delivered in order. The inline fallback is served through the same
+  connection. `--no-singleton`, `--wait-ready` and the daemon are unchanged.
 - **A follower no longer loads the browser stack before it connects.**
   `octowright serve` imported the server module on every path, so each MCP
   client's follower loaded Playwright, the browser pool and the whole tool

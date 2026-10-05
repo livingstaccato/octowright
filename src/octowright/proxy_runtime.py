@@ -17,9 +17,9 @@ import json
 import math
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import Any
+from typing import Any, cast
 
 import anyio
 import httpx2
@@ -37,6 +37,7 @@ from octowright.defaults import (
     FOLLOWER_EXIT_BACKSTOP_SECONDS,
     env_float,
 )
+from octowright.proxy_inline import InlineLeader, serve_inline_leader
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
     BridgeSupervisor,
@@ -377,17 +378,30 @@ async def leader_health_alive(health_url: str) -> bool:
 
 async def run_supervised_proxy(
     *,
-    leader_mcp_url: str,
+    leader_mcp_url: str | None = None,
     health_url: str | None = None,
     heartbeat_interval: float = 10.0,
     heartbeat_max_failures: int = 3,
+    leader_source: Callable[[], Awaitable[str | InlineLeader]] | None = None,
+    pre_leader_budget: float = 0.0,
 ) -> None:
+    """Bridge stdio to the leader.
+
+    With ``leader_source`` (the election) instead of ``leader_mcp_url``, stdio
+    opens first and the election runs after it, so the client's connect never
+    waits for a daemon spawn: the handshake is answered locally meanwhile, and
+    other calls wait up to ``pre_leader_budget`` more for the leader. The
+    source returns the leader's MCP URL, or an inline leader to serve over
+    memory (``proxy_inline``).
+    """
     async with stdio_server() as (local_read, local_write):
         supervisor_obj = BridgeSupervisor(
             local_read=local_read,
             local_write=local_write,
             request_timeout_seconds=BRIDGE_REQUEST_TIMEOUT_SECONDS,
         )
+        if leader_source is not None:
+            supervisor_obj.begin_pre_leader(pre_leader_budget)
         async with anyio.create_task_group() as local_tg:
             remote_write_slot = _RemoteWriteSlot()
             remote_reset_slot = _RemoteResetSlot()
@@ -410,9 +424,19 @@ async def run_supervised_proxy(
                 nonlocal leader_health_failed
                 leader_health_failed = True
 
+            # Set when the leader is inline: stdin EOF then closes its stdio
+            # rather than the whole bridge (see proxy_inline).
+            on_local_eof: list[Callable[[], Awaitable[None]] | None] = [None]
+
+            def _set_local_eof_handler(handler: Callable[[], Awaitable[None]]) -> None:
+                on_local_eof[0] = handler
+
             async def _local_forwarder() -> None:
                 async for message in local_read:
                     await supervisor_obj.forward_one_local_message(message, remote_write_slot)
+                if (handler := on_local_eof[0]) is not None:
+                    await handler()
+                    return
                 # stdin EOF: the MCP client is gone. Cancel the bridge and arm a
                 # hard-exit backstop so a wedged remote teardown can't keep the
                 # follower alive past its client (the orphaned-follower leak).
@@ -467,7 +491,8 @@ async def run_supervised_proxy(
                     # stream opens). Used to detect a flap — a session that ends
                     # almost immediately — on the success path below.
                     connected_at: float | None = None
-                    remote_url = resolve_leader_url(leader_mcp_url)
+                    # Set (from leader_source when given) before this task starts.
+                    remote_url = resolve_leader_url(cast("str", leader_mcp_url))
                     if health_url is not None:
                         health_target[0] = _health_url_from_mcp(remote_url)
                     # Present the capability token from the 0600 lockfile so the
@@ -595,6 +620,20 @@ async def run_supervised_proxy(
                             attempt += 1
 
             local_tg.start_soon(_local_forwarder)
+            if leader_source is not None:
+                target = await leader_source()
+                # Over before the first connect, never after it: a handshake
+                # answered locally once the replay has run would leave the new
+                # session uninitialized.
+                supervisor_obj.end_pre_leader()
+                if not isinstance(target, str):
+                    await serve_inline_leader(target, supervisor_obj, remote_write_slot, _set_local_eof_handler)
+                    local_tg.cancel_scope.cancel()
+                    return
+                leader_mcp_url = target
+                health_url = health_url or _health_url_from_mcp(target)
+            if leader_mcp_url is None:
+                raise ValueError("run_supervised_proxy needs leader_mcp_url or leader_source")
             local_tg.start_soon(_remote_supervisor)
             local_tg.start_soon(supervisor_obj.watch_deadlines, 0.1, remote_reset_slot)
             # Re-source the leader's proactive MCP notifications (crash / driver-died

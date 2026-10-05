@@ -21,18 +21,27 @@ stream.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from octowright.defaults import BRIDGE_HEALTH_INTERVAL_SECONDS, BRIDGE_HEALTH_MAX_FAILURES
 from octowright.proxy_runtime import run_supervised_proxy
 
 
 async def run_proxy(
-    leader_mcp_url: str,
+    leader_mcp_url: str | None = None,
     *,
     health_url: str | None = None,
     heartbeat_interval: float = BRIDGE_HEALTH_INTERVAL_SECONDS,
     heartbeat_max_failures: int = BRIDGE_HEALTH_MAX_FAILURES,
+    leader_source: Callable[[], Awaitable[Any]] | None = None,
+    pre_leader_budget: float = 0.0,
 ) -> None:
     """Forward this process's stdio MCP traffic to ``leader_mcp_url``.
+
+    Or, with ``leader_source``, open stdio first and take the leader from it
+    (the election): the handshake is answered locally until it returns, and
+    other calls wait up to ``pre_leader_budget`` longer for the leader.
 
     Returns when either side closes its stream, or — if ``health_url`` is
     provided — when the watchdog observes ``heartbeat_max_failures`` consecutive
@@ -46,9 +55,13 @@ async def run_proxy(
     watchdog all live in ``octowright.proxy_supervisor``. This module is a
     thin facade preserved for the historical public entry point.
     """
+    electing: dict[str, Any] = (
+        {} if leader_source is None else {"leader_source": leader_source, "pre_leader_budget": pre_leader_budget}
+    )
     await run_supervised_proxy(
         leader_mcp_url=leader_mcp_url,
         health_url=health_url,
         heartbeat_interval=heartbeat_interval,
         heartbeat_max_failures=heartbeat_max_failures,
+        **electing,
     )
