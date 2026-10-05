@@ -234,6 +234,25 @@ def parse_forward_on_redirect(action: dict[str, Any]) -> frozenset[str]:
     return frozenset(chosen)
 
 
+def redirect_exposed_credential_headers(
+    action: dict[str, Any], headers: dict[str, Any], is_credential_header: Callable[[str], bool]
+) -> list[str]:
+    """The credential-named *headers* a step's `FORWARD_ON_REDIRECT_KEY` does not opt in, sorted.
+
+    What an exported script's ``inject_headers`` refuses, since its plain route
+    lets a navigation redirect carry them, and what ``macro_lint`` warns about.
+    *is_credential_header* is ``http_headers.is_credential_header``, passed in
+    because this module imports only the standard library. Raises as
+    `parse_forward_on_redirect` does on a malformed opt-in.
+    """
+    opted_in = parse_forward_on_redirect(action)
+    return sorted(
+        str(name)
+        for name in headers
+        if is_credential_header(str(name)) and str(name).strip().casefold() not in opted_in
+    )
+
+
 def _redirect_refusal(key: str, header: str) -> CredentialRefusal:
     return CredentialRefusal(
         f"macro expands credential arg {{{{{key}}}}} into inject_headers header {header!r} for the session's "

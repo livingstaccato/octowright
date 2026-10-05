@@ -48,6 +48,13 @@ a section that is already tagged and on PyPI.
   returns `warnings` when the write makes a parameter less sensitive; the YAML
   DSL accepts `parameter_specs`.
 
+- **`macro_lint` warns about an `inject_headers` step an exported script will
+  refuse.** A script from `macro_export_cli` refuses a credential-named header
+  the step's `forward_on_redirect` does not name, but only when it reaches the
+  step, and `macro_run` accepts the same step. The new
+  `export_refuses_credential_header` warning from `macro_lint` and the
+  dashboard's macro validation says so before the script is run.
+
 ### Fixed
 - **A credential macro is no longer refused for page code in a branch it
   never takes.** A run that types a credential refuses page code

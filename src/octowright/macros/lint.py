@@ -32,8 +32,10 @@ from octowright.credential_sinks import (
     REDIRECT_FORWARDED_HEADER_ACTIONS,
     parse_allowed_origins,
     parse_forward_on_redirect,
+    redirect_exposed_credential_headers,
 )
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
+from octowright.http_headers import is_credential_header
 
 from .lint_credentials import (
     _CREDENTIAL_CANDIDATE_KEYS,
@@ -254,6 +256,35 @@ def _check_forward_on_redirect(action: dict[str, Any], kind: str, outer_index: i
     except ValueError as exc:
         issues.append(
             Issue(severity="error", code="bad_forward_on_redirect", message=str(exc), action_index=outer_index)
+        )
+
+
+def _check_export_header_refusal(action: dict[str, Any], kind: str, outer_index: int, issues: list[Issue]) -> None:
+    """Warn about an inject_headers header an exported script refuses when it runs the step.
+
+    ``macro_run`` accepts it (it matches navigations per hop), so this is a
+    warning: the macro replays, its ``macro_export_cli`` script stops there. A
+    malformed opt-in is `_check_forward_on_redirect`'s error, not reported twice.
+    """
+    headers = action.get("headers")
+    if kind != "inject_headers" or not isinstance(headers, dict):
+        return
+    try:
+        named = redirect_exposed_credential_headers(action, headers, is_credential_header)
+    except ValueError:
+        return
+    if named:
+        issues.append(
+            Issue(
+                severity="warning",
+                code="export_refuses_credential_header",
+                message=(
+                    f"inject_headers header(s) {', '.join(named)} hold a credential; an exported script "
+                    "(macro_export_cli) refuses this step, since its navigation redirects carry them, unless "
+                    f'{FORWARD_ON_REDIRECT_KEY} names them, such as {{"{named[0]}": true}}. macro_run accepts it'
+                ),
+                action_index=outer_index,
+            )
         )
 
 
@@ -611,6 +642,7 @@ def _lint_action(action: Any, outer_index: int, issues: list[Issue]) -> None:
     _check_ambiguous_fields(action, kind, outer_index, issues)
     _check_allowed_origins(action, kind, outer_index, issues)
     _check_forward_on_redirect(action, kind, outer_index, issues)
+    _check_export_header_refusal(action, kind, outer_index, issues)
 
     if kind in _SIMPLE_REQUIRED:
         _check_simple(action, kind, outer_index, issues)

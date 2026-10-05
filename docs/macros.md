@@ -766,7 +766,8 @@ script therefore refuses, when the step runs, any credential-named header in
 an `inject_headers` step (`Authorization`, `Cookie`, `X-Api-Key` and the rest
 of the recorder's name rule), literal values included, unless the step names
 it in `forward_on_redirect`. `macro_run` does not need that for a literal
-value, because it matches navigations per hop. `forward_on_redirect` is
+value, because it matches navigations per hop; `macro_lint` warns about such a
+step at save time (`export_refuses_credential_header`). `forward_on_redirect` is
 the step's statement that the site will not redirect that header anywhere it
 should not go. It waives nothing else: the pattern must still name the own
 origin, each value must be a literal `true` or `false`, and the name must be
@@ -939,6 +940,10 @@ The linter catches:
 - An `inject_headers` `forward_on_redirect` replay would refuse
   (`bad_forward_on_redirect`): a value that is not a literal `true`/`false`,
   or a header name the step does not send.
+- An `inject_headers` credential-named header an exported script refuses
+  (`export_refuses_credential_header`, a warning): one the step's
+  `forward_on_redirect` does not name. `macro_run` accepts the step; a script
+  from `macro_export_cli` stops there.
 - An `expect_no_text` whose text is still the recording's redaction marker
   (`redacted_assertion_text`), which replay refuses.
 - `parameter_specs` problems, all warnings (see **Declaring sensitivity** above):

@@ -398,10 +398,7 @@ def _refuse_redirected_credential_headers(action: dict[str, Any], headers: dict[
     # A credential-named header therefore needs the step's forward_on_redirect.
     if not credential_sinks_blocked():
         return
-    opted_in = parse_forward_on_redirect(action)
-    named = sorted(
-        str(name) for name in headers if is_credential_header(str(name)) and str(name).strip().casefold() not in opted_in
-    )
+    named = redirect_exposed_credential_headers(action, headers, is_credential_header)
     if named:
         raise CredentialRefusal(
             f"inject_headers header(s) {{', '.join(named)}} hold a credential, and in an exported script a "
