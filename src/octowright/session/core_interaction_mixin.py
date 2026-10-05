@@ -249,10 +249,15 @@ class SessionInteractionMixin(SessionLike):
                 hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
             )
         if url_pattern in self._active_routes:
-            await bounded(
-                self.page.unroute(url_pattern, self._active_routes[url_pattern]),
-                operation="browser_mock_route",
-            )
+            # Off the page it was SET on, which page_switch may have left behind.
+            spec = self._mock_specs.get(url_pattern)
+            old_page = spec.page if spec is not None and spec.page is not None else self.page
+            closed = getattr(old_page, "is_closed", None)  # a closed page took its routes with it
+            if not (callable(closed) and closed()):
+                await bounded(
+                    old_page.unroute(url_pattern, self._active_routes[url_pattern]),
+                    operation="browser_mock_route",
+                )
         await bounded(self.page.route(url_pattern, _handler), operation="browser_mock_route")
         # Popped first so each registry's order stays Playwright's registration
         # order, which a replacement replays (route_carry).
@@ -442,11 +447,18 @@ class SessionInteractionMixin(SessionLike):
     @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
         """Remove a previously-installed mock for url_pattern."""
-        handler = self._active_routes.pop(url_pattern, None)
-        self._mock_specs.pop(url_pattern, None)
+        handler = self._active_routes.get(url_pattern)
         if handler is None:
             raise KeyError(f"no active mock for pattern {url_pattern!r}")
-        await bounded(self.page.unroute(url_pattern, handler), operation="browser_unmock_route")
+        # A mock is a page route: unrouting the active page instead left it
+        # fulfilling on the page it was set on, after a page_switch.
+        spec = self._mock_specs.get(url_pattern)
+        page = spec.page if spec is not None and spec.page is not None else self.page
+        closed = getattr(page, "is_closed", None)  # a closed page took its routes with it
+        if not (callable(closed) and closed()):
+            await bounded(page.unroute(url_pattern, handler), operation="browser_unmock_route")
+        self._active_routes.pop(url_pattern, None)
+        self._mock_specs.pop(url_pattern, None)
         self.recorder.record("unmock_route", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 

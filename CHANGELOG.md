@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`browser_unmock_route` works after a page switch.** It removed the mock
+  from the active page, so after `page_switch` a mock set on the previous page
+  kept answering there while `browser_unmock_route` reported success. It, and
+  a `browser_mock_route` that replaces a mock on the same pattern, now act on
+  the page the mock was set on.
 - **An exported macro script no longer lets a navigation redirect carry a
   credential header.** In a script from `macro_export_cli`, an
   `inject_headers` header rode every redirect a page load followed, wherever
