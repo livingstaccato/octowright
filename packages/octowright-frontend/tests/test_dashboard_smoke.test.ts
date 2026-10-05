@@ -26,6 +26,7 @@ import { resolve } from "node:path";
 import * as vt from "vitest";
 
 const { beforeAll, describe, expect, it } = vt;
+// biome-ignore lint/performance/noDynamicNamespaceImportAccess: a test file, not bundled; the indirection predates lint coverage of tests/ and its reason was not recorded, so it is kept rather than guessed at
 const after_all = vt["after" + "All"] as typeof beforeAll;
 
 const PKG_ROOT = resolve(__dirname, "..");
@@ -33,7 +34,7 @@ const OUT_DIR = mkdtempSync(resolve(tmpdir(), "octowright-frontend-build-"));
 
 const FAIL_MSG_BARE_IMPORTS =
   "production bundle has unresolved bare imports — Vite build is broken or " +
-  "misconfigured. Browsers cannot resolve `import ... from \"@provide-io/...\"` " +
+  'misconfigured. Browsers cannot resolve `import ... from "@provide-io/..."` ' +
   "without a bundler. Re-run `npm run build` and inspect vite.config.ts.";
 
 // Match real ES import/export statements with a bare specifier
@@ -104,9 +105,7 @@ describe("vite build artifacts", () => {
     }
 
     if (offenders.length > 0) {
-      const report = offenders
-        .map((o) => `  - ${o.specifier} in ${o.file}\n      …${o.snippet}…`)
-        .join("\n");
+      const report = offenders.map((o) => `  - ${o.specifier} in ${o.file}\n      …${o.snippet}…`).join("\n");
       throw new Error(`${FAIL_MSG_BARE_IMPORTS}\nOffenders:\n${report}`);
     }
   });
@@ -116,13 +115,11 @@ describe("vite build artifacts", () => {
     // pino's own code disappears too and runtime logging is silently broken.
     // Pino's source includes the literal string `pino` in many places — match
     // any of a few stable identifiers.
-    const bundled = bundledJsFiles().map((f) => readFileSync(f, "utf8")).join("\n");
-    const hasPinoMarker =
-      /pino/.test(bundled) || /asJson/.test(bundled) || /__pinoLogs/.test(bundled);
-    expect(
-      hasPinoMarker,
-      "no pino-shaped marker found in bundle — telemetry dep was stubbed away?",
-    ).toBe(true);
+    const bundled = bundledJsFiles()
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
+    const hasPinoMarker = /pino/.test(bundled) || /asJson/.test(bundled) || /__pinoLogs/.test(bundled);
+    expect(hasPinoMarker, "no pino-shaped marker found in bundle — telemetry dep was stubbed away?").toBe(true);
   });
 });
 

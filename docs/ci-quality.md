@@ -13,7 +13,8 @@ make test
 `packages/octowright-terminal/src` and `tests/plugins/reference`), `ty` over `src/octowright`,
 `bandit` security checks, codespell, SPDX header validation, and `detect-secrets` against
 `.secrets.baseline`. It also runs the dashboard's `biome check` -- formatter, linter and
-import order together, over `packages/octowright-frontend/src`, via `npm run check:frontend` --
+import order together, over `packages/octowright-frontend`'s `src/`, `tests/` and its root
+vite/vitest config files (biome.json's `files.includes`), via `npm run check:frontend` --
 when the npm workspace is installed, and prints a `SKIP:` line instead when `node_modules` is
 absent, so the target still runs on a host without node. CI's Python lint job has no node, so
 the frontend job runs the same check. `make format` applies the formatter
