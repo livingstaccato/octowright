@@ -559,7 +559,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
     actions = expand_actions(
         ACTIONS, args, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE, trusted_origins=trusted
     )
-    # Page code can read a typed credential back, so a run that carries one runs none.
+    # Page code can read a typed credential back, so a run that carries one runs
+    # none: refused here where every run reaches it, and again as each step is
+    # dispatched (below), as macro_run does.
     credential_names = credential_args_in(ACTIONS, is_credential=_is_credential_arg, placeholder=_PLACEHOLDER_RE)
     refuse_page_code(actions, credential_names)
     async with async_playwright() as p:
@@ -607,6 +609,9 @@ async def {fn_name}({signature}) -> dict[str, int]:
                     print(json.dumps(log_record, sort_keys=True))
                     if evidence is not None:
                         evidence.record(log_record)
+                    refusal = page_code_refusal(action, credential_names)
+                    if refusal is not None:
+                        raise refusal
                     _check_credential_fill(state, index, action, trusted)
                     if kind in _LIFECYCLE_SKIP:
                         skipped += 1

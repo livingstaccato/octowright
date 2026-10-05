@@ -49,6 +49,14 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **A credential macro is no longer refused for page code in a branch it
+  never takes.** A run that types a credential refuses page code
+  (`evaluate`, `expect_js` and the like), and it judged every step before
+  starting, including ones in an `if_selector` branch or a later `try_each`
+  branch the page might never take. Those steps are now refused when their
+  branch runs instead; a step every run reaches is still refused before the
+  run starts. Exported scripts from `macro_export_cli` now also check each
+  step as it runs, as `macro_run` does; re-export a script to pick this up.
 - **`browser_list` no longer reports page headers on a page that is not
   sending them.** Headers set with `browser_set_extra_http_headers` apply to
   the page they were set on, but after `page_switch` the browser's reported

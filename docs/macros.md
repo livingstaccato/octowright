@@ -784,8 +784,13 @@ wherever it likes. So when a run expands a credential-named argument anywhere
 `expect_js`, `wait_for` with an `expression`, `a11y_dragdrop` with
 `verify_js`/`grabbed_predicate_js`, and `mock_route` with a `body` in it is
 refused -- before the fill or after it, in a nested body or a called macro --
-naming the step and the argument, never the value. Split such a check into a
-macro that carries no credential, or set `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
+naming the step and the argument, never the value. A step every run reaches (a
+top-level step, a `try`'s steps, a `try_each`'s first branch) is refused before
+the run starts, so nothing is half done; one in an `if_selector` branch or a
+later `try_each` branch is refused when that branch is taken, so a run whose
+page never takes it is not refused. The exported CLI judges each step the same
+way. Split such a check into a macro that carries no credential, or set
+`OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
 A `macro_run_sequence` is judged as one run: the credential arguments any of
 its steps types, read from every step's macro before the first runs, refuse
 page code in every step, since a step's page code can read back what an

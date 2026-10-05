@@ -92,9 +92,10 @@ def credential_run_args(
 
     Judged on the macro as *written*, plus every other step's when the run is
     a ``macro_run_sequence`` step (`sequence_credentials`); the expanded
-    *actions* are checked for page code at every depth before any step runs,
-    so a refusal leaves nothing half done. A called macro's page code is
-    refused as it is dispatched (`credential_fill_guard`).
+    *actions* every run reaches are checked for page code before any step
+    runs, so a refusal leaves nothing half done. A conditional branch's page
+    code, and a called macro's, is refused as it is dispatched
+    (`credential_fill_guard`), so a branch never taken refuses nothing.
     """
     names = sorted({*written_credential_args(written, credential_args), *_SEQUENCE.get()})
     refuse_page_code(actions, names)
