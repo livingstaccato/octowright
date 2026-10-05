@@ -49,17 +49,18 @@ typecheck-assets: ## Type-check the JS init scripts injected into every page
 	# already has both.
 	npm run typecheck:assets
 
-lint: ## Ruff/format, frontend format, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
+lint: ## Ruff/format, frontend biome check, mypy, ty, bandit, codespell, SPDX, LOC, vulture, xenon, secrets-scan
 	uv run ruff check .
 	uv run ruff format --check .
-	# The dashboard sources' formatter check. Needs the npm workspace install
+	# The dashboard sources' biome check: formatter, linter and import order
+	# (`biome check`), not the formatter alone. Needs the npm workspace install
 	# (`make install` / `npm ci`); without it the check is skipped with a
 	# message rather than failing, so `lint` still runs on a node-less host,
 	# the same way `install` treats a missing npm. CI runs it in the frontend job.
 	@if [ -x node_modules/.bin/biome ]; then \
-		npm run --silent format:check:frontend; \
+		npm run --silent check:frontend; \
 	else \
-		echo "SKIP: frontend format check (node_modules absent; run 'make install' or 'npm ci' to enable it)." >&2; \
+		echo "SKIP: frontend biome check (node_modules absent; run 'make install' or 'npm ci' to enable it)." >&2; \
 	fi
 	# tests/plugins/reference is included so the reference plugin's
 	# `_assert_structural_conformance` pin is actually checked: `activate`

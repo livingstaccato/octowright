@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bootDashboardFromDom, loadState, renderDashboard, updateDashboard } from "./dashboard.js";
 import * as api from "./api.js";
+import { bootDashboardFromDom, loadState, renderDashboard, updateDashboard } from "./dashboard.js";
 import type { LiveScenario, MacroSummary, PersonaSummary, ScenarioListResponse, SessionListResponse } from "./types.js";
 
 const macroDetail = JSON.parse(

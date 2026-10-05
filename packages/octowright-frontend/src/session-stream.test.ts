@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { bootStreamSession, importRenderer } from "./session-stream.js";
 import type { StreamHandle } from "./plugin-contract.js";
+import { bootStreamSession, importRenderer } from "./session-stream.js";
 
 vi.mock("./api.js", () => ({
   getEvents: vi.fn().mockResolvedValue({

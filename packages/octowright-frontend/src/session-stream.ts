@@ -18,8 +18,8 @@
 import { tailWebSocketUrl } from "./api.js";
 import { getAllEvents } from "./events-pager.js";
 import type { MountStream, StreamContext, StreamHandle } from "./plugin-contract.js";
-import { mountFallbackStream, type FallbackReason } from "./session-fallback.js";
 import { installDashboardAuthRequiredNotice, renderFooter, renderHeader, renderTailStatus } from "./session.js";
+import { type FallbackReason, mountFallbackStream } from "./session-fallback.js";
 import { openTail } from "./tail.js";
 import { getLogger } from "./telemetry.js";
 import { appendTimelineEvents, renderTimeline } from "./timeline.js";

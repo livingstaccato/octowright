@@ -32,8 +32,8 @@ import { RENDERER_API_VERSION } from "./plugin-registry.js";
 import {
   bootSession,
   buildLayout,
-  loadProtectedVideo,
   installDashboardAuthRequiredNotice,
+  loadProtectedVideo,
   renderCachePanel,
   renderFooter,
   renderHeader,

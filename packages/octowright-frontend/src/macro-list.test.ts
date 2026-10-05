@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { renderMacroList } from "./macro-list.js";
 import type { DashboardState } from "./dashboard-state.js";
+import { renderMacroList } from "./macro-list.js";
 
 const emptyState: DashboardState = {
   sessions: { live: [], closed: [] },
