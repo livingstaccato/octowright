@@ -12,7 +12,7 @@ Three tools change what a browser sends after it launched, at two levels:
 * ``browser_mock_route`` -- PAGE routes (``_active_routes``, with the
   response each fulfils in ``_mock_specs``);
 * ``browser_set_extra_http_headers`` -- the PAGE's own header map
-  (``_page_extra_headers``).
+  (``_page_extra_headers_by_page``, one per page: ``page_headers``).
 
 ``LaunchOptions`` carries none of them, so handoff, fluid relaunch and the
 driver-death / process-crash reopen -- each a new context -- lost all three,
@@ -48,6 +48,7 @@ from typing import Any, Final
 
 from provide.telemetry import get_logger
 
+from octowright.session.page_headers import move_page_headers, open_pages_with_headers, page_headers_on
 from octowright.session.timeouts import bounded
 
 log = get_logger(__name__)
@@ -114,13 +115,12 @@ class RouteCarry:
                 )
             else:
                 mocks.append((pattern, MockSpec(**spec.kwargs())))
-        page_headers = _mapping(session, "_page_extra_headers")
-        if page_headers and getattr(session, "_page_extra_headers_page", None) is not active:
+        page_headers = page_headers_on(session, active) or {}
+        if any(page is not active for page in open_pages_with_headers(session)):
             not_carried.append(
                 "page-level extra HTTP headers were not carried: they were set on a page other than "
                 "the active one, and a replacement reopens only the active page"
             )
-            page_headers = {}
         return cls(
             injected=tuple(
                 (pattern, dict(headers)) for pattern, headers in _mapping(session, "_injected_headers").items()
@@ -165,6 +165,8 @@ class PageRoutes:
     mocks: tuple[str, ...] = ()
     page_headers: dict[str, str] | None = None
     not_carried: tuple[str, ...] = ()
+    #: The page they were read off, whose headers move to its replacement.
+    page: Any = field(default=None, compare=False, repr=False)
 
 
 def page_routes_of(session: Any, page: Any) -> PageRoutes:
@@ -178,10 +180,12 @@ def page_routes_of(session: Any, page: Any) -> PageRoutes:
             not_carried.append(f"mock_route {pattern!r} was not restored: the page it was installed on is unknown")
         elif spec.page is page:
             mocks.append(pattern)
-    page_headers = _mapping(session, "_page_extra_headers")
-    on_page = bool(page_headers) and getattr(session, "_page_extra_headers_page", None) is page
+    page_headers = page_headers_on(session, page)
     return PageRoutes(
-        mocks=tuple(mocks), page_headers=dict(page_headers) if on_page else None, not_carried=tuple(not_carried)
+        mocks=tuple(mocks),
+        page_headers=dict(page_headers) if page_headers else None,
+        not_carried=tuple(not_carried),
+        page=page,
     )
 
 
@@ -225,4 +229,4 @@ def rebind_page_routes(session: Any, routes: PageRoutes, new_page: Any) -> None:
         if isinstance(spec, MockSpec):
             specs[pattern] = MockSpec(**spec.kwargs(), page=new_page)
     if routes.page_headers is not None:
-        session._page_extra_headers_page = new_page
+        move_page_headers(session, routes.page, new_page)

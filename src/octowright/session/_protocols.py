@@ -49,8 +49,7 @@ class SessionLike(Protocol):
     #: the same reason the two route registries are: the mixin reads and writes
     #: them, and the dataclass that actually owns them is not its base.
     _injected_headers: dict[str, dict[str, str]]
-    _page_extra_headers: dict[str, str] | None
-    _page_extra_headers_page: Any | None
+    _page_extra_headers_by_page: list[tuple[Any, dict[str, str]]]
     _mock_specs: dict[str, Any]
     extra_http_headers: dict[str, str] | None
     extra_http_headers_urls: list[str] | None

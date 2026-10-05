@@ -196,7 +196,7 @@ def header_session():  # type: ignore[no-untyped-def]
             self._header_routes: dict[str, object] = {}
             self._injected_headers: dict[str, dict[str, str]] = {}
             self._active_routes: dict[str, object] = {}
-            self._page_extra_headers: dict[str, str] | None = None
+            self._page_extra_headers_by_page: list[tuple[object, dict[str, str]]] = []
 
         def operation(self, *args: object, **kwargs: object) -> object:
             @asynccontextmanager
@@ -235,7 +235,7 @@ class TestLaunchWiring:
         assert "extra_http_headers" in fields
         assert "extra_http_headers_urls" in fields
         assert "_injected_headers" in fields
-        assert "_page_extra_headers" in fields
+        assert "_page_extra_headers_by_page" in fields
 
     def test_the_copies_are_defensive(self) -> None:
         """The session outlives the caller's dict; a later mutation must not
@@ -284,4 +284,4 @@ class TestPageHeadersFollowTheirPage:
     async def test_the_real_session_records_the_page_they_were_set_on(self) -> None:
         from octowright.session.core import BrowserSession
 
-        assert "_page_extra_headers_page" in BrowserSession.__dataclass_fields__
+        assert "_page_extra_headers_by_page" in BrowserSession.__dataclass_fields__

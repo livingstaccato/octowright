@@ -195,13 +195,10 @@ class BrowserSession(
     #: instead of unscoped context headers. Reported alongside, because scoped
     #: headers do not ride every request and the headers alone overstate reach.
     extra_http_headers_urls: list[str] | None = None
-    #: Headers set on the ACTIVE page by set_extra_http_headers. Per page by
-    #: nature, so this tracks the page it was last applied to rather than
-    #: claiming browser-wide scope.
-    _page_extra_headers: dict[str, str] | None = None
-    #: The page _page_extra_headers were applied to, which is what a
-    #: replacement can carry them from (route_carry).
-    _page_extra_headers_page: Any | None = field(default=None, repr=False)
+    #: Headers set by set_extra_http_headers, as ``(page, headers)`` per page:
+    #: Playwright keeps them per page, so each page's map is kept, and a
+    #: replacement carries them from the page they were set on (page_headers).
+    _page_extra_headers_by_page: list[tuple[Any, dict[str, str]]] = field(default_factory=list, repr=False)
     active_frame: Any | None = None  # playwright.async_api.Frame when set
     downloads: list[dict[str, Any]] = field(default_factory=list)
     _pending_download_events: list[Any] = field(default_factory=list)

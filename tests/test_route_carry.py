@@ -24,6 +24,7 @@ import pytest
 
 from octowright.browser_pool import driver_relaunch, incidents, replacement
 from octowright.browser_pool.options import LaunchOptions
+from octowright.session.page_headers import set_page_headers
 from octowright.session.route_carry import MockSpec, RouteCarry, replay_onto_session
 
 
@@ -67,8 +68,7 @@ def _original(**over: Any) -> SimpleNamespace:
         "_injected_headers": {},
         "_active_routes": {},
         "_mock_specs": {},
-        "_page_extra_headers": None,
-        "_page_extra_headers_page": None,
+        "_page_extra_headers_by_page": [],
     }
     base.update(over)
     return SimpleNamespace(**base)
@@ -98,11 +98,12 @@ def test_capture_copies_the_mappings() -> None:
 
 
 def test_page_headers_are_carried_only_from_the_page_the_replacement_reopens() -> None:
-    session = _original(_page_extra_headers={"X-Page": "1"})
-    session._page_extra_headers_page = session.page
+    session = _original()
+    set_page_headers(session, session.page, {"X-Page": "1"})
     assert RouteCarry.of(session).page_headers == {"X-Page": "1"}
 
-    session._page_extra_headers_page = object()  # set on a popup, since switched away from
+    set_page_headers(session, session.page, {})
+    set_page_headers(session, object(), {"X-Page": "1"})  # set on a popup, since switched away from
     carry = RouteCarry.of(session)
     assert carry.page_headers is None
     assert carry.not_carried and "page-level" in carry.not_carried[0]
@@ -140,8 +141,7 @@ async def test_replay_goes_through_the_session_methods_in_order() -> None:
     session = _original(_injected_headers={"**/b": {"X-B": "2"}, "**/a": {"X-A": "1"}})
     session._mock_specs = {"**/m": _spec(session.page, status=418, body="tea")}
     session._active_routes = {"**/m": object()}
-    session._page_extra_headers = {"X-Page": "p"}
-    session._page_extra_headers_page = session.page
+    set_page_headers(session, session.page, {"X-Page": "p"})
     target = _Recorder()
 
     warnings = await replay_onto_session(target, RouteCarry.of(session))

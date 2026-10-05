@@ -56,6 +56,14 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **Page headers set on two pages are both remembered.** After
+  `browser_set_extra_http_headers` on one page and then, after `page_switch`,
+  on another, the first page kept sending its headers but `browser_list` no
+  longer reported them on it, and a handoff, relaunch or crash recovery
+  neither carried them nor said they were left behind. Each page's headers
+  are now kept: reported while that page is active, carried by crash recovery
+  of that page, and named in a replacement's `warnings` when they are on a
+  page the replacement does not reopen.
 - **A credential macro is no longer refused for page code in a branch it
   never takes.** A run that types a credential refuses page code
   (`evaluate`, `expect_js` and the like), and it judged every step before

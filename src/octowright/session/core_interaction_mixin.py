@@ -29,6 +29,7 @@ from octowright.http_headers import (
 from octowright.session._protocols import SessionLike
 from octowright.session.aria_redaction import resolve_redaction_mode
 from octowright.session.operation.gate import gated_operation
+from octowright.session.page_headers import page_headers_on, set_page_headers
 from octowright.session.route_carry import MockSpec
 from octowright.session.timeouts import bounded
 from octowright.url_patterns import validate_url_pattern
@@ -398,14 +399,12 @@ class SessionInteractionMixin(SessionLike):
         _reject_redacted_headers(headers)
         validate_extra_http_headers(headers)
         await self.page.set_extra_http_headers(dict(headers))
-        # Playwright has no getter for these, so remember them or nothing can
-        # report what this page is sending. Replaces rather than merges,
-        # matching Playwright: each call sets the page's full header map.
-        # `or None` is not cosmetic: Playwright treats set_extra_http_headers({})
-        # as CLEARING the page's headers, so an empty map must reset the record
-        # rather than leave the previous one standing.
-        self._page_extra_headers = dict(headers) or None
-        self._page_extra_headers_page = self.page if headers else None
+        # Playwright has no getter for these, so remember them, per page, or
+        # nothing can report what each page is sending. Replaces rather than
+        # merges, matching Playwright: each call sets the page's full header
+        # map, and set_extra_http_headers({}) CLEARS it, so an empty map drops
+        # the page's record rather than leaving the previous one standing.
+        set_page_headers(self, self.page, headers)
         self.recorder.record(
             "set_extra_http_headers",
             headers=redact_header_values(headers, resolve_redaction_mode()),
@@ -437,8 +436,8 @@ class SessionInteractionMixin(SessionLike):
                 state["launch_url_patterns"] = list(self.extra_http_headers_urls)
         # Set on one page, they stay on that page: after a page_switch the
         # active page is not sending them, so they are not reported for it.
-        if self._page_extra_headers and self._page_extra_headers_page is self.page:
-            state["page"] = redact_headers_for_report(self._page_extra_headers)
+        if page_headers := page_headers_on(self, self.page):
+            state["page"] = redact_headers_for_report(page_headers)
         if self._injected_headers:
             state["injected"] = {
                 pattern: redact_headers_for_report(headers)

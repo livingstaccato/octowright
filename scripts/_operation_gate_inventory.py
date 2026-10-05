@@ -147,6 +147,12 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "page-level headers were set on -- no Playwright I/O; ungated so browser_list never queues "
         "behind a slow in-flight action",
     ),
+    "session/page_headers.py:_closed": (
+        "cached-property-only",
+        "calls Page.is_closed(), which returns Playwright's locally cached closed flag -- no "
+        "browser I/O; reached from set_extra_http_headers' own lease and from RouteCarry.of (the "
+        "close-race / driver-death capture), where no lease is, or can be, held",
+    ),
     "session/route_carry.py:RouteCarry.of": (
         "cached-property-only",
         "reads the cached active-page reference only to compare its identity with the page each "
