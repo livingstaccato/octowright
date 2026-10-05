@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from provide.telemetry import get_logger
 
+from octowright import ssrf_guard
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS
 from octowright.http_headers import (
     REDACTED_HEADER_PLACEHOLDER,
@@ -294,6 +295,13 @@ class SessionInteractionMixin(SessionLike):
         an injector on an overlapping pattern suppresses it completely and the
         injector never runs. An exact-pattern collision is warned about here;
         an overlapping-glob collision cannot be detected and is documented.
+
+        Navigations are matched PER HOP: the first injection routes the
+        context's navigations through the SSRF guard's single-fetch path (with
+        the policy off too), registered before this route so this route runs
+        first. A route's header override otherwise rides every redirect the
+        engine follows. Subresources (fetch/XHR) still forward the header on
+        redirect -- see ``credential_sinks.parse_forward_on_redirect``.
         """
         validate_url_pattern(url_pattern, field="url_pattern")
         _reject_redacted_headers(headers)
@@ -309,6 +317,7 @@ class SessionInteractionMixin(SessionLike):
         async def _handler(route: Any) -> None:
             await route.fallback(headers={**route.request.headers, **headers})
 
+        await ssrf_guard.install_navigation_guard(self.context, scope_headers=True)
         if url_pattern in self._header_routes:
             await bounded(
                 self.context.unroute(url_pattern, self._header_routes[url_pattern]),

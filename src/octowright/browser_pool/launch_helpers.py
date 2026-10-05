@@ -299,8 +299,14 @@ async def install_context_routes(context: Any, headers: dict[str, str] | None, u
     browser actually makes redirects somewhere the policy would have refused,
     and the guard never sees it. The order is the whole point of this helper
     existing rather than two calls at the call site.
+
+    Scoped headers also install the guard with the SSRF policy off
+    (``scope_headers``): a route's header override rides every redirect the
+    engine follows, so only the guard's one-fetch-per-hop navigation lets each
+    hop be re-matched against the patterns. Unscoped or no headers register
+    nothing.
     """
-    await install_navigation_guard(context)
+    await install_navigation_guard(context, scope_headers=bool(headers) and url_patterns is not None)
     await install_scoped_header_routes(context, headers, url_patterns)
 
 

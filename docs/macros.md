@@ -754,10 +754,14 @@ host and port of the launch URL or persona `base_url` may carry
  "forward_on_redirect": {"Authorization": true}}
 ```
 
-The pattern scopes only the first request. The browser re-sends an injected
-header on every redirect that request follows, so an own-site URL that answers
-`302` to another host hands it the token (measured on Chromium and Firefox for
-every header; WebKit drops only `Authorization`). `forward_on_redirect` is
+A navigation is matched against the pattern at every redirect hop, so a page
+load that an own-site URL redirects elsewhere does not carry the header there.
+A `fetch`/XHR is not: the pattern scopes only its first request, and the
+browser re-sends the header on every redirect that request follows, so an
+own-site endpoint that answers `302` to another host hands it the token
+(measured on Chromium and Firefox for every header; WebKit drops only
+`Authorization`). An exported macro CLI does not match navigations per hop
+either. `forward_on_redirect` is
 the step's statement that the site will not redirect that header anywhere it
 should not go. It waives nothing else: the pattern must still name the own
 origin, each value must be a literal `true` or `false`, and the name must be

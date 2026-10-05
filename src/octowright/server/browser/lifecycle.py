@@ -199,8 +199,8 @@ async def _maybe_attach_outline(result: dict[str, Any], response_mode: str | Non
         "requests too, and on Chromium that makes them CORS-preflighted, so a CDN or font "
         "host that does not echo Access-Control-Allow-Headers rejects them outright and the "
         "page never finishes rendering (Firefox and WebKit are unaffected). Scoping moves "
-        "the headers onto context routes that still follow popups and new tabs. The scope "
-        "covers only the FIRST request: a matching request redirected to another origin "
+        "the headers onto context routes that still follow popups and new tabs. Navigations "
+        "are matched per redirect hop, but a fetch/XHR redirected to another origin still "
         "carries the headers there (Chromium, Firefox; WebKit drops Authorization only). "
         "Verify either with browser_network_requests(include_headers=True)."
     ),

@@ -15,7 +15,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
-from octowright import ssrf, ssrf_guard
+from octowright import ssrf_guard
 from octowright.console_levels import is_diagnostic_console_message
 from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_MS
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
@@ -550,7 +550,7 @@ class SessionOpsMixin(SessionViewportMixin, SessionLike):
                 )
             new_page = await popup_info.value
             try:
-                if ssrf.policy_enabled():
+                if ssrf_guard.guards_context(self.context):
                     await self._settle_guarded_popup(new_page)
                 else:
                     await new_page.wait_for_load_state("domcontentloaded", timeout=DEFAULT_NAV_TIMEOUT_MS)

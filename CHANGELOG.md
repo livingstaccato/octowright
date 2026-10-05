@@ -492,10 +492,10 @@ a section that is already tagged and on PyPI.
 
 ### Changed
 - **Behaviour change: a macro credential in an `inject_headers` header now
-  needs `forward_on_redirect`, even to the session's own origin.** The
-  pattern scopes only the first request. The browser re-sends an injected
-  header on every redirect that request follows, so an own-site URL answering
-  `302` to another host received the token there. This was measured on
+  needs `forward_on_redirect`, even to the session's own origin.** For a
+  `fetch`/XHR the pattern scopes only the first request. The browser re-sends
+  an injected header on every redirect that request follows, so an own-site
+  endpoint answering `302` to another host received the token there. This was measured on
   Chromium and Firefox for every header name; WebKit drops only
   `Authorization`. A step such as `{"Authorization": "Bearer {{token}}"}` to
   `https://app.example.test/**` is now refused unless it also carries
@@ -506,8 +506,23 @@ a section that is already tagged and on PyPI.
   malformed one as `bad_forward_on_redirect`. `mock_route` headers are a
   response served to the page and need no opt-in.
   `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow` still turns the whole check off.
-  Launch-time `extra_http_headers_urls` and `browser_inject_headers` are
-  documented as scoping the first request only.
+- **A URL-scoped header is matched at every redirect hop of a navigation.**
+  Headers from `extra_http_headers_urls`, `browser_inject_headers` or a macro
+  `inject_headers` step rode a page load's redirects: a matching URL that
+  answered `302` to another origin sent the header there too, with the SSRF
+  policy off (the default). A session with scoped headers now sends its
+  navigations through the same one-fetch-per-hop path the SSRF guard uses,
+  with or without a policy, so each hop is a new navigation and a header goes
+  only to hops its pattern matches. `page.url` is the final URL, relative
+  links resolve against it, and cookies set by a redirect still land. Measured
+  on Chromium, Firefox and WebKit. A session without scoped headers registers
+  nothing. Costs for sessions that have them: a redirecting navigation's
+  `goto` returns the redirect page's synthetic `200` rather than the 3xx
+  (each hop's real status stays in `browser_network_requests`); a `307`/`308`
+  redirect of a form `POST` is refused, as it is under the policy; every
+  request pays one route round trip; and a navigation's response is buffered
+  before the page gets it. A `fetch`/XHR still carries a scoped header across
+  a redirect, which is why `forward_on_redirect` is still required.
 - `pool.handoff(headed=None)` keeps the original browser's headed setting, and
   relaunches keep `badge` and `record_video` instead of resetting them.
 - **Handoff and relaunch keep the browser `channel`.** A browser launched on

@@ -143,11 +143,13 @@ def canonical_aliases(kind: str, fields: dict[str, Any]) -> dict[str, Any]:
 #: page makes, third-party hosts included, so it has no destination to vet.
 PATTERN_SCOPED_HEADER_ACTIONS = frozenset({"inject_headers", "mock_route"})
 #: The ones whose headers are REQUEST headers, which the pattern scopes only on
-#: the first hop: Playwright applies a routed header override to every redirect
-#: the request starts, so an own-site ``fetch`` answered ``302 -> elsewhere``
-#: carries the header elsewhere (measured: chromium and firefox for every
-#: header name, webkit for all but ``Authorization``). A credential in one
-#: needs `FORWARD_ON_REDIRECT_KEY` too. ``mock_route``'s are response headers.
+#: the first hop of a subresource: Playwright applies a routed header override
+#: to every redirect the request starts, so an own-site ``fetch`` answered
+#: ``302 -> elsewhere`` carries the header elsewhere (measured: chromium and
+#: firefox for every header name, webkit for all but ``Authorization``). A
+#: session matches its NAVIGATIONS per hop (``ssrf_guard``), but fetch/XHR and
+#: an exported script's routes do not. A credential in one needs
+#: `FORWARD_ON_REDIRECT_KEY` too. ``mock_route``'s are response headers.
 REDIRECT_FORWARDED_HEADER_ACTIONS = frozenset({"inject_headers"})
 #: ``{"Authorization": true}`` on such a step: per header, the macro author
 #: accepting that the own site may redirect that header onward. A literal
@@ -235,8 +237,8 @@ def parse_forward_on_redirect(action: dict[str, Any]) -> frozenset[str]:
 def _redirect_refusal(key: str, header: str) -> CredentialRefusal:
     return CredentialRefusal(
         f"macro expands credential arg {{{{{key}}}}} into inject_headers header {header!r} for the session's "
-        "own origin, but the pattern scopes only the first request: a redirect from that origin carries the "
-        f'header wherever it points. If the site will not redirect it elsewhere, add "{FORWARD_ON_REDIRECT_KEY}": '
+        "own origin, but the pattern scopes only the first request of a fetch/XHR: a redirect from that origin "
+        f'carries the header wherever it points. If the site will not redirect it elsewhere, add "{FORWARD_ON_REDIRECT_KEY}": '
         f'{{"{header}": true}} to this step, or set {CREDENTIAL_SINKS_ENV}=allow.'
     )
 
