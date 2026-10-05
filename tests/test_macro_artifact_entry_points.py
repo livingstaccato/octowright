@@ -42,7 +42,7 @@ ENTRY_POINTS: dict[str, set[str]] = {
         "export_macro_cli",  # macro_export_cli
         "run_macro_artifact",  # macro_artifact_run
         "macro_artifact_critical_points_set",  # macro_artifact_critical_points_set
-        "macro_artifact_verify",  # macro_artifact_verify, and a run with critical points
+        "_store_rollup",  # macro_artifact_verify (and a run with critical points) through its rollup
     },
     "refresh_run_summary": {"macro_artifact_verify"},
     "macro_artifact_verify": {"_verify_run"},  # run_macro_artifact's verify step

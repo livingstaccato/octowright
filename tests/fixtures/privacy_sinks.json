@@ -49,6 +49,12 @@
   },
   {
     "module": "octowright.macros.artifacts",
+    "function": "_store_rollup",
+    "callee": "write_artifact_manifest",
+    "shape": "call"
+  },
+  {
+    "module": "octowright.macros.artifacts",
     "function": "_verify_run",
     "callee": "macro_artifact_verify",
     "shape": "call"
@@ -81,12 +87,6 @@
     "module": "octowright.macros.artifacts",
     "function": "macro_artifact_verify",
     "callee": "refresh_run_summary",
-    "shape": "call"
-  },
-  {
-    "module": "octowright.macros.artifacts",
-    "function": "macro_artifact_verify",
-    "callee": "write_artifact_manifest",
     "shape": "call"
   },
   {
@@ -151,13 +151,13 @@
   },
   {
     "module": "octowright.macros.storage",
-    "function": "save_macro",
+    "function": "_write",
     "callee": "atomic_write_text",
     "shape": "call"
   },
   {
     "module": "octowright.macros.storage",
-    "function": "write_macro",
+    "function": "save_macro",
     "callee": "atomic_write_text",
     "shape": "call"
   },
