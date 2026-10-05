@@ -56,6 +56,22 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A follower's first call after connecting or reconnecting is no longer
+  refused with "Missing session ID".** When a follower connected to the
+  leader, the first time or after a leader restart, it replayed the client's
+  `initialize` and sent the handshake's completion and any waiting calls
+  straight after it, without waiting for the leader's answer. That answer is
+  what names the session, so a frame sent sooner could reach the leader
+  without it and be refused with `-32600 Bad Request: Missing session ID`,
+  intermittently and most often for a client that calls a tool right after
+  its handshake. The follower now waits for
+  the answer, within the connect timeout, before it sends anything else; a
+  refused or unanswered `initialize` is treated as a failed connect and
+  retried, and no waiting call is sent on that session. For the same reason
+  `octowright_bridge_leader_recovery_total{outcome="recovered"}` now counts a
+  leader restart as survived only once the new leader has answered the
+  handshake; a reconnect attempt made while the leader was still down could
+  count before.
 - **A redacted screenshot no longer stops a page's animations for hours.**
   An animation that had not started yet when the screenshot began, as on a
   page screenshotted right after it loaded, was given a start time about as

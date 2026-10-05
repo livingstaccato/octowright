@@ -19,6 +19,7 @@ from tests._proxy_supervisor_helpers import (
     _request,
     _response,
     _tools_call,
+    replay_answered,
 )
 
 
@@ -101,8 +102,7 @@ async def test_initialize_is_replayed_after_reconnect() -> None:
     assert supervisor.message_method(init_msg) == "initialize"
     await supervisor_obj.forward_remote_message(_response("init-1"))
     assert supervisor.message_request_id(await local_out_recv.receive()) == "init-1"
-    await supervisor_obj.replay_initialize(remote_write)
-    replayed = await first_remote_recv.receive()
+    replayed = await replay_answered(supervisor_obj, remote_write, first_remote_recv)
     assert supervisor.message_method(replayed) == "initialize"
 
 
@@ -124,13 +124,11 @@ async def test_replay_initialize_uses_fresh_request_id_on_each_replay() -> None:
     supervisor_obj.track_local_message(init_request)
 
     _read1, remote_write1, _sid1 = await connector.connect()
-    await supervisor_obj.replay_initialize(remote_write1)
-    first_seen = await connector.sessions[0][0].receive()
+    first_seen = await replay_answered(supervisor_obj, remote_write1, connector.sessions[0][0])
     first_id = supervisor.message_request_id(first_seen)
 
     _read2, remote_write2, _sid2 = await connector.connect()
-    await supervisor_obj.replay_initialize(remote_write2)
-    second_seen = await connector.sessions[1][0].receive()
+    second_seen = await replay_answered(supervisor_obj, remote_write2, connector.sessions[1][0])
     second_id = supervisor.message_request_id(second_seen)
 
     assert first_id != "client-init-id"
@@ -156,13 +154,10 @@ async def test_replay_initialize_response_is_swallowed_not_forwarded() -> None:
     supervisor_obj.track_local_message(init_request)
 
     _read, remote_write, _sid = await connector.connect()
-    await supervisor_obj.replay_initialize(remote_write)
-    seen_on_wire = await connector.sessions[0][0].receive()
+    # The leader answers using the replay id (replay_answered plays it).
+    seen_on_wire = await replay_answered(supervisor_obj, remote_write, connector.sessions[0][0])
     replay_id = supervisor.message_request_id(seen_on_wire)
     assert isinstance(replay_id, str)
-
-    # Leader answers using the replay id.
-    await supervisor_obj.forward_remote_message(_response(replay_id))
 
     with anyio.move_on_after(0.05):
         leaked = await local_out_recv.receive()

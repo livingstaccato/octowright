@@ -11,7 +11,8 @@ election as its leader source. Until the election returns, ``initialize`` and
 ``notifications/initialized`` is kept for the replay; any other request waits
 for the leader -- for the pre-leader budget on top of the usual connect wait,
 so a slow election delays the first call instead of failing it -- and is then
-delivered in order after the replayed handshake, whose answer is swallowed.
+delivered in order after the replayed handshake, which waits for the leader's
+answer to its ``initialize`` (then swallows it).
 When the election falls back to an inline leader, the bridge serves it over an
 in-memory connection instead of HTTP.
 """
@@ -175,15 +176,15 @@ async def test_a_call_made_before_the_leader_is_delivered_after_the_handshake_in
             election.decide(_URL)
             await leader.wait_for(1)
             to_leader, from_leader = leader.sessions[0][1], leader.sessions[0][0]
-            frames = [await to_leader.receive() for _ in range(4)]
-            replay = frames[0].message
+            replay = (await to_leader.receive()).message
             assert isinstance(replay, JSONRPCRequest) and replay.method == "initialize"
             assert str(replay.id).startswith("octowright-bridge-replay")
-            assert frames[1].message.method == "notifications/initialized"
-            assert [frames[2].message.id, frames[3].message.id] == ["list-1", "res-1"]
-            # The leader's answer to the replayed initialize is swallowed: the
-            # client already has one.
+            # The leader's answer to the replayed initialize is swallowed (the
+            # client already has one), and nothing else goes out before it.
             await from_leader.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=replay.id, result={})))
+            frames = [await to_leader.receive() for _ in range(3)]
+            assert frames[0].message.method == "notifications/initialized"
+            assert [frames[1].message.id, frames[2].message.id] == ["list-1", "res-1"]
             await from_leader.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id="list-1", result={"tools": []})))
             reply = await local_out.receive()
         assert reply.message.id == "list-1"

@@ -151,7 +151,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_follower_session_reaped_total` | counter | — | Leader MCP sessions terminated by the housekeeping pid-liveness reaper (job 3) because their follower's OS process was found dead. Process-lifetime running total also readable in-process via `octowright_status()["bridge"]["follower_sessions_reaped"]`. |
 | `octowright_mcp_new_session_throttled_total` | counter | — | Session-creating `/mcp` requests rejected with `429` by the leader-side per-source new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`). A high value means a follower is storming — reconnecting/creating sessions far faster than legit use. |
 | `octowright_mcp_session_evicted_total` | counter | — | Leader MCP sessions evicted by housekeeping because the live table exceeded `OCTOWRIGHT_MCP_MAX_SESSIONS` (the version-agnostic memory bound against a session storm). |
-| `octowright_bridge_leader_recovery_total` | counter | `outcome` | Leader-down gaps (`outcome` = `recovered`/`exhausted`) — how often a leader restart is survived vs. drops the client. |
+| `octowright_bridge_leader_recovery_total` | counter | `outcome` | Leader-down gaps (`outcome` = `recovered`/`exhausted`) — how often a leader restart is survived vs. drops the client. `recovered` is counted when a reconnect's replayed `initialize` is answered, before the session is used. |
 | `octowright_artifact_verify_total` | counter | — | Macro-artifact verification runs. |
 | `octowright_artifact_verify_check_total` | counter | — | Per-check results within a macro-artifact verification. |
 | `octowright_macro_artifact_run_total` | counter | — | Macro-artifact replay runs. |

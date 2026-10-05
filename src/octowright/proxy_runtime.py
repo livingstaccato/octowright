@@ -530,7 +530,6 @@ async def run_supervised_proxy(
                                 ) as (remote_read, remote_write),
                             ):
                                 _connect_scope.deadline = math.inf
-                                connected_at = anyio.current_time()
                                 # Before the writer is published: every call sent
                                 # on this session is stamped with this leader.
                                 supervisor_obj.leader_generation = resolve_leader_generation()
@@ -541,8 +540,26 @@ async def run_supervised_proxy(
                                 # queued behind ``ready``, and one sent ahead of the
                                 # replayed initialize reaches an uninitialized session,
                                 # which the leader answers with an error (and a stray
-                                # session against our new-session rate limit).
-                                await supervisor_obj.replay_initialize(remote_write)
+                                # session against our new-session rate limit). The
+                                # replay reads the session itself until the leader
+                                # answers it: only that answer carries the session id
+                                # every later frame needs.
+                                await supervisor_obj.replay_initialize(remote_write, remote_read)
+                                # Only an answered handshake is a session: one the
+                                # leader refused, or never answered, is a failed
+                                # connect and takes the connect backoff, not the
+                                # flap guard's.
+                                connected_at = anyio.current_time()
+                                attempt = 0
+                                # Connected → the leader is back. If an outage was
+                                # observed (inline OR by the monitor's unstick), this
+                                # reconnect survived it — meter the recovery, then
+                                # clear the clock (only a real reconnect clears it).
+                                # Before the writer is published, so a call answered
+                                # on this session is never ahead of its metering.
+                                if leader_down[0] is not None:
+                                    _LEADER_RECOVERY.add(1, attributes={"outcome": "recovered"})
+                                leader_down[0] = None
                                 await supervisor_obj.resume_in_flight(remote_write)
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
@@ -556,14 +573,6 @@ async def run_supervised_proxy(
                                     reconnect_attempts=supervisor_obj.reconnect_attempts,
                                     request_timeouts=supervisor_obj.request_timeouts,
                                 )
-                                attempt = 0
-                                # Connected → the leader is back. If an outage was
-                                # observed (inline OR by the monitor's unstick), this
-                                # reconnect survived it — meter the recovery, then
-                                # clear the clock (only a real reconnect clears it).
-                                if leader_down[0] is not None:
-                                    _LEADER_RECOVERY.add(1, attributes={"outcome": "recovered"})
-                                leader_down[0] = None
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
 

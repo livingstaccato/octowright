@@ -145,6 +145,11 @@ def bridge_http_client(headers: dict[str, str], supervisor_obj: Any) -> Any:
     return build_tracing_http_client(headers=headers, on_session_id=_note_session_id)
 
 
+class ReplayHandshakeError(RuntimeError):
+    """The leader refused the replayed ``initialize``, or closed the session
+    before answering it: the connect failed."""
+
+
 class BridgeSupervisor:
     def __init__(
         self,
@@ -168,6 +173,10 @@ class BridgeSupervisor:
         # the local client already got its initialize response on the first try.
         self._replay_id_counter = itertools.count(1)
         self._internal_replay_ids: set[str | int] = set()
+        # A replay waiting for its answer: the id's event is set, and the answer
+        # kept, when the leader's response or error for it arrives.
+        self._replay_waiters: dict[str | int, anyio.Event] = {}
+        self._replay_answers: dict[str | int, Any] = {}
         # Progress-token bookkeeping: every in-flight progressToken (client or
         # bridge-synthetic) maps to its request id so a leader progress
         # notification re-arms the right deadline; the synthetic subset is also
@@ -459,7 +468,26 @@ class BridgeSupervisor:
                 leader_generation=self.leader_generation,
             )
 
-    async def replay_initialize(self, remote_write: Any) -> None:
+    async def replay_initialize(self, remote_write: Any, remote_read: Any | None = None) -> None:
+        """Initialize a fresh leader session with the client's cached handshake.
+
+        Waits, within ``BRIDGE_CONNECT_TIMEOUT_SECONDS``, for the leader's
+        answer to the replayed ``initialize`` before sending
+        ``notifications/initialized``, and so before the caller resumes or
+        publishes anything. The leader names the session (``Mcp-Session-Id``)
+        only in that answer, and mcp's streamable-HTTP client builds each POST's
+        headers from the id it holds when the POST goes out, POSTing requests
+        concurrently: a frame sent before the answer arrived carried no session
+        id and was refused with ``Bad Request: Missing session ID``.
+
+        ``remote_read`` is the session's read side when nothing reads it yet
+        (an HTTP connect starts its reader only once the session is ready);
+        frames other than the answer are handled as the reader would. Without
+        it, a running reader delivers the answer through
+        ``forward_remote_message``. An error answer, a session that closes
+        first, or no answer in time raises, so the caller treats the connect as
+        failed and sends nothing else on it.
+        """
         if self._initialize_message is None:
             return
         cached_root = message_root(self._initialize_message)
@@ -467,14 +495,37 @@ class BridgeSupervisor:
             return
         replay_id = f"octowright-bridge-replay-{next(self._replay_id_counter)}"
         self._internal_replay_ids.add(replay_id)
-        replay_request = cached_root.model_copy(update={"id": replay_id})
-        replay_message = SessionMessage(replay_request)
-        await remote_write.send(replay_message)
+        answered = anyio.Event()
+        self._replay_waiters[replay_id] = answered
+        try:
+            with anyio.fail_after(defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS):
+                await remote_write.send(SessionMessage(cached_root.model_copy(update={"id": replay_id})))
+                if remote_read is None:
+                    await answered.wait()
+                else:
+                    await self._read_until_answered(remote_read, answered)
+        finally:
+            self._replay_waiters.pop(replay_id, None)
+        answer = self._replay_answers.pop(replay_id, None)
+        if isinstance(answer, JSONRPCError):
+            raise ReplayHandshakeError(f"the leader refused the replayed initialize: {answer.error.message}")
         # Complete the handshake on the fresh session: replay the cached
         # notifications/initialized too, or the leader leaves the session
         # half-initialized and 400s the next tool call.
         if self._initialized_message is not None:
             await remote_write.send(self._initialized_message)
+
+    async def _read_until_answered(self, remote_read: Any, answered: anyio.Event) -> None:
+        while not answered.is_set():
+            try:
+                message = await remote_read.receive()
+            except (anyio.EndOfStream, anyio.ClosedResourceError) as exc:
+                raise ReplayHandshakeError(
+                    "the leader closed the session before answering the replayed initialize"
+                ) from exc
+            if isinstance(message, Exception):
+                raise message
+            await self.forward_remote_message(message)
 
     async def _forward_progress(self, message: SessionMessage, progress_token: Any) -> None:
         """Progress means the op is alive: re-arm its deadline. A bridge-synthetic
@@ -535,6 +586,10 @@ class BridgeSupervisor:
             # been told the session is initialized; forwarding a second
             # response would be a duplicate id from the client's perspective.
             self._internal_replay_ids.discard(request_id)
+            waiter = self._replay_waiters.pop(request_id, None)
+            if waiter is not None:
+                self._replay_answers[request_id] = message_root(message)
+                waiter.set()
             return
         if request_id is not None and not self._settle_in_flight(request_id, message):
             return

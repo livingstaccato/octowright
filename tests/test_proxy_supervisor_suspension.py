@@ -29,7 +29,7 @@ import pytest
 from mcp.shared.message import SessionMessage
 
 from octowright import proxy_supervisor as supervisor
-from tests._proxy_supervisor_helpers import _notification, _request
+from tests._proxy_supervisor_helpers import _notification, _request, replay_answered
 
 
 @pytest.fixture
@@ -48,9 +48,7 @@ async def test_reconnect_replays_initialize_then_initialized() -> None:
     sup.track_local_message(_notification("notifications/initialized"))
 
     out_send, out_recv = anyio.create_memory_object_stream[SessionMessage](10)
-    await sup.replay_initialize(out_send)
-
-    first = out_recv.receive_nowait()
+    first = await replay_answered(sup, out_send, out_recv)
     assert supervisor.message_method(first) == "initialize"
     second = out_recv.receive_nowait()
     assert supervisor.message_method(second) == "notifications/initialized"

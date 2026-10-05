@@ -33,7 +33,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCError
 
 from octowright import proxy_runtime as runtime
-from tests._proxy_supervisor_helpers import _request, _tools_call
+from tests._proxy_supervisor_helpers import _request, _response, _tools_call
 
 
 @pytest.fixture
@@ -115,13 +115,14 @@ async def test_a_queued_call_goes_to_the_new_leader_after_initialize(monkeypatch
             assert (await leader.sessions[0][1].receive()).message.id == "init-1"
             await leader.sessions[0][0].send(RuntimeError("leader dropped the stream"))
             await leader.wait_for(2)
+            first = await leader.sessions[1][1].receive()
+            assert str(first.message.id).startswith("octowright-bridge-replay"), first
+            await leader.sessions[1][0].send(_response(first.message.id))
             await reconnect_snapshot.wait()
             await local_in.send(_tools_call("persona_list", "call-1"))
             await anyio.sleep(0.1)  # let the forwarder act on whatever is published
             release.set()
-            first = await leader.sessions[1][1].receive()
             second = await leader.sessions[1][1].receive()
-        assert str(first.message.id).startswith("octowright-bridge-replay"), first
         assert second.message.id == "call-1"
         tg.cancel_scope.cancel()
     await local_in.aclose()
