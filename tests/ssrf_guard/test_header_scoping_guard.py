@@ -242,3 +242,135 @@ async def test_inject_headers_installs_the_guard_before_its_own_route() -> None:
     await session.inject_headers("**/api/**", {"X-Tag": "t"})
     await session.inject_headers("**/gql", {"X-Tag": "t"})
     assert session.context.registered == ["**/*", "**/api/**", "**/gql"]
+
+
+class _UnrouteContext(_Context):
+    """A context that records removals too, and the page listener the guard adds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.listeners: list[str] = []
+
+    async def unroute(self, pattern: str, _handler: Any = None) -> None:
+        self.registered.append(f"unroute {pattern}")
+
+    def on(self, event: str, *_args: Any) -> None:
+        self.listeners.append(event)
+
+    def remove_listener(self, event: str, *_args: Any) -> None:
+        self.listeners.remove(event)
+
+
+async def _release(context: Any) -> bool:
+    """What ``uninject_headers`` does under its gated operation."""
+    if not ssrf_guard.scoped_header_guard_releasable(context):
+        return False
+    await context.unroute(*ssrf_guard.navigation_route())
+    ssrf_guard.forget_scoped_header_guard(context)
+    return True
+
+
+async def test_releasing_a_scope_only_guard_removes_its_route() -> None:
+    context = _UnrouteContext()
+    await install_navigation_guard(context, scope_headers=True)
+    assert context.listeners == ["page"]
+
+    assert await _release(context) is True
+
+    assert context.registered == ["**/*", "unroute **/*"]
+    assert context.listeners == []
+    assert not ssrf_guard.guards_context(context)
+    # A later scoped header installs it afresh, ahead of its own route.
+    await install_navigation_guard(context, scope_headers=True)
+    assert context.registered == ["**/*", "unroute **/*", "**/*"]
+
+
+async def test_releasing_never_removes_the_policy_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+    context = _UnrouteContext()
+    await install_navigation_guard(context, scope_headers=True)
+
+    assert await _release(context) is False
+    assert "unroute **/*" not in context.registered
+
+
+async def test_releasing_keeps_a_scope_guard_once_the_policy_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The route reads the policy per request: with it on now, the route is the policy's guard too."""
+    context = _UnrouteContext()
+    await install_navigation_guard(context, scope_headers=True)
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+
+    assert await _release(context) is False
+    assert "unroute **/*" not in context.registered
+
+
+async def test_releasing_an_unguarded_context_is_a_no_op() -> None:
+    context = _UnrouteContext()
+    assert await _release(context) is False
+    assert context.registered == []
+
+
+class _ScopedSession:
+    """The session surface ``inject_headers`` / ``uninject_headers`` touch, over a recording context."""
+
+    def __init__(self, *, launch_headers: dict[str, str] | None = None, launch_urls: list[str] | None = None) -> None:
+        from types import SimpleNamespace
+
+        self.instance_id = "i"
+        self.context = _UnrouteContext()
+        self.recorder = SimpleNamespace(record=lambda *a, **k: None)
+        self._header_routes: dict[str, object] = {}
+        self._injected_headers: dict[str, dict[str, str]] = {}
+        self._active_routes: dict[str, object] = {}
+        self.extra_http_headers = launch_headers
+        self.extra_http_headers_urls = launch_urls
+
+    def operation(self, *args: object, **kwargs: object) -> object:
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _cm():  # type: ignore[no-untyped-def]
+            yield None
+
+        return _cm()
+
+    from octowright.session.core_interaction_mixin import SessionInteractionMixin as _Mixin
+
+    inject_headers = _Mixin.inject_headers
+    uninject_headers = _Mixin.uninject_headers
+
+
+async def test_uninjecting_the_last_injection_removes_the_navigation_route() -> None:
+    session = _ScopedSession()
+    await session.inject_headers("**/api/**", {"X-Tag": "t"})
+    await session.inject_headers("**/gql", {"X-Tag": "t"})
+
+    await session.uninject_headers("**/api/**")
+    assert "unroute **/*" not in session.context.registered
+    assert ssrf_guard.guards_context(session.context)
+
+    await session.uninject_headers("**/gql")
+    assert session.context.registered[-1] == "unroute **/*"
+    assert not ssrf_guard.guards_context(session.context)
+
+
+async def test_uninjecting_keeps_the_route_for_scoped_launch_headers() -> None:
+    session = _ScopedSession(launch_headers={"X-Launch": "1"}, launch_urls=["**/launch/**"])
+    await install_navigation_guard(session.context, scope_headers=True)
+    await session.inject_headers("**/api/**", {"X-Tag": "t"})
+
+    await session.uninject_headers("**/api/**")
+
+    assert "unroute **/*" not in session.context.registered
+    assert ssrf_guard.guards_context(session.context)
+
+
+async def test_uninjecting_keeps_the_route_under_the_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OCTOWRIGHT_SSRF_POLICY", "block-private")
+    session = _ScopedSession()
+    await install_navigation_guard(session.context)
+    await session.inject_headers("**/api/**", {"X-Tag": "t"})
+
+    await session.uninject_headers("**/api/**")
+
+    assert "unroute **/*" not in session.context.registered

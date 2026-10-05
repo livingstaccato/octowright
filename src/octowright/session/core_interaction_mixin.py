@@ -350,12 +350,26 @@ class SessionInteractionMixin(SessionLike):
 
     @gated_operation("browser_uninject_headers")
     async def uninject_headers(self, url_pattern: str) -> dict[str, Any]:
-        """Remove a previously-installed header injection for ``url_pattern``."""
+        """Remove a previously-installed header injection for ``url_pattern``.
+
+        The last one also takes down the scoped-header navigation route, unless
+        launch headers are scoped too or the SSRF policy is on.
+        """
         handler = self._header_routes.pop(url_pattern, None)
         self._injected_headers.pop(url_pattern, None)
         if handler is None:
             raise KeyError(f"no active header injection for pattern {url_pattern!r}")
         await bounded(self.context.unroute(url_pattern, handler), operation="browser_uninject_headers")
+        # Nothing scoped is left, so the per-hop navigation route the first
+        # injection installed is only cost now (a round trip per request,
+        # buffered navigation bodies). The policy's guard stays.
+        scoped_left = bool(self._header_routes) or bool(self.extra_http_headers and self.extra_http_headers_urls)
+        if not scoped_left and ssrf_guard.scoped_header_guard_releasable(self.context):
+            await bounded(
+                self.context.unroute(*ssrf_guard.navigation_route()),
+                operation="browser_uninject_headers",
+            )
+            ssrf_guard.forget_scoped_header_guard(self.context)
         self.recorder.record("uninject_headers", pattern=url_pattern)
         return {"ok": True, "pattern": url_pattern}
 

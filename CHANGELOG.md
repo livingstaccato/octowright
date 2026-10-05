@@ -49,6 +49,13 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **Removing the last `browser_inject_headers` injection stops routing
+  navigations.** The first injection routes the browser's navigations through
+  a per-hop handler so a scoped header does not follow a redirect; that route
+  stayed after the last injection was removed, so every request kept paying a
+  route round trip and every page body was still buffered. It now goes with
+  the last injection, unless the launch headers are URL-scoped too or an SSRF
+  policy is on.
 - **A handoff, relaunch or crash recovery keeps the headers and mocks you
   set after launch.** A replacement browser from `browser_handoff`,
   `browser_relaunch_fluid` or a driver-death / browser-process-crash reopen
