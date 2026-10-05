@@ -39,11 +39,7 @@ function operationBadge(row: SessionSummary): HTMLElement | null {
   return badge;
 }
 
-export function renderSessionTable(
-  rows: SessionSummary[],
-  live: boolean,
-  actions: SessionTableActions,
-): HTMLElement {
+export function renderSessionTable(rows: SessionSummary[], live: boolean, actions: SessionTableActions): HTMLElement {
   if (rows.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty";

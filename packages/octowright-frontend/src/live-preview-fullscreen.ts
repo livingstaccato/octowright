@@ -8,11 +8,7 @@ export interface FullscreenController {
 
 const MAXIMIZED_CLASS = "live-preview--maximized";
 
-export function attachFullscreen(
-  button: HTMLElement,
-  target: HTMLElement,
-  mode: FullscreenMode,
-): FullscreenController {
+export function attachFullscreen(button: HTMLElement, target: HTMLElement, mode: FullscreenMode): FullscreenController {
   let disposed = false;
   let nativeRequestGeneration = 0;
 

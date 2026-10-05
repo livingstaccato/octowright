@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearDashboardMediaAuth,
-  configureDashboardMediaAuth,
-} from "./dashboard-media-auth.js";
+import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboard-media-auth.js";
 
 interface FakeController {
   postMessage: ReturnType<typeof vi.fn>;
@@ -290,9 +287,7 @@ describe("dashboard media service-worker coordinator", () => {
   });
 
   it("fails boundedly when service workers are unavailable", async () => {
-    await expect(configureDashboardMediaAuth("page-secret", { serviceWorker: null })).rejects.toThrow(
-      "service worker",
-    );
+    await expect(configureDashboardMediaAuth("page-secret", { serviceWorker: null })).rejects.toThrow("service worker");
   });
 
   it("times out a registration that never settles", async () => {
@@ -404,11 +399,12 @@ describe("dashboard media service worker", () => {
   it.each([401, 403])("notifies only the originating client when authenticated video returns %s", async (status) => {
     const worker = await import("../static/dashboard-media-sw.js");
     const postMessage = vi.fn();
-    const getClient = vi.fn(async (clientId: string) =>
-      clientId === "client-denied" ? { postMessage } : undefined,
-    );
+    const getClient = vi.fn(async (clientId: string) => (clientId === "client-denied" ? { postMessage } : undefined));
     vi.stubGlobal("clients", { get: getClient });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status })),
+    );
     worker.handleDashboardMediaAuthMessage({
       source: { id: "client-denied" },
       data: { type: "octowright.dashboard.media-auth.set", bearer: "denied-secret" },

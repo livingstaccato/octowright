@@ -70,11 +70,18 @@ const HEADLINE_KEYS = [
 ];
 
 function isLikelyBinaryPreview(value: unknown): boolean {
-  return typeof value === "string" && ((value.startsWith("b\"") && value.endsWith("\"")) || (value.startsWith("b'") && value.endsWith("'")));
+  return (
+    typeof value === "string" &&
+    ((value.startsWith('b"') && value.endsWith('"')) || (value.startsWith("b'") && value.endsWith("'")))
+  );
 }
 
 export function eventHeadline(event: Record<string, unknown>, max = 60): string {
-  if (typeof event.action === "string" && event.action.startsWith("websocket_") && isLikelyBinaryPreview(event.payload_preview)) {
+  if (
+    typeof event.action === "string" &&
+    event.action.startsWith("websocket_") &&
+    isLikelyBinaryPreview(event.payload_preview)
+  ) {
     return "[binary payload hidden]";
   }
 

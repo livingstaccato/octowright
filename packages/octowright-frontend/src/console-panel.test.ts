@@ -150,10 +150,7 @@ describe("severity mapping matches what the engines emit", () => {
       { level: "log", text: "noise", page_index: null },
     ];
 
-    expect(filterMessages(messages, "warn").map((m) => m.text)).toEqual([
-      "engine spelling",
-      "defensive alias",
-    ]);
+    expect(filterMessages(messages, "warn").map((m) => m.text)).toEqual(["engine spelling", "defensive alias"]);
   });
 
   it("groups a failed console.assert under Error", () => {
@@ -163,10 +160,7 @@ describe("severity mapping matches what the engines emit", () => {
       { level: "warning", text: "careful", page_index: null },
     ];
 
-    expect(filterMessages(messages, "error").map((m) => m.text)).toEqual([
-      "invariant broke",
-      "boom",
-    ]);
+    expect(filterMessages(messages, "error").map((m) => m.text)).toEqual(["invariant broke", "boom"]);
   });
 
   it("maps each engine level to a severity", () => {

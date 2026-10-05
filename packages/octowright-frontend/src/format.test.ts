@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { colorForAction, eventHeadline, formatDateTime, formatTime, relativeSeconds, shortUrl, truncate } from "./format.js";
+import {
+  colorForAction,
+  eventHeadline,
+  formatDateTime,
+  formatTime,
+  relativeSeconds,
+  shortUrl,
+  truncate,
+} from "./format.js";
 
 describe("truncate", () => {
   it("returns short strings unchanged", () => {
@@ -77,7 +85,9 @@ describe("eventHeadline", () => {
     expect(eventHeadline({ ts: "x", action: "click", selector: "#foo", text: "ignored" })).toBe("#foo");
   });
   it("falls back to url", () => {
-    expect(eventHeadline({ ts: "x", action: "navigate", url: "https://octowright.com" })).toBe("https://octowright.com");
+    expect(eventHeadline({ ts: "x", action: "navigate", url: "https://octowright.com" })).toBe(
+      "https://octowright.com",
+    );
   });
   it("returns empty when nothing matches", () => {
     expect(eventHeadline({ ts: "x", action: "noop" })).toBe("");
@@ -87,7 +97,12 @@ describe("eventHeadline", () => {
   });
   it("prefers payload preview for websocket events", () => {
     expect(
-      eventHeadline({ ts: "x", action: "websocket_framereceived", is_binary: true, payload_preview: "[binary payload hidden: 6 bytes]" }),
+      eventHeadline({
+        ts: "x",
+        action: "websocket_framereceived",
+        is_binary: true,
+        payload_preview: "[binary payload hidden: 6 bytes]",
+      }),
     ).toBe("[binary payload hidden: 6 bytes]");
   });
   it("normalizes old raw binary payload preview format", () => {

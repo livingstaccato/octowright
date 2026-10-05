@@ -188,9 +188,7 @@ function recoverActiveAuthorization(active: ActiveMediaAuthorization): void {
     })
     .catch((error: unknown) => {
       if (activeAuthorization === active && !active.recoveryQueued) {
-        active.options.onRecoveryFailed?.(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+        active.options.onRecoveryFailed?.(error instanceof Error ? error : new Error(String(error)));
       }
     })
     .finally(() => {
@@ -227,10 +225,7 @@ function attachActiveAuthorization(
         recoverActiveAuthorization(active);
         return;
       }
-      if (
-        data?.type === MEDIA_AUTH_REQUIRED &&
-        (data.status === 401 || data.status === 403)
-      ) {
+      if (data?.type === MEDIA_AUTH_REQUIRED && (data.status === 401 || data.status === 403)) {
         options.onUnauthorized?.(data.status);
       }
     },

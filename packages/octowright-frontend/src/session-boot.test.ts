@@ -741,7 +741,10 @@ describe("bootSession — live session", () => {
     });
 
     await bootSession(root, "sess-console-cursor", {});
-    (captured as TailOptions | null)?.onMessage({ events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }], cursor: 5 });
+    (captured as TailOptions | null)?.onMessage({
+      events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }],
+      cursor: 5,
+    });
 
     await vi.waitFor(() => expect(loaders.getConsole).toHaveBeenLastCalledWith("sess-console-cursor", 1201));
     await vi.waitFor(() => {
@@ -776,7 +779,10 @@ describe("bootSession — live session", () => {
     });
 
     await bootSession(root, "sess-console-reset", {});
-    (captured as TailOptions | null)?.onMessage({ events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }], cursor: 5 });
+    (captured as TailOptions | null)?.onMessage({
+      events: [{ ts: "2026-04-24T13:00:00Z", action: "click" }],
+      cursor: 5,
+    });
 
     await vi.waitFor(() => expect(loaders.getConsole).toHaveBeenLastCalledWith("sess-console-reset", 0));
     await vi.waitFor(() => {
