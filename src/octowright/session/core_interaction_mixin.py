@@ -435,7 +435,9 @@ class SessionInteractionMixin(SessionLike):
             state["launch"] = redact_headers_for_report(self.extra_http_headers)
             if self.extra_http_headers_urls:
                 state["launch_url_patterns"] = list(self.extra_http_headers_urls)
-        if self._page_extra_headers:
+        # Set on one page, they stay on that page: after a page_switch the
+        # active page is not sending them, so they are not reported for it.
+        if self._page_extra_headers and self._page_extra_headers_page is self.page:
             state["page"] = redact_headers_for_report(self._page_extra_headers)
         if self._injected_headers:
             state["injected"] = {

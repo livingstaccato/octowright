@@ -141,6 +141,12 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "close-race fallback snapshot in _close_with_fallback_snapshot where the gate is by "
         "definition no longer available",
     ),
+    "session/core_interaction_mixin.py:SessionInteractionMixin.header_state": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the page the "
+        "page-level headers were set on -- no Playwright I/O; ungated so browser_list never queues "
+        "behind a slow in-flight action",
+    ),
     "session/route_carry.py:RouteCarry.of": (
         "cached-property-only",
         "reads the cached active-page reference only to compare its identity with the page each "

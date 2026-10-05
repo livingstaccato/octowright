@@ -49,6 +49,11 @@ a section that is already tagged and on PyPI.
   DSL accepts `parameter_specs`.
 
 ### Fixed
+- **`browser_list` no longer reports page headers on a page that is not
+  sending them.** Headers set with `browser_set_extra_http_headers` apply to
+  the page they were set on, but after `page_switch` the browser's reported
+  headers still listed them under `page` for the newly active page. They are
+  now reported only while the page they were set on is the active one.
 - **`browser_unmock_route` works after a page switch.** It removed the mock
   from the active page, so after `page_switch` a mock set on the previous page
   kept answering there while `browser_unmock_route` reported success. It, and

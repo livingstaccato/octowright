@@ -266,3 +266,22 @@ class TestClearingPageHeaders:
         await header_session.set_extra_http_headers({"X-B": "2"})  # type: ignore[attr-defined]
 
         assert header_session.header_state()["page"] == {"X-B": "2"}  # type: ignore[attr-defined]
+
+
+class TestPageHeadersFollowTheirPage:
+    """Page-level headers belong to the page they were set on; the report covers the active page."""
+
+    async def test_a_switch_to_another_page_drops_them_from_the_report(self, header_session: object) -> None:
+        await header_session.set_extra_http_headers({"X-Page": "1"})  # type: ignore[attr-defined]
+        original = header_session.page  # type: ignore[attr-defined]
+        header_session.page = type(original)()  # type: ignore[attr-defined]  # what page_switch does
+
+        assert "page" not in header_session.header_state()  # type: ignore[attr-defined]
+
+        header_session.page = original  # type: ignore[attr-defined]
+        assert header_session.header_state()["page"] == {"X-Page": "1"}  # type: ignore[attr-defined]
+
+    async def test_the_real_session_records_the_page_they_were_set_on(self) -> None:
+        from octowright.session.core import BrowserSession
+
+        assert "_page_extra_headers_page" in BrowserSession.__dataclass_fields__
