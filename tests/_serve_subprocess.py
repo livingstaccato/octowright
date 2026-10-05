@@ -62,6 +62,12 @@ def isolated_env(root: Path) -> dict[str, str]:
     # daemon log and every unlisted default would land in the runner's profile.
     env["LOCALAPPDATA"] = str(root / "localappdata")
     env["APPDATA"] = str(root / "appdata")
+    # ``serve --daemon-mode`` sweeps every ``octowright-session-*`` dir in the
+    # system temp dir at boot; a test daemon must not reach a real daemon's.
+    tmp = root / "tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    for name in ("TMPDIR", "TEMP", "TMP"):
+        env[name] = str(tmp)
     env.update(
         {
             "OCTOWRIGHT_HEADLESS": "1",
