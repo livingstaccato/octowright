@@ -146,6 +146,10 @@ jobs:
         run: npm run typecheck:assets
       - name: Lint
         run: npm run lint --workspace=packages/octowright-frontend
+      # `make lint` runs this too, but only where node_modules exists; the
+      # Python lint job has no node, so this is where CI enforces it.
+      - name: Format check
+        run: npm run format:check:frontend
       - name: Tests (vitest with coverage)
         run: npm test --workspace=packages/octowright-frontend
       # The terminal plugin's dashboard renderer is a COMMITTED build artifact:

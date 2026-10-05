@@ -21,7 +21,9 @@ make test                 # pytest — DOES launch real browsers where engines a
 make lint                 # ruff/format/mypy/ty/bandit/codespell/SPDX/LOC/vulture/xenon/secrets
                           # + the doc guards (agent-docs sync, telemetry, tool inventory,
                           # mutmut selection) — see docs/ci-quality.md for the table
-make format               # ruff format + ruff --fix
+                          # + the dashboard's biome format check (skipped, with a message,
+                          # when node_modules is absent)
+make format               # ruff format + ruff --fix (+ biome format on the dashboard when installed)
 make typecheck            # mypy only
 make ci                   # lint + test
 make audit                # pip-audit against the dependency tree

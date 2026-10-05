@@ -8,6 +8,8 @@
     "test": "vitest run --coverage",
     "test:nocov": "vitest run",
     "lint": "biome lint src/",
+    "format": "biome format --write src/",
+    "format:check": "biome format src/",
     "fix": "biome check --write --unsafe src/"
   },
   "devDependencies": {

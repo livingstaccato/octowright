@@ -12,8 +12,15 @@ make test
 `make lint` runs ruff lint/format checks, `mypy` (over `src/octowright`, the terminal plugin's
 `packages/octowright-terminal/src` and `tests/plugins/reference`), `ty` over `src/octowright`,
 `bandit` security checks, codespell, SPDX header validation, and `detect-secrets` against
-`.secrets.baseline`. It then runs the repo's own guard scripts, each of which exists because
-something drifted silently once:
+`.secrets.baseline`. It also runs the dashboard's formatter check (`biome format` over
+`packages/octowright-frontend/src`, via `npm run format:check:frontend`) when the npm workspace
+is installed, and prints a `SKIP:` line instead when `node_modules` is absent, so the target
+still runs on a host without node. CI's Python lint job has no node, so the frontend job runs
+the same check. `make format` applies it (`npm run format:frontend`). Import ordering
+(`biome check`) is not part of the gate.
+
+It then runs the repo's own guard scripts, each of which exists because something drifted
+silently once:
 
 | Guard | Fails when |
 |---|---|
