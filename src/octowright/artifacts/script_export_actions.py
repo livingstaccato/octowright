@@ -28,6 +28,7 @@ kept in the generated script's ``state`` dict — see ``STATE_HELPERS``.
 from __future__ import annotations
 
 import inspect
+from typing import Any
 
 from octowright import request_failures
 from octowright.assertion_warnings import STRICT_OPTIONS, assertion_warning, strict_option, strict_refusal
@@ -720,6 +721,38 @@ EXPORT_UNSUPPORTED = 'raise RuntimeError(f"unsupported macro action in exported 
 def exported_action_kinds() -> frozenset[str]:
     """Action kinds the generated script can dispatch."""
     return frozenset(EXPORT_DISPATCH)
+
+
+#: Kinds the generated script skips rather than dispatches, as replay does.
+EXPORT_SKIPPED = frozenset({"launch", "close", "snapshot"})
+
+
+def unrunnable_steps(actions: list[Any]) -> list[tuple[int, Any]]:
+    """``(index, kind)`` of each top-level step the generated script would
+    reach and fail on with ``EXPORT_UNSUPPORTED``.
+
+    Top level only, because the script walks only the top level: a container
+    step (``if_selector``, ``try``, ``try_each``, ``macro_call``) is itself the
+    unrunnable one, whatever it holds.
+    """
+    runnable = exported_action_kinds() | EXPORT_SKIPPED
+    found: list[tuple[int, Any]] = []
+    for index, action in enumerate(actions):
+        kind = action.get("action") if isinstance(action, dict) else None
+        if kind not in runnable:
+            found.append((index, kind))
+    return found
+
+
+def refuse_unrunnable_steps(name: str, macro: dict[str, Any]) -> None:
+    """Refuse to export a macro with a step the script cannot dispatch: the
+    script would fail on it only after running every step before it against
+    the target."""
+    actions = macro.get("actions")
+    found = unrunnable_steps(actions if isinstance(actions, list) else [])
+    if found:
+        where = ", ".join(f"step {index} ({kind})" for index, kind in found)
+        raise ValueError(f"macro {name!r} cannot be exported: the script cannot run {where}")
 
 
 def _indent_block(body: str, indent: str) -> str:

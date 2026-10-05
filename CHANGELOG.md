@@ -56,6 +56,11 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **`macro_export_cli` refuses a macro its script cannot run.** An exported
+  script has no `if_selector`, `try`, `try_each` or `macro_call`, so a macro
+  with one exported fine and then failed with "unsupported macro action"
+  after every step before it had already run against the target. The export
+  now refuses it, naming each such step and its kind.
 - **Page headers set on two pages are both remembered.** After
   `browser_set_extra_http_headers` on one page and then, after `page_switch`,
   on another, the first page kept sending its headers but `browser_list` no

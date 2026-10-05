@@ -789,8 +789,9 @@ naming the step and the argument, never the value. A step every run reaches (a
 top-level step, a `try`'s steps, a `try_each`'s first branch) is refused before
 the run starts, so nothing is half done; one in an `if_selector` branch or a
 later `try_each` branch is refused when that branch is taken, so a run whose
-page never takes it is not refused. The exported CLI judges each step the same
-way. Split such a check into a macro that carries no credential, or set
+page never takes it is not refused. The exported CLI judges each step it runs
+the same way (it runs no `if_selector`, `try`, `try_each` or `macro_call`; see
+below). Split such a check into a macro that carries no credential, or set
 `OCTOWRIGHT_MACRO_CREDENTIAL_SINKS=allow`.
 A `macro_run_sequence` is judged as one run: the credential arguments any of
 its steps types, read from every step's macro before the first runs, refuse
@@ -890,6 +891,12 @@ A step whose `action` is itself a placeholder (`"action": "{{kind}}"`) is
 judged as the action it expands to, so `kind=fill` is checked as a credential
 fill and `"{{call}}"` resolving to `macro_call` keeps its credential taint. A
 credential-named argument is refused as an action name.
+
+**Exported scripts run only flat steps.** A script runs the top-level steps
+in order and has no `if_selector`, `try`, `try_each` or `macro_call`, so
+`macro_export_cli` refuses a macro with one of those (or any step the script
+cannot dispatch), naming each step and its kind, rather than writing a script
+that would fail on it after running every step before it.
 
 **Exported scripts enforce the live guards.** A script from `macro_export_cli`
 refuses a credential in a URL, code or outbound field, types a credential only

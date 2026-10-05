@@ -139,7 +139,9 @@ def macro_digest(name: str | None = None, recording_path: str | None = None, max
         "Export a saved macro as an import-safe Python argparse CLI script. The script enforces "
         "replay's guards: it types a credential only on an origin passed as --trusted-origin (or "
         "listed in the step's allowed_origins), uploads only from the upload roots, and runs "
-        "expect_network_clean / expect_no_text, printing what each passing check saw."
+        "expect_network_clean / expect_no_text, printing what each passing check saw. A macro "
+        "with a step the script cannot run (if_selector, try, try_each, macro_call) is refused, "
+        "naming the step, instead of exported to fail partway through."
     ),
 )
 def macro_export_cli(

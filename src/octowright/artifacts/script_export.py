@@ -12,7 +12,7 @@ from typing import Any
 
 from octowright import credential_input, credential_sinks, drawn_text, http_headers
 from octowright._paths import atomic_write_text
-from octowright.artifacts.script_export_actions import STATE_HELPERS, render_dispatch_chain
+from octowright.artifacts.script_export_actions import EXPORT_SKIPPED, STATE_HELPERS, render_dispatch_chain
 from octowright.artifacts.script_export_args import (
     _args_dict,
     _call_args,
@@ -171,7 +171,7 @@ _DEFAULT_ACTION_TIMEOUT_MS = {DEFAULT_ACTION_TIMEOUT_MS}
 # none, so Playwright's own default applies, and a credential step, which has
 # to pass one, passes the same. The script sets no default timeout of its own.
 _PLAYWRIGHT_DEFAULT_TIMEOUT_MS = 30000
-_LIFECYCLE_SKIP = {{"launch", "close", "snapshot"}}
+_LIFECYCLE_SKIP = set({sorted(EXPORT_SKIPPED)!r})
 _PLACEHOLDER_RE = {PLACEHOLDER_PATTERN!r}
 _FIELD_NAME_RE = re.compile({FIELD_NAME_PATTERN!r})
 
