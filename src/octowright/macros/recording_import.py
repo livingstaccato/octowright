@@ -40,7 +40,8 @@ def iter_macro_actions(
             if strict_json:
                 raise
             continue
-        action_type = entry.get("action", "")
+        # Any default outside the strip sets keeps an action-less row the same way.
+        action_type = entry.get("action", "")  # pragma: no mutate
         if action_type in ALWAYS_STRIP or action_type in RECORDER_NOISE:
             continue
         if action_type in LIFECYCLE and not include_launch:
