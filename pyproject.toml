@@ -604,6 +604,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_generic_screenshot_privacy.py",
     "tests/test_live_buffers_scrub_ledger.py",
     "tests/test_typed_password_ledger_bounds.py",
+    "tests/mutation_kills/test_artifacts_evidence.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
