@@ -183,8 +183,12 @@ def test_a_kind_without_macros_cannot_declare_startup_macros(registered):
 
     p = Participant(persona="tanuki-tim", kind="refkind", role="player", startup_macros=["login"])
     s = Scenario(name="demo", participants=[p])
-    with pytest.raises(ValueError, match="startup_macros"):
+    with pytest.raises(ValueError) as raised:
         _validate_participant_kind(s, p)
+    assert str(raised.value) == (
+        "scenario 'demo': participant 'tanuki-tim' of kind 'refkind' cannot declare startup_macros "
+        "(its adapter provides no run_macro)"
+    )
 
 
 def test_a_kind_with_macros_may_declare_startup_macros(registered):

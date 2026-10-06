@@ -68,9 +68,12 @@ def test_scenario_list_and_status(_patch_deps: dict[str, MagicMock], monkeypatch
 
 
 @pytest.mark.anyio
-async def test_scenario_spawn_template_and_stop_run_wait_tail(_patch_deps: dict[str, MagicMock]) -> None:
+async def test_scenario_spawn_template_and_stop_run_wait_tail(
+    _patch_deps: dict[str, MagicMock], monkeypatch: pytest.MonkeyPatch
+) -> None:
     spec = SimpleNamespace(name="templ")
-    _scenarios.scenario_mod.load_scenario_template = MagicMock(return_value=spec)
+    # monkeypatch, not assignment: the stub must not outlive this test.
+    monkeypatch.setattr(_scenarios.scenario_mod, "load_scenario_template", MagicMock(return_value=spec))
     live = SimpleNamespace(scenario_id="sid", name="templ", participants=[{"instance_id": "i1"}])
     _patch_deps["scenario_pool"].start = AsyncMock(return_value=live)
     _patch_deps["scenario_pool"].stop = AsyncMock(return_value={"scenario_id": "sid", "closed": 1})
