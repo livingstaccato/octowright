@@ -1072,7 +1072,14 @@ async def test_manual_action_cannot_interleave_macro(session: MacroGateFake, mon
     session.block_after_first = asyncio.Event()
     session.release_first = asyncio.Event()
     macro_task = asyncio.create_task(run_macro(session, "two-actions"))
-    await session.block_after_first.wait()
+    blocked = asyncio.create_task(session.block_after_first.wait())
+    # A macro that fails before its first click never sets the event: surface
+    # that failure instead of waiting on the event until the suite times out.
+    await asyncio.wait({macro_task, blocked}, return_when=asyncio.FIRST_COMPLETED)
+    if macro_task.done():
+        blocked.cancel()
+        macro_task.result()
+        pytest.fail("the macro finished without blocking after its first click")
     manual = asyncio.create_task(session.click("#manual"))
     await wait_for_queue_depth(session._test_operation_gate, 1)
     assert session.calls == ["macro:first"]
