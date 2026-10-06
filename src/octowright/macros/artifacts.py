@@ -74,7 +74,9 @@ def plan_macro_artifact(name: str, args: dict[str, Any] | None = None) -> dict[s
         manifest = _merge_existing_manifest(existing_manifest_path, manifest)
     # A plan has no run to learn what a called macro classifies (a run's
     # ledger does), so with a macro_call anywhere every value is withheld.
-    calls = any(a.get("action") == "macro_call" for a in iter_nested_actions(macro.get("actions", [])))
+    # The walk yields nothing for None as for [], so the default is not mutated.
+    planned_actions = macro.get("actions", [])  # pragma: no mutate
+    calls = any(a.get("action") == "macro_call" for a in iter_nested_actions(planned_actions))
     shown = dict.fromkeys(args_used, REDACTED) if calls else privacy.redact(args_used)
     manifest["parameters"] = shown
     write_artifact_manifest(manifest_path, manifest)
@@ -333,7 +335,8 @@ async def run_macro_artifact(
             manifest["parameters"] = scrub_sensitive_values(privacy.redact(args_used), sensitive_values)
             write_artifact_manifest(manifest_path, manifest)
 
-            critical_points = manifest.get("critical_points", [])
+            # The manifest always carries critical_points, so the default is not mutated.
+            critical_points = manifest.get("critical_points", [])  # pragma: no mutate
             verification_status, verification_paths = _verify_run(name, run_dir.name, verify and bool(critical_points))
 
             with span("octowright.macro.artifact.run") as s:
@@ -380,7 +383,8 @@ def _verify_run(name: str, run_id: str, enabled: bool) -> tuple[str, dict[str, A
     v_res = macro_artifact_verify(name, run_id)
     if not v_res.get("ok"):
         return "not_configured", {}
-    return v_res.get("status", "unknown"), v_res.get("paths", {})
+    # An ok verification always carries both keys, so the defaults are not mutated.
+    return v_res.get("status", "unknown"), v_res.get("paths", {})  # pragma: no mutate
 
 
 async def _capture_screenshot(
@@ -412,7 +416,8 @@ async def _capture_screenshot(
                 # A mistyped policy must not take down the whole artifact run; the
                 # macro's own screenshot action still raises on it.
                 log.warning("octowright.artifacts.screenshot_policy_invalid", env=safe_screenshot.POLICY_ENV)
-                built_in = False
+                # Only its falsiness is read, so None would do the same.
+                built_in = False  # pragma: no mutate
             if not built_in:
                 evidence.screenshot_suppressed(label=label)
                 return
@@ -445,7 +450,8 @@ def _safe_existing_manifest_path(store: ArtifactStore, manifest_path: Path) -> P
     if not manifest_path.exists():
         return None
     try:
-        contained_path = store._contained(manifest_path, label="macro artifact manifest")
+        # A refusal is swallowed below, so its label is never seen; not mutated.
+        contained_path = store._contained(manifest_path, label="macro artifact manifest")  # pragma: no mutate
         contained_path.relative_to(store.root.resolve())
     except (OSError, ValueError):
         return None
@@ -504,7 +510,8 @@ def _merge_existing_manifest(path: Path, manifest: dict[str, Any]) -> dict[str, 
 def _stored_manifest(store: ArtifactStore, path: Path) -> tuple[Path, dict[str, Any]] | None:
     """The manifest as it is on disk, and its contained path; what a read-modify-write writes back."""
     try:
-        contained_path = store._contained(path, label="macro artifact manifest")
+        # A refusal is swallowed below, so its label is never seen; not mutated.
+        contained_path = store._contained(path, label="macro artifact manifest")  # pragma: no mutate
         contained_path.relative_to(store.root.resolve())
     except (OSError, ValueError):
         return None
@@ -618,8 +625,9 @@ def _normalize_critical_point(point: dict[str, Any], index: int) -> dict[str, An
     normalized.setdefault("status", "unknown")
     normalized.setdefault("checks", [])
     normalized.setdefault("evidence", [])
-    normalized.setdefault("last_verified_run", None)
-    normalized.setdefault("notes", None)
+    # None is setdefault's own default, so dropping it is equivalent.
+    normalized.setdefault("last_verified_run", None)  # pragma: no mutate
+    normalized.setdefault("notes", None)  # pragma: no mutate
     return normalized
 
 
@@ -657,7 +665,8 @@ def macro_artifact_verify(name: str, run_id: str | None = None) -> dict[str, Any
     if not manifest:
         return {"ok": False, "error": "Manifest not found."}
 
-    critical_points = manifest.get("critical_points", [])
+    # The manifest always carries critical_points, so the default is not mutated.
+    critical_points = manifest.get("critical_points", [])  # pragma: no mutate
     if not critical_points:
         return {"ok": False, "error": "No critical points configured."}
 
@@ -749,7 +758,8 @@ def macro_artifact_status(name: str) -> dict[str, Any]:
     if not manifest:
         return {"ok": False, "error": "Manifest not found."}
 
-    critical_points = manifest.get("critical_points", [])
+    # The manifest always carries critical_points, so the default is not mutated.
+    critical_points = manifest.get("critical_points", [])  # pragma: no mutate
     passed = sum(1 for cp in critical_points if cp.get("status") == "passed")
     failed = sum(1 for cp in critical_points if cp.get("status") == "failed")
 
