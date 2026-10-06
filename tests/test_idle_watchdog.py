@@ -12,11 +12,38 @@ scenario_pool.list_live(). Stub them so the tests don't need real browsers.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 
 from octowright.idle_watchdog import idle_watchdog
+
+
+class _FakeClock:
+    """The watchdog's time source and poll wait, advanced only by the watchdog's own polls.
+
+    Asserting *when* the watchdog fired against a real ``asyncio.sleep`` timed
+    the runner as much as the watchdog: a loaded macOS runner woke the task
+    that re-armed the pool too late, the watchdog fired on the countdown the
+    re-arm should have cleared, and ``elapsed >= 0.16`` failed at 0.138s. Here
+    a poll advances time by exactly its interval and then applies every
+    scheduled change due by then, so each verdict is exact and independent of
+    scheduling. Integral times keep the float arithmetic exact.
+    """
+
+    def __init__(self, schedule: dict[float, Callable[[], object]]) -> None:
+        self._now = 0.0
+        self._pending = sorted(schedule.items())
+
+    def now(self) -> float:
+        return self._now
+
+    async def sleep(self, seconds: float) -> None:
+        self._now += seconds
+        while self._pending and self._pending[0][0] <= self._now:
+            self._pending.pop(0)[1]()
+        await asyncio.sleep(0)  # still yield, as the real wait does
 
 
 def _stub(sessions: list, scenarios: list) -> SimpleNamespace:
@@ -60,31 +87,27 @@ async def test_watchdog_fires_after_pool_drains() -> None:
 
 @pytest.mark.asyncio
 async def test_watchdog_resets_grace_when_new_session_appears() -> None:
-    """A new session during the grace window pushes the timer back to zero."""
+    """A new session during the grace window pushes the timer back to zero.
+
+    Sessions: present until t=3, gone until t=6, back until t=16, then gone.
+    With the reset the countdown restarts at t=16 and fires at t=16+8=24;
+    a watchdog that kept the first countdown (started at t=3) fires at t=16.
+    """
     sessions: list = [{"instance_id": "a"}]
-    pool = _stub(sessions, [])
-    scenarios = _stub([], [])
-
-    async def _flap() -> None:
-        await asyncio.sleep(0.03)
-        sessions.clear()
-        await asyncio.sleep(0.03)
-        sessions.append({"instance_id": "b"})  # re-arm during grace
-        await asyncio.sleep(0.10)
-        sessions.clear()  # final drain
-
-    flapper = asyncio.create_task(_flap())
-    # If the watchdog ignored the re-armed session, it would fire too early.
-    # grace=0.08 means without the reset it'd fire ~t=0.11, but the reset
-    # pushes its earliest fire to ~t=0.16+0.08 = 0.24.
-    start = asyncio.get_event_loop().time()
-    await asyncio.wait_for(
-        idle_watchdog(pool, scenarios, grace_seconds=0.08, poll_seconds=0.01),
-        timeout=2.0,
+    clock = _FakeClock(
+        {
+            3: sessions.clear,
+            6: lambda: sessions.append({"instance_id": "b"}),  # re-arm during grace
+            16: sessions.clear,  # final drain
+        }
     )
-    elapsed = asyncio.get_event_loop().time() - start
-    assert elapsed >= 0.16
-    await flapper
+    await asyncio.wait_for(
+        idle_watchdog(
+            _stub(sessions, []), _stub([], []), grace_seconds=8, poll_seconds=1, clock=clock.now, sleep=clock.sleep
+        ),
+        timeout=5.0,
+    )
+    assert clock.now() == 24
 
 
 @pytest.mark.asyncio
@@ -100,28 +123,27 @@ async def test_watchdog_arm_immediately_fires_without_prior_activity() -> None:
 
 @pytest.mark.asyncio
 async def test_watchdog_arm_immediately_resets_on_activity() -> None:
-    """Even with arm_immediately, an active session pushes the timer back."""
+    """Even with arm_immediately, an active session pushes the timer back.
+
+    Armed and idle from the first tick (t=1); a session from t=2 to t=12
+    restarts the countdown at t=12, so it fires at t=12+5=17. Without the
+    reset the countdown from t=1 fires the first idle tick after it, t=12.
+    """
     sessions: list = []
-    pool = _stub(sessions, [])
-    scenarios = _stub([], [])
-
-    async def _add_session_after_short_delay() -> None:
-        await asyncio.sleep(0.02)
-        sessions.append({"instance_id": "a"})
-        await asyncio.sleep(0.10)
-        sessions.clear()
-
-    adder = asyncio.create_task(_add_session_after_short_delay())
-    start = asyncio.get_event_loop().time()
+    clock = _FakeClock({2: lambda: sessions.append({"instance_id": "a"}), 12: sessions.clear})
     await asyncio.wait_for(
-        idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01, arm_immediately=True),
-        timeout=1.0,
+        idle_watchdog(
+            _stub(sessions, []),
+            _stub([], []),
+            grace_seconds=5,
+            poll_seconds=1,
+            arm_immediately=True,
+            clock=clock.now,
+            sleep=clock.sleep,
+        ),
+        timeout=5.0,
     )
-    elapsed = asyncio.get_event_loop().time() - start
-    # Without the reset, watchdog would fire ~t=0.05. With the reset (session
-    # appears at t=0.02, leaves at t=0.12), earliest possible fire is ~t=0.17.
-    assert elapsed >= 0.15
-    await adder
+    assert clock.now() == 17
 
 
 @pytest.mark.asyncio

@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from provide.telemetry import get_logger
@@ -52,11 +52,12 @@ class _WatchdogState:
 
     armed: bool = False
     idle_since: float | None = None
+    clock: Callable[[], float] = field(default=time.monotonic)
 
     def idle_for_seconds(self) -> float | None:
         if self.idle_since is None:
             return None
-        return time.monotonic() - self.idle_since
+        return self.clock() - self.idle_since
 
 
 @dataclass
@@ -111,7 +112,7 @@ def _check_idle_expiry(
 ) -> bool:
     """An idle tick: start the countdown if needed, fire if grace exceeded.
     Returns True iff the watchdog should exit (caller should return)."""
-    now = time.monotonic()
+    now = state.clock()
     if state.idle_since is None:
         log.info("octowright.watchdog.idle_started", grace_seconds=grace_seconds)
         state.idle_since = now
@@ -138,6 +139,8 @@ async def idle_watchdog(
     poll_seconds: float = 2.0,
     arm_immediately: bool = False,
     get_extra_active_count: Callable[[], int] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     """Return once the pool has been used and then sat empty for ``grace_seconds``.
 
@@ -156,8 +159,13 @@ async def idle_watchdog(
     check so the daemon doesn't exit while a follower is connected.
 
     The caller is expected to trigger shutdown when this coroutine returns.
+
+    ``clock`` and ``sleep`` are the time source the grace is measured on and
+    the wait between polls. Production keeps the defaults; a test passes a
+    fake pair so a verdict about *when* the watchdog fires does not depend on
+    how promptly a loaded runner wakes a real ``asyncio.sleep``.
     """
-    state = _WatchdogState(armed=arm_immediately)
+    state = _WatchdogState(armed=arm_immediately, clock=clock)
     log.info(
         "octowright.watchdog.start",
         grace_seconds=grace_seconds,
@@ -165,7 +173,7 @@ async def idle_watchdog(
         armed=state.armed,
     )
     while True:
-        await asyncio.sleep(poll_seconds)
+        await sleep(poll_seconds)
         snapshot = _sample_pool(pool, scenario_pool, get_extra_active_count)
         log.debug(
             "octowright.watchdog.tick",
