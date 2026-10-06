@@ -643,6 +643,7 @@ pytest_add_cli_args_test_selection = [
     "tests/mutation_kills/test_macros_privacy.py",
     "tests/mutation_kills/test_macros_privacy_ledger.py",
     "tests/mutation_kills/test_artifacts_bundle_privacy.py",
+    "tests/mutation_kills/test_macros_substitution.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
