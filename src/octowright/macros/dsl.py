@@ -61,7 +61,8 @@ def _coerce_parameters(raw: Any, *, strict: bool) -> list[str]:
     if not isinstance(raw, list):
         _error(f"macro 'parameters' must be a list, got {type(raw).__name__}", strict=strict)
         if strict:
-            raise ValueError(f"macro 'parameters' must be a list, got {type(raw).__name__}")  # safety
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError(f"macro 'parameters' must be a list, got {type(raw).__name__}")  # pragma: no mutate
         return []
 
     parameters: list[str] = []
@@ -79,7 +80,8 @@ def _as_list_of_actions(value: Any, path: str, *, strict: bool) -> list[dict[str
     if value is None:
         return []
     if not isinstance(value, list):
-        _error(f"{path} must be a list, got {type(value).__name__}", strict=strict)
+        # Not mutated: unreachable: every caller passes a list or None.
+        _error(f"{path} must be a list, got {type(value).__name__}", strict=strict)  # pragma: no mutate
         return []
     out: list[dict[str, Any]] = []
     for idx, action in enumerate(value):
@@ -126,7 +128,8 @@ def _compile_try(
     if not isinstance(actions_raw, list):
         _error(f"{path}: try is missing required field 'actions' list", strict=strict)
         if strict:
-            raise ValueError(f"{path}: try is missing required field 'actions' list")
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError(f"{path}: try is missing required field 'actions' list")  # pragma: no mutate
         action["actions"] = []
         return action
     action["actions"] = _as_list_of_actions(actions_raw, f"{path}.actions", strict=strict)
@@ -143,7 +146,8 @@ def _compile_try_each(
     if not isinstance(branches_raw, list):
         _error(f"{path}: try_each is missing required field 'branches' list", strict=strict)
         if strict:
-            raise ValueError(f"{path}: try_each is missing required field 'branches' list")
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError(f"{path}: try_each is missing required field 'branches' list")  # pragma: no mutate
         action["branches"] = []
         return action
 
@@ -153,7 +157,8 @@ def _compile_try_each(
         if not isinstance(branch, list):
             _error(f"{branch_path} must be a list, got {type(branch).__name__}", strict=strict)
             if strict:
-                raise ValueError(f"{branch_path} must be a list, got {type(branch).__name__}")
+                # Not mutated: unreachable: _error() above already raised when strict.
+                raise ValueError(f"{branch_path} must be a list, got {type(branch).__name__}")  # pragma: no mutate
             continue
         branches.append(_as_list_of_actions(branch, branch_path, strict=strict))
     action["branches"] = branches
@@ -185,7 +190,8 @@ def _expand_mapping_shorthand(key: str, value: Any, path: str, *, strict: bool) 
         )
         _error(msg, strict=strict)
         if strict:
-            raise ValueError(msg)
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError(msg)  # pragma: no mutate
         return {key: value}
     return {"action": key, **value}
 
@@ -211,9 +217,12 @@ def _register_conditional_compilers() -> None:
     """Late-binding registration: the compilers are defined elsewhere in this
     module; we wire them into the dispatch table here so _compile_action stays
     a thin lookup."""
-    _CONDITIONAL_COMPILERS["if_selector"] = _compile_if_selector
-    _CONDITIONAL_COMPILERS["try"] = _compile_try
-    _CONDITIONAL_COMPILERS["try_each"] = _compile_try_each
+    # Not mutated: cannot be killed: runs at import, before mutmut activates a mutant.
+    _CONDITIONAL_COMPILERS["if_selector"] = _compile_if_selector  # pragma: no mutate
+    # Not mutated: cannot be killed: runs at import, before mutmut activates a mutant.
+    _CONDITIONAL_COMPILERS["try"] = _compile_try  # pragma: no mutate
+    # Not mutated: cannot be killed: runs at import, before mutmut activates a mutant.
+    _CONDITIONAL_COMPILERS["try_each"] = _compile_try_each  # pragma: no mutate
 
 
 def _compile_action(action: Any, path: str, *, strict: bool) -> dict[str, Any] | None:
@@ -251,7 +260,8 @@ def compile_macro_document(
     if not isinstance(doc, dict):
         _error(f"macro document must be a mapping, got {type(doc).__name__}", strict=strict)
         if strict:
-            raise ValueError(f"macro document must be a mapping, got {type(doc).__name__}")
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError(f"macro document must be a mapping, got {type(doc).__name__}")  # pragma: no mutate
         doc = {}
 
     raw_name = name if name is not None else doc.get("name")
@@ -262,8 +272,10 @@ def compile_macro_document(
     if not isinstance(raw_actions, list):
         _error("macro is missing required field 'actions'", strict=strict)
         if strict:
-            raise ValueError("macro is missing required field 'actions'")
-        raw_actions = []
+            # Not mutated: unreachable: _error() above already raised when strict.
+            raise ValueError("macro is missing required field 'actions'")  # pragma: no mutate
+        # Not mutated: equivalent: None and [] both compile to no actions.
+        raw_actions = []  # pragma: no mutate
 
     compiled: dict[str, Any] = {
         "name": str(raw_name),
