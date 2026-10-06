@@ -640,6 +640,7 @@ pytest_add_cli_args_test_selection = [
     "tests/mutation_kills/test_macros_scrub_engine.py",
     "tests/mutation_kills/test_macros_scrub_admission.py",
     "tests/mutation_kills/test_macros_scrub_capacity.py",
+    "tests/mutation_kills/test_macros_privacy.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
