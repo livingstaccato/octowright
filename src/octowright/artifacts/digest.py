@@ -142,5 +142,8 @@ def _sanitize_relative_url(parts: Any) -> str:
 def _looks_like_relative_userinfo(url: str) -> bool:
     if not url.startswith("/"):
         return False
-    userinfo_end = url.find("@")
+    # The LAST '@': a browser (and urlsplit's own hostname) splits userinfo
+    # there, so a username may itself contain '@'. Splitting at the first one
+    # passed ``///alice@corp.example:zebrin4@intranet/`` with its password.
+    userinfo_end = url.rfind("@")
     return userinfo_end != -1 and ":" in url[:userinfo_end]

@@ -99,18 +99,13 @@ def test_a_relative_url_loses_its_query_and_fragment() -> None:
     assert sanitize_url("/orders/42?token=secret#frag") == "/orders/42"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="real bug: _looks_like_relative_userinfo splits userinfo at the FIRST '@', "
-    "so a username containing '@' lets the password through",
-)
 def test_a_relative_url_whose_username_contains_an_at_sign_is_refused() -> None:
     """``///user@corp:pw@host`` is a credential-bearing URL to a browser.
 
     WHATWG (and ``urlsplit``'s own ``hostname``) split userinfo at the LAST
     ``@``. ``urlsplit`` collapses the leading slashes into a path, so this
-    reaches ``_sanitize_relative_url``, whose userinfo check looks for ``:``
-    only before the FIRST ``@`` -- ``/alice`` -- and returns the URL with
+    reaches ``_sanitize_relative_url``, whose userinfo check looked for ``:``
+    only before the FIRST ``@`` -- ``/alice`` -- and returned the URL with
     ``zebrin4`` in it.
     """
     assert sanitize_url("///alice@corp.example:zebrin4@intranet/path") == "(invalid-url)"
