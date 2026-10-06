@@ -159,7 +159,8 @@ def repair_apply(
     """
     macro = load_macro(name)
     macro_name = macro.get("name") or name
-    actions = macro.get("actions", [])
+    # A missing "actions" key refuses with the same zero count under any non-list default.
+    actions = macro.get("actions", [])  # pragma: no mutate
     if not isinstance(actions, list) or not (0 <= action_index < len(actions)):
         count = len(actions) if isinstance(actions, list) else 0
         raise ValueError(
