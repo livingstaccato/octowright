@@ -80,7 +80,8 @@ class AnimationFreeze:
         self._cdp = cdp
         self._pending: str | None = None
         self._noted = False
-        self._noted_at = 0.0
+        # Equivalent under mutation: pause() sets it before anything can read it.
+        self._noted_at = 0.0  # pragma: no mutate
 
     async def pause(self) -> None:
         """Note the pending animations, stop the timeline, then repair the noted ones once resolved."""
