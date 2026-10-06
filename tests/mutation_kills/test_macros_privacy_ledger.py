@@ -158,3 +158,28 @@ def test_a_nested_call_outside_a_run_is_refused_by_a_full_session_set(monkeypatc
         admit_call_privacy(session, PrivacyLedger(), "child", ScrubAdmission(persistent=("new-credential",)))
 
     assert session_privacy_ledger(session).values == ("held",)
+
+
+def test_re_adding_held_values_keeps_the_built_scrubber() -> None:
+    """An add that changes nothing must not rebuild the scrubber every live buffer calls per message."""
+    ledger = PrivacyLedger(["held-anywhere"])
+    ledger.add(["held-bounded"], word_bounded=True)
+    built = ledger._text_scrubber()
+
+    ledger.add(["held-anywhere"])
+    ledger.add(["held-bounded"], word_bounded=True)
+
+    assert ledger._text_scrubber() is built
+    assert ledger.scrub("x held-anywhere y") == "x <redacted> y"
+
+
+def test_re_adding_a_scopes_own_values_keeps_the_built_scrubber() -> None:
+    ledger = SessionPrivacyLedger()
+    token = ledger.open_run_scope()
+    ledger.add_run_scoped(token, ["scoped-held"])
+    built = ledger._text_scrubber()
+
+    ledger.add_run_scoped(token, ["scoped-held"])
+
+    assert ledger._text_scrubber() is built
+    assert ledger.values == ("scoped-held",)
