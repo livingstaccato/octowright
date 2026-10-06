@@ -49,6 +49,8 @@ docs/reviews/
 .provide/
 memory/
 mutants/
+# `make mutmut-remote` results (scripts/mutmut_remote.sh)
+.mutmut-remote/
 
 # Scratch test output and external tool artifacts (never commit these).
 test_output*.txt

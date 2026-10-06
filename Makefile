@@ -1,4 +1,4 @@
-.PHONY: help install frontend-build test test-terminal test-frontend typecheck-assets lint format typecheck audit vulture xenon secrets-scan mutmut precommit precommit-install act-lint act-test ci clean profile-dump profile-record
+.PHONY: help install frontend-build test test-terminal test-frontend typecheck-assets lint format typecheck audit vulture xenon secrets-scan mutmut mutmut-remote precommit precommit-install act-lint act-test ci clean profile-dump profile-record
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-22s\033[0m %s\n", $$1, $$2}'
@@ -109,6 +109,11 @@ mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in; 
 	# mutmut 3.x copies the project to mutants/ before running pytest; src-layout
 	# packages need PYTHONPATH=src so the copied tree can import octowright.
 	PYTHONPATH=src nice -n 10 uv run mutmut run --max-children $(MUTMUT_JOBS)
+
+# Same run on another machine: MUTMUT_REMOTE_HOST=<ssh host> make mutmut-remote.
+# MUTMUT_JOBS reaches the host only when you set it; otherwise it uses all its CPUs.
+mutmut-remote: ## Run `make mutmut` on $$MUTMUT_REMOTE_HOST over ssh, fetch the score (scripts/mutmut_remote.sh)
+	MUTMUT_JOBS='$(if $(filter command line environment,$(origin MUTMUT_JOBS)),$(MUTMUT_JOBS))' bash scripts/mutmut_remote.sh run
 
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run python scripts/normalize_spdx_headers.py
