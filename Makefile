@@ -99,10 +99,16 @@ xenon: ## Cyclomatic-complexity scan (baseline-ratchet, no new violations allowe
 secrets-scan: ## Re-run detect-secrets across the repo against .secrets.baseline
 	bash ci/run_detect_secrets.sh
 
-mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in)
+# mutmut runs one pytest child per CPU unless told otherwise, which on a
+# workstation is every core plus a full test-suite import each. Cap it; the CI
+# runner has 4 vCPUs, so the default changes nothing there. Override with
+# `make mutmut MUTMUT_JOBS=8`.
+MUTMUT_JOBS ?= 4
+
+mutmut: ## Mutation testing on critical parsing/dispatch modules (slow; opt-in; MUTMUT_JOBS=4)
 	# mutmut 3.x copies the project to mutants/ before running pytest; src-layout
 	# packages need PYTHONPATH=src so the copied tree can import octowright.
-	PYTHONPATH=src uv run mutmut run
+	PYTHONPATH=src nice -n 10 uv run mutmut run --max-children $(MUTMUT_JOBS)
 
 spdx-fix: ## Normalize SPDX headers in source files
 	uv run python scripts/normalize_spdx_headers.py
