@@ -112,8 +112,7 @@ def _safe_default(param: str, args: dict[str, Any] | None, privacy: MacroArgPriv
     """
     if is_sensitive_arg_key(param) or param in privacy.assertion_args or param in privacy.credential_args:
         return ""
-    # A None default renders as "" below, the same as this one.
-    value = (args or {}).get(param, "")  # pragma: no mutate
+    value = (args or {}).get(param, "")
     rendered = str(value) if value is not None else ""
     scrubbed = scrub_sensitive_values(rendered, privacy.blind_scrub(args or {}))
     return rendered if scrubbed == rendered else ""

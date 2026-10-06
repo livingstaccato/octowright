@@ -77,8 +77,7 @@ def _called_actions(node: dict[str, Any], load_macro: MacroLoader) -> Any:
     was the common cost; a called macro whose kinds and call names are literal
     reads the same raw as expanded.
     """
-    # A missing "actions" key walks the same with a None default: the walk skips non-list, non-dict nodes.
-    called = load_macro(node["name"]).get("actions", [])  # pragma: no mutate
+    called = load_macro(node["name"]).get("actions", [])
     if not _names_a_placeholder(called):
         return called
     # Local import: substitution imports privacy, which imports this module.
