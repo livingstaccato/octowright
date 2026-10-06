@@ -614,6 +614,7 @@ pytest_add_cli_args_test_selection = [
     "tests/mutation_kills/test_macros_nesting.py",
     "tests/mutation_kills/test_macros_recording_import.py",
     "tests/mutation_kills/test_macros_repair.py",
+    "tests/mutation_kills/test_macros_semantic.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]

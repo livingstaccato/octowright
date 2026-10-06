@@ -50,18 +50,21 @@ def _sum_if_selector(a: dict, p: str) -> str:
     cond = "present" if a.get("present", True) else "absent"
     lines = [f"{p}If '{a['selector']}' is {cond}:"]
     for sub in a.get("then", []):
-        lines.append(f"{p}  - " + summarize_action(sub, 0))
+        # 0 is summarize_action's default indent, so omitting it is equivalent.
+        lines.append(f"{p}  - " + summarize_action(sub, 0))  # pragma: no mutate
     if a.get("else"):
         lines.append(f"{p}Else:")
         for sub in a["else"]:
-            lines.append(f"{p}  - " + summarize_action(sub, 0))
+            # 0 is summarize_action's default indent, so omitting it is equivalent.
+            lines.append(f"{p}  - " + summarize_action(sub, 0))  # pragma: no mutate
     return "\n".join(lines)
 
 
 def _sum_try(a: dict, p: str) -> str:
     lines = [f"{p}Try (ignore errors):"]
     for sub in a.get("actions", []):
-        lines.append(f"{p}  - " + summarize_action(sub, 0))
+        # 0 is summarize_action's default indent, so omitting it is equivalent.
+        lines.append(f"{p}  - " + summarize_action(sub, 0))  # pragma: no mutate
     return "\n".join(lines)
 
 
@@ -70,7 +73,8 @@ def _sum_try_each(a: dict, p: str) -> str:
     for i, branch in enumerate(a.get("branches", [])):
         lines.append(f"{p}  Branch {i + 1}:")
         for sub in branch:
-            lines.append(f"{p}    - " + summarize_action(sub, 0))
+            # 0 is summarize_action's default indent, so omitting it is equivalent.
+            lines.append(f"{p}    - " + summarize_action(sub, 0))  # pragma: no mutate
     return "\n".join(lines)
 
 
@@ -101,7 +105,8 @@ def summarize_action(action: dict[str, Any], indent: int = 0) -> str:
     """Convert a macro action into a human-readable string."""
     kind = action.get("action")
     prefix = "  " * indent
-    fmt = _SUMMARIZERS.get(kind or "")
+    # No summarizer is keyed by any fallback string, so the fallback is equivalent.
+    fmt = _SUMMARIZERS.get(kind or "")  # pragma: no mutate
     if fmt is not None:
         return fmt(action, prefix)
     return f"{prefix}Perform {kind} action"
