@@ -25,7 +25,7 @@ import pytest
 
 from octowright import defaults
 from octowright.artifacts.evidence import EvidenceBuilder
-from octowright.macros import artifacts, execution, safe_screenshot
+from octowright.macros import animation_freeze, artifacts, execution, safe_screenshot
 from octowright.macros import redaction_page_js as page_js
 from octowright.macros.page_devtools import closed_shadow_roots
 from octowright.macros.privacy import BLIND_SCRUB_POLICY_ENV, PrivacyLedger
@@ -129,12 +129,18 @@ class FakeCDP:
         assert params["expression"] == "document"
         return {"result": {"objectId": "document"}}
 
-    async def _Runtime_releaseObjectGroup(self, _params: dict[str, Any]) -> dict[str, Any]:
-        self.page.released = True
+    async def _Runtime_releaseObjectGroup(self, params: dict[str, Any]) -> dict[str, Any]:
+        # The animation freeze releases its own group; only the controller's counts here.
+        if params["objectGroup"] != animation_freeze.OBJECT_GROUP:
+            self.page.released = True
         return {}
 
     async def _Runtime_callFunctionOn(self, params: dict[str, Any]) -> dict[str, Any]:
         page = self.page
+        if params["functionDeclaration"] == animation_freeze.PENDING_JS:
+            # No animation is pending on the fake page, so nothing is noted or repaired.
+            assert params["objectId"] == "document" and params["returnByValue"] is False
+            return {"result": {"type": "object", "subtype": "null", "value": None}}
         if params["functionDeclaration"] == page_js.END_VIEW_TRANSITIONS_JS:
             assert params["objectId"] == "document" and params["awaitPromise"] is True
             if getattr(page, "end_error", None) is not None:

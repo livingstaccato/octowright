@@ -19,8 +19,12 @@ Two bugs in mutmut 3.5.0 + macOS bite this project:
    at-fork handler that no-ops mutmut's ``setproctitle`` binding in the
    child before any user code runs.
 
-Both patches only apply when running under mutmut (i.e. CWD is the
-``mutants/`` workdir). Normal pytest runs are unaffected.
+A third patch is not about a mutmut bug: the exported macro CLI renders live
+function source, and under mutmut that source carries the trampoline
+decorator. ``tests/_mutmut_compat.py`` explains it and strips the decorator.
+
+All three patches only apply when running under mutmut (i.e. this file is
+``mutants/conftest.py``). Normal pytest runs are unaffected.
 
 Pattern lifted from provide-uterm's conftest. See
 https://github.com/sjkelly/mutmut/issues for the upstream tracking issues.
@@ -59,6 +63,10 @@ if _running_under_mutmut:
             pass
 
     _os.register_at_fork(after_in_child=_noop_setproctitle_in_child)
+
+    from tests import _mutmut_compat
+
+    _mutmut_compat.install()
 
 
 def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:

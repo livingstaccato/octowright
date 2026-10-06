@@ -84,7 +84,8 @@ def test_inline_fallback_warning_names_the_risk() -> None:
 @pytest.mark.anyio
 async def test_inline_fallback_path_records_mode_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     """When the detached daemon spawn times out, _ensure_leader_or_inline must
-    run the leader inline AND record the fragile mode AND warn loudly."""
+    hand back an inline leader that, once served, records the fragile mode
+    AND warns loudly."""
     import octowright.daemonize as _daemonize_mod
     import octowright.singleton as _sn_mod
     from octowright.cli import serve as _serve
@@ -101,7 +102,8 @@ async def test_inline_fallback_path_records_mode_and_warns(monkeypatch: pytest.M
 
     result = await _serve._ensure_leader_or_inline({}, http_host=None, http_port=None, idle_grace=None)
 
-    assert result is None  # inline fallback → caller returns
+    assert isinstance(result, _serve._InlineFallback)  # inline fallback → the bridge serves it
+    await result((object(), object()))
     run_leader.assert_awaited_once()
     assert _state.leader_mode_snapshot() == {"mode": "inline", "inline_reason": "daemon_spawn_failed"}
     assert any("INLINE" in line for line in captured), captured

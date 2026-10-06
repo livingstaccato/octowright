@@ -271,18 +271,40 @@ async def _serve_async(
         "idle_grace": idle_grace,
     }
     # Direct-leader paths: daemon-mode (the spawned daemon runs leader code
-    # directly) and --no-singleton (inline mode: no daemon, no follower).
-    from octowright.server import _state
-
+    # directly) and --no-singleton (inline mode: no daemon, no follower). Only
+    # these import the server: the follower path below must not, or every
+    # connected client pays for Playwright and the whole tool registry before
+    # its stdio is even open (tests/test_follower_import_weight.py).
     if daemon_mode:
+        from octowright.server import _state
+
         _state.set_leader_mode("daemon")
         await _run_leader(**leader_kwargs, no_singleton=False, arm_watchdog_immediately=True)
         return
     if no_singleton:
+        from octowright.server import _state
+
         _state.set_leader_mode("inline", inline_reason="no_singleton")
         await _run_leader(**leader_kwargs, no_singleton=True)
         return
     await _serve_singleton(leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace)
+
+
+class _InlineFallback:
+    """The leader this process has to run itself, because the election
+    produced none; called with the (read, write) streams to serve MCP on.
+
+    The follower bridge already owns stdio by the time the election ends, so
+    the leader is served over an in-memory connection the bridge holds
+    (``proxy_inline``) rather than opening stdio again.
+    """
+
+    def __init__(self, leader_kwargs: dict[str, Any], *, reason: str) -> None:
+        self.leader_kwargs = leader_kwargs
+        self.reason = reason
+
+    async def __call__(self, stdio_streams: tuple[Any, Any]) -> None:
+        await _fall_back_inline(self.leader_kwargs, reason=self.reason, stdio_streams=stdio_streams)
 
 
 async def _ensure_leader_or_inline(
@@ -292,8 +314,8 @@ async def _ensure_leader_or_inline(
     http_port: int | None,
     idle_grace: float | None,
 ) -> Any:
-    """Find or spawn a daemon leader. Returns leader info, OR None when
-    we fell back to running the leader inline (caller returns immediately)."""
+    """Find or spawn a daemon leader. Returns its leader info, OR an
+    :class:`_InlineFallback` when the leader has to run in this process."""
     try:
         spawned = await _election.elect_leader(
             http_host=http_host,
@@ -307,8 +329,7 @@ async def _ensure_leader_or_inline(
         # never started, and "daemon_spawn_failed" would report a failure that
         # did not happen. Still fall back inline — a fragile server beats
         # dropping the client — but say which of the two happened.
-        await _fall_back_inline(leader_kwargs, reason="election_contention")
-        return None
+        return _InlineFallback(leader_kwargs, reason="election_contention")
     if spawned is None:
         # Daemon didn't come up — run leader inline so the user at least gets
         # a working server (browsers die on this process's exit). Surface the
@@ -316,24 +337,25 @@ async def _ensure_leader_or_inline(
         # The warning says THAT the spawn failed; only the daemon log says WHY
         # -- see echo_daemon_log_tail.
         _ready.echo_daemon_log_tail()
-        await _fall_back_inline(leader_kwargs, reason="daemon_spawn_failed")
-        return None
+        return _InlineFallback(leader_kwargs, reason="daemon_spawn_failed")
     return spawned
 
 
-async def _fall_back_inline(leader_kwargs: dict[str, Any], *, reason: str) -> None:
+async def _fall_back_inline(
+    leader_kwargs: dict[str, Any], *, reason: str, stdio_streams: tuple[Any, Any] | None = None
+) -> None:
     """Run the leader in THIS process, loudly, recording why."""
     from octowright.server import _state
 
     click.echo(_INLINE_FALLBACK_WARNING, err=True)
     _state.set_leader_mode("inline", inline_reason=reason)
-    await _run_leader(**leader_kwargs, no_singleton=False)
+    await _run_leader(**leader_kwargs, no_singleton=False, stdio_streams=stdio_streams)
 
 
-async def _bridge_to_leader(leader_info: Any) -> None:
+async def _bridge_to_leader(leader_source: Any) -> None:
     """Run the follower bridge; log how it ended (exception vs clean close)."""
     try:
-        await _run_follower(leader_info.mcp_url)
+        await _run_follower(leader_source)
     except Exception as exc:
         click.echo(f"octowright: leader bridge ended ({exc}); checking daemon", err=True)
     else:
@@ -388,30 +410,50 @@ async def _serve_singleton(
     http_port: int | None,
     idle_grace: float | None,
 ) -> None:
-    """The default singleton-coordinated path: find or spawn a daemon leader,
-    follow it, and re-spawn if it dies mid-session."""
-    existing = await _ensure_leader_or_inline(
-        leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace
-    )
-    if existing is None:
+    """The default singleton-coordinated path: open stdio, find or spawn a
+    daemon leader, follow it, and re-spawn if it dies mid-session.
+
+    Stdio opens BEFORE the election, which runs as the bridge's leader source:
+    the client's ``initialize`` is answered locally meanwhile, so a slow
+    election -- a contended lock, a cold spawn, a raised ``--ready-timeout``
+    -- delays only the first tool call and never the client's connect.
+    """
+    outcome: dict[str, str] = {}
+
+    async def _leader_source() -> Any:
+        found = await _ensure_leader_or_inline(
+            leader_kwargs, http_host=http_host, http_port=http_port, idle_grace=idle_grace
+        )
+        if isinstance(found, _InlineFallback):
+            outcome["leader"] = "inline"
+            return found
+        outcome["leader"] = "daemon"
+        click.echo(f"octowright: connecting to leader at {found.mcp_url}", err=True)
+        return found.mcp_url
+
+    await _bridge_to_leader(_leader_source)
+    # An inline leader was this process; one never elected means the client
+    # left first. Either way there is no lost leader to replace.
+    if outcome.get("leader") != "daemon":
         return
-    await _bridge_to_leader(existing)
     keep_alive = bool(leader_kwargs.get("keep_alive"))
     await _respawn_if_leader_gone(
         http_host=http_host, http_port=http_port, idle_grace=idle_grace, keep_alive=keep_alive
     )
 
 
-async def _run_follower(leader_mcp_url: str) -> None:
-    """Bridge stdio to the leader's HTTP-MCP endpoint."""
+async def _run_follower(leader_source: Any) -> None:
+    """Bridge stdio to the leader ``leader_source`` (the election) returns.
+
+    A call made before the election returns waits for it for as long as an
+    election can take -- the election lock's budget plus a contended
+    election's readiness wait -- rather than the usual connect timeout.
+    """
+    from octowright import daemonize as _daemon
     from octowright.proxy_bridge import run_proxy
 
-    # Same host:port serves /api/health — used by the bridge watchdog to
-    # detect a wedged leader (silent SSE) and tear down rather than hang. This
-    # only seeds it: the bridge re-derives it from each reconnect's leader URL.
-    health_url = leader_mcp_url.rsplit("/mcp", 1)[0] + "/api/health"
-    click.echo(f"octowright: connecting to leader at {leader_mcp_url}", err=True)
-    await run_proxy(leader_mcp_url, health_url=health_url)
+    budget = _election._election_lock_timeout() + _daemon.daemon_ready_timeout()
+    await run_proxy(leader_source=leader_source, pre_leader_budget=budget)
 
 
 def _reap_orphan_session_dirs(no_singleton: bool) -> None:
@@ -464,8 +506,14 @@ async def _run_leader(
     idle_grace: float | None,
     no_singleton: bool,
     arm_watchdog_immediately: bool = False,
+    stdio_streams: tuple[Any, Any] | None = None,
 ) -> None:
-    """Serve MCP stdio + HTTP debugger + (when not --no-http) HTTP-MCP."""
+    """Serve MCP stdio + HTTP debugger + (when not --no-http) HTTP-MCP.
+
+    ``stdio_streams`` serves MCP on those (read, write) streams instead of
+    opening stdio: an inline fallback reached from the follower bridge, which
+    already owns stdio and hands the leader an in-memory connection.
+    """
     import asyncio as _asyncio
 
     from octowright import http as _http
@@ -474,8 +522,8 @@ async def _run_leader(
     from octowright.housekeeping import reap_orphan_browsers_at_boot, start_housekeeping_task
     from octowright.idle_watchdog import _resolve_watchdog_grace, idle_watchdog
     from octowright.server import mcp
+    from octowright.server import mcp_notifications as _notifications
     from octowright.server._state import pool, scenario_pool
-    from octowright.server.mcp_notifications import run_stdio_with_notifications
 
     grace = _resolve_watchdog_grace(keep_alive=keep_alive, idle_grace=idle_grace, env_default=IDLE_GRACE_SECONDS)
     bound_host = http_host or HTTP_HOST
@@ -524,7 +572,7 @@ async def _run_leader(
         info = _sn.make_leader_info(host, port, token=leader_token)
         _sn.write_lock(info)
 
-    mcp_task = _asyncio.create_task(run_stdio_with_notifications(mcp), name="octowright.mcp")
+    mcp_task = _asyncio.create_task(_notifications.serve_mcp(mcp, stdio_streams), name="octowright.mcp")
     sidecars: list[_asyncio.Task[object]] = []
 
     if not no_http:

@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import anyio
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest
+from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 from provide.telemetry import get_logger
 
 from octowright import defaults
@@ -145,6 +145,11 @@ def bridge_http_client(headers: dict[str, str], supervisor_obj: Any) -> Any:
     return build_tracing_http_client(headers=headers, on_session_id=_note_session_id)
 
 
+class ReplayHandshakeError(RuntimeError):
+    """The leader refused the replayed ``initialize``, or closed the session
+    before answering it: the connect failed."""
+
+
 class BridgeSupervisor:
     def __init__(
         self,
@@ -168,6 +173,10 @@ class BridgeSupervisor:
         # the local client already got its initialize response on the first try.
         self._replay_id_counter = itertools.count(1)
         self._internal_replay_ids: set[str | int] = set()
+        # A replay waiting for its answer: the id's event is set, and the answer
+        # kept, when the leader's response or error for it arrives.
+        self._replay_waiters: dict[str | int, anyio.Event] = {}
+        self._replay_answers: dict[str | int, Any] = {}
         # Progress-token bookkeeping: every in-flight progressToken (client or
         # bridge-synthetic) maps to its request id so a leader progress
         # notification re-arms the right deadline; the synthetic subset is also
@@ -185,32 +194,99 @@ class BridgeSupervisor:
         # None when it cannot be told; two Nones compare equal, which keeps resume
         # working wherever identity is unavailable rather than failing every call.
         self.leader_generation: str | None = None
+        # Seconds a call may wait for a leader on top of the usual connect
+        # wait, while the follower is still electing one (see begin_pre_leader).
+        # Zero once the election is over: a reconnect waits as it always has.
+        self.pre_leader_budget = 0.0
+        self._awaiting_leader = False
+
+    def begin_pre_leader(self, budget: float) -> None:
+        """Mark the follower as still electing its leader.
+
+        Until ``end_pre_leader``, the handshake is answered locally and any
+        other call waits up to ``budget`` more for the leader, so a slow
+        election (a contended lock, a raised ``--ready-timeout``) delays the
+        first call instead of failing it.
+        """
+        self.pre_leader_budget = max(0.0, budget)
+        self._awaiting_leader = True
+
+    def end_pre_leader(self) -> None:
+        self.pre_leader_budget = 0.0
+        self._awaiting_leader = False
+
+    async def _answer_before_leader(self, message: SessionMessage) -> bool:
+        """Answer what needs no leader; True when ``message`` was handled.
+
+        ``initialize`` is answered from ``mcp_identity`` (the leader's own
+        values, parity-tested) and kept, so the first connect replays it and
+        swallows the leader's answer. ``notifications/initialized`` is kept for
+        that replay too. ``ping`` is answered. Params that do not validate are
+        left for the leader to answer.
+        """
+        root = message_root(message)
+        method = message_method(message)
+        if isinstance(root, JSONRPCNotification) and method == "notifications/initialized":
+            self._initialized_message = message
+            return True
+        if not isinstance(root, JSONRPCRequest):
+            return False
+        if method == "ping":
+            result: dict[str, Any] | None = {}
+        elif method == "initialize":
+            from octowright.mcp_identity import local_initialize_result
+
+            result = local_initialize_result(root.params)
+            if result is not None:
+                self._initialize_message = message
+        else:
+            return False
+        if result is None:
+            return False
+        await self.local_write.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=root.id, result=result)))
+        return True
 
     @property
     def in_flight_count(self) -> int:
         return len(self._in_flight)
 
+    async def _await_remote_writer(self, remote_write_slot: _RemoteWriteSlot) -> Any | None:
+        """Startup / reconnect race: poll until a live writer appears or the
+        connect timeout (plus any pre-leader budget) expires.
+
+        ``ready`` is re-read from the slot on each iteration because it's
+        replaced with a fresh Event on each disconnect (anyio.Event is one-shot;
+        a stale set event would return immediately even though write is still
+        None, causing a spurious bridge error).
+        """
+        deadline = anyio.current_time() + defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS + self.pre_leader_budget
+        while remote_write_slot.write is None:
+            remaining = deadline - anyio.current_time()
+            if remaining <= 0:
+                break
+            with anyio.move_on_after(min(remaining, 0.5)):
+                await remote_write_slot.ready.wait()
+        return remote_write_slot.write
+
+    async def _writer_for(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> Any | None:
+        """The writer to forward ``message`` on, or None when it was answered
+        here instead: before the leader exists, or with an error once the wait
+        for one ran out."""
+        if remote_write_slot.write is not None:
+            return remote_write_slot.write
+        if self._awaiting_leader and await self._answer_before_leader(message):
+            return None
+        remote_write = await self._await_remote_writer(remote_write_slot)
+        request_id = message_request_id(message)
+        if remote_write is None and is_request(message) and request_id is not None:
+            await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
+        return remote_write
+
     async def forward_one_local_message(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> None:
-        remote_write = remote_write_slot.write
         request_id = message_request_id(message)
         method = message_method(message) or "notification"
+        remote_write = await self._writer_for(message, remote_write_slot)
         if remote_write is None:
-            # Startup / reconnect race: poll until a live writer appears or the
-            # connect timeout expires. We re-read `ready` from the slot on each
-            # iteration because it's replaced with a fresh Event on each disconnect
-            # (anyio.Event is one-shot; a stale set event would return immediately
-            # even though write is still None, causing a spurious bridge error).
-            deadline = anyio.current_time() + defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS
-            while remote_write_slot.write is None:
-                remaining = deadline - anyio.current_time()
-                if remaining <= 0:
-                    break
-                with anyio.move_on_after(min(remaining, 0.5)):
-                    await remote_write_slot.ready.wait()
-            remote_write = remote_write_slot.write
-        if remote_write is None:
-            if is_request(message) and request_id is not None:
-                await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
             return
         # One span per forwarded message — covers only the outbound send to
         # the leader. End-to-end follower→leader→follower latency is captured
@@ -392,7 +468,26 @@ class BridgeSupervisor:
                 leader_generation=self.leader_generation,
             )
 
-    async def replay_initialize(self, remote_write: Any) -> None:
+    async def replay_initialize(self, remote_write: Any, remote_read: Any | None = None) -> None:
+        """Initialize a fresh leader session with the client's cached handshake.
+
+        Waits, within ``BRIDGE_CONNECT_TIMEOUT_SECONDS``, for the leader's
+        answer to the replayed ``initialize`` before sending
+        ``notifications/initialized``, and so before the caller resumes or
+        publishes anything. The leader names the session (``Mcp-Session-Id``)
+        only in that answer, and mcp's streamable-HTTP client builds each POST's
+        headers from the id it holds when the POST goes out, POSTing requests
+        concurrently: a frame sent before the answer arrived carried no session
+        id and was refused with ``Bad Request: Missing session ID``.
+
+        ``remote_read`` is the session's read side when nothing reads it yet
+        (an HTTP connect starts its reader only once the session is ready);
+        frames other than the answer are handled as the reader would. Without
+        it, a running reader delivers the answer through
+        ``forward_remote_message``. An error answer, a session that closes
+        first, or no answer in time raises, so the caller treats the connect as
+        failed and sends nothing else on it.
+        """
         if self._initialize_message is None:
             return
         cached_root = message_root(self._initialize_message)
@@ -400,14 +495,37 @@ class BridgeSupervisor:
             return
         replay_id = f"octowright-bridge-replay-{next(self._replay_id_counter)}"
         self._internal_replay_ids.add(replay_id)
-        replay_request = cached_root.model_copy(update={"id": replay_id})
-        replay_message = SessionMessage(replay_request)
-        await remote_write.send(replay_message)
+        answered = anyio.Event()
+        self._replay_waiters[replay_id] = answered
+        try:
+            with anyio.fail_after(defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS):
+                await remote_write.send(SessionMessage(cached_root.model_copy(update={"id": replay_id})))
+                if remote_read is None:
+                    await answered.wait()
+                else:
+                    await self._read_until_answered(remote_read, answered)
+        finally:
+            self._replay_waiters.pop(replay_id, None)
+        answer = self._replay_answers.pop(replay_id, None)
+        if isinstance(answer, JSONRPCError):
+            raise ReplayHandshakeError(f"the leader refused the replayed initialize: {answer.error.message}")
         # Complete the handshake on the fresh session: replay the cached
         # notifications/initialized too, or the leader leaves the session
         # half-initialized and 400s the next tool call.
         if self._initialized_message is not None:
             await remote_write.send(self._initialized_message)
+
+    async def _read_until_answered(self, remote_read: Any, answered: anyio.Event) -> None:
+        while not answered.is_set():
+            try:
+                message = await remote_read.receive()
+            except (anyio.EndOfStream, anyio.ClosedResourceError) as exc:
+                raise ReplayHandshakeError(
+                    "the leader closed the session before answering the replayed initialize"
+                ) from exc
+            if isinstance(message, Exception):
+                raise message
+            await self.forward_remote_message(message)
 
     async def _forward_progress(self, message: SessionMessage, progress_token: Any) -> None:
         """Progress means the op is alive: re-arm its deadline. A bridge-synthetic
@@ -468,6 +586,10 @@ class BridgeSupervisor:
             # been told the session is initialized; forwarding a second
             # response would be a duplicate id from the client's perspective.
             self._internal_replay_ids.discard(request_id)
+            waiter = self._replay_waiters.pop(request_id, None)
+            if waiter is not None:
+                self._replay_answers[request_id] = message_root(message)
+                waiter.set()
             return
         if request_id is not None and not self._settle_in_flight(request_id, message):
             return

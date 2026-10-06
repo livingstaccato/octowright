@@ -8,7 +8,7 @@
 A screenshot of a page a protected value was typed into is a durable copy of it that no
 text scrub can reach, so a run holding values admitted by the blind-scrub policy refuses
 screenshots by default. This module is the safe path for a Chromium page. It pauses CSS
-animations, redacts the page, proves no admitted value is rendered, takes the screenshot,
+animations (:mod:`octowright.macros.animation_freeze`), redacts the page, proves no admitted value is rendered, takes the screenshot,
 proves again, and restores the page, all through one DevTools session:
 
 1. The in-page controller (:mod:`octowright.macros.redaction_page_js`) replaces every
@@ -58,6 +58,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
+from octowright.macros.animation_freeze import AnimationFreeze
 from octowright.macros.page_devtools import (
     PageChanges,
     PageController,
@@ -201,10 +202,9 @@ async def _capture(cdp: Any, target: Path) -> None:
     await atomic_write_via_writer(target, write)
 
 
-async def _pause_animations(cdp: Any) -> None:
+async def _pause_animations(freeze: AnimationFreeze) -> None:
     """Stop the page's CSS animations and transitions, so the scans and the capture see one frame."""
-    await bounded(cdp.send("Animation.enable"), operation=_OPERATION)
-    await bounded(cdp.send("Animation.setPlaybackRate", {"playbackRate": 0}), operation=_OPERATION)
+    await freeze.pause()
 
 
 async def _end_view_transitions(cdp: Any, refusals: Refusals) -> None:
@@ -223,13 +223,12 @@ async def _apply_styles(changes: PageChanges, refusals: Refusals) -> None:
         raise refusals.refuse("the page's styles could not be applied", "styles not applied") from exc
 
 
-async def _release(cdp: Any, changes: PageChanges) -> None:
+async def _release(cdp: Any, changes: PageChanges, freeze: AnimationFreeze) -> None:
     """Stop counting, resume animations and detach; each step is attempted even if an earlier one failed."""
     with contextlib.suppress(Exception):
         await bounded(changes.close(), operation=_OPERATION)
-    for method, params in (("Animation.setPlaybackRate", {"playbackRate": 1}), ("Animation.disable", None)):
-        with contextlib.suppress(Exception):
-            await bounded(cdp.send(method, params) if params else cdp.send(method), operation=_OPERATION)
+    with contextlib.suppress(Exception):
+        await freeze.resume()
     with contextlib.suppress(Exception):
         await cdp.detach()
 
@@ -253,12 +252,12 @@ async def _restore(controller: PageController, target: Path, *, quiet: bool) -> 
 
 
 async def _redact_and_capture(
-    cdp: Any, changes: PageChanges, values: list[str], target: Path, refusals: Refusals
+    cdp: Any, changes: PageChanges, freeze: AnimationFreeze, values: list[str], target: Path, refusals: Refusals
 ) -> PageController:
     """Pause, redact, count, prove, capture and prove again; on any failure restore and re-raise."""
     controller: PageController | None = None
     try:
-        await _pause_animations(cdp)
+        await _pause_animations(freeze)
         await _end_view_transitions(cdp, refusals)
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
@@ -318,11 +317,12 @@ async def redacted_screenshot(
             head = "a redacted screenshot needs a Chromium page to read what is rendered"
             raise refusals.refuse(head, "no rendered-surface snapshot") from exc
         changes = PageChanges(cdp)
+        freeze = AnimationFreeze(cdp)
         try:
-            controller = await _redact_and_capture(cdp, changes, values, target, refusals)
+            controller = await _redact_and_capture(cdp, changes, freeze, values, target, refusals)
             await _restore(controller, target, quiet=False)
         finally:
-            await _release(cdp, changes)
+            await _release(cdp, changes, freeze)
         recorder = getattr(session, "recorder", None)
         if recorder is not None:
             recorder.record("screenshot", path=str(target))

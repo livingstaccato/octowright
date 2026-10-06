@@ -58,6 +58,22 @@ built-in list rather than extending it, so the defaults are restated alongside
 `mutants`; dropping one would quietly start collecting `build/`, `dist/` or
 `node_modules/`.
 
+**Exported-script tests strip mutmut's trampoline.** The exported macro CLI
+(`artifacts/script_export.py`) is built from `inspect.getsource` of live
+functions, and mutmut 3.x decorates every function it mutates with
+`@_mutmut_mutated(<dict>)`, which `getsource` returns too. Every exported
+script then began with a decorator naming a dict it never defines, so mutmut's
+clean run died on the first export test with `NameError: name
+'mutants_x__serialized_variants__mutmut' is not defined` -- 141 of the 174
+clean-run failures measured on 2026-10-06 -- and the nightly job scored
+nothing. Under mutmut only, the root `conftest.py` installs
+`tests/_mutmut_compat.py`, which removes exactly that decorator line from
+`getsource` output and keeps any other decorator.
+Excluding the rendered functions from mutation was the alternative, and was
+rejected: they are the credential guard and the scrubber. The exported script
+therefore runs the unmutated body; a mutant in a rendered function is still
+exercised by the live path the export tests compare against.
+
 **Read the score from `export-cicd-stats`, never from `mutmut results`.**
 `mutmut results` prints only the mutants that still need attention — survived,
 `no tests`, `timeout` — and **omits every killed one**, so its line count is the

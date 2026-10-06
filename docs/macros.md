@@ -372,6 +372,11 @@ order:
      shadow roots, which would otherwise draw its raster of the old state from before
      the redaction, and waits, reading DevTools rather than the page, until their
      pseudo-elements are gone.
+   - An animation that has not started yet when the capture begins, as on a page
+     screenshotted the moment it loaded, is held on its first frame and carries on from
+     there afterwards. Chrome gives such an animation a start time hours ahead while
+     animations are paused, so Octowright notes it before pausing and sets it back once
+     it has started.
    - It replaces every raw, JSON-escaped and URL-encoded spelling of the run's
      policy-admitted values with `<redacted>` in text and attribute values across the
      document and its open and closed shadow roots. Case, whitespace, Unicode

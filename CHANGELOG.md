@@ -56,6 +56,29 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A follower's first call after connecting or reconnecting is no longer
+  refused with "Missing session ID".** When a follower connected to the
+  leader, the first time or after a leader restart, it replayed the client's
+  `initialize` and sent the handshake's completion and any waiting calls
+  straight after it, without waiting for the leader's answer. That answer is
+  what names the session, so a frame sent sooner could reach the leader
+  without it and be refused with `-32600 Bad Request: Missing session ID`,
+  intermittently and most often for a client that calls a tool right after
+  its handshake. The follower now waits for
+  the answer, within the connect timeout, before it sends anything else; a
+  refused or unanswered `initialize` is treated as a failed connect and
+  retried, and no waiting call is sent on that session. For the same reason
+  `octowright_bridge_leader_recovery_total{outcome="recovered"}` now counts a
+  leader restart as survived only once the new leader has answered the
+  handshake; a reconnect attempt made while the leader was still down could
+  count before.
+- **A redacted screenshot no longer stops a page's animations for hours.**
+  An animation that had not started yet when the screenshot began, as on a
+  page screenshotted right after it loaded, was given a start time about as
+  far ahead as the machine had been running. It switched to its unanimated
+  style partway through the capture and did not play again until then. Such
+  an animation now holds its first frame for the capture and carries on from
+  it afterwards.
 - **A crashed background page's headers no longer haunt later
   replacements.** When crash recovery gave up on a page that was not the
   active one, its `browser_set_extra_http_headers` record stayed (a crashed
@@ -120,6 +143,21 @@ a section that is already tagged and on PyPI.
   page other than the one the replacement reopens, is named in the handoff or
   relaunch result's `warnings`, as `route_warnings` on the lost-session
   record, or on the crash incident.
+- **An MCP client connects without waiting for the leader election.**
+  `octowright serve` elected a leader -- waiting on the election lock, a
+  daemon spawn and its readiness budget -- before it opened stdio, so a cold
+  start, a contended election or a raised `--ready-timeout` could outlast the
+  client's own connect timeout. It now opens stdio first and answers
+  `initialize` and `ping` itself while the election runs; the first tool call
+  waits for the leader (up to the election's own budget) and is then
+  delivered in order. The inline fallback is served through the same
+  connection. `--no-singleton`, `--wait-ready` and the daemon are unchanged.
+- **A follower no longer loads the browser stack before it connects.**
+  `octowright serve` imported the server module on every path, so each MCP
+  client's follower loaded Playwright, the browser pool and the whole tool
+  registry (about 50MB) before electing a leader or opening its stdio, though
+  a follower only bridges to the leader. Only the daemon and inline leader
+  paths load it now.
 - **`GET /api/sessions/{id}/console?level=warn` finds warnings.** Every
   engine reports `console.warn` as `warning`, and the filter compared the raw
   level case-sensitively, so `level=warn` returned nothing. It now matches

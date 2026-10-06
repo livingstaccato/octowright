@@ -470,6 +470,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_scrub_saturation.py",
     "tests/test_macro_resolve_once.py",
     "tests/test_macro_redacted_screenshot.py",
+    "tests/test_animation_freeze.py",
     "tests/test_macro_redacted_screenshot_drawn_transitions.py",
     "tests/test_macro_rendered_surface.py",
     "tests/test_macro_redaction_text.py",
@@ -609,4 +610,7 @@ pytest_add_cli_args = ["-x", "-q", "--no-cov"]
 # mutmut 3.x copies only the files in source_paths by default; the rest of
 # the src tree must be listed here or imports fail in the mutants/ workdir.
 # tools/ holds the out-of-wheel demo lib that tests/conftest.py adds to sys.path.
-also_copy = ["src/", "tools/", "demo/", "examples/", "conftest.py"]
+# scripts/ because tests load repo scripts by path (tests/_script_module.py):
+# test_macro_artifact_entry_points runs scripts/derive_privacy_sinks.py, and
+# without the copy mutmut's clean run failed there with FileNotFoundError.
+also_copy = ["src/", "tools/", "demo/", "examples/", "scripts/", "conftest.py"]

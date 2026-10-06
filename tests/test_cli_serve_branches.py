@@ -584,7 +584,8 @@ class TestEnsureLeaderOrInline:
 
     @pytest.mark.anyio
     async def test_spawn_timeout_falls_back_to_inline(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """wait_for_daemon → None → call _run_leader inline and return None."""
+        """wait_for_daemon → None → an inline fallback that runs _run_leader on
+        the streams the bridge hands it."""
         _patch_sn_daemon(
             monkeypatch,
             read_lock=lambda: None,
@@ -606,9 +607,14 @@ class TestEnsureLeaderOrInline:
             http_port=None,
             idle_grace=None,
         )
-        assert result is None
+        assert isinstance(result, _serve._InlineFallback)
+        assert result.reason == "daemon_spawn_failed"
+        assert run_leader_calls == []  # not until the bridge serves it
+        streams = (object(), object())
+        await result(streams)
         assert len(run_leader_calls) == 1
         assert run_leader_calls[0]["no_singleton"] is False
+        assert run_leader_calls[0]["stdio_streams"] is streams
 
     @pytest.mark.anyio
     async def test_stale_pid_triggers_spawn(self, monkeypatch: pytest.MonkeyPatch) -> None:

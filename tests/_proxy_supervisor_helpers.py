@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import anyio
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
@@ -57,3 +59,16 @@ def _response(request_id: str = "r1") -> SessionMessage:
 class FailingRemoteWrite:
     async def send(self, _message: SessionMessage) -> None:
         raise anyio.ClosedResourceError
+
+
+async def replay_answered(sup: Any, remote_write: Any, wire: Any) -> SessionMessage:
+    """Run ``sup.replay_initialize(remote_write)`` as a connect does, playing the
+    leader: read the replayed ``initialize`` off ``wire`` (what ``remote_write``
+    delivers to) and answer it, since the replay waits for that answer before it
+    completes the handshake. Returns the replayed frame; anything sent after it
+    (``notifications/initialized``) is left on ``wire``."""
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(sup.replay_initialize, remote_write)
+        replayed = await wire.receive()
+        await sup.forward_remote_message(_response(replayed.message.id))
+    return replayed

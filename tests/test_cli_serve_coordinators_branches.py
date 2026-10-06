@@ -13,8 +13,8 @@ coordinator surface:
 - `serve` click command — every option flag wires through to env or kwargs;
   PROVIDE_LOG_LEVEL and OCTOWRIGHT_PROFILE export ordering.
 - `_serve_async` — daemon-mode short-circuit + no-singleton short-circuit.
-- `_run_follower` — health URL derivation and proxy_bridge invocation.
-- `_serve_singleton` — happy follow path and inline-fallback short-circuit.
+- `_run_follower` — the leader source and pre-leader budget it bridges with.
+- `_serve_singleton` — happy follow path, inline fallback, early client exit.
 - `_run_leader` — paths the EOF tests don't pin: no_http skips sidecar,
   no_singleton skips lock write/remove, daemon-mode arms watchdog immediately.
 """
@@ -360,89 +360,44 @@ class TestServeAsyncDispatch:
         assert captured[0]["no_singleton"] is False
 
 
-# ─── _run_follower: URL derivation + run_proxy invocation ───────────────────
+# ─── _run_follower: leader source + pre-leader budget ──────────────────────
 
 
 class TestRunFollower:
     @pytest.mark.anyio
-    async def test_strips_mcp_and_appends_health(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`http://host:port/mcp/` → health URL `http://host:port/api/health`."""
+    async def test_passes_the_source_and_the_election_budget(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A call made before the election returns may wait as long as an
+        election can take: the lock's budget plus a contended readiness wait."""
         captured: dict[str, Any] = {}
 
-        async def fake_run_proxy(url: str, *, health_url: str) -> None:
-            captured["url"] = url
-            captured["health_url"] = health_url
+        async def fake_run_proxy(**kwargs: Any) -> None:
+            captured.update(kwargs)
 
+        async def source() -> str:
+            return "http://127.0.0.1:8765/mcp/"
+
+        from octowright import daemonize as _daemon
         from octowright import proxy_bridge as _pb
+        from octowright.cli import _leader_election as _election
 
         monkeypatch.setattr(_pb, "run_proxy", fake_run_proxy)
-        await _serve._run_follower("http://127.0.0.1:8765/mcp/")
-        assert captured["url"] == "http://127.0.0.1:8765/mcp/"
-        assert captured["health_url"] == "http://127.0.0.1:8765/api/health"
-
-    @pytest.mark.anyio
-    async def test_handles_url_without_trailing_slash(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """`http://host:port/mcp` (no trailing slash) → health correctly built."""
-        captured: dict[str, Any] = {}
-
-        async def fake_run_proxy(url: str, *, health_url: str) -> None:
-            captured["health_url"] = health_url
-
-        from octowright import proxy_bridge as _pb
-
-        monkeypatch.setattr(_pb, "run_proxy", fake_run_proxy)
-        await _serve._run_follower("http://127.0.0.1:8765/mcp")
-        # rsplit("/mcp", 1) splits on the last /mcp, then "" + "/api/health".
-        assert captured["health_url"] == "http://127.0.0.1:8765/api/health"
-
-    @pytest.mark.anyio
-    async def test_logs_connection_message(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Echoes 'connecting to leader at <url>' on stderr before bridging."""
-        captured_messages: list[str] = []
-
-        from octowright import proxy_bridge as _pb
-
-        async def fake_run_proxy(url: str, *, health_url: str) -> None:
-            return None
-
-        monkeypatch.setattr(_pb, "run_proxy", fake_run_proxy)
-        monkeypatch.setattr(
-            _serve.click,
-            "echo",
-            lambda text, err=False: captured_messages.append(text),
-        )
-        await _serve._run_follower("http://127.0.0.1:8765/mcp/")
-        assert any("connecting to leader at" in msg for msg in captured_messages)
-        assert any("http://127.0.0.1:8765/mcp/" in msg for msg in captured_messages)
+        monkeypatch.setattr(_election, "_election_lock_timeout", lambda: 25.0)
+        monkeypatch.setattr(_daemon, "daemon_ready_timeout", lambda: 15.0)
+        await _serve._run_follower(source)
+        assert captured == {"leader_source": source, "pre_leader_budget": 40.0}
 
     @pytest.mark.anyio
     async def test_run_proxy_exception_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """run_proxy exception is NOT swallowed by _run_follower."""
 
-        async def boom(url: str, *, health_url: str) -> None:
+        async def boom(**_kwargs: Any) -> None:
             raise RuntimeError("bridge failed")
 
         from octowright import proxy_bridge as _pb
 
         monkeypatch.setattr(_pb, "run_proxy", boom)
-        monkeypatch.setattr(_serve.click, "echo", lambda *_a, **_kw: None)
         with pytest.raises(RuntimeError, match="bridge failed"):
-            await _serve._run_follower("http://x/mcp/")
-
-    @pytest.mark.anyio
-    async def test_health_url_for_unusual_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Verify URL-derivation works when /mcp is in a sub-path."""
-        captured: dict[str, Any] = {}
-
-        async def fake_run_proxy(url: str, *, health_url: str) -> None:
-            captured["health_url"] = health_url
-
-        from octowright import proxy_bridge as _pb
-
-        monkeypatch.setattr(_pb, "run_proxy", fake_run_proxy)
-        # rsplit('/mcp', 1) splits on the LAST occurrence, so any prefix is preserved.
-        await _serve._run_follower("http://127.0.0.1:8765/proxy/mcp/")
-        assert captured["health_url"] == "http://127.0.0.1:8765/proxy/api/health"
+            await _serve._run_follower(lambda: None)
 
 
 # ─── _serve_singleton: composition test ────────────────────────────────────
@@ -450,17 +405,18 @@ class TestRunFollower:
 
 class TestServeSingleton:
     @pytest.mark.anyio
-    async def test_inline_fallback_short_circuits(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When _ensure_leader_or_inline returns None (inline fallback already
-        ran), _serve_singleton returns immediately without bridge or respawn."""
-        bridge_calls: list[Any] = []
+    async def test_inline_fallback_skips_the_respawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When the election falls back inline, the bridge gets the inline
+        leader to serve and there is no lost daemon to respawn afterwards."""
+        served: list[Any] = []
         respawn_calls: list[Any] = []
+        fallback = _serve._InlineFallback({}, reason="daemon_spawn_failed")
 
         async def fake_ensure(*_args: Any, **_kwargs: Any) -> Any:
-            return None  # signals "inline fallback already happened"
+            return fallback
 
-        async def fake_bridge(_info: Any) -> None:
-            bridge_calls.append(_info)
+        async def fake_bridge(source: Any) -> None:
+            served.append(await source())
 
         async def fake_respawn(*_args: Any, **_kwargs: Any) -> None:
             respawn_calls.append(_args)
@@ -470,22 +426,41 @@ class TestServeSingleton:
         monkeypatch.setattr(_serve, "_respawn_if_leader_gone", fake_respawn)
 
         await _serve._serve_singleton({}, http_host=None, http_port=None, idle_grace=None)
-        assert bridge_calls == []
+        assert served == [fallback]
         assert respawn_calls == []
 
     @pytest.mark.anyio
-    async def test_happy_path_calls_ensure_then_bridge_then_respawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Sequence: ensure → bridge → respawn-check."""
+    async def test_a_client_gone_before_the_election_ends_skips_the_respawn(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        respawn_calls: list[Any] = []
+
+        async def fake_bridge(_source: Any) -> None:
+            return None  # stdin EOF before the election returned
+
+        async def fake_respawn(*_args: Any, **_kwargs: Any) -> None:
+            respawn_calls.append(_args)
+
+        monkeypatch.setattr(_serve, "_bridge_to_leader", fake_bridge)
+        monkeypatch.setattr(_serve, "_respawn_if_leader_gone", fake_respawn)
+
+        await _serve._serve_singleton({}, http_host=None, http_port=None, idle_grace=None)
+        assert respawn_calls == []
+
+    @pytest.mark.anyio
+    async def test_happy_path_bridges_then_respawns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Sequence: bridge (whose source runs the election) → respawn-check."""
         order: list[str] = []
-        leader_info = MagicMock()
+        leader_info = MagicMock(mcp_url="http://127.0.0.1:8765/mcp/")
+        echoed: list[str] = []
 
         async def fake_ensure(*_args: Any, **_kwargs: Any) -> Any:
             order.append("ensure")
             return leader_info
 
-        async def fake_bridge(info: Any) -> None:
-            assert info is leader_info
+        async def fake_bridge(source: Any) -> None:
             order.append("bridge")
+            assert await source() == "http://127.0.0.1:8765/mcp/"
 
         async def fake_respawn(*_args: Any, **_kwargs: Any) -> None:
             order.append("respawn")
@@ -493,9 +468,11 @@ class TestServeSingleton:
         monkeypatch.setattr(_serve, "_ensure_leader_or_inline", fake_ensure)
         monkeypatch.setattr(_serve, "_bridge_to_leader", fake_bridge)
         monkeypatch.setattr(_serve, "_respawn_if_leader_gone", fake_respawn)
+        monkeypatch.setattr(_serve.click, "echo", lambda text, err=False: echoed.append(text))
 
         await _serve._serve_singleton({"http_host": None}, http_host=None, http_port=None, idle_grace=None)
-        assert order == ["ensure", "bridge", "respawn"]
+        assert order == ["bridge", "ensure", "respawn"]
+        assert any("connecting to leader at http://127.0.0.1:8765/mcp/" in line for line in echoed)
 
     @pytest.mark.anyio
     async def test_passes_kwargs_to_ensure_and_respawn(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -505,10 +482,10 @@ class TestServeSingleton:
 
         async def fake_ensure(_leader_kwargs: Any, **kwargs: Any) -> Any:
             ensure_kwargs.update(kwargs)
-            return MagicMock()
+            return MagicMock(mcp_url="http://127.0.0.1:9000/mcp/")
 
-        async def fake_bridge(_info: Any) -> None:
-            return None
+        async def fake_bridge(source: Any) -> None:
+            await source()
 
         async def fake_respawn(**kwargs: Any) -> None:
             respawn_kwargs.update(kwargs)

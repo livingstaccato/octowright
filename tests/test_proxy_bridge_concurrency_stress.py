@@ -23,6 +23,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
 
 from octowright import proxy_supervisor as supervisor
+from tests._proxy_supervisor_helpers import replay_answered
 
 
 def _request(method: str, request_id: str = "r1") -> SessionMessage:
@@ -203,8 +204,7 @@ async def test_reconnect_replays_initialize_only_once_per_session() -> None:
     # client (which already received the original ``init-only`` response).
     # Internal-replay ids are namespaced ``octowright-bridge-replay-N``.
     session_two = await connector.connect()
-    await supervisor_obj.replay_initialize(session_two.remote_write)
-    replayed_one = await session_two.received.receive()
+    replayed_one = await replay_answered(supervisor_obj, session_two.remote_write, session_two.received)
     assert supervisor.message_method(replayed_one) == "initialize"
     replay_one_id = supervisor.message_request_id(replayed_one)
     assert isinstance(replay_one_id, str) and replay_one_id.startswith("octowright-bridge-replay-")
@@ -213,8 +213,7 @@ async def test_reconnect_replays_initialize_only_once_per_session() -> None:
 
     # Reconnect #2 -> another fresh replay id (distinct from #1).
     session_three = await connector.connect()
-    await supervisor_obj.replay_initialize(session_three.remote_write)
-    replayed_two = await session_three.received.receive()
+    replayed_two = await replay_answered(supervisor_obj, session_three.remote_write, session_three.received)
     assert supervisor.message_method(replayed_two) == "initialize"
     replay_two_id = supervisor.message_request_id(replayed_two)
     assert isinstance(replay_two_id, str) and replay_two_id.startswith("octowright-bridge-replay-")
