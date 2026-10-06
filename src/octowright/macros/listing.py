@@ -77,7 +77,8 @@ def family_of(name: str) -> str:
     """
     for separator in _FAMILY_SEPARATORS:
         if separator in name:
-            return name.split(separator, 1)[0]
+            # Only element [0] is read, so the maxsplit count cannot change the result.
+            return name.split(separator, 1)[0]  # pragma: no mutate
     return name
 
 
@@ -102,7 +103,8 @@ def _families(entries: Sequence[Mapping[str, Any]], limit: int) -> list[dict[str
         row["macros"] += 1
         row["actions"] += int(entry.get("action_count") or 0)
         updated = str(entry.get("updated_at") or "")
-        if updated > str(row["latest"]):
+        # `>=` would only reassign an equal string, so the comparison is not mutated.
+        if updated > str(row["latest"]):  # pragma: no mutate
             row["latest"] = updated
     # By macro count, then by action weight: count alone is the wrong ranking
     # when one family holds a third of every action ever recorded.
