@@ -154,7 +154,8 @@ def _visual_order(fragments: Iterable[tuple[float, float, float, str]]) -> list[
     """Text box strings ordered by line (vertical centre), then left to right."""
     ordered: list[str] = []
     line: list[tuple[float, str]] = []
-    centre = half = 0.0
+    # Equivalent under mutation: read only once a line is open, and opening one sets both.
+    centre = half = 0.0  # pragma: no mutate
     for top, height, left, text in sorted(fragments):
         middle = top + height / 2
         if line and abs(middle - centre) > half:
