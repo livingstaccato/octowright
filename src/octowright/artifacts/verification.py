@@ -156,7 +156,8 @@ def _evaluate_check(
         except Exception as exc:
             status = "failed"
             message = str(exc)
-            matching_evidence = []
+            # None is equivalent: new_check_result stores `evidence or []`.
+            matching_evidence = []  # pragma: no mutate
 
         set_attrs(s, status=status)
         counter("octowright_artifact_verify_check_total").add(

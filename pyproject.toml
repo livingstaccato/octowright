@@ -608,6 +608,7 @@ pytest_add_cli_args_test_selection = [
     "tests/mutation_kills/test_artifacts_models.py",
     "tests/mutation_kills/test_artifacts_digest.py",
     "tests/mutation_kills/test_artifacts_reports.py",
+    "tests/mutation_kills/test_artifacts_verification.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
