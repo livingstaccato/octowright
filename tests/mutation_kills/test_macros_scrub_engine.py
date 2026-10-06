@@ -40,11 +40,11 @@ def test_json_without_ascii_escaping_is_scrubbed() -> None:
 
 
 def test_repr_of_a_locator_error_quoting_the_value_as_json_is_scrubbed() -> None:
-    value = 'pä"ss'
+    value = 'pö"ss'
     message = f"waiting for get_by_text({json.dumps(value, ensure_ascii=False)})"
     text = repr(RuntimeError(message))
 
-    assert text == 'RuntimeError(\'waiting for get_by_text("pä\\\\"ss")\')'
+    assert text == 'RuntimeError(\'waiting for get_by_text("pö\\\\"ss")\')'
     assert _both(text, (value,)) == ("RuntimeError('waiting for get_by_text(\"<redacted>\")')",) * 2
 
 
