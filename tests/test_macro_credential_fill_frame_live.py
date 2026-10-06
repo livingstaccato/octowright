@@ -32,6 +32,7 @@ import pytest
 
 from octowright.browser_pool.pool import BrowserPool
 from octowright.macros import execution
+from octowright.session import core_locator_mixin, core_page_mixin
 
 pytestmark = pytest.mark.live_browser
 
@@ -130,9 +131,12 @@ async def _typed_values(session: Any, origin: str) -> list[str]:
     return values
 
 
-#: How long the injected foreign frame may take to show its field. Generous on
-#: purpose: it is the test's precondition, not what the test measures.
-FRAME_READY_TIMEOUT_MS = 60_000
+#: How long the foreign page may take to show its field, in a frame or after
+#: the page moved itself. Generous on purpose: it is the tests' precondition,
+#: not what they measure. A windows-2025 Firefox took ~14.5s to show the
+#: frame's field (below), and on 2026-10-05 a Windows Firefox took ~11.8s for
+#: one ordinary navigation in this module.
+FOREIGN_PAGE_READY_TIMEOUT_MS = 60_000
 
 
 async def _inject_foreign_frame(session: Any, monkeypatch: pytest.MonkeyPatch, evil: str) -> None:
@@ -148,7 +152,7 @@ async def _inject_foreign_frame(session: Any, monkeypatch: pytest.MonkeyPatch, e
     inject = {"action": "evaluate", "expression": f"document.body.innerHTML = '<iframe src=\"{evil}/form\"></iframe>'"}
     await _run(session, monkeypatch, [inject])
     field = session.page.frame_locator("iframe").locator("#pw")
-    await field.wait_for(state="attached", timeout=FRAME_READY_TIMEOUT_MS)
+    await field.wait_for(state="attached", timeout=FOREIGN_PAGE_READY_TIMEOUT_MS)
 
 
 def _move_later(origin: str, url: str) -> dict[str, Any]:
@@ -157,10 +161,30 @@ def _move_later(origin: str, url: str) -> dict[str, Any]:
     return {"action": "navigate", "url": f"{origin}/moves?to={quote(url, safe='')}"}
 
 
+def _step_waits_out_the_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the typing step a budget the page's own move to the foreign form fits in.
+
+    The refusal is decided on the document that receives the value, so it can
+    come only once the foreign form exists; until then there is nothing to
+    refuse. The step's attached-wait (the action timeout, 15s) therefore had to
+    cover the page's 700ms timer AND the foreign page's whole load. A Windows
+    Firefox that took ~11.8s per navigation spent the 15s with the foreign
+    navigation still in flight, and the step failed with Playwright's
+    "waiting for <foreign> navigation to finish" timeout: nothing typed, but
+    nothing the test could tell from a check that never ran. Reproduced on all
+    three engines by delaying the foreign form's response 16s. That load is the
+    precondition, so it gets the precondition's bound; what is asserted is
+    still the refusal, which comes as soon as the form is there.
+    """
+    for module in (core_page_mixin, core_locator_mixin):  # type/fill, and fill_by
+        monkeypatch.setattr(module, "DEFAULT_ACTION_TIMEOUT_MS", FOREIGN_PAGE_READY_TIMEOUT_MS)
+
+
 @pytest.mark.parametrize("kind", ["fill", "fill_by", "type", "type_keys"])
 async def test_a_navigation_during_the_wait_does_not_carry_the_credential(
     session: Any, trusted: str, evil: str, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
+    _step_waits_out_the_move(monkeypatch)
     with pytest.raises(RuntimeError, match=r"credential arg \{\{password\}\}"):
         await _run(session, monkeypatch, [_move_later(trusted, evil + "/form"), _typing_step(kind)])
     await session.page.wait_for_url(evil + "/form")
