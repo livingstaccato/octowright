@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 
+from octowright.macros import scrub_capacity
 from octowright.macros.scrub_capacity import (
     DEFAULT_SCRUB_MAX_VALUES,
     SCRUB_MAX_VALUES_ENV,
@@ -36,6 +37,8 @@ def test_an_unset_cap_is_the_default_without_a_warning(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.delenv(SCRUB_MAX_VALUES_ENV, raising=False)
+    # A process-wide dedupe: an earlier warning for the same raw value would hide this one.
+    monkeypatch.setattr(scrub_capacity, "_WARNED", set())
     caplog.set_level(logging.WARNING)
 
     assert scrub_max_values() == DEFAULT_SCRUB_MAX_VALUES
