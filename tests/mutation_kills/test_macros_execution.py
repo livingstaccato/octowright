@@ -348,3 +348,36 @@ async def test_the_run_log_line_reports_elapsed_seconds_rounded_to_milliseconds(
             "log_level": "info",
         }
     ]
+
+
+async def test_a_try_records_a_called_macro_step_with_the_callee_s_own_redaction(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The written form of a ``try``'s ``macro_call`` step reads the CALLEE's
+    ``parameter_specs`` through the run's loader: ``note`` is sensitive only
+    because ``child`` declares it, so a written step that fell back to
+    name-only privacy would record it in the clear."""
+    from octowright import conditional
+
+    session = _session(tmp_path, launch=LAUNCH, current=LAUNCH)
+    _install(
+        monkeypatch,
+        {
+            "outer": {"actions": [{"action": "try", "actions": [_call("child", note="visible-note-value")]}]},
+            "child": {"parameter_specs": {"note": {"sensitive": True}}, "actions": []},
+        },
+    )
+    registered: list[Any] = []
+    real = conditional.register_written_steps
+
+    def record(written: Any, expanded: Any) -> Any:
+        registered.append(copy.deepcopy(written))
+        return real(written, expanded)
+
+    monkeypatch.setattr(conditional, "register_written_steps", record)
+
+    await execution.run_macro(session, "outer", {})
+
+    assert registered[0] == [
+        {"action": "try", "actions": [{"action": "macro_call", "name": "child", "args": {"note": "<redacted>"}}]}
+    ]
