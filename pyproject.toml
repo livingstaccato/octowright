@@ -619,6 +619,7 @@ pytest_add_cli_args_test_selection = [
     "tests/mutation_kills/test_macros_artifacts_run.py",
     "tests/mutation_kills/test_macros_artifacts_encoding.py",
     "tests/mutation_kills/test_macros_screenshot_refusal.py",
+    "tests/mutation_kills/test_macros_redaction_page_js.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]
