@@ -10,13 +10,15 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+import structlog
 
 from octowright.macros import execution
-from octowright.macros.privacy_ledger import admit_redacted_input
+from octowright.macros.privacy_ledger import PrivacyLedger, admit_redacted_input
 from tests.test_macro_credential_fill_origin import SECRET, _session
 
 pytestmark = pytest.mark.anyio
@@ -299,3 +301,50 @@ async def test_a_macro_without_actions_runs_nothing(tmp_path: Any, monkeypatch: 
     result = await execution.run_macro(session, "empty", {})
 
     assert (result["executed"], result["skipped"]) == (0, 0)
+
+
+async def test_the_pill_text_is_scrubbed_of_the_run_ledger_it_is_handed(tmp_path: Any) -> None:
+    """The run's own values, not only the session's: the text is handed to page JavaScript."""
+    session = _session(tmp_path, launch=LAUNCH, current=LAUNCH)
+    session.click = AsyncMock()  # type: ignore[method-assign]
+
+    counts = await execution._dispatch_one(
+        session,
+        {"action": "click", "selector": "#acct-Zq9wv7Lm"},
+        invocation_stack=["m"],
+        run_ledger=PrivacyLedger(["Zq9wv7Lm"]),
+        macros=execution.RunMacros(lambda name: {}),
+    )
+
+    assert counts == (1, 0)
+    session.click.assert_awaited_once_with(selector="#acct-Zq9wv7Lm")
+    session.page.evaluate.assert_awaited_once_with(
+        execution._STATUS_PUSH_JS, {"visible": True, "text": "m | click selector=#acct-<redacted>"}
+    )
+
+
+async def test_the_run_log_line_reports_elapsed_seconds_rounded_to_milliseconds(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = _session(tmp_path, launch=LAUNCH, current=LAUNCH)
+    monkeypatch.setattr(execution, "time", SimpleNamespace(monotonic=lambda: 100.1234567))
+
+    with structlog.testing.capture_logs() as logs:
+        elapsed = await execution._finish_macro_run(
+            session, name="m", completed_ok=True, macro_started=100.0, executed=2, skipped=1, resolved_slowmo=0
+        )
+
+    assert elapsed == pytest.approx(0.1234567)
+    assert [entry for entry in logs if entry["event"] == "octowright.macro.run"] == [
+        {
+            "event": "octowright.macro.run",
+            "name": "m",
+            "instance_id": "test",
+            "executed": 2,
+            "skipped": 1,
+            "slowmo_ms": 0,
+            "status": "ok",
+            "elapsed_s": 0.123,
+            "log_level": "info",
+        }
+    ]
