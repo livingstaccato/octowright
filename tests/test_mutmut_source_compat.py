@@ -17,8 +17,15 @@ before scoring a single mutant.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
+
+import pytest
 
 from tests import _mutmut_compat
+
+# mutmut runs this file as mutants/tests/..., where the root conftest patches
+# inspect.getsource deliberately.
+UNDER_MUTMUT = Path(__file__).resolve().parents[1].name == "mutants"
 
 MUTATED = """\
 @_mutmut_mutated(mutants_x__serialized_variants__mutmut)
@@ -56,6 +63,7 @@ def test_source_without_a_trampoline_is_unchanged() -> None:
     assert _mutmut_compat.without_mutmut_trampoline(source) == source
 
 
+@pytest.mark.skipif(UNDER_MUTMUT, reason="under mutmut the root conftest installs the patch on purpose")
 def test_getsource_is_left_alone_outside_mutmut() -> None:
     assert inspect.getsource is _mutmut_compat.ORIGINAL_GETSOURCE
 
