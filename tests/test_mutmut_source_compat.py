@@ -58,3 +58,17 @@ def test_source_without_a_trampoline_is_unchanged() -> None:
 
 def test_getsource_is_left_alone_outside_mutmut() -> None:
     assert inspect.getsource is _mutmut_compat.ORIGINAL_GETSOURCE
+
+
+def test_clearing_empties_every_octowright_function_cache() -> None:
+    """mutmut forks each mutant from the process that ran the clean pass, so a
+    cache filled there hands the mutant the unmutated result: the scrubber's
+    ``_scrub_patterns`` hid word-boundary mutants that its tests do kill."""
+    from octowright.macros import scrub_engine
+
+    scrub_engine._scrub_patterns(("zebrin4",))
+    assert scrub_engine._scrub_patterns.cache_info().currsize > 0
+
+    _mutmut_compat.clear_function_caches()
+
+    assert scrub_engine._scrub_patterns.cache_info().currsize == 0
