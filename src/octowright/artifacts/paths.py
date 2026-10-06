@@ -51,7 +51,9 @@ class ArtifactStore:
             if match is not None:
                 max_seen = max(max_seen, int(match.group(1)))
         run_dir = runs_dir / f"run_{max_seen + 1:04d}"
-        run_dir.mkdir(parents=False, exist_ok=False)
+        # parents is moot (runs_dir was just created) and a falsy exist_ok is False: the
+        # only live mutant here, exist_ok=True, is pinned by a test.
+        run_dir.mkdir(parents=False, exist_ok=False)  # pragma: no mutate
         return run_dir
 
     def existing_run_dir(self, artifact_dir: Path, run_id: str) -> Path:
@@ -78,5 +80,6 @@ class ArtifactStore:
             return target
         macro_slug = slug(name)
         exports_dir = self.macro_dir(name) / "exports"
-        exports_dir.mkdir(parents=True, exist_ok=True)
+        # parents is moot (macro_dir just created the parent); exist_ok is pinned by a test.
+        exports_dir.mkdir(parents=True, exist_ok=True)  # pragma: no mutate
         return exports_dir / f"{macro_slug}.py"
