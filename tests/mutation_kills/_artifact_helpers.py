@@ -26,6 +26,15 @@ def stable(value: Any, tmp_path: Path) -> Any:
     return value
 
 
+def native(*parts: str) -> str:
+    """*parts* joined and spelled the way this OS spells a path.
+
+    The product returns ``str(Path)``, so ``\\`` separates on Windows; an
+    expected value built here stays an exact comparison on every OS.
+    """
+    return str(Path(*parts))
+
+
 def read_json(path: Path | str) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 

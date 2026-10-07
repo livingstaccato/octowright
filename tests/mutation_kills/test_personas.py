@@ -12,6 +12,7 @@ variables explicitly; nothing reads the real profile or config directories.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,6 +24,15 @@ from octowright import personas
 SHELL_ENV = "OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS"
 ARBITRARY_ENV = "OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS"
 ALLOWLIST = sorted(personas._CREDENTIAL_HELPER_ALLOWLIST)
+
+#: A ``bash -c`` cmd needs a POSIX bash; on a Windows runner ``bash`` is the WSL launcher, or absent.
+needs_posix_bash = pytest.mark.skipif(sys.platform == "win32", reason="runs a POSIX `bash -c` cmd")
+#: The helper is a ``#!/bin/sh`` script made executable with ``chmod``, which Windows cannot run.
+needs_sh_script = pytest.mark.skipif(sys.platform == "win32", reason="runs an executable #!/bin/sh helper script")
+#: File credentials are refused on Windows by design: there are no POSIX permissions to hold the file to.
+needs_file_credentials = pytest.mark.skipif(
+    sys.platform == "win32", reason="file credentials are refused on Windows by design"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -279,6 +289,7 @@ def test_a_cmd_that_is_not_shell_form_and_not_allowlisted_is_refused(cmd: str) -
     )
 
 
+@needs_posix_bash
 def test_the_shell_opt_in_runs_a_shell_form_cmd(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(SHELL_ENV, "1")
     assert personas.resolve_credential(_cred(token_cmd="bash -c 'echo \"  s3cret  \"'"), "token") == "s3cret"
@@ -302,6 +313,7 @@ def test_the_arbitrary_opt_in_does_not_admit_a_shell_form(monkeypatch: pytest.Mo
         personas.resolve_credential(_cred(token_cmd="sh -c 'echo hi'"), "token")
 
 
+@needs_sh_script
 def test_an_allowlisted_helper_runs_without_an_opt_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     helper = tmp_path / "bin" / "op"
     helper.parent.mkdir()
@@ -318,6 +330,7 @@ def test_a_missing_executable_is_named(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@needs_posix_bash
 def test_a_failing_cmd_reports_its_exit_code_and_never_its_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(SHELL_ENV, "1")
     persona = _cred(token_cmd="bash -c 'echo leaked-secret >&2; exit 3'")
@@ -326,8 +339,6 @@ def test_a_failing_cmd_reports_its_exit_code_and_never_its_stderr(monkeypatch: p
 
 
 def test_a_cmd_that_runs_too_long_times_out_after_thirty_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
-    import subprocess
-
     seen: dict[str, object] = {}
 
     def bounded_run(argv: list[str], **kwargs: object) -> object:
@@ -430,6 +441,7 @@ def test_a_host_without_posix_permissions_refuses_file_credentials(tmp_path: Pat
 # --- resolution and the check report --------------------------------------------------
 
 
+@needs_file_credentials
 def test_resolve_credential_prefers_cmd_then_file_then_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALICE_KEY", "from-env")
     monkeypatch.setenv(ARBITRARY_ENV, "1")
@@ -474,12 +486,22 @@ def test_check_credentials_reports_each_name_once_by_its_winning_source(
             "token_env": "ALICE_EMAIL",
         },
     )
+    key_entry: dict[str, object] = {"name": "key", "source": "file", "reference": str(path), "ok": True, "error": None}
+    summary = "2/4 credentials resolved; failing: pin, token"
+    if sys.platform == "win32":
+        # File credentials are refused there by design, so the file source wins and fails.
+        key_entry["ok"] = False
+        key_entry["error"] = (
+            "persona 'alice' field 'key': file credentials need POSIX file permissions and are not "
+            "supported on this platform; use key_env or key_cmd"
+        )
+        summary = "1/4 credentials resolved; failing: key, pin, token"
     report = personas.check_credentials(persona)
     assert report == {
         "persona": "alice",
         "checked": [
             {"name": "email", "source": "env", "reference": "ALICE_EMAIL", "ok": True, "error": None},
-            {"name": "key", "source": "file", "reference": str(path), "ok": True, "error": None},
+            key_entry,
             {
                 "name": "pin",
                 "source": "env",
@@ -496,7 +518,7 @@ def test_check_credentials_reports_each_name_once_by_its_winning_source(
             },
         ],
         "ok": False,
-        "summary": "2/4 credentials resolved; failing: pin, token",
+        "summary": summary,
     }
 
 
@@ -533,8 +555,21 @@ def logged(monkeypatch: pytest.MonkeyPatch) -> LogRecorder:
     return recorder
 
 
+def _ran(monkeypatch: pytest.MonkeyPatch, stdout: str) -> list[list[str]]:
+    """Stand in for the exec, so a test of the policy runs on a host without the binary."""
+    argvs: list[list[str]] = []
+
+    def run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        argvs.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+    monkeypatch.setattr(personas.subprocess, "run", run)
+    return argvs
+
+
 def test_an_opted_in_shell_cmd_is_audited(monkeypatch: pytest.MonkeyPatch, logged: LogRecorder) -> None:
     monkeypatch.setenv(SHELL_ENV, "1")
+    argvs = _ran(monkeypatch, "x\n")
     personas.resolve_credential(_cred(token_cmd="/bin/bash -c 'echo x'"), "token")
     assert logged.calls == [
         (
@@ -548,6 +583,7 @@ def test_an_opted_in_shell_cmd_is_audited(monkeypatch: pytest.MonkeyPatch, logge
             },
         )
     ]
+    assert argvs == [["/bin/bash", "-c", "echo x"]]
 
 
 def test_an_opted_in_arbitrary_binary_is_audited(monkeypatch: pytest.MonkeyPatch, logged: LogRecorder) -> None:
@@ -567,14 +603,14 @@ def test_an_opted_in_arbitrary_binary_is_audited(monkeypatch: pytest.MonkeyPatch
     ]
 
 
-def test_an_allowlisted_helper_is_not_audited(tmp_path: Path, logged: LogRecorder) -> None:
-    helper = tmp_path / "gpg"
-    helper.write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
-    helper.chmod(0o700)
-    assert personas.resolve_credential(_cred(token_cmd=str(helper)), "token") == "ok"
+def test_an_allowlisted_helper_is_not_audited(monkeypatch: pytest.MonkeyPatch, logged: LogRecorder) -> None:
+    argvs = _ran(monkeypatch, "ok\n")
+    assert personas.resolve_credential(_cred(token_cmd="/opt/bin/gpg --decrypt"), "token") == "ok"
+    assert argvs == [["/opt/bin/gpg", "--decrypt"]]
     assert logged.calls == []
 
 
+@needs_posix_bash
 def test_a_failing_cmd_logs_only_the_length_of_its_stderr(monkeypatch: pytest.MonkeyPatch, logged: LogRecorder) -> None:
     monkeypatch.setenv(SHELL_ENV, "1")
     with pytest.raises(personas.MissingCredential):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,9 @@ def test_write_passes_args_and_the_evidence_choice_through(tmp_path: Path) -> No
     assert "class _Evidence:" not in path.read_text(encoding="utf-8")
 
 
+# The refusal walks the parent with O_NOFOLLOW/O_DIRECTORY and dir_fd
+# (``_paths._open_parent``); Windows has none of them, as in tests/test_paths.py.
+@pytest.mark.skipif(os.name == "nt", reason="directory descriptors are POSIX-only")
 def test_write_refuses_a_symlinked_directory_under_its_root(tmp_path: Path) -> None:
     root = tmp_path / "root"
     root.mkdir()

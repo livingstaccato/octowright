@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from tests._macro_artifact_fixtures import _CapturingSession, _FakeSession, _reload, restore_reloaded_defaults
-from tests.mutation_kills._artifact_helpers import artifact_dir, read_json, stable
+from tests.mutation_kills._artifact_helpers import artifact_dir, native, read_json, stable
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +79,7 @@ async def test_a_successful_run_writes_and_returns_exact_records(
     # Every value is withheld while the replay runs; a called macro may classify any of them.
     assert seen_during_replay == [{"item": "<redacted>", "password": "<redacted>"}]
     assert calls[0]["slowmo_ms"] == 25
-    run_dir = "<tmp>/recordings/artifacts/macros/checkout/runs/run_0001"
+    run_dir = native("<tmp>/recordings/artifacts/macros/checkout/runs/run_0001")
     assert stable(result, tmp_path) == {
         "ok": True,
         "macro": "checkout",
@@ -88,18 +88,18 @@ async def test_a_successful_run_writes_and_returns_exact_records(
         "verification_status": "not_configured",
         "paths": {
             "run_dir": run_dir,
-            "manifest": "<tmp>/recordings/artifacts/macros/checkout/artifact.json",
-            "summary": f"{run_dir}/summary.md",
-            "evidence": f"{run_dir}/evidence.json",
-            "result": f"{run_dir}/result.json",
+            "manifest": native("<tmp>/recordings/artifacts/macros/checkout/artifact.json"),
+            "summary": native(run_dir, "summary.md"),
+            "evidence": native(run_dir, "evidence.json"),
+            "result": native(run_dir, "result.json"),
         },
     }
-    root = "<tmp>/recordings/artifacts/macros/checkout"
+    root = native("<tmp>/recordings/artifacts/macros/checkout")
     assert _manifest(tmp_path) == {
         "artifact_version": 1,
         "artifact_type": "macro",
         "name": "checkout",
-        "source": {"type": "macro", "path": "<tmp>/macros/checkout.json"},
+        "source": {"type": "macro", "path": native("<tmp>/macros/checkout.json")},
         "parameters": {"item": "socks", "password": "<redacted>"},
         "latest_run": {"run_id": "run_0001", "path": run_dir},
         "exports": [],
@@ -108,7 +108,7 @@ async def test_a_successful_run_writes_and_returns_exact_records(
             "description": "Checkout flow",
             "action_count": 1,
             "missing_args": [],
-            "paths": {"artifact_dir": root, "runs_dir": f"{root}/runs", "exports_dir": f"{root}/exports"},
+            "paths": {"artifact_dir": root, "runs_dir": native(root, "runs"), "exports_dir": native(root, "exports")},
             "ready": True,
         },
     }
@@ -194,7 +194,7 @@ async def test_a_failed_replay_without_a_recording_points_at_the_run_dir(
     result = await macro_artifacts.run_macro_artifact(session, "checkout", {"item": "socks"}, capture=False)
 
     records = read_json(result["paths"]["evidence"])["records"]
-    assert [record["path"] for record in records] == [f"{result['paths']['run_dir']}/replay.jsonl"]
+    assert [record["path"] for record in records] == [native(result["paths"]["run_dir"], "replay.jsonl")]
 
 
 @pytest.mark.asyncio
@@ -236,8 +236,8 @@ async def test_screenshots_land_under_the_run_and_are_recorded(monkeypatch: pyte
     run_dir = result["paths"]["run_dir"]
     records = read_json(result["paths"]["evidence"])["records"]
     assert [(record["type"], record.get("path"), record.get("label")) for record in records] == [
-        ("screenshot", f"{run_dir}/screenshots/before.png", "before"),
-        ("screenshot", f"{run_dir}/screenshots/after.png", "after"),
+        ("screenshot", native(run_dir, "screenshots", "before.png"), "before"),
+        ("screenshot", native(run_dir, "screenshots", "after.png"), "after"),
     ]
 
 
@@ -270,7 +270,7 @@ async def test_a_failed_screenshot_is_recorded_as_an_excerpt(monkeypatch: pytest
         {
             "id": "ev_001",
             "type": "log_excerpt",
-            "path": "<tmp>/run/screenshots/before.png",
+            "path": native("<tmp>/run/screenshots/before.png"),
             "offset": 0,
             "length": len("OSError: disk full at before.png"),
             "preview": "OSError: disk full at before.png",
@@ -344,7 +344,7 @@ async def test_a_classified_screenshot_is_redacted_into_the_run_dir(
 
     assert page.calls == TAKEN
     assert stable(evidence.records, tmp_path) == [
-        {"id": "ev_001", "type": "screenshot", "path": "<tmp>/run/screenshots/after.png", "label": "after"}
+        {"id": "ev_001", "type": "screenshot", "path": native("<tmp>/run/screenshots/after.png"), "label": "after"}
     ]
 
 
@@ -372,7 +372,7 @@ async def test_a_refused_classified_screenshot_is_recorded_as_an_excerpt(
         {
             "id": "ev_001",
             "type": "log_excerpt",
-            "path": "<tmp>/run/screenshots/before.png",
+            "path": native("<tmp>/run/screenshots/before.png"),
             "offset": 0,
             "length": len("ScreenshotRefused"),
             "preview": "ScreenshotRefused",

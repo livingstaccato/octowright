@@ -228,4 +228,6 @@ def test_a_refreshed_summary_is_utf8_whatever_the_locale(tmp_path: Path) -> None
     """
     refresh_run_summary(run_dir=tmp_path, result={"macro": "café"}, evidence=[], verification={})
 
-    assert (tmp_path / "summary.md").read_bytes().startswith("# Macro Artifact Run: café\n".encode())
+    # Text mode writes the platform's newline (CRLF on Windows); only the encoding is pinned here.
+    written = (tmp_path / "summary.md").read_bytes().replace(b"\r\n", b"\n")
+    assert written.startswith("# Macro Artifact Run: café\n".encode())

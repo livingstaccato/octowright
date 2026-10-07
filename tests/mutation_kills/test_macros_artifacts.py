@@ -21,7 +21,7 @@ import pytest
 
 from octowright.drawn_text import REDACTED_ASSERTION_TEXT, REDACTED_TEXT_REFUSAL
 from tests._macro_artifact_fixtures import _reload, restore_reloaded_defaults
-from tests.mutation_kills._artifact_helpers import artifact_dir, read_json, stable
+from tests.mutation_kills._artifact_helpers import artifact_dir, native, read_json, stable
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +31,8 @@ def _restore_defaults() -> Any:
 
 
 def _paths_metadata(name: str) -> dict[str, str]:
-    root = f"<tmp>/recordings/artifacts/macros/{name}"
-    return {"artifact_dir": root, "runs_dir": f"{root}/runs", "exports_dir": f"{root}/exports"}
+    root = native(f"<tmp>/recordings/artifacts/macros/{name}")
+    return {"artifact_dir": root, "runs_dir": native(root, "runs"), "exports_dir": native(root, "exports")}
 
 
 def _expected_manifest(name: str, *, parameters: dict[str, Any], missing: list[str], **extra: Any) -> dict[str, Any]:
@@ -40,7 +40,7 @@ def _expected_manifest(name: str, *, parameters: dict[str, Any], missing: list[s
         "artifact_version": 1,
         "artifact_type": "macro",
         "name": name,
-        "source": {"type": "macro", "path": f"<tmp>/macros/{name}.json"},
+        "source": {"type": "macro", "path": native(f"<tmp>/macros/{name}.json")},
         "parameters": parameters,
         "latest_run": None,
         "exports": [],
@@ -87,11 +87,11 @@ def test_plan_writes_the_whole_manifest_and_returns_its_paths(monkeypatch: pytes
         "missing_args": ["region"],
         "args_used": {"q": "otters"},
         "paths": {
-            "macro_path": "<tmp>/macros/search.json",
-            "artifact_dir": "<tmp>/recordings/artifacts/macros/search",
-            "manifest": "<tmp>/recordings/artifacts/macros/search/artifact.json",
-            "runs_dir": "<tmp>/recordings/artifacts/macros/search/runs",
-            "exports_dir": "<tmp>/recordings/artifacts/macros/search/exports",
+            "macro_path": native("<tmp>/macros/search.json"),
+            "artifact_dir": native("<tmp>/recordings/artifacts/macros/search"),
+            "manifest": native("<tmp>/recordings/artifacts/macros/search/artifact.json"),
+            "runs_dir": native("<tmp>/recordings/artifacts/macros/search/runs"),
+            "exports_dir": native("<tmp>/recordings/artifacts/macros/search/exports"),
         },
     }
     assert stable(read_json(result["paths"]["manifest"]), tmp_path) == _expected_manifest(
@@ -182,7 +182,7 @@ def test_export_writes_the_manifest_and_returns_the_script(monkeypatch: pytest.M
 
     result = macro_artifacts.export_macro_cli(name="search", args={"q": "otters-in-the-river"})
 
-    script = "<tmp>/recordings/artifacts/macros/search/exports/search.py"
+    script = native("<tmp>/recordings/artifacts/macros/search/exports/search.py")
     assert stable(result, tmp_path) == {"ok": True, "macro": "search", "path": script, "import_safe": True}
     assert "otters-in-the-river" in Path(result["path"]).read_text(encoding="utf-8")
     manifest = stable(read_json(artifact_dir(tmp_path, "search") / "artifact.json"), tmp_path)
@@ -327,8 +327,8 @@ def test_verify_reads_a_bundle_whose_evidence_has_no_records(monkeypatch: pytest
         "ok": True,
         "status": "passed",
         "paths": {
-            "verification": "<tmp>/recordings/artifacts/macros/search/runs/run_0001/verification.json",
-            "summary": "<tmp>/recordings/artifacts/macros/search/runs/run_0001/summary.md",
+            "verification": native("<tmp>/recordings/artifacts/macros/search/runs/run_0001/verification.json"),
+            "summary": native("<tmp>/recordings/artifacts/macros/search/runs/run_0001/summary.md"),
         },
     }
     text = (run / "verification.json").read_text(encoding="utf-8")
@@ -349,6 +349,6 @@ def test_delete_reports_what_it_removed(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert stable(result, tmp_path) == {
         "deleted": True,
         "name": "search",
-        "path": "<tmp>/recordings/artifacts/macros/search",
+        "path": native("<tmp>/recordings/artifacts/macros/search"),
         "runs_removed": 1,
     }
