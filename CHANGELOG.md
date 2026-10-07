@@ -71,7 +71,9 @@ a section that is already tagged and on PyPI.
   `<name>_cmd` such as `C:\bin\op.exe item get x` was split with POSIX
   escaping, so the backslashes were dropped and `C:binop.exe` was checked
   and run. The cmd is now split by the Windows command-line rules, where
-  backslashes are literal and double quotes group a path with spaces. The
+  backslashes are literal and double quotes group a path with spaces; single
+  quotes still group as they did, so a persona file written for Linux or
+  macOS (`bash -c '... | ...'`) splits the same on Windows. The
   executable is also matched against the credential-helper allowlist and the
   shell gate case-insensitively and without its `.exe` or `.com` suffix, so
   `op.exe` is accepted as `op` and `bash.exe -c` needs

@@ -69,6 +69,21 @@ _SPLIT_TABLE = [
     ("a\\\\ b\\", ["a\\\\", "b\\"]),
     # shell metacharacters inside quotes are part of the argument
     ('bash -c "op read x | head -1"', ["bash", "-c", "op read x | head -1"]),
+    # single quotes group as on POSIX (Windows itself does not), so one persona
+    # file splits the same everywhere; inside them every character is literal
+    ("bash -c 'op read x | head -1'", ["bash", "-c", "op read x | head -1"]),
+    ("printf 'a|b'", ["printf", "a|b"]),
+    (r"'C:\Program Files\op.exe' item", [r"C:\Program Files\op.exe", "item"]),
+    (r"""'say "hi"' x""", ['say "hi"', "x"]),
+    (r"'a\\\"b'", [r"a\\\"b"]),
+    ("op '' x", ["op", "", "x"]),
+    ("x'y z'w", ["xy zw"]),
+    # inside double quotes a single quote is literal, and vice versa
+    (""""it's" ok""", ["it's", "ok"]),
+    # '#' is an ordinary character, not a comment
+    ("op read vault#item", ["op", "read", "vault#item"]),
+    # the existing \" form keeps working (it did under shlex)
+    (r'python -c "print(\"ok\")"', ["python", "-c", 'print("ok")']),
     ("", []),
     ("   ", []),
 ]
@@ -79,7 +94,7 @@ def test_windows_splitter_rules(personas, cmd, expected):
     assert personas._split_windows_cmdline(cmd) == expected
 
 
-@pytest.mark.parametrize("cmd", ['op "unterminated', r'op "x\"', '"'])
+@pytest.mark.parametrize("cmd", ['op "unterminated', r'op "x\"', '"', "op 'unterminated", "'"])
 def test_windows_splitter_refuses_an_unterminated_quote(personas, cmd):
     with pytest.raises(ValueError, match="No closing quotation"):
         personas._split_windows_cmdline(cmd)

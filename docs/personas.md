@@ -106,7 +106,9 @@ three suffixes. When more than one is set for a name, `_cmd` wins, then
   stdout (typical for password managers like `op`, `pass`, `bw`). The cmd
   is `shlex.split` and run with `shell=False` — no `/bin/sh` is involved.
   On Windows it is split by the Windows command-line rules instead (double
-  quotes group, backslashes are literal except before a `"`), so
+  quotes group, backslashes are literal except before a `"`, so `\"` is a
+  literal quote), plus single quotes, which group as they do under `shlex`
+  so `bash -c '... | ...'` works the same on every OS. So
   `"C:\Program Files\1Password CLI\op.exe" item get x` keeps its path, and the
   executable is matched against the credential-helper allowlist and the
   `bash -c` gate below case-insensitively and without its `.exe` or `.com`

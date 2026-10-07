@@ -106,6 +106,34 @@ def _windows_backslash_run(cmd: str, start: int) -> tuple[str, int]:
     return "\\" * (run // 2), end
 
 
+def _single_quoted(cmd: str, start: int) -> tuple[str, int]:
+    """The text of the single-quoted span opening at ``start``, and the index after it."""
+    end = cmd.find("'", start + 1)
+    if end == -1:
+        raise ValueError("No closing quotation")
+    return cmd[start + 1 : end], end + 1
+
+
+def _windows_piece(cmd: str, i: int, *, in_quotes: bool) -> tuple[str, str, int]:
+    """The piece of ``cmd`` at ``i``: its kind, its text, and the index after it.
+
+    Kinds: ``separator`` (unquoted whitespace), ``quote`` (a ``"``, which
+    toggles grouping and adds no text), and ``text``.
+    """
+    ch = cmd[i]
+    if ch == "\\":
+        text, end = _windows_backslash_run(cmd, i)
+        return "text", text, end
+    if ch == "'" and not in_quotes:
+        text, end = _single_quoted(cmd, i)
+        return "text", text, end
+    if ch == '"':
+        return "quote", "", i + 1
+    if ch in " \t" and not in_quotes:
+        return "separator", "", i + 1
+    return "text", ch, i + 1
+
+
 def _split_windows_cmdline(cmd: str) -> list[str]:
     r"""Split ``cmd`` the way CreateProcess / CommandLineToArgvW do.
 
@@ -115,6 +143,11 @@ def _split_windows_cmdline(cmd: str) -> list[str]:
     2n+1 backslashes + ``"`` give n backslashes and a literal ``"``. So
     ``C:\bin\op.exe`` keeps its backslashes, where ``shlex.split`` reads them
     as POSIX escapes and yields ``C:binop.exe``.
+
+    Single quotes also group, with every character inside them literal, as
+    ``shlex.split`` reads them. Windows itself does not, but persona files are
+    written for POSIX too, and ``bash -c '... | ...'`` split under shlex
+    before this splitter existed; keeping it means one file works everywhere.
 
     An unterminated quote raises ``ValueError("No closing quotation")``, the
     message ``shlex.split`` uses, rather than being closed at the end of the
@@ -126,24 +159,17 @@ def _split_windows_cmdline(cmd: str) -> list[str]:
     in_quotes = False
     i = 0
     while i < len(cmd):
-        ch = cmd[i]
-        if ch == "\\":
-            text, i = _windows_backslash_run(cmd, i)
-            current.append(text)
-            in_token = True
-            continue
-        if ch == '"':
-            in_quotes = not in_quotes
-            in_token = True
-        elif ch in " \t" and not in_quotes:
+        kind, text, i = _windows_piece(cmd, i, in_quotes=in_quotes)
+        if kind == "separator":
             if in_token:
                 argv.append("".join(current))
                 current = []
                 in_token = False
-        else:
-            current.append(ch)
-            in_token = True
-        i += 1
+            continue
+        if kind == "quote":
+            in_quotes = not in_quotes
+        current.append(text)
+        in_token = True
     if in_quotes:
         raise ValueError("No closing quotation")
     if in_token:
