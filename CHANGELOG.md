@@ -56,6 +56,10 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A persona credential command that is not installed is named on
+  Windows.** The error read `cmd not found on PATH (None)` there, because
+  Windows does not report which file it failed to find. It now names the
+  command, as it already did on Linux and macOS.
 - **A password in a URL whose username contains `@` no longer survives URL
   sanitizing.** Artifact digests and the macro failure payload reduce every
   URL to origin and path, and refuse a relative one that carries a password.
