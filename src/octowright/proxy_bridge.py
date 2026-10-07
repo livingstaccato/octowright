@@ -47,9 +47,11 @@ async def run_proxy(
     provided — when the watchdog observes ``heartbeat_max_failures`` consecutive
     failed probes (each with a 5s timeout) at ``heartbeat_interval`` cadence.
 
-    Raises whatever the underlying transports raise on connection failure —
-    ``cli.serve`` is expected to catch and fall back to leader mode if the
-    leader has died.
+    Raises whatever the underlying transports raise on connection failure.
+    A leader that dies is waited for within the recovery window
+    (``BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS``); after the bridge returns,
+    ``cli.serve`` respawns a daemon if none answers
+    (``_respawn_if_leader_gone``) rather than becoming the leader itself.
 
     NOTE: The actual stdio↔HTTP pump, request bookkeeping, and leader-health
     watchdog all live in ``octowright.proxy_supervisor``. This module is a

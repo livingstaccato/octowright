@@ -57,12 +57,12 @@ These steps apply when you are in **Claude Code** (the main session, with Bash a
 1. Retry **one** Octowright MCP call. The follower bridge fails fast and reconnects on the next call; a single transient drop recovers here.
 2. If it still fails, check daemon health: `curl http://127.0.0.1:6286/api/health`
 3. If health is **200 OK**, the daemon is alive but the client handle is broken — tell the user to reconnect via `/mcp` in Claude Code.
-4. If health **fails**, the daemon is down — tell the user to run `octowright restart` (or `uv run --directory <octowright-path> octowright restart`), then reconnect via `/mcp`.
+4. If health **fails**, the daemon is down — tell the user to run `octowright restart` (or `uv run --directory <octowright-path> octowright restart`). A follower that is still running reconnects to the new daemon by itself; if tools still fail after that, reconnect via `/mcp`.
 5. Do not retry more than once before telling the user.
 
 ## When Octowright Won't Come Back — STOP AND TELL THE USER
 
-Two failure modes: a **transient** drop recovers on one retry; a **gone** leader closes the client's stdio and **cannot recover in-session** — the human must reconnect.
+Two failure modes: a **transient** drop recovers on one retry; a leader **gone for longer than the recovery window** (180s by default, `OCTOWRIGHT_BRIDGE_LEADER_RECOVERY_WINDOW_SECONDS`) makes the follower give up and close the client's stdio, which **cannot recover in-session** — the human must reconnect. A daemon that comes back within the window (an `octowright restart`, say) is picked up by the follower without a reconnect.
 
 **Signals Octowright is gone, not just slow:**
 - Octowright tools are absent from your available tool list.
@@ -70,7 +70,7 @@ Two failure modes: a **transient** drop recovers on one retry; a **gone** leader
 - `octowright_status` itself is unreachable.
 
 **Forbidden actions — these burn tokens and never fix the connection:**
-- Running `octowright restart`, `uv run octowright restart`, or any shell variant to restart the daemon yourself. The `octowright` binary is **not on the agent's shell PATH** in Codex, background tasks, or most subagent environments. Even if it were, restarting the daemon closes the MCP stdio connection — it does NOT reconnect the MCP client. The human must reconnect their MCP client after any restart.
+- Running `octowright restart`, `uv run octowright restart`, or any shell variant to restart the daemon yourself. The `octowright` binary is **not on the agent's shell PATH** in Codex, background tasks, or most subagent environments. Even if it were, a restart cannot reopen a client connection that has already closed — that is the client's own stdio to its follower, which only the client can reconnect — and it closes every open browser on the way.
 - Running `which octowright`, `find`, or any filesystem search to locate the binary. This wastes tokens and cannot fix a disconnected MCP client.
 - Probing `curl http://127.0.0.1:6286/api/health` as a diagnostic step outside of Claude Code. Even if the daemon answers, only the MCP client reconnecting fixes the stdio handle.
 - Opening a URL with any shell command (`open`, `xdg-open`, `start`, `osascript`, `Bash`) and treating it as a browser session. That is an unmanaged, undriveable browser — not Octowright.
@@ -124,6 +124,6 @@ reconnect.
 
 ## What NOT to Do
 
-- **Don't** `pkill -f octowright` then `octowright serve &` in a loop. The agent's stdio bridge is one-shot and won't reconnect.
+- **Don't** `pkill -f octowright` then `octowright serve &` in a loop. The pattern also kills every MCP client's follower process, which closes those clients' stdio; a `serve` you start yourself is not connected to any client.
 - **Don't** spawn multiple `octowright serve` instances. They fight for the lockfile and HTTP port; the loser exits, leaving zombies that `octowright restart` has to clean up.
 - **Don't** assume the daemon is dead because MCP fails. Always probe `/api/health` first. Most failures are a broken client stdio handle, not a broken daemon.
