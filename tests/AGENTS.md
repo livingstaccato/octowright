@@ -84,6 +84,37 @@ hid three word-boundary mutants in `_identifier_bounded` and
 function on an `octowright` module before each test, under mutmut only
 (`tests/_mutmut_compat.clear_function_caches`).
 
+**`make mutmut` is capped; `make mutmut-remote` runs it elsewhere.** Left
+alone, mutmut starts one pytest child per CPU, each importing the whole test
+selection, which saturates a workstation for the length of the run. The target
+therefore passes `--max-children $(MUTMUT_JOBS)` (default 4, the CI runner's
+vCPU count, so the nightly job is unchanged) and runs under `nice -n 10`;
+`make mutmut MUTMUT_JOBS=8` raises it. `MUTMUT_REMOTE_HOST=<ssh host> make
+mutmut-remote` (`scripts/mutmut_remote.sh`) sends the git-tracked files, with
+their working-tree content, to a host you can already ssh to, runs `make
+mutmut` there detached so a dropped connection does not stop it, and fetches
+`mutmut-cicd-stats.json`, the log and the exit status into `.mutmut-remote/`
+(git-ignored). `MUTMUT_JOBS` reaches the host only when you set it; otherwise
+the host uses all its CPUs. The script's header lists its sub-commands
+(`start`/`status`/`fetch`/`stop`/`sync`) and its other variables. mutmut copies
+only `also_copy` into `mutants/`, which includes `scripts/` because a selected
+test loads a script there by path.
+
+**Mutant-killing tests live in `tests/mutation_kills/`**, named after the
+module they target (`test_<package>_<module>.py`), and each must be named in
+`[tool.mutmut]`'s `pytest_add_cli_args_test_selection`:
+`scripts/check_mutmut_selection.py` (part of `make lint`) fails when a fast
+test that imports a mutated module is missing from it, and a test outside the
+selection never runs against a mutant.
+
+**`# pragma: no mutate` only where every mutant on the line is unkillable.**
+The pragma suppresses every mutant on its line, not just the one it was
+argued for, and several that were placed for one equivalent mutant were
+hiding killable ones beside it (a mutated `.get()` key, an `or` turned
+`and`). They stay only on unreachable or import-time lines and literal
+initialisations whose only mutants are never observed; an equivalent mutant
+on a line that also carries killable ones is left as a known survivor.
+
 **Read the score from `export-cicd-stats`, never from `mutmut results`.**
 `mutmut results` prints only the mutants that still need attention — survived,
 `no tests`, `timeout` — and **omits every killed one**, so its line count is the
