@@ -269,7 +269,7 @@ class TestIntentLoginUrl:
 
     def test_with_creds_lists_them(self) -> None:
         """Non-empty fills → 'Login to <url> with <creds>'."""
-        result = _intent_login_url(["https://x/login"], ["#email=me", "#pass=secret"])
+        result = _intent_login_url(["https://x/login"], [("#email", "me"), ("#pass", "secret")])
         assert result == "Login to https://x/login with #email=me, #pass=secret"
 
     def test_no_creds_no_with_clause(self) -> None:
@@ -280,24 +280,24 @@ class TestIntentLoginUrl:
 class TestIntentLoginFields:
     def test_user_and_pass_required(self) -> None:
         """Needs BOTH a user-ish and pass-ish field."""
-        assert _intent_login_fields([], ["#email=me", "#pass=secret"]) == "Login flow"
+        assert _intent_login_fields([], [("#email", "me"), ("#pass", "secret")]) == "Login flow"
 
     def test_only_user_returns_none(self) -> None:
         """user but no pass → None."""
-        assert _intent_login_fields([], ["#email=me"]) is None
+        assert _intent_login_fields([], [("#email", "me")]) is None
 
     def test_only_pass_returns_none(self) -> None:
         """pass but no user → None."""
-        assert _intent_login_fields([], ["#pass=secret"]) is None
+        assert _intent_login_fields([], [("#pass", "secret")]) is None
 
     def test_with_url_target_appended(self) -> None:
         """Line 119-120 — URL present → ' on <url>' suffix."""
-        result = _intent_login_fields(["https://x"], ["#email=me", "#pass=secret"])
+        result = _intent_login_fields(["https://x"], [("#email", "me"), ("#pass", "secret")])
         assert result == "Login flow on https://x"
 
     def test_user_keyword_alternates(self) -> None:
         """Either 'email' OR 'user' counts as user-ish."""
-        assert _intent_login_fields([], ["#user=u", "#pass=p"]) == "Login flow"
+        assert _intent_login_fields([], [("#user", "u"), ("#pass", "p")]) == "Login flow"
 
 
 class TestIntentSearch:
@@ -306,21 +306,20 @@ class TestIntentSearch:
         assert _intent_search(["https://x"], []) is None
 
     def test_with_query_extracted_from_search_field(self) -> None:
-        """Lines 126-127 — fill containing 'search' → query extracted via split('=')[1]."""
-        result = _intent_search(["https://x/search"], ["#search=puppies"])
+        """A fill whose selector contains 'search' gives the query."""
+        result = _intent_search(["https://x/search"], [("#search", "puppies")])
         assert result == "Search for 'puppies' on https://x/search"
 
     def test_query_extracted_from_q_field(self) -> None:
-        """`'q' in f.lower()` — q field also matches."""
-        result = _intent_search(["https://x/search"], ["#q=cats"])
+        """A field named q is the search box too."""
+        result = _intent_search(["https://x/search"], [("#q", "cats")])
         assert result == "Search for 'cats' on https://x/search"
 
     def test_no_query_field_means_search_only(self) -> None:
         """Fills exist but none look like a query → 'Search on <url>'."""
-        result = _intent_search(["https://x/search"], ["#unrelated=v"])
-        # Note: 'q' is in 'unrelated' (qua) — q-field heuristic matches.
-        # Use a string without 'q' to avoid the q-fallback.
-        assert "Search" in result
+        result = _intent_search(["https://x/search"], [("#unrelated", "v")])
+        # 'unrelated' contains a q, but only a whole q/query name is a search box.
+        assert result == "Search on https://x/search"
 
 
 class TestIntentUrlFallback:

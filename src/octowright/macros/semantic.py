@@ -13,6 +13,7 @@ the MCP surface is registered in ``server/macros.py``.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -110,34 +111,49 @@ def summarize_action(action: dict[str, Any], indent: int = 0) -> str:
 # --- get_semantic_intent: per-shape detectors + first-match dispatch ------
 
 
-def _intent_login_url(urls: list[str], fills: list[str]) -> str | None:
+# A fill is ``(selector, value)``: kept apart so a value or a selector holding
+# ``=`` is never cut, and so only the selector decides what a field is.
+_Fill = tuple[str, str]
+
+# The field a search page types its term into: ``search`` anywhere in the
+# selector, or ``q`` / ``query`` as a whole name (``#q``, ``[name=q]``,
+# ``input[name="query"]``) -- not any selector that merely contains a ``q``.
+_SEARCH_FIELD = re.compile(r"search|(?<![a-z0-9_-])(?:q|query)(?![a-z0-9_-])")
+
+
+def _rendered(fills: list[_Fill]) -> list[str]:
+    return [f"{selector}={value}" for selector, value in fills]
+
+
+def _intent_login_url(urls: list[str], fills: list[_Fill]) -> str | None:
     if not any("login" in url.lower() for url in urls):
         return None
-    creds = ", ".join(fills)
+    creds = ", ".join(_rendered(fills))
     return f"Login to {urls[0]} with {creds}" if creds else f"Login to {urls[0]}"
 
 
-def _intent_login_fields(urls: list[str], fills: list[str]) -> str | None:
-    has_user = any("email" in f.lower() or "user" in f.lower() for f in fills)
-    has_pass = any("pass" in f.lower() for f in fills)
+def _intent_login_fields(urls: list[str], fills: list[_Fill]) -> str | None:
+    rendered = _rendered(fills)
+    has_user = any("email" in f.lower() or "user" in f.lower() for f in rendered)
+    has_pass = any("pass" in f.lower() for f in rendered)
     if not (has_user and has_pass):
         return None
     target = f" on {urls[0]}" if urls else ""
     return f"Login flow{target}"
 
 
-def _intent_search(urls: list[str], fills: list[str]) -> str | None:
+def _intent_search(urls: list[str], fills: list[_Fill]) -> str | None:
     if not any("search" in url.lower() for url in urls):
         return None
-    query = next((f.split("=")[1] for f in fills if "search" in f.lower() or "q" in f.lower()), None)
+    query = next((value for selector, value in fills if _SEARCH_FIELD.search(selector.lower())), None)
     return f"Search for '{query}' on {urls[0]}" if query else f"Search on {urls[0]}"
 
 
-def _intent_url_fallback(urls: list[str], _fills: list[str]) -> str | None:
+def _intent_url_fallback(urls: list[str], _fills: list[_Fill]) -> str | None:
     return f"Interact with {urls[0]}" if urls else None
 
 
-_INTENT_DETECTORS: tuple[Callable[[list[str], list[str]], str | None], ...] = (
+_INTENT_DETECTORS: tuple[Callable[[list[str], list[_Fill]], str | None], ...] = (
     _intent_login_url,
     _intent_login_fields,
     _intent_search,
@@ -152,8 +168,8 @@ def get_semantic_intent(actions: list[dict[str, Any]]) -> str:
     urls = [a["url"] for a in actions if a.get("action") == "navigate"]
     # The trailing ``or ""`` keeps an empty or absent value from rendering as
     # ``None`` -- which ``_intent_search`` would then quote as the search term.
-    fills = [
-        f"{a['selector']}={a.get('value') or a.get('text') or ''}"
+    fills: list[_Fill] = [
+        (str(a["selector"]), str(a.get("value") or a.get("text") or ""))
         for a in actions
         if a.get("action") in ("fill", "type")
     ]

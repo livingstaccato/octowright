@@ -90,3 +90,29 @@ def test_login_intent_lists_an_empty_fill_without_none() -> None:
     ]
 
     assert get_semantic_intent(actions) == "Login to https://ex.test/login with #user="
+
+
+SEARCH = "https://ex.test/search"
+
+
+def _search(selector: str, value: str) -> str:
+    return get_semantic_intent(
+        [{"action": "navigate", "url": SEARCH}, {"action": "fill", "selector": selector, "value": value}]
+    )
+
+
+def test_a_field_with_q_inside_its_name_is_not_the_search_box() -> None:
+    assert _search("#quantity", "3") == f"Search on {SEARCH}"
+
+
+def test_a_value_with_q_in_it_does_not_make_its_field_the_search_box() -> None:
+    assert _search("#name", "quokka") == f"Search on {SEARCH}"
+
+
+def test_a_q_field_is_the_search_box_in_any_selector_spelling() -> None:
+    for selector in ("#q", "q", 'input[name="q"]', "[name=q]", "#query", ".search-input"):
+        assert _search(selector, "otters") == f"Search for 'otters' on {SEARCH}", selector
+
+
+def test_a_search_term_containing_equals_is_kept_whole() -> None:
+    assert _search("#q", "a=b") == f"Search for 'a=b' on {SEARCH}"

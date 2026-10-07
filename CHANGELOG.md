@@ -61,6 +61,10 @@ a section that is already tagged and on PyPI.
   an empty or missing fill value as `None`, so it came out as
   `Search for 'None' on <url>`, and a login intent listed the field as
   `#user=None`. An empty value now gives `Search on <url>` and `#user=`.
+  The search field is also found by its selector alone, as one containing
+  `search` or named `q` or `query`: any selector or value with a `q` in it
+  (`#quantity`, a value like `quokka`) used to count, and a term or
+  selector containing `=` was cut at the first `=`.
 - **A persona credential command that is not installed is named on
   Windows.** The error read `cmd not found on PATH (None)` there, because
   Windows does not report which file it failed to find. It now names the
