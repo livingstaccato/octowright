@@ -25,6 +25,9 @@ package "user surfaces" #eff6ff {
   [server/\nMCPServer (134 tools, 141 with the terminal\nplugin; slimmable via --profile)] as SERVER
   [cli/\nclick: serve / test / scenario / persona /\nrestart / doctor / dashboard / cleanup] as CLI
   [http/\nStarlette dashboard + /mcp follower proxy] as HTTP
+  ' What `octowright serve` runs for an MCP client: stdio opens before the
+  ' leader election, and nothing on this path imports server/.
+  [follower bridge\nproxy_bridge / proxy_runtime / proxy_supervisor\nstdio <-> leader /mcp; proxy_inline: inline fallback] as BRIDGE
 }
 
 package "live state" #fef3c7 {
@@ -59,6 +62,7 @@ package "infrastructure" #f3f4f6 {
   [recorder.py\nappend-only JSONL] as RECORDER
   [export.py\nrecording → playwright script] as EXPORT
   [upgrade/\npost-upgrade "what's new" notice] as UPGRADE
+  [mcp_identity.py\nserver name, instructions, capabilities\n(initialize answered before the election)] as IDENTITY
   ' Package-root shared helpers. They sit at the root deliberately: server/,
   ' session/ and the root summarizers all need them, and putting one inside
   ' any of those layers makes the others import a layer they have no business
@@ -85,6 +89,12 @@ SERVER --> POOL
 SERVER --> SPOOL
 HTTP --> POOL
 HTTP --> SPOOL
+
+' ── follower bridge: answers the handshake itself, then forwards ──
+CLI ..> BRIDGE : serve (follower)
+BRIDGE ..> HTTP : /mcp on the elected leader
+BRIDGE ..> IDENTITY : local initialize / ping
+SERVER ..> IDENTITY : built from
 
 ' ── live state composition ──
 POOL "1" *-- "*" SESSION : owns

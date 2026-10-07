@@ -655,6 +655,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_mutmut_source_compat.py",
     "tests/mutation_kills/test_macros_descriptions.py",
     "tests/mutation_kills/test_macros_assertion_results.py",
+    "tests/test_persona_cred_cmd_windows.py",
 ]
 do_not_mutate = ["*/__init__.py"]
 pytest_add_cli_args = ["-x", "-q", "--no-cov"]

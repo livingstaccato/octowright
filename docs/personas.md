@@ -105,6 +105,18 @@ three suffixes. When more than one is set for a name, `_cmd` wins, then
 - `<name>_cmd: "command argv-form"` — exec the command directly and capture
   stdout (typical for password managers like `op`, `pass`, `bw`). The cmd
   is `shlex.split` and run with `shell=False` — no `/bin/sh` is involved.
+  On Windows it is split by the Windows command-line rules instead (double
+  quotes group, backslashes are literal except before a `"`, so `\"` is a
+  literal quote), plus single quotes, which group as they do under `shlex`
+  so `bash -c '... | ...'` works the same on every OS. So
+  `"C:\Program Files\1Password CLI\op.exe" item get x` keeps its path, and the
+  executable is matched against the credential-helper allowlist and the
+  `bash -c` gate below case-insensitively and without its `.exe` or `.com`
+  suffix (`OP.EXE` is `op`, `bash.exe -c` is shell form). A `.cmd` or `.bat`
+  helper (the Windows `gcloud.cmd`, an npm-installed `bw.cmd`) is not matched:
+  Windows runs it through `cmd.exe`, which re-reads its arguments with its own
+  metacharacters, so it needs `OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS`, as do
+  `cmd.exe /c` and `powershell -Command`.
 
   Pipes / redirection / subshells in the raw cmd are refused. To use a
   pipeline, write the cmd as `bash -c "..."` — bash becomes a normal argv

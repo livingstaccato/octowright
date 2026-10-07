@@ -156,9 +156,11 @@ Notes:
 
 ## Dashboard
 
-`octowright serve` boots two things in one process: the MCP stdio server (what
-your client talks to) and a Starlette HTTP server on `http://127.0.0.1:6286/` (what
-*you* look at) — every live browser and scenario, closed-session cleanup, a
+`octowright serve` is what your MCP client starts: it answers the client over
+stdio and forwards its calls to one shared background daemon, starting that
+daemon if none is running (`--no-singleton` runs everything in the one process
+instead). The daemon owns the browsers and also serves a Starlette HTTP server
+on `http://127.0.0.1:6286/` (what *you* look at) — every live browser and scenario, closed-session cleanup, a
 per-session debugger (video, action timeline, console/downloads/screenshots),
 live WebSocket updates, and a Playwright trace-viewer deep-dive.
 
@@ -406,7 +408,7 @@ without going through an MCP client:
 
 | Command | What |
 |---|---|
-| `octowright serve [--profile=<spec>]` | Run the MCP stdio server + the dashboard HTTP server. This is the default when you invoke `octowright` with no subcommand. Pass `--profile=core` (or `core,macros` etc.) to slim the LLM-visible MCP tool surface — see [Capability profiles](#capability-profiles) below. |
+| `octowright serve [--profile=<spec>]` | Serve an MCP client over stdio through the shared daemon, starting the daemon (MCP + dashboard HTTP server) if none is running. This is the default when you invoke `octowright` with no subcommand. Pass `--profile=core` (or `core,macros` etc.) to slim the LLM-visible MCP tool surface — see [Capability profiles](#capability-profiles) below. |
 | `octowright init [--force]` | First-run scaffolding: create the standard config dirs, drop a sample persona / scenario / macro, and print the `.mcp.json` registration block with your install path filled in. |
 | `octowright selftest` | Print the list of registered MCP tools without needing a live MCP client. Sanity check after install. |
 | `octowright test [<dir>] [--kind <engine>] [--tag <tag>] [--out <xml>]` | Run every `[test]`-tagged macro in a directory, emit JUnit XML. `--out` must sit under `OCTOWRIGHT_RECORDINGS` (checked before anything launches); without it the report is a timestamped file there. `--persona` runs tests one at a time (refused with `--max-parallel` above 1). |
