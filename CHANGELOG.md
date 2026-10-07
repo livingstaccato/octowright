@@ -67,6 +67,18 @@ a section that is already tagged and on PyPI.
   browser splits at the last, so `///alice@corp.example:zebrin4@intranet/path`
   came out with `zebrin4` in it. It now splits at the last `@` and returns
   `(invalid-url)`.
+- **Persona credential cmds work with Windows paths.** On Windows a
+  `<name>_cmd` such as `C:\bin\op.exe item get x` was split with POSIX
+  escaping, so the backslashes were dropped and `C:binop.exe` was checked
+  and run. The cmd is now split by the Windows command-line rules, where
+  backslashes are literal and double quotes group a path with spaces. The
+  executable is also matched against the credential-helper allowlist and the
+  shell gate case-insensitively and without its `.exe` or `.com` suffix, so
+  `op.exe` is accepted as `op` and `bash.exe -c` needs
+  `OCTOWRIGHT_ALLOW_SHELL_CRED_CMDS` like `bash -c`. A `.cmd`/`.bat` helper
+  such as `gcloud.cmd` still needs `OCTOWRIGHT_ALLOW_ARBITRARY_CRED_CMDS`:
+  Windows runs it through `cmd.exe`, which re-reads its arguments. Parsing
+  and matching on Linux and macOS are unchanged.
 - **A follower's first call after connecting or reconnecting is no longer
   refused with "Missing session ID".** When a follower connected to the
   leader, the first time or after a leader restart, it replayed the client's

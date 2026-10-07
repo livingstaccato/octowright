@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import errno
+import ntpath
 import os
 import re
 import shlex
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -72,8 +74,103 @@ _CREDENTIAL_HELPER_ALLOWLIST = frozenset(
 )
 
 
-def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str) -> list[str]:
-    """Parse `cmd` into argv form; raise MissingCredential if it cannot be
+# Suffixes CreateProcess resolves an executable by (the default PATHEXT
+# entries it can start). Stripped only on Windows, and only to match argv[0]
+# against the gates above; the argv that runs is never rewritten.
+# Only the formats CreateProcess starts directly. A .bat/.cmd runs through
+# cmd.exe, which re-reads the arguments with its own metacharacters (&, |, %),
+# so matching one as an allowlisted helper would let a persona's arguments run
+# anything; .ps1 cannot be started at all without an interpreter.
+_WINDOWS_EXECUTABLE_SUFFIXES = (".exe", ".com")
+
+
+def _is_windows() -> bool:
+    return sys.platform == "win32"
+
+
+def _windows_backslash_run(cmd: str, start: int) -> tuple[str, int]:
+    """Read the run of backslashes at ``start``; return its text and the next index.
+
+    Before a double quote, 2n backslashes give n and leave the quote to toggle
+    grouping; 2n+1 give n plus a literal quote, which is consumed. Anywhere
+    else the backslashes are literal.
+    """
+    end = start
+    while end < len(cmd) and cmd[end] == "\\":
+        end += 1
+    run = end - start
+    if end >= len(cmd) or cmd[end] != '"':
+        return "\\" * run, end
+    if run % 2:
+        return "\\" * (run // 2) + '"', end + 1
+    return "\\" * (run // 2), end
+
+
+def _split_windows_cmdline(cmd: str) -> list[str]:
+    r"""Split ``cmd`` the way CreateProcess / CommandLineToArgvW do.
+
+    Whitespace separates arguments and double quotes group them (and are
+    removed). Backslashes are literal unless they precede a double quote:
+    2n backslashes + ``"`` give n backslashes and the quote toggles grouping,
+    2n+1 backslashes + ``"`` give n backslashes and a literal ``"``. So
+    ``C:\bin\op.exe`` keeps its backslashes, where ``shlex.split`` reads them
+    as POSIX escapes and yields ``C:binop.exe``.
+
+    An unterminated quote raises ``ValueError("No closing quotation")``, the
+    message ``shlex.split`` uses, rather than being closed at the end of the
+    string as Windows would: a cmd whose grouping is ambiguous is refused.
+    """
+    argv: list[str] = []
+    current: list[str] = []
+    in_token = False
+    in_quotes = False
+    i = 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if ch == "\\":
+            text, i = _windows_backslash_run(cmd, i)
+            current.append(text)
+            in_token = True
+            continue
+        if ch == '"':
+            in_quotes = not in_quotes
+            in_token = True
+        elif ch in " \t" and not in_quotes:
+            if in_token:
+                argv.append("".join(current))
+                current = []
+                in_token = False
+        else:
+            current.append(ch)
+            in_token = True
+        i += 1
+    if in_quotes:
+        raise ValueError("No closing quotation")
+    if in_token:
+        argv.append("".join(current))
+    return argv
+
+
+def _executable_match_name(argv0: str, *, windows: bool) -> str:
+    r"""The name ``argv0`` is matched by against the allowlist and the shell gate.
+
+    POSIX: the exact basename. Windows: the basename by Windows path rules,
+    without the trailing dots and spaces Win32 drops from a file name,
+    casefolded, and without one ``.exe``/``.com`` suffix, so
+    ``C:\tools\BASH.EXE`` reaches the shell gate as ``bash``. A ``.cmd``/``.bat``
+    keeps its suffix and so matches nothing on the allowlist.
+    """
+    if not windows:
+        return Path(argv0).name
+    name = ntpath.basename(argv0).rstrip(". ").casefold()
+    for suffix in _WINDOWS_EXECUTABLE_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)].rstrip(". ")
+    return name
+
+
+def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str, *, windows: bool | None = None) -> list[str]:
+    r"""Parse `cmd` into argv form; raise MissingCredential if it cannot be
     safely represented without invoking /bin/sh.
 
     A persona YAML can come from any source the caller has configured, so
@@ -81,9 +178,15 @@ def _credential_cmd_argv(cmd: str, persona_name: str, cred_name: str) -> list[st
     escape hatch for pipeline-style credential helpers — the bash invocation
     is itself a normal argv token, and the pipeline lives inside its `-c`
     argument where the cmd author has signed off on it.
+
+    On Windows (``windows`` defaults from ``sys.platform``) the cmd is split
+    by the Windows command-line rules instead of ``shlex``, which would read
+    the backslashes of ``C:\bin\op.exe`` as POSIX escapes.
     """
+    if windows is None:
+        windows = _is_windows()
     try:
-        argv = shlex.split(cmd)
+        argv = _split_windows_cmdline(cmd) if windows else shlex.split(cmd)
     except ValueError as exc:
         raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd parse failure: {exc}") from exc
     bad = [tok for tok in argv if tok in _SHELL_OPERATOR_TOKENS or tok.startswith("$(")]
@@ -336,7 +439,9 @@ class MissingCredential(RuntimeError):
     pass
 
 
-def _enforce_credential_cmd_policy(argv: list[str], persona_name: str, cred_name: str) -> None:
+def _enforce_credential_cmd_policy(
+    argv: list[str], persona_name: str, cred_name: str, *, windows: bool | None = None
+) -> None:
     """Apply the trust-boundary gates that must pass before we exec ``argv``.
 
     Two gates, mutually exclusive on the argv shape:
@@ -352,8 +457,14 @@ def _enforce_credential_cmd_policy(argv: list[str], persona_name: str, cred_name
 
     Both opt-in paths emit a structured ``log.warning`` at the call site so
     the trust boundary stays audit-able.
+
+    On Windows argv[0] is matched case-insensitively and without its
+    executable suffix (``_executable_match_name``), so ``bash.exe -c`` meets
+    the shell gate exactly as ``bash -c`` does.
     """
-    interpreter_name = Path(argv[0]).name if argv else ""
+    if windows is None:
+        windows = _is_windows()
+    interpreter_name = _executable_match_name(argv[0], windows=windows) if argv else ""
     is_shell_form = interpreter_name in _SHELL_INTERPRETER_BASENAMES and len(argv) >= 2 and argv[1] == "-c"
     if is_shell_form:
         if not defaults.allow_shell_cred_cmds():
