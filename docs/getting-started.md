@@ -72,7 +72,7 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 | Command | Purpose |
 |---|---|
-| `octowright serve` | Run the MCP stdio server + the dashboard HTTP server (default). |
+| `octowright serve` | Serve an MCP client over stdio through the shared daemon, starting the daemon (MCP + dashboard HTTP server) if none is running (default). |
 | `octowright init` | Scaffold standard config dirs and print a registration snippet. |
 | `octowright selftest` | Print the registered MCP tools without needing a live MCP client. |
 | `octowright persona ...` | Manage personas from the terminal (`list` / `show` / `create` / `delete`). |
