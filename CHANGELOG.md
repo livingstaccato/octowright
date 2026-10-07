@@ -56,6 +56,11 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A macro whose search box is filled with nothing no longer searches for
+  `'None'`.** The intent `macro_explain` and the session detail report read
+  an empty or missing fill value as `None`, so it came out as
+  `Search for 'None' on <url>`, and a login intent listed the field as
+  `#user=None`. An empty value now gives `Search on <url>` and `#user=`.
 - **A persona credential command that is not installed is named on
   Windows.** The error read `cmd not found on PATH (None)` there, because
   Windows does not report which file it failed to find. It now names the

@@ -63,3 +63,30 @@ def test_search_intent_with_a_query() -> None:
     ]
 
     assert get_semantic_intent(actions) == "Search for 'otters' on https://ex.test/search"
+
+
+def test_search_intent_with_an_empty_query_names_no_term() -> None:
+    actions = [
+        {"action": "navigate", "url": "https://ex.test/search"},
+        {"action": "fill", "selector": "#q", "value": ""},
+    ]
+
+    assert get_semantic_intent(actions) == "Search on https://ex.test/search"
+
+
+def test_search_intent_with_a_valueless_type_names_no_term() -> None:
+    actions = [
+        {"action": "navigate", "url": "https://ex.test/search"},
+        {"action": "type", "selector": "#q"},
+    ]
+
+    assert get_semantic_intent(actions) == "Search on https://ex.test/search"
+
+
+def test_login_intent_lists_an_empty_fill_without_none() -> None:
+    actions = [
+        {"action": "navigate", "url": "https://ex.test/login"},
+        {"action": "fill", "selector": "#user", "value": ""},
+    ]
+
+    assert get_semantic_intent(actions) == "Login to https://ex.test/login with #user="

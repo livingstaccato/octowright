@@ -150,8 +150,12 @@ def get_semantic_intent(actions: list[dict[str, Any]]) -> str:
     if not actions:
         return "Empty macro"
     urls = [a["url"] for a in actions if a.get("action") == "navigate"]
+    # The trailing ``or ""`` keeps an empty or absent value from rendering as
+    # ``None`` -- which ``_intent_search`` would then quote as the search term.
     fills = [
-        f"{a['selector']}={a.get('value') or a.get('text')}" for a in actions if a.get("action") in ("fill", "type")
+        f"{a['selector']}={a.get('value') or a.get('text') or ''}"
+        for a in actions
+        if a.get("action") in ("fill", "type")
     ]
     for detector in _INTENT_DETECTORS:
         result = detector(urls, fills)
