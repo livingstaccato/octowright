@@ -74,6 +74,16 @@ rejected: they are the credential guard and the scrubber. The exported script
 therefore runs the unmutated body; a mutant in a rendered function is still
 exercised by the live path the export tests compare against.
 
+**Function caches are emptied before every test under mutmut.** mutmut forks
+each mutant from the process that ran the clean pass, so a `functools` cache
+filled there answers the mutant with the unmutated result and the mutant is
+scored as a survivor. Measured on 2026-10-06: `scrub_engine._scrub_patterns`
+hid three word-boundary mutants in `_identifier_bounded` and
+`_continues_identifier` that fail the scrubber's tests when applied with
+`mutmut apply`. The root `conftest.py` therefore clears every `cache_clear`-able
+function on an `octowright` module before each test, under mutmut only
+(`tests/_mutmut_compat.clear_function_caches`).
+
 **Read the score from `export-cicd-stats`, never from `mutmut results`.**
 `mutmut results` prints only the mutants that still need attention — survived,
 `no tests`, `timeout` — and **omits every killed one**, so its line count is the

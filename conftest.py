@@ -19,11 +19,13 @@ Two bugs in mutmut 3.5.0 + macOS bite this project:
    at-fork handler that no-ops mutmut's ``setproctitle`` binding in the
    child before any user code runs.
 
-A third patch is not about a mutmut bug: the exported macro CLI renders live
-function source, and under mutmut that source carries the trampoline
-decorator. ``tests/_mutmut_compat.py`` explains it and strips the decorator.
+Two more patches are not about mutmut bugs. The exported macro CLI renders
+live function source, and under mutmut that source carries the trampoline
+decorator; and mutmut forks every mutant from a process whose ``functools``
+caches already hold unmutated results. ``tests/_mutmut_compat.py`` explains
+both: it strips the decorator and empties the caches before each test.
 
-All three patches only apply when running under mutmut (i.e. this file is
+All four patches only apply when running under mutmut (i.e. this file is
 ``mutants/conftest.py``). Normal pytest runs are unaffected.
 
 Pattern lifted from provide-uterm's conftest. See
@@ -67,6 +69,11 @@ if _running_under_mutmut:
     from tests import _mutmut_compat
 
     _mutmut_compat.install()
+
+    @pytest.fixture(autouse=True)
+    def _mutmut_fresh_function_caches() -> None:
+        """Each test starts with empty caches (see ``clear_function_caches``)."""
+        _mutmut_compat.clear_function_caches()
 
 
 def pytest_addoption(parser: pytest.Parser, pluginmanager: pytest.PytestPluginManager) -> None:

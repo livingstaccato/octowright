@@ -56,6 +56,17 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A persona credential command that is not installed is named on
+  Windows.** The error read `cmd not found on PATH (None)` there, because
+  Windows does not report which file it failed to find. It now names the
+  command, as it already did on Linux and macOS.
+- **A password in a URL whose username contains `@` no longer survives URL
+  sanitizing.** Artifact digests and the macro failure payload reduce every
+  URL to origin and path, and refuse a relative one that carries a password.
+  That check split the username from the host at the first `@`, while a
+  browser splits at the last, so `///alice@corp.example:zebrin4@intranet/path`
+  came out with `zebrin4` in it. It now splits at the last `@` and returns
+  `(invalid-url)`.
 - **A follower's first call after connecting or reconnecting is no longer
   refused with "Missing session ID".** When a follower connected to the
   leader, the first time or after a leader restart, it replayed the client's

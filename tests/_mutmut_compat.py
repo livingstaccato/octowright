@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import inspect
 import re
+import sys
 from typing import Any
 
 ORIGINAL_GETSOURCE = inspect.getsource
@@ -42,3 +43,21 @@ def _getsource(obj: Any) -> str:
 
 def install() -> None:
     inspect.getsource = _getsource
+
+
+def clear_function_caches() -> None:
+    """Empty every ``functools`` cache on an ``octowright`` module's functions.
+
+    mutmut forks each mutant from the process that ran the clean pass, so a
+    cache filled there answers a mutant with the unmutated result and the
+    mutant is scored as a survivor its tests would kill. Measured: the
+    scrubber's ``_scrub_patterns`` hid word-boundary mutants in
+    ``scrub_engine._identifier_bounded`` that fail its tests when applied.
+    """
+    for name, module in list(sys.modules.items()):
+        if module is None or not (name == "octowright" or name.startswith("octowright.")):
+            continue
+        for value in list(vars(module).values()):
+            clear = getattr(value, "cache_clear", None)
+            if callable(clear):
+                clear()

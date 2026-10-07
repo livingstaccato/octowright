@@ -406,7 +406,7 @@ def _exec_credential_cmd(cmd_str: str, persona_name: str, cred_name: str) -> str
         )
     except FileNotFoundError as e:
         raise MissingCredential(
-            f"persona {persona_name!r} field {cred_name!r}: cmd not found on PATH ({e.filename!r})"
+            f"persona {persona_name!r} field {cred_name!r}: cmd not found on PATH ({argv[0]!r})"
         ) from e
     except subprocess.TimeoutExpired as e:
         raise MissingCredential(f"persona {persona_name!r} field {cred_name!r}: cmd timed out after 30s") from e
