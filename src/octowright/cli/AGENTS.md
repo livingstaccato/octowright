@@ -6,10 +6,9 @@ directory. The root file remains the canonical index.
 ### `octowright doctor`
 
 One command that answers "is this machine broken, or is Octowright broken?".
-It exists because that question once took hours: a local suite wedged, and the
-answer turned out to be a WebKit build that could not navigate to
-`about:blank` -- provable in fifteen seconds with raw Playwright, but only once
-someone thought to ask.
+A broken engine (for example a WebKit build that cannot navigate to
+`about:blank`) is provable in seconds with raw Playwright, and otherwise reads
+as an Octowright failure.
 
 The engine probes are the point. Each drives a real headless browser through
 launch -> new_context -> new_page -> goto -> evaluate -> add_init_script using
@@ -18,8 +17,7 @@ not complete. That separation is the whole diagnostic value: if the probe
 fails the engine is broken and reading Octowright's launch pipeline will not
 help; if the probe passes and Octowright still cannot launch, the bug is ours.
 Routing the probe through `BrowserPool` would collapse the two cases back
-together and answer neither. On the machine that prompted this it prints, in
-seven seconds:
+together and answer neither. On a machine with a broken WebKit it prints:
 
 ```
 PASS  engine:chromium     launch -> page -> goto -> evaluate in 0.41s
@@ -72,10 +70,9 @@ launching anything, and the command exits 1 on any FAIL so CI can gate on it.
 its MCP client owns and it deliberately SURVIVES a leader restart so the client
 is not dropped -- so upgrading Octowright and restarting the daemon updates the
 leader and **nothing else**, and every connected client keeps running whatever
-follower it spawned until that client reconnects. Observed with followers two
-releases behind a current leader, driving browsers, while `doctor` reported
-all-PASS, because nothing in it looked at followers at all. It compares against
-the **running daemon's** version (read from `/api/health`), not this process's
+follower it spawned until that client reconnects, so a deployment can be
+driving browsers through followers releases behind the leader while every
+other check passes. It compares against the **running daemon's** version (read from `/api/health`), not this process's
 `VERSION`: doctor is usually invoked from a checkout already upgraded past the
 daemon, so its own version is what the daemon *will* be after a restart, and
 comparing against it would report skew against a version nobody is running --
@@ -86,12 +83,11 @@ client does not respawn a dead stdio server.
 
 **Dead followers are not counted.** `bridge_state._prune_dead_followers` drops
 exited followers, but only when a follower WRITES a snapshot -- and a follower
-that has stopped writing is precisely the one most likely to be dead. Nothing
-pruned on the READ path, so `octowright_status()["bridge"]` reported 8 stale
-followers "running older code" of which the two investigated were **both
-already-exited processes**. `summarize_state` now partitions by PID liveness
-first (`is_alive` is injectable so tests stay deterministic; the default issues
-a real `os.kill(pid, 0)`), reports the discarded count as `dead_follower_count`
+that has stopped writing is precisely the one most likely to be dead, so
+without a read-path check `octowright_status()["bridge"]` would count exited
+processes as stale followers. `summarize_state` therefore partitions by PID
+liveness first (`is_alive` is injectable so tests stay deterministic; the
+default is a real liveness check, `singleton.pid_is_alive`), reports the discarded count as `dead_follower_count`
 so a shrinking `follower_count` is explainable, and keeps an unparsable PID key
 as live -- the conservative direction is to over-report a follower, not to drop
 a real one.
@@ -103,27 +99,24 @@ symptom. WebKit's GPU process calls into CoreAudio on every startup
 `coreaudiod`'s HAL is wedged that call never returns, so WebKit's own watchdog
 declares the GPU process unresponsive after ~3s, SIGKILLs it, relaunches it,
 and it hangs again -- WebContent never gets a renderer and every navigation
-dies. Diagnosed on 2026-08-30: WebKit failed `goto about:blank` at ~6.7s with
-**no crash report**, the GPU pid changed three times in a single six-second
-run, and the unified log said it outright (`GPUProcessProxy::didBecomeUnresponsive`,
-`gpuProcessExited: reason=Unresponsive`, with the SIGKILL sent by the Playwright
-UI process itself). `sample` on the live GPU process showed its main thread in
-`HALC_ProxySystem::HALC_ProxySystem -> mach_msg` in 100% of samples. It was not
-a WebKit, Playwright, or Octowright bug: `system_profiler SPAudioDataType` hung
-identically with no browser involved, and `killall coreaudiod` took the same
-probe from never completing to 0.97s end to end.
+dies. The symptoms: WebKit fails `goto about:blank` after several seconds with
+**no crash report**, the GPU pid changes repeatedly within one run, the unified
+log shows `GPUProcessProxy::didBecomeUnresponsive` /
+`gpuProcessExited: reason=Unresponsive`, and the GPU process's main thread sits
+in `HALC_ProxySystem::HALC_ProxySystem -> mach_msg`. It is not a WebKit,
+Playwright, or Octowright bug: `system_profiler SPAudioDataType` hangs
+identically with no browser involved, and `killall coreaudiod` clears it.
 
 Two implementation details are load-bearing. The probe runs in a **child
 process** that is reaped with `proc.kill()` (SIGKILL) rather than SIGTERM: the
 wedged call blocks in `mach_msg`, where a pending SIGTERM cannot be delivered,
-so plain `timeout` does not kill it and `timeout -s KILL` does (measured -- exit
-137). And it runs even under `--skip-engines`, because it costs 0.12-0.15s
-(measured on a healthy machine, against 0.46s for the `system_profiler`
-equivalent) and stays useful precisely when the slow probes are turned off. It
+so plain `timeout` does not kill it and `timeout -s KILL` does. And it runs
+even under `--skip-engines`, because it costs ~0.12-0.15s on a healthy machine
+(against ~0.46s for the `system_profiler` equivalent) and stays useful precisely when the slow probes are turned off. It
 is gated to macOS in `run_checks` rather than returning a `skip` from the check
 itself, so Linux runs carry no permanent SKIP line for a check that can never
 apply there.
 
-Nothing tracked the driver processes before this. `process_reaper` reasons
-*from* the driver -- its orphan rule for a browser is "my driver died" -- so a
-leaked driver with no browsers under it was invisible to every existing tool.
+`processes:drivers` exists because `process_reaper` reasons *from* the driver
+-- its orphan rule for a browser is "my driver died" -- so a leaked driver with
+no browsers under it is invisible to it.

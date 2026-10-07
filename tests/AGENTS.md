@@ -5,24 +5,22 @@ directory. The root file remains the canonical index.
 
 ### Test-run bounds: per-test timeout and pinned order
 
-Two `[tool.pytest.ini_options]` settings exist because a wedged suite used to
-be unattributable. Both are deliberate and worth knowing before changing them.
+Two `[tool.pytest.ini_options]` settings keep a wedged suite attributable.
+Both are deliberate and worth knowing before changing them.
 
-**`timeout = 300`, `timeout_method = "thread"` (pytest-timeout).** Nothing
-bounded a hung test before this. A target that stops answering — observed on a
-WebKit leg — hangs the run forever, because `page.on("crash")` never fires for
-a target that is merely *unresponsive*, and a local run was seen sitting on one
-test past 12.6 hours. 300s is measured, not taste: the slowest legitimate test
-observed locally is a two-participant headless WebKit scenario at 81s, and a
+**`timeout = 300`, `timeout_method = "thread"` (pytest-timeout).** A target
+that stops answering (a WebKit leg can) otherwise hangs the run forever,
+because `page.on("crash")` never fires for a target that is merely
+*unresponsive*. 300s is sized from the suite, not taste: the slowest
+legitimate test is a two-participant headless WebKit scenario at ~81s, and a
 whole CI leg finishes in ~10.5 minutes.
 
 The `thread` method is chosen over the platform default, and the default
 genuinely does not work here. With `signal`, pytest-timeout arms **one** alarm
 across the whole runtest protocol and cancels it at the end — so the alarm is
-spent the moment it fires. Measured on the reproducer: it fired in the call
-phase and failed the test as designed, then teardown wedged with no alarm left
-to arm and the process sat alive and silent 6+ minutes later. A bound a second
-wedge walks straight through is not a bound. `thread` uses a `threading.Timer`
+spent the moment it fires: a test that times out in the call phase and then
+wedges in teardown has no alarm left, and the process sits alive and silent.
+A bound a second wedge walks straight through is not a bound. `thread` uses a `threading.Timer`
 that dumps every thread's stack and calls `os._exit(1)`. The cost is real: the
 run dies at the first wedge instead of continuing, losing later results — still
 strictly better than a run that produces no name, no stacks and no results at
@@ -36,24 +34,22 @@ re-run" reports a NEW victim every time and reads as an inter-test leak that is
 not there. Pinning makes a run reproducible by default; shuffling is one flag
 away when it is the point: `--randomly-seed=last` to replay the previous run,
 an explicit integer to replay a specific one, or `--randomly-dont-reorganize`
-for source order. Prefer those over `-p no:randomly`, which used to exit 4 with
-"unrecognized arguments" — unloading the plugin also unregisters the
-`--randomly-seed` option `addopts` still passes. The root `conftest.py` now
-registers an inert stand-in for that option **when the plugin is absent**, so
-the flag parses; it exists because mutmut 3.x hardcodes `-p no:randomly` with no
+for source order. Prefer those over `-p no:randomly`: unloading the plugin
+also unregisters the `--randomly-seed` option `addopts` still passes. The root
+`conftest.py` registers an inert stand-in for that option **when the plugin is
+absent**, so the flag parses; it exists because mutmut 3.x hardcodes `-p no:randomly` with no
 way to configure it off, not as an endorsement of typing it by hand. The
 plugin's own flags leave its seeding machinery intact and stay the right answer
 for a human. Bump the constant to re-roll for everyone.
 
 **`norecursedirs` names `mutants`.** mutmut copies the whole project —
-`conftest.py` included — into `mutants/` and leaves it behind, and pytest then
-walks it as an ordinary directory. A bare `pytest` at the repo root consequently
-died in *collection*, with `ImportPathMismatchError` on the duplicated
-`tests.conftest` and, under `-p no:randomly`, "option names
-`{'--randomly-seed'}` already added" from the two copies of the root conftest —
-so running `make mutmut` once made a bare `pytest` unusable until someone
-deleted the directory by hand, and it defeated the stand-in above. `make test`
-passes `tests/` explicitly and never noticed. The setting **replaces** pytest's
+`conftest.py` included — into `mutants/` and leaves it behind, and pytest would otherwise
+walk it as an ordinary directory. Without the exclusion a bare `pytest`
+at the repo root dies in *collection* after any `make mutmut`, with
+`ImportPathMismatchError` on the duplicated `tests.conftest` and, under
+`-p no:randomly`, "option names `{'--randomly-seed'}` already added" from the
+two copies of the root conftest (`make test` passes `tests/` explicitly, so it
+is unaffected). The setting **replaces** pytest's
 built-in list rather than extending it, so the defaults are restated alongside
 `mutants`; dropping one would quietly start collecting `build/`, `dist/` or
 `node_modules/`.
@@ -61,26 +57,23 @@ built-in list rather than extending it, so the defaults are restated alongside
 **Exported-script tests strip mutmut's trampoline.** The exported macro CLI
 (`artifacts/script_export.py`) is built from `inspect.getsource` of live
 functions, and mutmut 3.x decorates every function it mutates with
-`@_mutmut_mutated(<dict>)`, which `getsource` returns too. Every exported
-script then began with a decorator naming a dict it never defines, so mutmut's
-clean run died on the first export test with `NameError: name
-'mutants_x__serialized_variants__mutmut' is not defined` -- 141 of the 174
-clean-run failures measured on 2026-10-06 -- and the nightly job scored
-nothing. Under mutmut only, the root `conftest.py` installs
+`@_mutmut_mutated(<dict>)`, which `getsource` returns too, so an unstripped
+exported script begins with a decorator naming a dict it never defines and
+mutmut's clean run fails on every export test with `NameError: name
+'mutants_x__serialized_variants__mutmut' is not defined`. Under mutmut only, the root `conftest.py` installs
 `tests/_mutmut_compat.py`, which removes exactly that decorator line from
 `getsource` output and keeps any other decorator.
-Excluding the rendered functions from mutation was the alternative, and was
-rejected: they are the credential guard and the scrubber. The exported script
+The rendered functions are deliberately not excluded from mutation instead:
+they are the credential guard and the scrubber. The exported script
 therefore runs the unmutated body; a mutant in a rendered function is still
 exercised by the live path the export tests compare against.
 
 **Function caches are emptied before every test under mutmut.** mutmut forks
 each mutant from the process that ran the clean pass, so a `functools` cache
 filled there answers the mutant with the unmutated result and the mutant is
-scored as a survivor. Measured on 2026-10-06: `scrub_engine._scrub_patterns`
-hid three word-boundary mutants in `_identifier_bounded` and
-`_continues_identifier` that fail the scrubber's tests when applied with
-`mutmut apply`. The root `conftest.py` therefore clears every `cache_clear`-able
+scored as a survivor (`scrub_engine._scrub_patterns`, for one, would hide
+word-boundary mutants in `_identifier_bounded` and `_continues_identifier`
+that fail the scrubber's tests when applied with `mutmut apply`). The root `conftest.py` therefore clears every `cache_clear`-able
 function on an `octowright` module before each test, under mutmut only
 (`tests/_mutmut_compat.clear_function_caches`).
 
@@ -109,31 +102,28 @@ selection never runs against a mutant.
 
 **`# pragma: no mutate` only where every mutant on the line is unkillable.**
 The pragma suppresses every mutant on its line, not just the one it was
-argued for, and several that were placed for one equivalent mutant were
-hiding killable ones beside it (a mutated `.get()` key, an `or` turned
-`and`). They stay only on unreachable or import-time lines and literal
+argued for, so one placed for an equivalent mutant can hide killable ones
+beside it (a mutated `.get()` key, an `or` turned `and`). Pragmas stay only on unreachable or import-time lines and literal
 initialisations whose only mutants are never observed; an equivalent mutant
 on a line that also carries killable ones is left as a known survivor.
 
 **Read the score from `export-cicd-stats`, never from `mutmut results`.**
 `mutmut results` prints only the mutants that still need attention — survived,
 `no tests`, `timeout` — and **omits every killed one**, so its line count is the
-size of the backlog and not the population. Reading it as the population turns
-an 80% score into a reported 2.8%, which is what happened on 2026-09-03 and sent
-a triage after a harness problem that did not exist. The second half of the same
-mistake is parsing the status column by last word: `no tests` ends in "tests"
+size of the backlog and not the population; reading it as the population
+reports a healthy score as a near-zero one and sends a triage after a harness
+problem that does not exist. The second half of the same mistake is parsing the status column by last word: `no tests` ends in "tests"
 and reads as a kill. `uv run mutmut export-cicd-stats` writes
 `mutants/mutmut-cicd-stats.json` with `killed`/`survived`/`no_tests`/`timeout`/
 `total` as integers, and that file is the only honest denominator.
 
 Two things are worth knowing before acting on a survivor list. **Count is the
-wrong ranking** — a big module dominates it while scoring fine (`macros.artifacts`
-led with 190 survivors at 85%, while `artifacts.evidence` sat at 21%), so rank by
-rate. And **most survivors are not logic**: on that run 81% were string-literal or
-`None` substitutions — dict keys, log event names, error wording — leaving 77
-genuine logic mutations. A handful of whole-record equality assertions kills the
-string bulk in batches (three of them took `artifacts.evidence` from 21% to
-100%); the logic ones are worth reading individually.
+wrong ranking** — a big module dominates it while scoring fine, and a small
+one with few survivors can have the worst rate — so rank by rate. And **most
+survivors are not logic**: the large majority are string-literal or `None`
+substitutions — dict keys, log event names, error wording. A handful of
+whole-record equality assertions kills the string bulk in batches; the logic
+ones are worth reading individually.
 
 **Verify a kill by applying the mutant, not by trusting a green test.** A test
 written against correct code passes whether or not it would notice the code
@@ -152,8 +142,7 @@ for `FAILED` silently never matches — the output is ANSI-coloured, so the toke
 is not at the start of the line and `^FAILED` finds nothing. That inverts every
 verdict at once and reports a dead mutant as a survivor, which reads as a much
 more alarming result than it is. `mutmut apply` is easy to miss in
-`mutmut --help`; a whole-function-swap script was once written to do what it
-already does.
+`mutmut --help`; no custom swap script is needed.
 
 Note that `mutmut show` reports a mutant's CURRENT
 status, so a mutant absent from `results` is already dead — check before writing
@@ -180,28 +169,26 @@ added to the hot path of every phase) and reads it back against a macOS crash
 report: `--correlate --newest-crash`, or an explicit `.ips` path or timestamp.
 
 **Read its output knowing the report directory is mostly self-inflicted.**
-Measured on a real machine, 31 reports split 27 `EXC_BREAKPOINT` on
-`Chrome_ChildIOThread` (children aborting when `test_stability_chaos_live`
-kills the shared driver with `pool._pw.stop()`), 3 `EXC_BAD_ACCESS` on
-`CrRendererMain` (its CDP `Page.crash`), and **one** `EXC_BREAKPOINT` on
-`CrBrowserMain` — the real headed abort. So the signal sits
-under 30:1 noise and `--newest-crash` hands you a manufactured crash after any
-suite run.
-
-That real abort is no longer wholly unexplained, though it is not yet fixed.
-`scripts/characterize_headed_crash.py` reproduced it on 2026-09-07 (26 reports
-byte-exact to the field signature, Chromium 151), and each report's own
-`procLaunch`/`captureTime` puts the browser's lifetime at **1.09–1.76s against
-a 1.34s launch/close cycle** — so it dies **at close**, not at launch. What
-remains open is what makes it happen at all: the same arm scored 26 crashes in
-134 launches and then 0 in 872 an hour later, so it is bursty and conditional
-on machine state. Read that script's docstring before spending time on it; it
-records which experiments have already come back empty. A correlated row whose module carries a deliberate-crash mechanism
-is therefore labelled, found by scanning that module rather than by listing
+After a suite run the reports are dominated by deliberate crashes:
+`EXC_BREAKPOINT` on `Chrome_ChildIOThread` (children aborting when
+`test_stability_chaos_live` kills the shared driver with `pool._pw.stop()`) and
+`EXC_BAD_ACCESS` on `CrRendererMain` (its CDP `Page.crash`). The real headed
+abort is `EXC_BREAKPOINT` on `CrBrowserMain`, typically under ~30:1 noise, so
+`--newest-crash` hands you a manufactured crash after any suite run. A
+correlated row whose module carries a deliberate-crash mechanism is therefore
+labelled, found by scanning that module rather than by listing
 test names so a chaos test added later is covered. Matching is by substring and
 cannot separate "uses the mechanism" from "mentions it" — the tool's own test
 file flagged itself — so the note means *check whether this was deliberate*,
 never proof that it was.
+
+That real headed abort is not yet fixed and only partly explained. The
+browser dies **at close**, not at launch (each report's
+`procLaunch`/`captureTime` puts its lifetime within a launch/close cycle), and
+it is bursty and conditional on machine state: the same reproduction arm can
+crash often and then not at all. `scripts/characterize_headed_crash.py`
+reproduces it; read its docstring before spending time on it, since it records
+which experiments have already come back empty.
 
 A related trap for anyone counting dumps: `browser_pool.crash_reports.enrich`
 only decorates incidents Octowright already observed, so this noise does **not**
@@ -214,19 +201,18 @@ signature.
 `tests/conftest.py` tracks every `BrowserPool` as it is constructed and, at
 each test's teardown, sends `SIGTERM` to the driver of any pool still holding
 one. A pool starts its Playwright driver lazily and only `shutdown_pool` ever
-calls `pw.stop()`, so the modules that launch a real browser and never shut
-their pool down leaked: measured at a **peak of 9 live
-`playwright/driver/node` children** under one pytest process, each holding a
-pipe, an OS process and an `asyncio-waitpid` thread. With the reaper the same
-119 tests peak at **1**, and run 24% faster (29.8s to 22.7s).
+calls `pw.stop()`, so without the reaper every module that launches a real
+browser and never shuts its pool down leaks a `playwright/driver/node` child
+(several live at once under one pytest process), each holding a pipe, an OS
+process and an `asyncio-waitpid` thread. With the reaper the peak is **1**,
+and the affected tests run noticeably faster.
 
-Signalling a pid rather than awaiting `pool.shutdown()` is deliberate, and the
-graceful version was written first and reverted. An async autouse fixture *does*
-run for sync tests under `asyncio_mode = "auto"`, but it also forces an asyncio
-loop onto the trio half of every `pytest-anyio`-parametrized test, which then
-fails inside anyio's shielded `CancelScope` with "must be called from async
-context" — two `tests/test_roster.py` trio cases went red and were green again
-the moment the fixture stopped being autouse. A sync fixture that signals a pid
+Signalling a pid rather than awaiting `pool.shutdown()` is deliberate. An async
+autouse fixture *does* run for sync tests under `asyncio_mode = "auto"`, but it
+also forces an asyncio loop onto the trio half of every
+`pytest-anyio`-parametrized test, which then fails inside anyio's shielded
+`CancelScope` with "must be called from async context" (the trio cases in
+`tests/test_roster.py` among them). A sync fixture that signals a pid
 needs no loop and cannot care which backend ran the test.
 
 ### Requiring live engines: `OCTOWRIGHT_REQUIRE_LIVE_ENGINES`
@@ -256,7 +242,7 @@ browser engine` (the daemon-driven tests read the failure from a tool result, so
 there is no exception). A deliberate skip raised from nowhere -- "closed shadow
 roots are only reachable through Chromium", "CDP Page.crash did not deliver" --
 stays a skip. The engine is the test's parametrization, else Chromium, the
-pool's default. Measured: with `PLAYWRIGHT_BROWSERS_PATH` pointed at an empty
+pool's default. So with `PLAYWRIGHT_BROWSERS_PATH` pointed at an empty
 directory and `=webkit`, `test_macro_network_clean_no_text_live`'s webkit case
 errors and its chromium/firefox cases still skip.
 
@@ -272,13 +258,12 @@ otherwise green run whose pytest process ends holding more than `LEAK_BOUND`
 (16) sockets it did not hold at session start, and names the tests that opened
 them. Linux only (it reads `/proc/self/fd`); everywhere else it is a no-op.
 
-It exists because a Windows leg failed a loopback navigation with
-`net::ERR_NO_BUFFER_SPACE` (`WSAENOBUFS`, ephemeral-port exhaustion), and a
-per-test test server or client left open is how a serial run would get there
-without Linux noticing. Measured when it was added, nothing in the suite leaks:
-across all 9,678 tests the process never held more than 9 sockets at a test's
-end, and the session-end excess was 0 in 52 of 53 chunked runs and 2 in the
-other (a handler thread still inside `time.sleep(20)`). So that failure is not
-explained by a leak in this process. Per-test cost is one `listdir` plus a
+It guards against ephemeral-port exhaustion (`net::ERR_NO_BUFFER_SPACE`,
+`WSAENOBUFS`, seen on a Windows leg's loopback navigation): a per-test server
+or client left open is how a serial run would get there without Linux
+noticing. The suite does not currently leak — the process holds at most a
+handful of sockets at any test's end, and a small session-end excess (a
+handler thread still inside `time.sleep(20)`) stays well under the bound — so
+that Windows failure is not explained by a leak in this process. Per-test cost is one `listdir` plus a
 `readlink` per fd new since the previous test (~56us). To run without it, pass
 `-p no:octowright-socket-leak-tripwire`.
