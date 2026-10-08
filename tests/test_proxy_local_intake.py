@@ -20,9 +20,9 @@ from typing import Any
 import anyio
 import pytest
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCNotification, JSONRPCResponse
+from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCResponse
 
-from octowright import defaults
+from octowright import defaults, proxy_intake
 from tests._proxy_supervisor_helpers import _request, _tools_call
 from tests.test_proxy_early_handshake import _URL, _Election, _initialize, _initialized, _Leader, _start, _wire
 
@@ -151,4 +151,69 @@ async def test_ordinary_requests_behind_a_waiting_call_keep_their_order(monkeypa
             to_leader = leader.sessions[0][1]
             ids = [(await to_leader.receive()).message.id for _ in range(4)]
         assert ids == ["r1", "r2", "r3", "r4"]
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_a_ping_behind_a_call_waiting_for_a_reconnect_is_answered_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same rule holds while the leader is being reconnected to: the new
+    session's replayed handshake is not answered yet, so no writer is
+    published, and a ping behind a call waiting for one is still answered."""
+    leader = _Leader()
+    local_in, local_out = _wire(monkeypatch, leader)
+    election = _Election()
+    async with anyio.create_task_group() as tg:
+        _start(tg, election, budget=30.0)
+        with anyio.fail_after(10.0):
+            await local_in.send(_initialize())
+            await local_out.receive()
+            await local_in.send(_initialized())
+            election.decide(_URL)
+            await leader.wait_for(1)
+            to_leader, from_leader = leader.sessions[0][1], leader.sessions[0][0]
+            replay = (await to_leader.receive()).message
+            await from_leader.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=replay.id, result={})))
+            assert (await to_leader.receive()).message.method == "notifications/initialized"
+            await from_leader.aclose()  # the session ends; the bridge reconnects
+            await leader.wait_for(2)
+            to_leader2, from_leader2 = leader.sessions[1][1], leader.sessions[1][0]
+            replay2 = (await to_leader2.receive()).message  # left unanswered for now
+            await local_in.send(_request("tools/list", "y"))
+            await local_in.send(_request("ping", "p2"))
+        with anyio.fail_after(1.0):
+            reply = (await local_out.receive()).message
+        assert isinstance(reply, JSONRPCResponse)
+        assert reply.id == "p2"
+        with anyio.fail_after(5.0):
+            await from_leader2.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=replay2.id, result={})))
+            assert (await to_leader2.receive()).message.method == "notifications/initialized"
+            assert (await to_leader2.receive()).message.id == "y"
+        tg.cancel_scope.cancel()
+
+
+@pytest.mark.anyio
+async def test_a_request_past_the_pending_cap_is_refused_at_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What waits for a leader is bounded: a request arriving with the cap
+    already waiting is answered with an error instead of queued, and the
+    queued ones still go, in order, once a leader is there."""
+    monkeypatch.setattr(proxy_intake, "MAX_PENDING_FRAMES", 3)
+    leader = _Leader()
+    local_in, local_out = _wire(monkeypatch, leader)
+    election = _Election()
+    async with anyio.create_task_group() as tg:
+        _start(tg, election, budget=30.0)
+        with anyio.fail_after(5.0):
+            for request_id in ("r1", "r2", "r3", "r4"):
+                await local_in.send(_request("tools/list", request_id))
+            refused = (await local_out.receive()).message
+            assert isinstance(refused, JSONRPCError)
+            assert refused.id == "r4"
+            assert "waiting for the leader" in refused.error.message
+            election.decide(_URL)
+            await leader.wait_for(1)
+            to_leader = leader.sessions[0][1]
+            ids = [(await to_leader.receive()).message.id for _ in range(3)]
+        assert ids == ["r1", "r2", "r3"]
         tg.cancel_scope.cancel()

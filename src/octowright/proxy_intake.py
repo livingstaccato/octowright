@@ -26,6 +26,12 @@ exactly as before. Two kinds are handled by the reader itself:
   and here the follower is that receiver. A call the leader already has keeps
   its cancellation in the queue, in order, and stops being the bridge's to
   resume or time out (``BridgeSupervisor.forget_in_flight``).
+
+What waits is bounded by ``MAX_PENDING_FRAMES``. The reader never waits on the
+sender (a ping behind a waiting call would wait again), so past the cap a
+request is answered with a bridge error at once and a notification is dropped
+with a warning, rather than holding without limit everything a client sends
+while no leader is reachable.
 """
 
 from __future__ import annotations
@@ -38,9 +44,20 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification, JSONRPCResponse
 from provide.telemetry import get_logger
 
-from octowright._bridge_message_helpers import is_request, message_method, message_request_id, message_root
+from octowright._bridge_message_helpers import (
+    bridge_error,
+    is_request,
+    message_method,
+    message_request_id,
+    message_root,
+)
 
 log = get_logger(__name__)
+
+# Frames accepted and not yet sent that the reader will hold. A client waits
+# for answers, so in practice only a handful queue; the cap is for a client
+# that keeps sending through a long election or an unreachable leader.
+MAX_PENDING_FRAMES = 1024
 
 
 def cancelled_request_id(message: SessionMessage) -> str | int | None:
@@ -59,9 +76,8 @@ class LocalIntake:
     def __init__(self, supervisor: Any, remote_write_slot: Any) -> None:
         self._supervisor = supervisor
         self._slot = remote_write_slot
-        # Unbounded: the reader must never wait on the sender, or a ping behind
-        # a waiting call waits again. What it holds is what the client has
-        # already sent, so the client bounds it.
+        # Unbounded as a stream: the reader must never wait on the sender, or a
+        # ping behind a waiting call waits again. ``accept`` bounds it instead.
         self._send, self._recv = anyio.create_memory_object_stream[SessionMessage](math.inf)
         # Frames accepted and not yet finished by the sender.
         self._pending = 0
@@ -85,6 +101,9 @@ class LocalIntake:
         if cancelled is not None and self._withdraw(cancelled):
             return
         request_id = message_request_id(message) if is_request(message) else None
+        if self._pending >= MAX_PENDING_FRAMES:
+            await self._refuse(message, request_id)
+            return
         if request_id is not None:
             self._queued.add(request_id)
         self._pending += 1
@@ -102,6 +121,17 @@ class LocalIntake:
             SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=request_id, result={}))
         )
         return True
+
+    async def _refuse(self, message: SessionMessage, request_id: str | int | None) -> None:
+        log.warning(
+            "octowright.bridge.intake_full",
+            pending=self._pending,
+            method=message_method(message),
+            request_id=request_id,
+        )
+        if request_id is not None:
+            reason = f"{self._pending} messages are already waiting for the leader; this one was not queued."
+            await self._supervisor.local_write.send(bridge_error(request_id, reason))
 
     def _withdraw(self, request_id: str | int) -> bool:
         """Honour a cancellation here; True when it must not be forwarded.
