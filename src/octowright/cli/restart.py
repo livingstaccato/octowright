@@ -400,8 +400,8 @@ def _spawn_election_lock() -> Iterator[bool]:
     because a peer is mid-election is useless precisely when it is needed.
     The degraded path is no worse than the old unconditional behaviour, and
     ``_stop_leader(spawn_port=...)`` still reclaims a squatted port afterwards
-    -- the split-brain RECOVERY that has always existed here. Windows takes the
-    no-op branch inside ``election_lock`` and reports False.
+    -- the split-brain RECOVERY that has always existed here. Windows locks
+    too (``msvcrt.locking``), so the same holds there.
     """
     from octowright.cli import _leader_election
 
