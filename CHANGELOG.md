@@ -13,6 +13,14 @@ exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
 ### Added
+- **Status reports a client holding a different handshake from the
+  leader's.** A follower answers `initialize` itself before the election
+  returns, and a client can reconnect to a leader restarted on another
+  version, so what the client was told can differ from what the running
+  leader would say. `octowright_status()["bridge"]["summary"]` now carries
+  `handshake_mismatch_count`, `handshake_mismatch_fields` and
+  `handshake_mismatch_hint`, and each follower snapshot records
+  `handshake_mismatch`.
 - **Headed Chromium on Linux runs as a native Wayland client when it can.**
   On a Wayland desktop it opens with `--ozone-platform=wayland` instead of
   running through XWayland. It turns on automatically
@@ -56,6 +64,25 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **`octowright restart` no longer starts a second leader beside one that
+  appeared while it waited.** A client that gave up waiting for the election
+  lock could start serving inline, and restart then spawned its own daemon
+  as well. Just before spawning, restart now checks for a live leader again
+  (the lockfile leader confirmed over HTTP, else an Octowright on the
+  requested port). If it finds one it names it and starts nothing, exiting 0
+  when that leader is on the requested port and 1 when it is elsewhere.
+- **A follower keeps reading the client's messages while a call waits for
+  the leader.** A `ping` behind a waiting call is answered at once, and a
+  `notifications/cancelled` for a call no leader has seen withdraws it
+  without a response. A cancelled call the leader already has is no longer
+  resumed after a reconnect or answered with a timeout error.
+- **Mocks on a crashed page that recovery gave up on stop producing
+  warnings.** Once crash recovery gives up on a crashed page that is not the
+  active one, its mocks are named once in the crash incident instead of
+  warning "installed on a page other than the active one" on every later
+  replacement. `browser_unmock_route` still removes such a mock and reports
+  `page_crashed: true`. A mock on a closed page is no longer warned about
+  either.
 - **A macro whose search box is filled with nothing no longer searches for
   `'None'`.** The intent `macro_explain` and the session detail report read
   an empty or missing fill value as `None`, so it came out as
