@@ -166,6 +166,18 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "page -- no Playwright I/O; called by crash recovery once it has given up, from inside "
         "its crash_recovery lease or from schedule_recovery's page-crash handler before one exists",
     ),
+    "session/core_interaction_mixin.py:SessionInteractionMixin._mock_unroute_target": (
+        "cached-property-only",
+        "reads the cached active-page reference and calls Page.is_closed(), Playwright's locally "
+        "cached closed flag -- no browser I/O; reached only from mock_route's and unmock_route's "
+        "own leases, to pick the page to unroute",
+    ),
+    "session/route_carry.py:abandon_crashed_page_mocks": (
+        "cached-property-only",
+        "reads the cached active-page reference only to compare its identity with the crashed "
+        "page -- no Playwright I/O; called by crash recovery once it has given up, from inside "
+        "its crash_recovery lease or from schedule_recovery's page-crash handler before one exists",
+    ),
     "session/screencast.py:ScreencastManager._stop_bound_owned_locked": (
         "cached-property-only",
         "reads and clears the cached _bound_page reference (no I/O) purely to decide whether "

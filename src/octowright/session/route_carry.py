@@ -74,6 +74,10 @@ class MockSpec:
     #: The page it was installed on: a mock is a PAGE route, so it covers that
     #: page only (a popup or a page switched to afterwards never had it).
     page: Any = field(default=None, compare=False, repr=False)
+    #: Crash recovery gave up on ``page`` while it was not the active page: the
+    #: mock fulfils nothing any more. Kept so ``unmock_route`` still answers for
+    #: it, but neither carried nor warned about (the incident said so once).
+    page_crashed: bool = field(default=False, compare=False)
 
     def kwargs(self) -> dict[str, Any]:
         return {
@@ -84,9 +88,38 @@ class MockSpec:
         }
 
 
+def _page_gone(spec: MockSpec) -> bool:
+    """Whether *spec*'s page can no longer be fulfilled on: closed, or a given-up crash."""
+    if spec.page_crashed:
+        return True
+    closed = getattr(spec.page, "is_closed", None)
+    return bool(callable(closed) and closed() is True)
+
+
 def _mapping(session: Any, name: str) -> dict[str, Any]:
     value = getattr(session, name, None)
     return value if isinstance(value, dict) else {}
+
+
+def _carried_mocks(session: Any, active: Any) -> tuple[list[tuple[str, MockSpec]], list[str]]:
+    """The mocks a replacement reopening *active* carries, and warnings for the rest."""
+    specs = _mapping(session, "_mock_specs")
+    mocks: list[tuple[str, MockSpec]] = []
+    not_carried: list[str] = []
+    for pattern in _mapping(session, "_active_routes"):
+        spec = specs.get(pattern)
+        if not isinstance(spec, MockSpec):
+            not_carried.append(f"mock_route {pattern!r} was not carried: its response was not kept")
+        elif spec.page is active:
+            mocks.append((pattern, MockSpec(**spec.kwargs())))
+        elif not _page_gone(spec):
+            not_carried.append(
+                f"mock_route {pattern!r} was not carried: it was installed on a page other than the "
+                "active one, and a replacement reopens only the active page"
+            )
+        # else: its page closed, or crashed and was given up on -- the mock
+        # fulfils nothing, so a replacement loses nothing by leaving it.
+    return mocks, not_carried
 
 
 @dataclass(frozen=True)
@@ -106,20 +139,7 @@ class RouteCarry:
     def of(cls, session: Any) -> RouteCarry:
         """Read off *session* now: the copy outlives the original's teardown."""
         active = getattr(session, "page", None)
-        specs = _mapping(session, "_mock_specs")
-        mocks: list[tuple[str, MockSpec]] = []
-        not_carried: list[str] = []
-        for pattern in _mapping(session, "_active_routes"):
-            spec = specs.get(pattern)
-            if not isinstance(spec, MockSpec):
-                not_carried.append(f"mock_route {pattern!r} was not carried: its response was not kept")
-            elif spec.page is not active:
-                not_carried.append(
-                    f"mock_route {pattern!r} was not carried: it was installed on a page other than the "
-                    "active one, and a replacement reopens only the active page"
-                )
-            else:
-                mocks.append((pattern, MockSpec(**spec.kwargs())))
+        mocks, not_carried = _carried_mocks(session, active)
         page_headers = page_headers_on(session, active) or {}
         if any(page is not active for page in open_pages_with_headers(session)):
             not_carried.append(
@@ -251,3 +271,26 @@ def forget_crashed_page_headers(session: Any, page: Any) -> list[str]:
         return []
     set_page_headers(session, page, {})
     return ["page-level extra HTTP headers set on the crashed page were dropped: crash recovery gave up on it"]
+
+
+def abandon_crashed_page_mocks(session: Any, page: Any) -> list[str]:
+    """Mark the mocks set on *page* as on a dead page, once crash recovery gave up on it.
+
+    The mock counterpart of :func:`forget_crashed_page_headers`, for the same
+    reason: a crashed page is not closed, so every later replacement warned the
+    mock was "installed on a page other than the active one" -- a dead one. The
+    entries are kept rather than dropped, so ``unmock_route`` still removes the
+    mock it was asked about (reporting ``page_crashed``) instead of answering
+    ``no active mock`` for a mock nobody removed. Kept as-is while *page* is
+    the active page, which a replacement reopens. Returns the warnings for the
+    crash incident (patterns only).
+    """
+    if page is getattr(session, "page", None):
+        return []
+    specs = _mapping(session, "_mock_specs")
+    warnings: list[str] = []
+    for pattern, spec in list(specs.items()):
+        if isinstance(spec, MockSpec) and spec.page is page and not spec.page_crashed:
+            specs[pattern] = MockSpec(**spec.kwargs(), page=page, page_crashed=True)
+            warnings.append(f"mock_route {pattern!r} on the crashed page was abandoned: crash recovery gave up on it")
+    return warnings

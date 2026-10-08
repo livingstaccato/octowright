@@ -66,6 +66,7 @@ from octowright.session.operation.gate import (
 )
 from octowright.session.route_carry import (
     PageRoutes,
+    abandon_crashed_page_mocks,
     forget_crashed_page_headers,
     install_page_routes,
     page_routes_of,
@@ -291,11 +292,12 @@ def _count_failure(session: Any, exc: BaseException) -> None:
 
 
 def _note_given_up(session: Any, incident: dict[str, Any], *dead_pages: Any) -> None:
-    """Recovery gave up on *dead_pages*: forget their page headers (unless one
-    is still the active page) and say so on the incident."""
+    """Recovery gave up on *dead_pages*: forget their page headers and abandon
+    their mocks (unless one is still the active page), and say so on the incident."""
     warnings: list[str] = []
     for dead in dict.fromkeys(dead_pages):
         warnings.extend(forget_crashed_page_headers(session, dead))
+        warnings.extend(abandon_crashed_page_mocks(session, dead))
     if warnings:
         incident["route_warnings"] = warnings
 
