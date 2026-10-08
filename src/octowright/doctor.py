@@ -541,12 +541,19 @@ async def check_followers() -> Check:
     # the daemon that is actually answering, through the same shared predicate
     # so only the baseline differs.
     stale = stale_follower_count(versions, leader)
+    # A client can hold an ``initialize`` answer the running leader would not
+    # give even at the same version (see the bridge summary's hint); absent in
+    # a summary from before the field existed.
+    mismatched = summary.get("handshake_mismatch_count") or 0
+    mismatch_fields: dict[str, int] = summary.get("handshake_mismatch_fields") or {}
     data = {
         "leader_version": leader,
         "follower_versions": versions,
         "live_followers": live,
         "stale_followers": stale,
         "dead_followers_ignored": dead,
+        "handshake_mismatches": mismatched,
+        "handshake_mismatch_fields": mismatch_fields,
     }
     if not live:
         return Check("followers", "ok", f"no live followers (leader {leader})", data)
@@ -557,6 +564,15 @@ async def check_followers() -> Check:
             "warn",
             f"{stale} of {live} live follower(s) behind leader {leader} ({spread}) — "
             "each client must reconnect; a daemon restart cannot update them",
+            data,
+        )
+    if mismatched:
+        fields = ", ".join(sorted(mismatch_fields))
+        return Check(
+            "followers",
+            "warn",
+            f"{mismatched} of {live} live follower(s) hold a client handshake that differs from "
+            f"leader {leader} ({fields}) — each client must reconnect to pick up the leader's",
             data,
         )
     return Check("followers", "ok", f"all {live} live follower(s) on leader version {leader}", data)
