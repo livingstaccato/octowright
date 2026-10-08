@@ -199,6 +199,24 @@ class BridgeSupervisor:
         # Zero once the election is over: a reconnect waits as it always has.
         self.pre_leader_budget = 0.0
         self._awaiting_leader = False
+        # The request whose forward is waiting for a writer, and that wait.
+        self._waiting_for_writer: tuple[str | int | None, anyio.CancelScope] | None = None
+
+    def withdraw_waiting(self, request_id: str | int) -> bool:
+        """Abandon the forward of ``request_id`` if it is waiting for a writer."""
+        waiting = self._waiting_for_writer
+        if waiting is None or waiting[0] != request_id:
+            return False
+        waiting[1].cancel()
+        return True
+
+    def forget_in_flight(self, request_id: str | int) -> None:
+        """Stop tracking a call its client cancelled: no resume, no timeout error,
+        and a late answer from the leader is dropped (``_settle_in_flight``)."""
+        item = self._in_flight.pop(request_id, None)
+        if item is not None and not item.responded:
+            item.responded = True
+            self._discard_progress_token(item)
 
     def begin_pre_leader(self, budget: float) -> None:
         """Mark the follower as still electing its leader.
@@ -276,8 +294,14 @@ class BridgeSupervisor:
             return remote_write_slot.write
         if self._awaiting_leader and await self._answer_before_leader(message):
             return None
-        remote_write = await self._await_remote_writer(remote_write_slot)
         request_id = message_request_id(message)
+        with anyio.CancelScope() as wait:
+            # A request's wait can be abandoned by its cancellation (withdraw_waiting).
+            self._waiting_for_writer = (request_id, wait) if is_request(message) else None
+            remote_write = await self._await_remote_writer(remote_write_slot)
+        self._waiting_for_writer = None
+        if wait.cancel_called:
+            return None  # cancelled before any leader saw it: no answer is owed
         if remote_write is None and is_request(message) and request_id is not None:
             await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
         return remote_write

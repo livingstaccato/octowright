@@ -38,6 +38,7 @@ from octowright.defaults import (
     env_float,
 )
 from octowright.proxy_inline import InlineLeader, serve_inline_leader
+from octowright.proxy_intake import LocalIntake
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
     BridgeSupervisor,
@@ -431,9 +432,12 @@ async def run_supervised_proxy(
             def _set_local_eof_handler(handler: Callable[[], Awaitable[None]]) -> None:
                 on_local_eof[0] = handler
 
+            # Reads stdin continuously, so a ping or a cancellation behind a call
+            # waiting for the leader is not held up by it (see proxy_intake).
+            intake = LocalIntake(supervisor_obj, remote_write_slot)
+
             async def _local_forwarder() -> None:
-                async for message in local_read:
-                    await supervisor_obj.forward_one_local_message(message, remote_write_slot)
+                await intake.run(local_read)
                 if (handler := on_local_eof[0]) is not None:
                     await handler()
                     return
