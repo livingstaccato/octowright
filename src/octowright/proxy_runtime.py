@@ -576,6 +576,7 @@ async def run_supervised_proxy(
                                     in_flight=supervisor_obj.in_flight_count,
                                     reconnect_attempts=supervisor_obj.reconnect_attempts,
                                     request_timeouts=supervisor_obj.request_timeouts,
+                                    handshake_mismatch=supervisor_obj.handshake_mismatch,
                                 )
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
@@ -619,6 +620,7 @@ async def run_supervised_proxy(
                             in_flight=supervisor_obj.in_flight_count,
                             reconnect_attempts=attempt,
                             request_timeouts=supervisor_obj.request_timeouts,
+                            handshake_mismatch=supervisor_obj.handshake_mismatch,
                         )
                         if not await _leader_recoverable():
                             _mark_leader_health_failed()

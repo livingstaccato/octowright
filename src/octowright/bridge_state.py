@@ -379,6 +379,7 @@ def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | 
     in_flight, reconnect_attempts, request_timeouts, latest_error = _follower_totals(followers)
     versions = _follower_version_counts(followers)
     stale = stale_follower_count(versions, VERSION)
+    mismatched, mismatch_fields = _handshake_mismatches(followers)
     return {
         "follower_count": len(followers),
         # Recorded-but-exited followers, dropped from every count above. Surfaced
@@ -403,7 +404,39 @@ def summarize_state(state: dict[str, Any], *, is_alive: Callable[[int], bool] | 
         # follower survives that by design. Only its own client respawning it
         # can.
         "stale_follower_hint": _STALE_FOLLOWER_HINT if stale else None,
+        # Followers whose client holds an initialize answer (instructions,
+        # capabilities, ...) the leader would not give, and which fields. Not
+        # implied by the version count: a current follower whose client kept
+        # an older leader's handshake across a restart is counted here only.
+        # A snapshot that predates the field is not counted -- it says nothing.
+        "handshake_mismatch_count": mismatched,
+        "handshake_mismatch_fields": mismatch_fields,
+        "handshake_mismatch_hint": _HANDSHAKE_MISMATCH_HINT if mismatched else None,
     }
+
+
+_HANDSHAKE_MISMATCH_HINT = (
+    "These followers' clients were given MCP server instructions or capabilities that differ from the "
+    "running leader's (an older follower answered the handshake, or the client kept an older leader's "
+    "across a restart). MCP cannot re-send a handshake within a session, so only reconnecting the "
+    "client to octowright (Claude Code: /mcp -> octowright -> Reconnect) gives it the leader's."
+)
+
+
+def _handshake_mismatches(followers: dict[str, Any]) -> tuple[int, dict[str, int]]:
+    """Followers reporting a non-empty ``handshake_mismatch``, and how many
+    report each field, sorted for stability."""
+    count = 0
+    fields: dict[str, int] = {}
+    for item in followers.values():
+        mismatch = item.get("handshake_mismatch") if isinstance(item, dict) else None
+        if not isinstance(mismatch, list) or not mismatch:
+            continue
+        count += 1
+        for name in mismatch:
+            if isinstance(name, str):
+                fields[name] = fields.get(name, 0) + 1
+    return count, dict(sorted(fields.items()))
 
 
 _STALE_FOLLOWER_HINT = (
@@ -480,6 +513,7 @@ def record_snapshot(
     request_timeouts: int,
     max_events: int = 50,
     follower_version: str = VERSION,
+    handshake_mismatch: list[str] | None = None,
     still_current: Callable[[], bool] | None = None,
 ) -> bool:
     """Record one follower's bridge snapshot; return whether it is settled.
@@ -499,6 +533,11 @@ def record_snapshot(
     self-identifying header carries a pid and nothing else. Diagnosing a
     version skew meant reading process start times against commit timestamps
     by hand.
+
+    ``handshake_mismatch`` names the ``initialize`` result fields where what
+    this follower's client was told differs from what the leader it last
+    connected to answers (``mcp_identity.handshake_differences``); empty when
+    they agree, None when it could not compare.
     """
     snapshot = {
         "ts": time.time(),
@@ -511,6 +550,7 @@ def record_snapshot(
         "in_flight": in_flight,
         "reconnect_attempts": reconnect_attempts,
         "request_timeouts": request_timeouts,
+        "handshake_mismatch": handshake_mismatch,
     }
     with _state_lock(path) as locked:
         if not locked:
