@@ -20,7 +20,8 @@ a section that is already tagged and on PyPI.
   leader would say. `octowright_status()["bridge"]["summary"]` now carries
   `handshake_mismatch_count`, `handshake_mismatch_fields` and
   `handshake_mismatch_hint`, and each follower snapshot records
-  `handshake_mismatch`.
+  `handshake_mismatch`. `octowright doctor`'s `followers` check warns on it
+  and names the fields.
 - **Headed Chromium on Linux runs as a native Wayland client when it can.**
   On a Wayland desktop it opens with `--ozone-platform=wayland` instead of
   running through XWayland. It turns on automatically
@@ -75,7 +76,9 @@ a section that is already tagged and on PyPI.
   the leader.** A `ping` behind a waiting call is answered at once, and a
   `notifications/cancelled` for a call no leader has seen withdraws it
   without a response. A cancelled call the leader already has is no longer
-  resumed after a reconnect or answered with a timeout error.
+  resumed after a reconnect or answered with a timeout error. What waits is
+  capped at 1024 messages: past it a request is answered with a bridge
+  error at once instead of being held.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of
