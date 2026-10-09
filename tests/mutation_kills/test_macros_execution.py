@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import time
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -124,7 +125,12 @@ async def test_elapsed_seconds_are_rounded_to_milliseconds(tmp_path: Any, monkey
     _install(monkeypatch, {"m": {"actions": [{"action": "fill", "selector": "#q", "value": "x"}]}})
 
     async def _slow_fill(**kwargs: Any) -> None:
-        await asyncio.sleep(0.0123)
+        # Wait on the clock run_macro reads, not on a sleep: Windows' monotonic
+        # clock ticks every ~15.6ms, so a 12.3ms sleep can start and end inside
+        # one tick and the run would measure 0.0.
+        started = time.monotonic()
+        while time.monotonic() - started < 0.0123:
+            await asyncio.sleep(0.005)
 
     session.fill = AsyncMock(side_effect=_slow_fill)  # type: ignore[method-assign]
 
