@@ -152,3 +152,22 @@ def local_initialize_result(params: Mapping[str, Any] | None) -> dict[str, Any] 
     )
     dumped = result.model_dump(by_alias=True, mode="json", exclude_none=True)
     return methods.serialize_server_result("initialize", LATEST_HANDSHAKE_VERSION, dumped)
+
+
+# The ``initialize`` result fields a client acts on for the whole session.
+HANDSHAKE_FIELDS = ("capabilities", "instructions", "protocolVersion", "serverInfo")
+
+
+def handshake_differences(told: Mapping[str, Any], leader: Mapping[str, Any]) -> list[str]:
+    """The ``initialize`` result fields where what a client was told differs
+    from what the leader answers, sorted; empty when they agree.
+
+    A follower answers ``initialize`` from its own copy of this module while
+    it elects a leader, so a follower older than the leader tells its client
+    its own instructions and capabilities, and a client that kept one
+    handshake across a leader restart holds the previous leader's. Neither can
+    be corrected inside the session -- MCP has no way to re-send a handshake --
+    so the difference is reported instead (the bridge snapshot's
+    ``handshake_mismatch``).
+    """
+    return sorted(name for name in HANDSHAKE_FIELDS if told.get(name) != leader.get(name))

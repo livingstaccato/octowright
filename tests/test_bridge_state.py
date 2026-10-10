@@ -257,6 +257,9 @@ def test_summarize_state_totals_followers_and_latest_error() -> None:
         "follower_versions": {bridge_state.UNKNOWN_FOLLOWER_VERSION: 2},
         "stale_follower_count": 2,
         "stale_follower_hint": bridge_state._STALE_FOLLOWER_HINT,
+        "handshake_mismatch_count": 0,
+        "handshake_mismatch_fields": {},
+        "handshake_mismatch_hint": None,
     }
 
 
@@ -287,6 +290,9 @@ def test_summarize_state_ignores_bad_shapes() -> None:
         "follower_versions": {bridge_state.UNKNOWN_FOLLOWER_VERSION: 2},
         "stale_follower_count": 2,
         "stale_follower_hint": bridge_state._STALE_FOLLOWER_HINT,
+        "handshake_mismatch_count": 0,
+        "handshake_mismatch_fields": {},
+        "handshake_mismatch_hint": None,
     }
 
 
@@ -303,6 +309,9 @@ def test_summarize_state_handles_non_dict_followers() -> None:
         "follower_versions": {},
         "stale_follower_count": 0,
         "stale_follower_hint": None,
+        "handshake_mismatch_count": 0,
+        "handshake_mismatch_fields": {},
+        "handshake_mismatch_hint": None,
     }
 
 

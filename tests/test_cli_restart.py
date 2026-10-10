@@ -45,6 +45,11 @@ def _no_real_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     # this daemon's browsers, plus the orphan scan); neither should shell out here.
     monkeypatch.setattr(_restart_mod, "browser_pids_owned_by", lambda _pids: [])
     monkeypatch.setattr("octowright.process_reaper.find_browser_pids", lambda _scope, **_kw: [])
+    # The pre-spawn split-brain re-probe reads the lockfile and dials the
+    # requested port's /api/health -- the developer's real daemon, at the
+    # default port. tests/cli_restart/test_existing_leader_before_spawn.py
+    # covers it; here nothing else is running.
+    monkeypatch.setattr(_restart_mod, "_live_leader_before_spawn", lambda *_a: None)
 
 
 @pytest.fixture

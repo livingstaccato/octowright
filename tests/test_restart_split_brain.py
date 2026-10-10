@@ -117,6 +117,7 @@ class TestSplitBrainPrevention:
         monkeypatch.setattr(restart_mod, "_stop_leader", _stop)
         monkeypatch.setattr(restart_mod, "_reap_browsers", lambda *_a: events.append("reap"))
         monkeypatch.setattr(restart_mod, "_wait_for_port_free", lambda *_a: (events.append("port_free"), True)[1])
+        monkeypatch.setattr(restart_mod, "_live_leader_before_spawn", lambda *_a: None)
         monkeypatch.setattr(restart_mod, "_spawn_daemon", lambda *_a: (events.append("spawn"), 4242)[1])
         monkeypatch.setattr(
             restart_mod,

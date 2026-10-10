@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import anyio
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest, JSONRPCResponse
+from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest
 from provide.telemetry import get_logger
 
 from octowright import defaults
@@ -31,6 +31,7 @@ from octowright._bridge_message_helpers import (
 from octowright._trace_propagation import build_tracing_http_client
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import BRIDGE_TOOL_TIMEOUTS, env_float
+from octowright.proxy_handshake import answer_before_leader, compare_handshake
 
 _BRIDGE_RECONNECT = counter(
     "octowright_bridge_reconnect_total",
@@ -199,6 +200,29 @@ class BridgeSupervisor:
         # Zero once the election is over: a reconnect waits as it always has.
         self.pre_leader_budget = 0.0
         self._awaiting_leader = False
+        # The request whose forward is waiting for a writer, and that wait.
+        self._waiting_for_writer: tuple[str | int | None, anyio.CancelScope] | None = None
+        # The initialize result the client holds (ours, or a leader's it was
+        # forwarded), and the fields the latest connect's leader answers
+        # otherwise (None: not compared). See mcp_identity.handshake_differences.
+        self._client_handshake: dict[str, Any] | None = None
+        self.handshake_mismatch: list[str] | None = None
+
+    def withdraw_waiting(self, request_id: str | int) -> bool:
+        """Abandon the forward of ``request_id`` if it is waiting for a writer."""
+        waiting = self._waiting_for_writer
+        if waiting is None or waiting[0] != request_id:
+            return False
+        waiting[1].cancel()
+        return True
+
+    def forget_in_flight(self, request_id: str | int) -> None:
+        """Stop tracking a call its client cancelled: no resume, no timeout error,
+        and a late answer from the leader is dropped (``_settle_in_flight``)."""
+        item = self._in_flight.pop(request_id, None)
+        if item is not None and not item.responded:
+            item.responded = True
+            self._discard_progress_token(item)
 
     def begin_pre_leader(self, budget: float) -> None:
         """Mark the follower as still electing its leader.
@@ -214,37 +238,6 @@ class BridgeSupervisor:
     def end_pre_leader(self) -> None:
         self.pre_leader_budget = 0.0
         self._awaiting_leader = False
-
-    async def _answer_before_leader(self, message: SessionMessage) -> bool:
-        """Answer what needs no leader; True when ``message`` was handled.
-
-        ``initialize`` is answered from ``mcp_identity`` (the leader's own
-        values, parity-tested) and kept, so the first connect replays it and
-        swallows the leader's answer. ``notifications/initialized`` is kept for
-        that replay too. ``ping`` is answered. Params that do not validate are
-        left for the leader to answer.
-        """
-        root = message_root(message)
-        method = message_method(message)
-        if isinstance(root, JSONRPCNotification) and method == "notifications/initialized":
-            self._initialized_message = message
-            return True
-        if not isinstance(root, JSONRPCRequest):
-            return False
-        if method == "ping":
-            result: dict[str, Any] | None = {}
-        elif method == "initialize":
-            from octowright.mcp_identity import local_initialize_result
-
-            result = local_initialize_result(root.params)
-            if result is not None:
-                self._initialize_message = message
-        else:
-            return False
-        if result is None:
-            return False
-        await self.local_write.send(SessionMessage(JSONRPCResponse(jsonrpc="2.0", id=root.id, result=result)))
-        return True
 
     @property
     def in_flight_count(self) -> int:
@@ -274,10 +267,16 @@ class BridgeSupervisor:
         for one ran out."""
         if remote_write_slot.write is not None:
             return remote_write_slot.write
-        if self._awaiting_leader and await self._answer_before_leader(message):
+        if self._awaiting_leader and await answer_before_leader(self, message):
             return None
-        remote_write = await self._await_remote_writer(remote_write_slot)
         request_id = message_request_id(message)
+        with anyio.CancelScope() as wait:
+            # A request's wait can be abandoned by its cancellation (withdraw_waiting).
+            self._waiting_for_writer = (request_id, wait) if is_request(message) else None
+            remote_write = await self._await_remote_writer(remote_write_slot)
+        self._waiting_for_writer = None
+        if wait.cancel_called:
+            return None  # cancelled before any leader saw it: no answer is owed
         if remote_write is None and is_request(message) and request_id is not None:
             await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
         return remote_write
@@ -509,6 +508,8 @@ class BridgeSupervisor:
         answer = self._replay_answers.pop(replay_id, None)
         if isinstance(answer, JSONRPCError):
             raise ReplayHandshakeError(f"the leader refused the replayed initialize: {answer.error.message}")
+        if (mismatch := compare_handshake(self._client_handshake, answer)) is not None:
+            self.handshake_mismatch = mismatch
         # Complete the handshake on the fresh session: replay the cached
         # notifications/initialized too, or the leader leaves the session
         # half-initialized and 400s the next tool call.
@@ -593,6 +594,8 @@ class BridgeSupervisor:
             return
         if request_id is not None and not self._settle_in_flight(request_id, message):
             return
+        if self._initialize_message is not None and request_id == message_request_id(self._initialize_message):
+            self._client_handshake = getattr(message_root(message), "result", None)
         await self.local_write.send(message)
 
     def _handle_suspension(self, gap: float) -> None:

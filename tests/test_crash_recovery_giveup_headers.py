@@ -16,6 +16,10 @@ warned that headers "set on a page other than the active one" were not carried
 and the crash incident says so. A crashed page that is still the active one
 keeps its record: a later replacement reopens the active page, so carrying
 its headers is still right.
+
+The page's mocks get the same give-up, except that they are marked
+``page_crashed`` rather than dropped, so ``unmock_route`` still answers for
+them (see ``tests/test_interception.py``).
 """
 
 from __future__ import annotations
@@ -29,7 +33,7 @@ import pytest
 
 from octowright.browser_pool import crash_recovery, incidents
 from octowright.session.page_headers import page_headers_on, set_page_headers
-from octowright.session.route_carry import RouteCarry
+from octowright.session.route_carry import MockSpec, RouteCarry
 from tests._operation_gate_fakes import OperationAwareFake
 
 HEADERS = {"X-Fixture": "Fixture-Not-A-Real-Secret-g11"}
@@ -155,3 +159,85 @@ async def test_the_active_crashed_page_keeps_its_headers_for_a_later_replacement
     assert page_headers_on(s, crashed) == HEADERS
     assert RouteCarry.of(s).page_headers == HEADERS
     assert "route_warnings" not in _incident()
+
+
+# ---------------------------------------------------------------------------
+# Mocks: the same give-up, for mock_route's page routes
+# ---------------------------------------------------------------------------
+
+MOCK = "**/api/g12"
+
+
+def _with_mock_on(s: _Session, page: MagicMock) -> None:
+    s._active_routes = {MOCK: AsyncMock()}
+    s._mock_specs = {MOCK: MockSpec(status=200, body="{}", content_type="application/json", headers={}, page=page)}
+
+
+def _mock_warning(s: _Session) -> list[str]:
+    return [w for w in RouteCarry.of(s).not_carried if MOCK in w]
+
+
+async def test_exhausted_abandons_a_background_pages_mock_without_a_later_warning() -> None:
+    s, crashed = _session(crashed_is_active=False, recoveries=2)
+    _with_mock_on(s, crashed)
+    assert _mock_warning(s)  # before: named as on "a page other than the active one"
+
+    assert crash_recovery.schedule_recovery(s, crashed) is None
+
+    assert _mock_warning(s) == []
+    assert RouteCarry.of(s).mocks == ()
+    assert s._mock_specs[MOCK].page_crashed is True
+    assert MOCK in s._active_routes  # still known, so unmock_route can report it
+    assert any(MOCK in w and "crashed page" in w for w in _incident()["route_warnings"])
+
+
+async def test_exhausted_after_failing_replacements_abandons_a_background_pages_mock() -> None:
+    s, crashed = _session(crashed_is_active=False)
+    _with_mock_on(s, crashed)
+
+    async def crashing_goto(*_a: Any, **_k: Any) -> None:
+        assert crash_recovery.claim_replacement_crash(fresh) is True
+        raise RuntimeError("Page.goto: Page crashed")
+
+    fresh = _page("fresh")
+    fresh.url = "about:blank"
+    fresh.goto = crashing_goto
+    fresh.route = AsyncMock()
+    fresh.set_extra_http_headers = AsyncMock()
+    s.context.new_page = AsyncMock(return_value=fresh)
+
+    assert await crash_recovery._recover(s, crashed, reload_timeout_ms=1000.0, url="https://example.com") is False
+
+    assert _mock_warning(s) == []
+    assert s._mock_specs[MOCK].page_crashed is True
+    assert any(MOCK in w for w in _incident()["route_warnings"])
+
+
+async def test_failed_recovery_abandons_a_background_pages_mock() -> None:
+    s, crashed = _session(crashed_is_active=False)
+    _with_mock_on(s, crashed)
+    s.context.new_page = AsyncMock(side_effect=RuntimeError("context gone"))
+
+    assert await crash_recovery._recover(s, crashed, reload_timeout_ms=1000.0, url="https://example.com") is False
+
+    assert _mock_warning(s) == []
+    assert any(MOCK in w for w in _incident()["route_warnings"])
+
+
+async def test_the_active_crashed_page_keeps_its_mock_for_a_later_replacement() -> None:
+    s, crashed = _session(crashed_is_active=True, recoveries=2)
+    _with_mock_on(s, crashed)
+
+    assert crash_recovery.schedule_recovery(s, crashed) is None
+
+    assert s._mock_specs[MOCK].page_crashed is False
+    assert [pattern for pattern, _ in RouteCarry.of(s).mocks] == [MOCK]
+
+
+def test_a_mock_on_a_closed_page_is_not_warned_about() -> None:
+    s, crashed = _session(crashed_is_active=False)
+    _with_mock_on(s, crashed)
+    crashed.is_closed.return_value = True
+
+    assert _mock_warning(s) == []
+    assert RouteCarry.of(s).mocks == ()

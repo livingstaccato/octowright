@@ -514,6 +514,29 @@ class TestFollowersCheck:
         assert check.status == "ok"
         assert check.data["dead_followers_ignored"] == 4
 
+    async def test_a_handshake_mismatch_warns_and_names_the_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Same version everywhere, yet a client holds an ``initialize`` answer
+        the running leader would not give (a follower answered it before the
+        election returned, or the client reconnected to a restarted leader).
+        Status already reports it; doctor is where an operator looks."""
+        summary = self._summary({"0.19.1": 2})
+        summary["handshake_mismatch_count"] = 1
+        summary["handshake_mismatch_fields"] = {"instructions": 1}
+        self._patch(monkeypatch, "0.19.1", summary)
+        check = await _doctor.check_followers()
+        assert check.status == "warn"
+        assert "instructions" in check.detail
+        assert "reconnect" in check.detail
+        assert check.data["handshake_mismatches"] == 1
+
+    async def test_no_handshake_fields_in_an_old_summary_is_not_a_warning(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 2}))
+        check = await _doctor.check_followers()
+        assert check.status == "ok"
+        assert check.data["handshake_mismatches"] == 0
+
 
 class TestCanonicalPortCheck:
     """Doctor must notice a SECOND leader alive beside the recorded one.

@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import pytest
+from playwright.async_api import Page
 
 from octowright import defaults
 from octowright.browser_pool import crash_recovery, incidents
@@ -118,6 +119,42 @@ def slow_page() -> Iterator[str]:
     srv.shutdown()
 
 
+#: The load timeouts tried, shortest first. The case needs the commit to land
+#: before the timeout fires, and that is not a property of the code under test:
+#: a slow runner (a Windows leg, firefox under block-private) has taken longer
+#: than 2s to commit, the goto timed out on ``about:blank``,
+#: and recovery correctly reported a page that was not yet at its last URL.
+_LOAD_TIMEOUTS_MS = (2_000, 10_000)
+
+
+def _note_commit_order(monkeypatch: pytest.MonkeyPatch, url: str) -> list[str]:
+    """Record, in the order Python sees them, the commit of *url* and the end of the latest goto to it.
+
+    Both reach recovery over the same driver connection, so when ``commit``
+    comes first, ``page.url`` was already *url* by the time recovery read it.
+    Only the latest goto's page counts: an earlier replacement can still
+    commit late, after the next attempt has begun.
+    """
+    order: list[str] = []
+    latest: list[Page] = []
+    original = Page.goto
+
+    async def goto(self: Page, target: str, **kwargs: Any) -> Any:
+        if target != url:
+            return await original(self, target, **kwargs)
+        latest[:] = [self]
+        order.clear()
+        main = self.main_frame
+        self.on("framenavigated", lambda frame: order.append("commit") if frame is main and latest == [self] else None)
+        try:
+            return await original(self, target, **kwargs)
+        finally:
+            order.append("goto_ended")
+
+    monkeypatch.setattr(Page, "goto", goto)
+    return order
+
+
 @pytest.mark.parametrize("policy", ["off", "block-private"])
 async def test_a_load_that_times_out_at_the_last_url_is_a_recovery_at_it(
     kind: str, policy: str, slow_page: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
@@ -126,6 +163,7 @@ async def test_a_load_that_times_out_at_the_last_url_is_a_recovery_at_it(
     monkeypatch.setenv("OCTOWRIGHT_SSRF_ALLOW", "127.0.0.1")
     events: list[Any] = []
     monkeypatch.setattr(_bus.session_event_bus, "publish_nowait", events.append)
+    order = _note_commit_order(monkeypatch, slow_page)
     pool = BrowserPool(recordings_dir=tmp_path)
     try:
         try:
@@ -133,8 +171,16 @@ async def test_a_load_that_times_out_at_the_last_url_is_a_recovery_at_it(
         except Exception as exc:  # engine not installed on this host
             pytest.skip(f"{kind} unavailable: {exc}")
         session = pool.get(inst["instance_id"])
-        incidents.reset()
-        assert await crash_recovery._recover(session, session.page, 2_000, slow_page) is True
+        for timeout_ms in _LOAD_TIMEOUTS_MS:
+            incidents.reset()
+            events.clear()
+            assert await crash_recovery._recover(session, session.page, timeout_ms, slow_page) is True
+            if order[:2] == ["commit", "goto_ended"]:
+                break
+            # Timed out before the commit: a page not yet at its last URL,
+            # which is not this case. Try again with more time.
+        else:
+            pytest.fail(f"the commit never preceded a load timeout of up to {timeout_ms}ms: {order}")
         assert session.page.url == slow_page
         (incident,) = incidents.recent(category=incidents.CATEGORY_RENDERER_CRASH)
         assert incident["outcome"] == "recovered" and "Timeout" in incident["navigation_error"]

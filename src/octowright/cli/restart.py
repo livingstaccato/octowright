@@ -21,8 +21,11 @@ motivated this command). ``octowright restart`` does the full dance:
 5. Reap Playwright browsers -- the ones the dead daemon owned (snapshotted
    before step 2) plus anything an earlier generation orphaned, protected or
    not (skip with ``--keep-browsers``). Never every browser on the box.
-6. Spawn a fresh detached daemon (skip with ``--no-start``).
-7. Probe ``/api/health`` until 200 OK, up to ``--timeout`` seconds.
+6. Wait for the port, then look for a live leader once more (a client that
+   gave up on the election lock may be serving inline); report it instead of
+   spawning a second one.
+7. Spawn a fresh detached daemon (skip with ``--no-start``).
+8. Probe ``/api/health`` until 200 OK, up to ``--timeout`` seconds.
 
 Note for AI agents: this restarts the *Octowright daemon*. It intentionally
 does not kill bare ``octowright serve`` follower processes owned by MCP
@@ -397,8 +400,8 @@ def _spawn_election_lock() -> Iterator[bool]:
     because a peer is mid-election is useless precisely when it is needed.
     The degraded path is no worse than the old unconditional behaviour, and
     ``_stop_leader(spawn_port=...)`` still reclaims a squatted port afterwards
-    -- the split-brain RECOVERY that has always existed here. Windows takes the
-    no-op branch inside ``election_lock`` and reports False.
+    -- the split-brain RECOVERY that has always existed here. Windows locks
+    too (``msvcrt.locking``), so the same holds there.
     """
     from octowright.cli import _leader_election
 
@@ -413,6 +416,61 @@ def _spawn_election_lock() -> Iterator[bool]:
             err=True,
         )
         yield False
+
+
+def _live_leader_before_spawn(http_host: str, http_port: int) -> tuple[str, int | None] | None:
+    """A live leader restart must not spawn beside: ``(base_url, pid)``, else None.
+
+    Restart holds the election lock from before the kill until its daemon is
+    healthy, so a client starting meanwhile waits on it -- and one whose wait
+    runs out (lock budget plus a readiness wait) falls back to an INLINE
+    leader, which binds a port and writes the lockfile without the lock. If
+    restart then spawned regardless, two leaders ran, and ``_health_candidates``
+    could report the inline one as restart's own daemon.
+
+    The same guard the follower respawn applies (``serve._respawn_if_leader_gone``):
+    the lockfile leader, verified live over HTTP, else an Octowright already
+    answering on the port restart is about to spawn on (a leader that has not
+    published a readable lockfile). ``pid`` is None for the latter.
+    """
+    import asyncio
+
+    from octowright.cli import _leader_election as election
+
+    async def _probe() -> tuple[str, int | None] | None:
+        info = await election._probe_alive_leader(singleton)
+        if info is not None:
+            return f"http://{info.http_host}:{info.http_port}/", info.pid
+        if await election._canonical_port_serves_octowright(http_host, http_port):
+            return f"http://{http_host}:{http_port}/", None
+        return None
+
+    return asyncio.run(_probe())
+
+
+def _report_existing_leader(ctx: click.Context, found: tuple[str, int | None], http_host: str, http_port: int) -> None:
+    """Say what restart found instead of spawning, and exit.
+
+    Success only when that leader holds the endpoint restart was asked for:
+    elsewhere, the operator asked for a daemon on ``http_port`` and did not get
+    one -- but a second leader there would be worse. It may be an inline leader
+    another client fell back to (``octowright_status()["daemon"]["mode"]``), so
+    restart names it rather than stopping it: an inline leader lives inside that
+    client's own process.
+    """
+    url, pid = found
+    who = f"pid {pid}" if pid is not None else "no readable lockfile"
+    click.echo(f"a live leader already serves at {url} ({who}); not spawning a second one (split-brain guard)")
+    if url == f"http://{http_host}:{http_port}/":
+        click.echo(f"daemon healthy at {url}")
+        return
+    click.echo(
+        f"WARNING: that leader is not on the requested {http_host}:{http_port}; it may be an inline "
+        "leader another client started while restart held the election lock "
+        '(octowright_status()["daemon"]["mode"] says which)',
+        err=True,
+    )
+    ctx.exit(1)
 
 
 def _spawn_daemon(http_host: str, http_port: int) -> int:
@@ -561,7 +619,15 @@ def restart(
             click.echo(f"done (stopped={stopped} sigkilled={killed}; not starting a new daemon)")
             return
 
-        if not _wait_for_port_free(http_host, http_port, timeout):
+        port_free = _wait_for_port_free(http_host, http_port, timeout)
+        # Re-probe after that wait, still under the lock: a client that gave up
+        # on the lock meanwhile may now be serving inline. See
+        # _live_leader_before_spawn.
+        found = _live_leader_before_spawn(http_host, http_port)
+        if found is not None:
+            _report_existing_leader(ctx, found, http_host, http_port)
+            return
+        if not port_free:
             click.echo(
                 f"WARNING: requested port {http_host}:{http_port} is still busy after {timeout:.1f}s; "
                 "not starting a daemon on a fallback port",

@@ -300,3 +300,39 @@ async def test_unmocking_a_mock_whose_page_closed_just_forgets_it(tmp_path: Path
     assert result["ok"] is True
     assert first.unrouted == [] and second.unrouted == []
     assert "**/api/data" not in s._active_routes
+
+
+@pytest.mark.anyio
+async def test_unmocking_a_mock_on_a_crashed_page_recovery_gave_up_on_reports_it(tmp_path: Path) -> None:
+    from octowright.session.route_carry import abandon_crashed_page_mocks
+
+    s = _make_session(tmp_path)
+    crashed, active = _ClosablePage(), _ClosablePage()
+    s.page = crashed  # type: ignore[assignment]
+    await s.mock_route("**/api/data", status=200)
+    s.page = active  # type: ignore[assignment]
+    abandon_crashed_page_mocks(s, crashed)
+
+    result = await s.unmock_route("**/api/data")
+
+    assert result == {"ok": True, "pattern": "**/api/data", "page_crashed": True}
+    assert crashed.unrouted == [] and active.unrouted == []  # nothing to unroute on a dead renderer
+    assert "**/api/data" not in s._active_routes and "**/api/data" not in s._mock_specs
+
+
+@pytest.mark.anyio
+async def test_re_mocking_a_pattern_whose_page_crashed_leaves_the_dead_page_alone(tmp_path: Path) -> None:
+    from octowright.session.route_carry import abandon_crashed_page_mocks
+
+    s = _make_session(tmp_path)
+    crashed, active = _ClosablePage(), _ClosablePage()
+    s.page = crashed  # type: ignore[assignment]
+    await s.mock_route("**/api/data", status=200)
+    s.page = active  # type: ignore[assignment]
+    abandon_crashed_page_mocks(s, crashed)
+
+    await s.mock_route("**/api/data", status=404)
+
+    assert crashed.unrouted == []
+    assert s._mock_specs["**/api/data"].page is active
+    assert s._mock_specs["**/api/data"].page_crashed is False

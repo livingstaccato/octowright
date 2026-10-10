@@ -249,16 +249,12 @@ class SessionInteractionMixin(SessionLike):
                 pattern=url_pattern,
                 hint="a page-level mock fulfills ahead of the context-level injector, so its headers will not be applied",
             )
-        if url_pattern in self._active_routes:
+        if url_pattern in self._active_routes and (old_page := self._mock_unroute_target(url_pattern)) is not None:
             # Off the page it was SET on, which page_switch may have left behind.
-            spec = self._mock_specs.get(url_pattern)
-            old_page = spec.page if spec is not None and spec.page is not None else self.page
-            closed = getattr(old_page, "is_closed", None)  # a closed page took its routes with it
-            if not (callable(closed) and closed()):
-                await bounded(
-                    old_page.unroute(url_pattern, self._active_routes[url_pattern]),
-                    operation="browser_mock_route",
-                )
+            await bounded(
+                old_page.unroute(url_pattern, self._active_routes[url_pattern]),
+                operation="browser_mock_route",
+            )
         await bounded(self.page.route(url_pattern, _handler), operation="browser_mock_route")
         # Popped first so each registry's order stays Playwright's registration
         # order, which a replacement replays (route_carry).
@@ -445,23 +441,41 @@ class SessionInteractionMixin(SessionLike):
             }
         return state
 
+    def _mock_unroute_target(self, url_pattern: str) -> Any | None:
+        """The page *url_pattern*'s mock must be unrouted from, or ``None`` if none can be.
+
+        A mock is a page route: the page it was SET on, which a page_switch may
+        have left behind (unrouting the active page instead left it fulfilling
+        there). ``None`` for a closed page, which took its routes with it, and
+        for a crashed page recovery gave up on, which is not closed but has no
+        renderer left to unroute.
+        """
+        spec = self._mock_specs.get(url_pattern)
+        if spec is not None and spec.page_crashed:
+            return None
+        page = spec.page if spec is not None and spec.page is not None else self.page
+        closed = getattr(page, "is_closed", None)
+        return None if callable(closed) and closed() else page
+
     @gated_operation("browser_unmock_route")
     async def unmock_route(self, url_pattern: str) -> dict[str, Any]:
         """Remove a previously-installed mock for url_pattern."""
         handler = self._active_routes.get(url_pattern)
         if handler is None:
             raise KeyError(f"no active mock for pattern {url_pattern!r}")
-        # A mock is a page route: unrouting the active page instead left it
-        # fulfilling on the page it was set on, after a page_switch.
+        # Set on a crashed page that recovery gave up on: still reported, so the
+        # caller learns it had stopped fulfilling, but that page is not unrouted.
         spec = self._mock_specs.get(url_pattern)
-        page = spec.page if spec is not None and spec.page is not None else self.page
-        closed = getattr(page, "is_closed", None)  # a closed page took its routes with it
-        if not (callable(closed) and closed()):
+        page_crashed = spec is not None and spec.page_crashed
+        if (page := self._mock_unroute_target(url_pattern)) is not None:
             await bounded(page.unroute(url_pattern, handler), operation="browser_unmock_route")
         self._active_routes.pop(url_pattern, None)
         self._mock_specs.pop(url_pattern, None)
         self.recorder.record("unmock_route", pattern=url_pattern)
-        return {"ok": True, "pattern": url_pattern}
+        result: dict[str, Any] = {"ok": True, "pattern": url_pattern}
+        if page_crashed:
+            result["page_crashed"] = True
+        return result
 
     # ------------------------------------------------------------------
     # File-input upload

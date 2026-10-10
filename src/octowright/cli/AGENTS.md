@@ -79,7 +79,10 @@ comparing against it would report skew against a version nobody is running --
 and call a follower that matches the live daemon stale. It warns rather than
 fails (a deployment state, not a broken machine) and `--fix` deliberately does
 not touch it: killing a follower just breaks that client's session, since a
-client does not respawn a dead stdio server.
+client does not respawn a dead stdio server. It warns too when a live follower's client holds
+an `initialize` answer that differs from the running leader's
+(`handshake_mismatch_count` in the bridge summary), naming the fields: same
+version, different instructions or capabilities, and the same remedy.
 
 **Dead followers are not counted.** `bridge_state._prune_dead_followers` drops
 exited followers, but only when a follower WRITES a snapshot -- and a follower
