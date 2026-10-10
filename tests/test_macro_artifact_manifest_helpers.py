@@ -26,13 +26,13 @@ from typing import Any
 import pytest
 
 from octowright.artifacts.paths import ArtifactStore
-from octowright.macros.artifacts import (
-    _cap_macro,
+from octowright.macros.artifact_manifests import (
     _compact_manifest,
     _manifest_for_plan,
     _merge_existing_manifest,
     _missing_args,
 )
+from octowright.macros.artifacts import _cap_macro
 
 # ---------------------------------------------------------------------------
 # _cap_macro -- bounds the `macro` metrics label
