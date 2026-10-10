@@ -14,8 +14,11 @@ the election took.
 
 ``LocalIntake`` therefore splits reading from sending. The reader takes every
 frame as it arrives; the sender forwards them one at a time in arrival order,
-exactly as before. Two kinds are handled by the reader itself:
+exactly as before. Three kinds are handled by the reader itself:
 
+- a 2026-07-28 request (its protocol version in ``_meta``) is refused here at
+  once, leader or not, since the bridge cannot carry that era
+  (``proxy_handshake.refuse_modern_request``).
 - ``ping``, when it would otherwise wait behind something (or for a leader),
   is answered here at once. With nothing in the way it still goes to the
   leader, as it always has.
@@ -51,6 +54,7 @@ from octowright._bridge_message_helpers import (
     message_request_id,
     message_root,
 )
+from octowright.proxy_handshake import refuse_modern_request
 
 log = get_logger(__name__)
 
@@ -95,6 +99,9 @@ class LocalIntake:
                     await self.accept(message)
 
     async def accept(self, message: SessionMessage) -> None:
+        if (refusal := refuse_modern_request(message)) is not None:
+            await self._supervisor.local_write.send(refusal)
+            return
         if await self._answer_ping_now(message):
             return
         cancelled = cancelled_request_id(message)

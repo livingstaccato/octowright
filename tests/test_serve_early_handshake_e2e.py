@@ -70,6 +70,18 @@ def test_initialize_is_answered_while_the_election_stalls(tmp_path: Path) -> Non
         # The election runs only once stdio is open, so seeing it start means
         # the client could already be talking to the follower.
         serve.wait_for_stderr("ELECTION-STARTED", timeout=STARTUP_TIMEOUT_SECONDS)
+        # A 2026-07-28 client probes first; it is refused at once, so it falls
+        # back to initialize instead of waiting out the election.
+        serve.send(
+            {
+                "jsonrpc": "2.0",
+                "id": "discover-1",
+                "method": "server/discover",
+                "params": {"_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}},
+            }
+        )
+        refused = serve.answer("discover-1", timeout=HANDSHAKE_BOUND_SECONDS)
+        assert refused["error"]["code"] == -32022, refused
         sent_at = time.monotonic()
         serve.send(
             {
