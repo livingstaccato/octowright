@@ -47,6 +47,7 @@ than Chromium have no rendered-surface snapshot, so the screenshot is refused th
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import os
@@ -81,6 +82,14 @@ ClassifiedScreenshotPolicy = Literal["refuse", "redact"]
 ScreenshotHandler = Callable[..., Awaitable[tuple[int, int] | None]]
 
 _OPERATION = "macro_redacted_screenshot"
+
+# Chrome answers Page.captureScreenshot this way when it has no frame to copy
+# yet (seen on a loaded Linux CI runner, between two proofs that passed).
+# Nothing on the page changed, so the capture is asked again: the proof after it
+# still covers every change since counting began.
+_NO_FRAME = "Unable to capture screenshot"
+_CAPTURE_ATTEMPTS = 3
+_CAPTURE_RETRY_SECONDS = 0.1
 
 
 def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
@@ -192,7 +201,15 @@ async def _require_unrendered(
 async def _capture(cdp: Any, target: Path) -> None:
     """Write the screenshot from ``Page.captureScreenshot``, atomically."""
     image = "jpeg" if target.suffix.lower() in {".jpg", ".jpeg"} else "png"
-    shot = await bounded(cdp.send("Page.captureScreenshot", {"format": image}), operation=_OPERATION)
+    for attempt in range(1, _CAPTURE_ATTEMPTS + 1):
+        try:
+            shot = await bounded(cdp.send("Page.captureScreenshot", {"format": image}), operation=_OPERATION)
+            break
+        except Exception as exc:
+            if _NO_FRAME not in str(exc) or attempt == _CAPTURE_ATTEMPTS:
+                raise
+            log.debug("octowright.macro.redacted_screenshot.no_frame", attempt=attempt)
+            await asyncio.sleep(_CAPTURE_RETRY_SECONDS)
     data = base64.b64decode(shot["data"])
     target.parent.mkdir(parents=True, exist_ok=True)
 
