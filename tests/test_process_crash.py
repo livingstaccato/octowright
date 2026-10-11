@@ -38,12 +38,16 @@ from octowright.browser_pool.process_crash import BrowserProcess
 # ─── a fake /proc ────────────────────────────────────────────────────────────
 
 
-def _proc(root: Path, pid: int, ppid: int, argv: list[str], state: str = "S", flags: int = 4194560) -> None:
+def _proc(
+    root: Path, pid: int, ppid: int, argv: list[str], state: str = "S", flags: int = 4194560, exit_code: int = 0
+) -> None:
     d = root / str(pid)
     d.mkdir(parents=True)
     (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
     # comm may contain spaces and parens; the parser must split on the LAST ')'.
-    (d / "stat").write_text(f"{pid} (chrome (x) y) {state} {ppid} 1 1 0 -1 {flags}\n")
+    # Fields 10-51 are zeros; exit_code is field 52, the last one.
+    middle = " ".join(["0"] * 42)
+    (d / "stat").write_text(f"{pid} (chrome (x) y) {state} {ppid} 1 1 0 -1 {flags} {middle} {exit_code}\n")
 
 
 def test_chromium_browser_is_the_root_most_process_naming_the_profile(tmp_path: Path) -> None:
@@ -203,16 +207,34 @@ def test_process_state_reads_the_stat_state(tmp_path: Path, state: str, expected
 
 # PF_EXITING (0x4): set when the process starts exiting, before it closes its
 # descriptors. A signalled browser drops its pipe while still R or D.
+_SIGTRAP, _SIGKILL, _SIGSEGV_CORE = 5, 9, 11 | 0x80
+
+
 @pytest.mark.parametrize("state", ["R", "D", "S"])
-def test_a_process_already_exiting_is_dead(tmp_path: Path, state: str) -> None:
-    _proc(tmp_path, 900, 1, ["chrome"], state=state, flags=4194560 | 0x4)
+@pytest.mark.parametrize("exit_code", [_SIGTRAP, _SIGKILL, _SIGSEGV_CORE])
+def test_a_process_already_exiting_on_a_signal_is_dead(tmp_path: Path, state: str, exit_code: int) -> None:
+    _proc(tmp_path, 900, 1, ["chrome"], state=state, flags=4194560 | 0x4, exit_code=exit_code)
     assert process_crash.process_state(900, proc_root=tmp_path) == "dead"
 
 
-def test_a_stat_without_flags_is_judged_by_its_state(tmp_path: Path) -> None:
+# exit(n) stores n << 8: no signal bits. An orderly exit keeps the margins
+# measured to the zombie, so it is still alive while exiting.
+@pytest.mark.parametrize("exit_code", [0, 1 << 8])
+def test_a_process_exiting_by_itself_is_alive_until_it_is_a_zombie(tmp_path: Path, exit_code: int) -> None:
+    _proc(tmp_path, 900, 1, ["chrome"], state="R", flags=4194560 | 0x4, exit_code=exit_code)
+    assert process_crash.process_state(900, proc_root=tmp_path) == "alive"
+
+
+def test_a_signal_exit_code_without_pf_exiting_is_alive(tmp_path: Path) -> None:
+    _proc(tmp_path, 900, 1, ["chrome"], state="R", exit_code=_SIGKILL)
+    assert process_crash.process_state(900, proc_root=tmp_path) == "alive"
+
+
+@pytest.mark.parametrize("stat", ["902 (chrome) R 1\n", "902 (chrome) R 1 1 1 0 -1 4194564\n"])
+def test_a_stat_too_short_to_show_a_signal_exit_is_judged_by_its_state(tmp_path: Path, stat: str) -> None:
     d = tmp_path / "902"
     d.mkdir()
-    (d / "stat").write_text("902 (chrome) R 1\n")
+    (d / "stat").write_text(stat)
     assert process_crash.process_state(902, proc_root=tmp_path) == "alive"
 
 

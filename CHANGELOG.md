@@ -100,7 +100,8 @@ a section that is already tagged and on PyPI.
   tearing it down, before it shows as exited, and on a loaded host the close
   could arrive in that gap. Such a crash was recorded as `user_close`, so no
   crash incident or `browser_crashed` notification was raised. A process
-  already exiting now counts as gone.
+  already exiting on a signal now counts as gone; one exiting by itself still
+  counts as alive until it has exited, so a window close is judged as before.
 - **A redacted screenshot no longer fails when Chrome has no frame ready.**
   Chrome can answer a capture with "Unable to capture screenshot" when it has
   not produced a frame yet. The capture is now asked again, up to three times;
