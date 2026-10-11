@@ -33,23 +33,22 @@ happens.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import re
 import subprocess  # nosec B404
 import sys
 import textwrap
 import time
-import urllib.request
 from pathlib import Path
 
 import pytest
 
 from tests._serve_subprocess import (
+    DAEMON_ENTRY_SCRIPT,
     HANDSHAKE_BOUND_SECONDS,
     STARTUP_TIMEOUT_SECONDS,
     ServeProcess,
     free_port,
+    health,
     isolated_env,
     kill_process_tree,
     pid_alive,
@@ -58,7 +57,8 @@ from tests._serve_subprocess import (
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32",
     reason="exercises the Windows detach flags (DETACHED_PROCESS / CREATE_BREAKAWAY_FROM_JOB) "
-    "and handle inheritance alongside the Proactor stdin reader; POSIX is covered by setsid",
+    "alongside the Proactor stdin reader; the pipe-inheritance check runs on every platform in "
+    "test_serve_daemon_holds_no_client_pipe_e2e.py",
 )
 
 # Held open inside wait_for_daemon so the "during the spawn" ping cannot race
@@ -66,19 +66,6 @@ pytestmark = pytest.mark.skipif(
 _SPAWN_WINDOW_SECONDS = 3.0
 _DAEMON_READY_SECONDS = 90.0
 _FOLLOWER_EXIT_SECONDS = 30.0
-
-_DAEMON_SCRIPT = textwrap.dedent(
-    """
-    import sys
-
-    from octowright import housekeeping
-    from octowright.cli import main
-
-    housekeeping.reap_orphan_browsers_at_boot = lambda **_kwargs: None
-    sys.argv = ["octowright", *sys.argv[1:]]
-    main()
-    """
-)
 
 _FOLLOWER_SCRIPT = textwrap.dedent(
     f"""
@@ -129,20 +116,12 @@ def _ping(serve: ServeProcess, request_id: str) -> float:
     return time.monotonic() - sent
 
 
-def _health(port: int) -> dict[str, object] | None:
-    url = f"http://127.0.0.1:{port}/api/health"
-    with contextlib.suppress(OSError, ValueError), urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
-        body = json.loads(response.read().decode("utf-8"))
-        return body if isinstance(body, dict) else None
-    return None
-
-
 def test_follower_stdio_survives_a_real_detached_daemon_spawn(
     tmp_path: Path, record_property: pytest.RecordProperty
 ) -> None:
     port = free_port()
     daemon_script = tmp_path / "daemon_entry.py"
-    daemon_script.write_text(_DAEMON_SCRIPT, encoding="utf-8")
+    daemon_script.write_text(DAEMON_ENTRY_SCRIPT, encoding="utf-8")
     follower_script = tmp_path / "follower_entry.py"
     follower_script.write_text(_FOLLOWER_SCRIPT, encoding="utf-8")
     env = isolated_env(tmp_path)
@@ -230,10 +209,10 @@ def test_follower_stdio_survives_a_real_detached_daemon_spawn(
         assert pid_alive(daemon_pid), (
             f"the detached daemon (pid {daemon_pid}) died with the follower it was spawned from"
         )
-        health = _health(port)
-        assert health is not None and health.get("ok") is True, (
+        answer = health(port)
+        assert answer is not None and answer.get("ok") is True, (
             f"the daemon (pid {daemon_pid}) stopped answering /api/health on port {port} once its "
-            f"follower exited: {health!r}"
+            f"follower exited: {answer!r}"
         )
     finally:
         serve.kill()

@@ -24,7 +24,6 @@ from typing import Any, cast
 import anyio
 import httpx2
 from mcp.client.streamable_http import streamable_http_client
-from mcp.server.stdio import stdio_server
 from provide.telemetry import get_logger
 
 from octowright import bridge_state, singleton
@@ -39,6 +38,7 @@ from octowright.defaults import (
 )
 from octowright.proxy_inline import InlineLeader, serve_inline_leader
 from octowright.proxy_intake import LocalIntake
+from octowright.proxy_stdin import stdio_server
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
     BridgeSupervisor,

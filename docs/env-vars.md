@@ -179,6 +179,7 @@ knob, an empty value (`OCTOWRIGHT_X=`) also opts in.
 - `OCTOWRIGHT_CAPTURES_DIR` / `OCTOWRIGHT_CAPTURE_MAX_TOTAL_BYTES` / `OCTOWRIGHT_CAPTURE_TTL_SECONDS` — cached analysis captures: root (default `<user cache dir>/captures`), total size cap (default 50 MiB) and age cap (default 7 days). A single capture larger than the total cap is refused rather than written and immediately pruned. `defaults.CAPTURES_DIR` and neighbours.
 - `OCTOWRIGHT_SESSION_MANIFEST` — live-session manifest used for crash recovery (default `<user state dir>/session-manifest.json`). `defaults.SESSION_MANIFEST_PATH`.
 - `OCTOWRIGHT_BRIDGE_STATE` — where followers write bridge health snapshots for `octowright_status()["bridge"]` (default `<user state dir>/bridge-state.json`). `defaults.BRIDGE_STATE_PATH`.
+- `OCTOWRIGHT_TOOLS_LIST_CACHE` — where a follower keeps the last `tools/list` answer a leader gave it, to answer a `tools/list` that has waited 5 seconds for a leader still being elected (default `<user state dir>/tools-list-cache.json`). Used only when the Octowright version, `OCTOWRIGHT_PROFILE`, `OCTOWRIGHT_PLUGINS` and the negotiated protocol version all match the ones it was saved under. `defaults.TOOLS_LIST_CACHE_PATH`, `proxy_tools_cache.py`.
 
 **Security opt-ins** are listed under "Capability opt-ins parse strictly" at the top of this file.
 

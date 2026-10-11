@@ -27,8 +27,10 @@ import signal
 import socket
 import subprocess  # nosec B404
 import sys
+import textwrap
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,25 @@ HANDSHAKE_BOUND_SECONDS = 5.0 if sys.platform == "win32" else 2.0
 
 _SKIP_CANONICAL = {6286, 6287}
 
+# The daemon entrypoint a test follower spawns in place of ``octowright``: the
+# real ``serve --daemon-mode`` with the host-wide boot orphan sweep disabled,
+# because a test must not reap browsers it does not own. Everything after the
+# entrypoint -- argv, the Popen call, its stdio and detach flags -- is the real
+# spawn path. Write it to a file and patch ``daemonize._resolve_daemon_entrypoint``
+# to ``[sys.executable, <that file>]`` in the follower.
+DAEMON_ENTRY_SCRIPT = textwrap.dedent(
+    """
+    import sys
+
+    from octowright import housekeeping
+    from octowright.cli import main
+
+    housekeeping.reap_orphan_browsers_at_boot = lambda **_kwargs: None
+    sys.argv = ["octowright", *sys.argv[1:]]
+    main()
+    """
+)
+
 
 def free_port() -> int:
     while True:
@@ -50,6 +71,15 @@ def free_port() -> int:
             port = int(sock.getsockname()[1])
         if port not in _SKIP_CANONICAL:
             return port
+
+
+def health(port: int) -> dict[str, Any] | None:
+    """The leader's ``/api/health`` body on *port*, or None if nothing answers."""
+    url = f"http://127.0.0.1:{port}/api/health"
+    with contextlib.suppress(OSError, ValueError), urllib.request.urlopen(url, timeout=5) as response:  # nosec B310
+        body = json.loads(response.read().decode("utf-8"))
+        return body if isinstance(body, dict) else None
+    return None
 
 
 def isolated_env(root: Path) -> dict[str, str]:
@@ -140,11 +170,14 @@ class ServeProcess:
                     return message
         raise TimeoutError(f"no answer to {request_id!r} within {timeout}s; {self.stderr_excerpt()}")
 
-    def wait_for_stderr(self, marker: str, *, timeout: float) -> str:
-        """Return the first stderr line containing *marker* (all lines are kept)."""
+    def wait_for_stderr(self, marker: str, *, timeout: float, occurrence: int = 1) -> str:
+        """Return the *occurrence*-th stderr line containing *marker* (all lines are kept)."""
+        seen = 0
         for line in self.stderr_seen:
             if marker in line:
-                return line
+                seen += 1
+                if seen == occurrence:
+                    return line
         deadline = time.monotonic() + timeout
         while (remaining := deadline - time.monotonic()) > 0:
             try:
@@ -155,8 +188,10 @@ class ServeProcess:
                 raise AssertionError(f"stderr closed before {marker!r} appeared; {self.stderr_excerpt()}")
             self.stderr_seen.append(line)
             if marker in line:
-                return line
-        raise TimeoutError(f"{marker!r} not seen within {timeout}s; {self.stderr_excerpt()}")
+                seen += 1
+                if seen == occurrence:
+                    return line
+        raise TimeoutError(f"{marker!r} (occurrence {occurrence}) not seen within {timeout}s; {self.stderr_excerpt()}")
 
     def drain_stderr(self) -> list[str]:
         """Collect whatever stderr has arrived so far without waiting."""

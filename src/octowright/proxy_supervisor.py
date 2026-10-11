@@ -17,7 +17,7 @@ from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCError, JSONRPCNotification, JSONRPCRequest
 from provide.telemetry import get_logger
 
-from octowright import defaults
+from octowright import defaults, proxy_tools_cache
 from octowright._bridge_message_helpers import (
     BRIDGE_ERROR_GUIDANCE,  # noqa: F401 — re-exported for tests
     bridge_error,
@@ -243,16 +243,17 @@ class BridgeSupervisor:
     def in_flight_count(self) -> int:
         return len(self._in_flight)
 
-    async def _await_remote_writer(self, remote_write_slot: _RemoteWriteSlot) -> Any | None:
+    async def _await_remote_writer(self, remote_write_slot: _RemoteWriteSlot, limit: float | None = None) -> Any | None:
         """Startup / reconnect race: poll until a live writer appears or the
-        connect timeout (plus any pre-leader budget) expires.
+        connect timeout (plus any pre-leader budget), or ``limit``, expires.
 
         ``ready`` is re-read from the slot on each iteration because it's
         replaced with a fresh Event on each disconnect (anyio.Event is one-shot;
         a stale set event would return immediately even though write is still
         None, causing a spurious bridge error).
         """
-        deadline = anyio.current_time() + defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS + self.pre_leader_budget
+        wait = defaults.BRIDGE_CONNECT_TIMEOUT_SECONDS + self.pre_leader_budget if limit is None else limit
+        deadline = anyio.current_time() + wait
         while remote_write_slot.write is None:
             remaining = deadline - anyio.current_time()
             if remaining <= 0:
@@ -263,23 +264,42 @@ class BridgeSupervisor:
 
     async def _writer_for(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> Any | None:
         """The writer to forward ``message`` on, or None when it was answered
-        here instead: before the leader exists, or with an error once the wait
-        for one ran out."""
+        here instead: before the leader exists, from the kept tools/list once
+        it has waited a while for one, or with an error once the wait ran out."""
         if remote_write_slot.write is not None:
             return remote_write_slot.write
         if self._awaiting_leader and await answer_before_leader(self, message):
             return None
-        request_id = message_request_id(message)
-        with anyio.CancelScope() as wait:
-            # A request's wait can be abandoned by its cancellation (withdraw_waiting).
-            self._waiting_for_writer = (request_id, wait) if is_request(message) else None
-            remote_write = await self._await_remote_writer(remote_write_slot)
-        self._waiting_for_writer = None
-        if wait.cancel_called:
+        kept = proxy_tools_cache.cached_answer(message, self._client_handshake) if self._awaiting_leader else None
+        limit = None if kept is None else proxy_tools_cache.GRACE_SECONDS
+        remote_write, withdrawn = await self._wait_for_writer(message, remote_write_slot, limit)
+        if withdrawn:
             return None  # cancelled before any leader saw it: no answer is owed
-        if remote_write is None and is_request(message) and request_id is not None:
-            await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
+        if remote_write is None:
+            await self._answer_without_leader(message, kept)
         return remote_write
+
+    async def _wait_for_writer(
+        self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot, limit: float | None
+    ) -> tuple[Any | None, bool]:
+        """The writer once one appears (None if the wait ran out), and whether
+        the request's cancellation abandoned the wait (``withdraw_waiting``)."""
+        request_id = message_request_id(message)
+        remote_write = None
+        with anyio.CancelScope() as wait:
+            self._waiting_for_writer = (request_id, wait) if is_request(message) else None
+            remote_write = await self._await_remote_writer(remote_write_slot, limit)
+        self._waiting_for_writer = None
+        return remote_write, wait.cancel_called
+
+    async def _answer_without_leader(self, message: SessionMessage, kept: SessionMessage | None) -> None:
+        if kept is not None:
+            log.info("octowright.bridge.tools_list_from_cache", request_id=message_request_id(message))
+            await self.local_write.send(kept)
+            return
+        request_id = message_request_id(message)
+        if is_request(message) and request_id is not None:
+            await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
 
     async def forward_one_local_message(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> None:
         request_id = message_request_id(message)
@@ -569,6 +589,8 @@ class BridgeSupervisor:
                 "outcome": "error" if isinstance(message_root(message), JSONRPCError) else "ok",
             },
         )
+        if in_flight.method == "tools/list":
+            proxy_tools_cache.remember(in_flight.outgoing, message, self._client_handshake)
         return True
 
     async def forward_remote_message(self, message: SessionMessage) -> None:

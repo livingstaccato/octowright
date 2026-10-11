@@ -24,6 +24,7 @@ import pytest
 from click.testing import CliRunner
 
 from octowright import doctor as _doctor
+from octowright import doctor_daemon as _daemon
 
 
 @pytest.fixture(autouse=True)
@@ -187,10 +188,10 @@ class TestCoreAudioCheck:
         """A SKIP line on every Linux run is noise a reader learns to ignore."""
         monkeypatch.setattr(_doctor.sys, "platform", "linux")
 
-        async def _daemon() -> Any:
+        async def _fake_daemon() -> Any:
             return _doctor.Check("x", "ok", "")
 
-        monkeypatch.setattr(_doctor, "check_daemon", _daemon)
+        monkeypatch.setattr(_daemon, "check_daemon", _fake_daemon)
         for name in (
             "check_browser_installs",
             "check_stray_drivers",
@@ -465,13 +466,13 @@ class TestFollowersCheck:
         async def _leader() -> str | None:
             return leader
 
-        monkeypatch.setattr(_doctor, "_running_leader_version", _leader)
+        monkeypatch.setattr(_daemon, "_running_leader_version", _leader)
         monkeypatch.setattr("octowright.bridge_state.read_state", lambda _p: {})
         monkeypatch.setattr("octowright.bridge_state.summarize_state", lambda _s: summary)
 
     async def test_matching_followers_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 3}))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "ok"
         assert check.name == "followers"
 
@@ -480,7 +481,7 @@ class TestFollowersCheck:
         the detail has to say a daemon restart will NOT fix it, which is the
         counterintuitive part."""
         self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 2, "0.17.0": 1}))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "warn"
         assert "0.17.0" in check.detail
         assert "reconnect" in check.detail
@@ -497,20 +498,20 @@ class TestFollowersCheck:
         live daemon stale.
         """
         self._patch(monkeypatch, "0.17.0", self._summary({"0.17.0": 2}))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "ok", "followers match the daemon that is actually answering"
         assert check.data["leader_version"] == "0.17.0"
 
     async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """With nothing answering there is no version to compare against."""
         self._patch(monkeypatch, None, self._summary({"0.17.0": 1}))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "skip"
 
     async def test_no_live_followers_is_ok_not_a_warning(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Dead followers are filtered upstream; zero live ones is a clean state."""
         self._patch(monkeypatch, "0.19.1", self._summary({}, dead=4))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "ok"
         assert check.data["dead_followers_ignored"] == 4
 
@@ -523,7 +524,7 @@ class TestFollowersCheck:
         summary["handshake_mismatch_count"] = 1
         summary["handshake_mismatch_fields"] = {"instructions": 1}
         self._patch(monkeypatch, "0.19.1", summary)
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "warn"
         assert "instructions" in check.detail
         assert "reconnect" in check.detail
@@ -533,7 +534,7 @@ class TestFollowersCheck:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._patch(monkeypatch, "0.19.1", self._summary({"0.19.1": 2}))
-        check = await _doctor.check_followers()
+        check = await _daemon.check_followers()
         assert check.status == "ok"
         assert check.data["handshake_mismatches"] == 0
 
@@ -571,8 +572,8 @@ class TestCanonicalPortCheck:
         """
         answered = live_ports or set()
         probed: list[int] = []
-        monkeypatch.setattr(_doctor, "read_lock", lambda: info)
-        monkeypatch.setattr(_doctor, "pid_is_alive", lambda _pid: alive)
+        monkeypatch.setattr(_daemon, "read_lock", lambda: info)
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda _pid: alive)
 
         async def _probe(_host: str | None, port: int | None) -> bool:
             probed.append(port if port is not None else -1)
@@ -583,7 +584,7 @@ class TestCanonicalPortCheck:
 
     async def test_no_daemon_skips_rather_than_guessing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch(monkeypatch, info=None, alive=False)
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "skip"
 
     async def test_a_dead_recorded_leader_skips(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -591,14 +592,14 @@ class TestCanonicalPortCheck:
         from octowright import defaults
 
         self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=False)
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "skip"
 
     async def test_leader_alone_on_the_canonical_port_is_ok(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from octowright import defaults
 
         self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True)
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "ok"
         assert check.name == "daemon:canonical-port"
         assert check.data["second_daemon_ports"] == []
@@ -613,7 +614,7 @@ class TestCanonicalPortCheck:
         from octowright import defaults
 
         probed = self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True)
-        await _doctor.check_canonical_port()
+        await _daemon.check_canonical_port()
 
         expected = list(range(defaults.HTTP_PORT + 1, defaults.HTTP_PORT + defaults.HTTP_PORT_RETRIES + 1))
         assert sorted(probed) == expected
@@ -627,7 +628,7 @@ class TestCanonicalPortCheck:
 
         bumped = defaults.HTTP_PORT + 1
         self._patch(monkeypatch, info=self._leader(port=defaults.HTTP_PORT), alive=True, live_ports={bumped})
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "fail"
         assert "two live daemons" in check.detail
         assert str(bumped) in check.detail
@@ -643,7 +644,7 @@ class TestCanonicalPortCheck:
 
         bumped = defaults.HTTP_PORT + 1
         self._patch(monkeypatch, info=self._leader(port=bumped), alive=True)
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "warn"
         assert "port-walked" in check.detail
         assert str(bumped) in check.detail
@@ -662,7 +663,7 @@ class TestCanonicalPortCheck:
             alive=True,
             live_ports={defaults.HTTP_PORT},
         )
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "fail"
         assert "two live daemons" in check.detail
         assert "restart --keep-browsers" in check.detail
@@ -688,7 +689,7 @@ class TestCanonicalPortCheck:
             alive=True,
             live_ports={defaults.HTTP_PORT},
         )
-        check = await _doctor.check_canonical_port()
+        check = await _daemon.check_canonical_port()
         assert check.status == "warn"
         assert "OCTOWRIGHT_HTTP_PORT" in check.detail
         assert probed == [], "a port mismatch this large is a config difference, not a probe target"
@@ -760,19 +761,19 @@ class TestDaemonCheck:
         """Killed daemon, lockfile left behind, pid handed to another process:
         liveness alone said "ok" while check_followers found nothing answering."""
         self._patch(monkeypatch, alive=True, answers=False)
-        check = await _doctor.check_daemon()
+        check = await _daemon.check_daemon()
         assert check.status == "warn"
         assert check.data["running"] is False
         assert check.data["stale"] is True
 
     async def test_a_live_pid_that_answers_is_the_leader(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch(monkeypatch, alive=True, answers=True)
-        check = await _doctor.check_daemon()
+        check = await _daemon.check_daemon()
         assert check.status == "ok"
         assert check.data["running"] is True
 
     async def test_a_dead_pid_is_stale_without_probing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._patch(monkeypatch, alive=False, answers=True)
-        check = await _doctor.check_daemon()
+        check = await _daemon.check_daemon()
         assert check.status == "warn"
         assert check.data["stale"] is True

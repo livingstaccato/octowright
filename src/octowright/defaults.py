@@ -299,6 +299,7 @@ BRIDGE_RECONNECT_MAX_SECONDS = env_float("OCTOWRIGHT_BRIDGE_RECONNECT_MAX_SECOND
 BRIDGE_HEALTH_INTERVAL_SECONDS = env_float("OCTOWRIGHT_BRIDGE_HEALTH_INTERVAL_SECONDS", 2)
 BRIDGE_HEALTH_MAX_FAILURES = env_int("OCTOWRIGHT_BRIDGE_HEALTH_MAX_FAILURES", 2)
 BRIDGE_STATE_PATH = Path(os.environ.get("OCTOWRIGHT_BRIDGE_STATE", str(_STATE_DIR / "bridge-state.json")))
+TOOLS_LIST_CACHE_PATH = Path(os.environ.get("OCTOWRIGHT_TOOLS_LIST_CACHE", str(_STATE_DIR / "tools-list-cache.json")))
 
 # Per-tool override of the flat BRIDGE_REQUEST_TIMEOUT_SECONDS in-flight deadline,
 # keyed by MCP tool name (the ``name`` field of a ``tools/call``). Some tools run

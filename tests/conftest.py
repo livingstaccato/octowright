@@ -101,13 +101,15 @@ def _relocate_user_config() -> None:
     _TEST_CONFIG_HOME = tempfile.mkdtemp(prefix="octowright-test-config-")
     os.environ["XDG_CONFIG_HOME"] = _TEST_CONFIG_HOME
     os.environ["APPDATA"] = _TEST_CONFIG_HOME
-    # The state half the docstring above says is NOT covered, for the two paths
-    # an ordinary launch writes: a stub-pool test with no recordings_dir of its
-    # own otherwise leaves JSONL (and manifest rows) in the developer's real
-    # ~/.local/state/octowright/sessions. Spawned daemons still isolate
-    # XDG_STATE_HOME themselves.
+    # The state half the docstring above says is NOT covered, for the paths an
+    # ordinary launch or a follower writes: a stub-pool test with no
+    # recordings_dir of its own otherwise leaves JSONL (and manifest rows) in the
+    # developer's real ~/.local/state/octowright/sessions, and a bridge test that
+    # forwards a tools/list would overwrite their saved tool list. Spawned
+    # daemons still isolate XDG_STATE_HOME themselves.
     os.environ["OCTOWRIGHT_RECORDINGS"] = os.path.join(_TEST_CONFIG_HOME, "sessions")
     os.environ["OCTOWRIGHT_SESSION_MANIFEST"] = os.path.join(_TEST_CONFIG_HOME, "session-manifest.json")
+    os.environ["OCTOWRIGHT_TOOLS_LIST_CACHE"] = os.path.join(_TEST_CONFIG_HOME, "tools-list-cache.json")
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:

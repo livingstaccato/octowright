@@ -79,6 +79,22 @@ a section that is already tagged and on PyPI.
   resumed after a reconnect or answered with a timeout error. What waits is
   capped at 1024 messages: past it a request is answered with a bridge
   error at once instead of being held.
+- **A client with a short timeout no longer starts with no tools on a slow
+  start.** While the follower is still electing a leader, a `tools/list`
+  could wait up to about 40 seconds. After 5 seconds it is now answered from
+  the last tool list a leader gave, kept on disk
+  (`OCTOWRIGHT_TOOLS_LIST_CACHE`) and used only when the version, profile,
+  plugins and protocol version match.
+- **Clients of the 2026-07-28 protocol fall back to `initialize` at once.**
+  Through the follower every such request failed with `Missing session ID`,
+  and only after the election finished. The follower now refuses that
+  protocol itself with `-32022`, naming the versions it serves, and the
+  client connects with the older handshake.
+- **A follower whose leader stays gone now exits and starts a new daemon
+  even when its client is idle.** After the leader recovery window ran out,
+  the follower waited for the client to send something or close its input
+  before it exited, so the replacement daemon started only then. It now
+  exits at the end of the window.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of

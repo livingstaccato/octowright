@@ -27,7 +27,7 @@ package "user surfaces" #eff6ff {
   [http/\nStarlette dashboard + /mcp follower proxy] as HTTP
   ' What `octowright serve` runs for an MCP client: stdio opens before the
   ' leader election, and nothing on this path imports server/.
-  [follower bridge\nproxy_bridge / proxy_runtime / proxy_supervisor\nstdio <-> leader /mcp; proxy_inline: inline fallback] as BRIDGE
+  [follower bridge\nproxy_bridge / proxy_runtime / proxy_supervisor\nstdio <-> leader /mcp; proxy_inline: inline fallback\nproxy_stdin: stdin read abandoned on exit\nproxy_tools_cache: tools/list copy for a slow start] as BRIDGE
 }
 
 package "live state" #fef3c7 {
@@ -93,7 +93,7 @@ HTTP --> SPOOL
 ' ── follower bridge: answers the handshake itself, then forwards ──
 CLI ..> BRIDGE : serve (follower)
 BRIDGE ..> HTTP : /mcp on the elected leader
-BRIDGE ..> IDENTITY : local initialize / ping
+BRIDGE ..> IDENTITY : local initialize / ping;\n-32022 for 2026-07-28 clients
 SERVER ..> IDENTITY : built from
 
 ' ── live state composition ──
