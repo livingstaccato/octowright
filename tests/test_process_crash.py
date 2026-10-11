@@ -38,12 +38,12 @@ from octowright.browser_pool.process_crash import BrowserProcess
 # ─── a fake /proc ────────────────────────────────────────────────────────────
 
 
-def _proc(root: Path, pid: int, ppid: int, argv: list[str], state: str = "S") -> None:
+def _proc(root: Path, pid: int, ppid: int, argv: list[str], state: str = "S", flags: int = 4194560) -> None:
     d = root / str(pid)
     d.mkdir(parents=True)
     (d / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
     # comm may contain spaces and parens; the parser must split on the LAST ')'.
-    (d / "stat").write_text(f"{pid} (chrome (x) y) {state} {ppid} 1 1 0 -1 4194560\n")
+    (d / "stat").write_text(f"{pid} (chrome (x) y) {state} {ppid} 1 1 0 -1 {flags}\n")
 
 
 def test_chromium_browser_is_the_root_most_process_naming_the_profile(tmp_path: Path) -> None:
@@ -199,6 +199,21 @@ def test_only_chromium_is_judged_by_its_lock(tmp_path: Path) -> None:
 def test_process_state_reads_the_stat_state(tmp_path: Path, state: str, expected: str) -> None:
     _proc(tmp_path, 900, 1, ["chrome"], state=state)
     assert process_crash.process_state(900, proc_root=tmp_path) == expected
+
+
+# PF_EXITING (0x4): set when the process starts exiting, before it closes its
+# descriptors. A signalled browser drops its pipe while still R or D.
+@pytest.mark.parametrize("state", ["R", "D", "S"])
+def test_a_process_already_exiting_is_dead(tmp_path: Path, state: str) -> None:
+    _proc(tmp_path, 900, 1, ["chrome"], state=state, flags=4194560 | 0x4)
+    assert process_crash.process_state(900, proc_root=tmp_path) == "dead"
+
+
+def test_a_stat_without_flags_is_judged_by_its_state(tmp_path: Path) -> None:
+    d = tmp_path / "902"
+    d.mkdir()
+    (d / "stat").write_text("902 (chrome) R 1\n")
+    assert process_crash.process_state(902, proc_root=tmp_path) == "alive"
 
 
 def test_a_reaped_process_is_dead(tmp_path: Path) -> None:
