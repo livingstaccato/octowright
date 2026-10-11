@@ -95,6 +95,18 @@ a section that is already tagged and on PyPI.
   the follower waited for the client to send something or close its input
   before it exited, so the replacement daemon started only then. It now
   exits at the end of the window.
+- **A browser killed by a signal is no longer sometimes reported as a closed
+  window.** A browser process drops its connection while the kernel is still
+  tearing it down, before it shows as exited, and on a loaded host the close
+  could arrive in that gap. Such a crash was recorded as `user_close`, so no
+  crash incident or `browser_crashed` notification was raised. A process
+  already exiting on a signal now counts as gone; one exiting by itself still
+  counts as alive until it has exited, so a window close is judged as before.
+- **A redacted screenshot no longer fails when Chrome has no frame ready.**
+  Chrome can answer a capture with "Unable to capture screenshot" when it has
+  not produced a frame yet. The capture is now tried up to three times in all,
+  unless the page is hidden or has no size and so can never produce one; the
+  check after the capture still covers every change to the page.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of
