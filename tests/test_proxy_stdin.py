@@ -88,6 +88,8 @@ _CHILD = textwrap.dedent(
                 raise RuntimeError("leader health check failed")
         except Exception:  # the task group wraps it in a group
             pass
+        print("left stdio_server", file=sys.stderr, flush=True)
+        # fstat on a pipe a read still holds hangs on Windows.
         print("after", kind(), file=sys.stderr, flush=True)
 
     anyio.run(main)

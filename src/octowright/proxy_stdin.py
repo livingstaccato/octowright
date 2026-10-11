@@ -20,6 +20,13 @@ it. Passing a stdin of our own skips mcp's claim of fd 0, so the
 claim is made here the same way: the wire moves to a private close-on-exec
 descriptor and fd 0 points at the null device while the bridge serves, so a
 child cannot read the client's requests, and fd 0 is restored on exit.
+
+Windows needs one more step. There a read left waiting on a pipe holds that
+pipe's file object, and every other operation on it -- the ``dup2`` that
+restores fd 0, an ``fstat`` -- waits for the read, so an abandoned read would
+hang the exit it was abandoned for. The waiting read is cancelled
+(``CancelSynchronousIo``) before fd 0 is restored, and fd 0 is left on the
+null device if it cannot be.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ import asyncio
 import os
 import sys
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from io import TextIOWrapper
@@ -40,6 +48,9 @@ from provide.telemetry import get_logger
 log = get_logger(__name__)
 
 _STDIN_FD = 0
+
+# How long the exit waits for a cancelled Windows read to give up its pipe.
+_CANCEL_READ_SECONDS = 2.0
 
 
 class _UnownedTextWrapper(TextIOWrapper):
@@ -71,6 +82,8 @@ class AbandonableLines(anyio.AsyncFile[str]):
     only, as the follower is.
     """
 
+    _reader: threading.Thread | None = None
+
     async def readline(self) -> str:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[str] = loop.create_future()
@@ -85,8 +98,45 @@ class AbandonableLines(anyio.AsyncFile[str]):
             with suppress(RuntimeError):  # the loop closed while we read
                 loop.call_soon_threadsafe(_settle, future, line, error)
 
-        threading.Thread(target=read, name="octowright-stdin", daemon=True).start()
+        self._reader = threading.Thread(target=read, name="octowright-stdin", daemon=True)
+        self._reader.start()
         return await future
+
+    def release_wire(self) -> bool:
+        """True once no read holds the wire, so fd 0 can be restored from it.
+
+        Only Windows needs this (see the module docstring); elsewhere a waiting
+        read blocks nothing else and is left behind.
+        """
+        reader = self._reader
+        if sys.platform != "win32" or reader is None:
+            return True
+        deadline = time.monotonic() + _CANCEL_READ_SECONDS  # pragma: no cover
+        while reader.is_alive() and time.monotonic() < deadline:  # pragma: no cover
+            _cancel_synchronous_io(reader)
+            reader.join(0.02)
+        return not reader.is_alive()  # pragma: no cover
+
+
+def _cancel_synchronous_io(thread: threading.Thread) -> None:
+    """Fail the read ``thread`` is blocked in, if it is in one yet."""
+    if sys.platform == "win32" and thread.native_id is not None:  # pragma: no cover
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.OpenThread.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.CancelSynchronousIo.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel32.OpenThread(_THREAD_TERMINATE, False, thread.native_id)
+        if handle:
+            kernel32.CancelSynchronousIo(handle)
+            kernel32.CloseHandle(handle)
+
+
+# The access right CancelSynchronousIo requires of the thread handle.
+_THREAD_TERMINATE = 0x0001
 
 
 def _rebind_windows_handle() -> None:
@@ -152,12 +202,15 @@ async def stdio_server() -> AsyncIterator[tuple[Any, Any]]:
     The bridge's only stdio entry point (tests replace it by this name).
     """
     wire, private_fd = _divert_stdin()
+    stdin = AbandonableLines(_UnownedTextWrapper(wire, encoding="utf-8", errors="replace"))
     try:
-        stdin = AbandonableLines(_UnownedTextWrapper(wire, encoding="utf-8", errors="replace"))
         async with _mcp_stdio_server(stdin=stdin) as streams:
             yield streams
     finally:
-        if private_fd is not None:
+        if private_fd is not None and not stdin.release_wire():
+            # Restoring it would wait for the read the cancel could not end.
+            log.warning("octowright.bridge.stdin_restore_skipped", reason="read still pending")
+        elif private_fd is not None:
             try:
                 os.dup2(private_fd, _STDIN_FD)
             except OSError as exc:
