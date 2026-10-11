@@ -24,8 +24,8 @@ Two layers keep the pipes out of the daemon, and they cover different spawns:
 * ``daemonize._spawn_detached`` gives the daemon DEVNULL for stdin and stdout,
   the daemon log for stderr and ``close_fds=True`` (on Windows that restricts
   inheritance to exactly those three handles).
-* While the bridge serves, mcp's ``stdio_server`` moves the wire to private
-  close-on-exec descriptors and points fd 0 at the null device and fd 1 at
+* While the bridge serves, ``proxy_stdin`` (fd 0) and mcp's ``stdio_server``
+  (fd 1) move the wire to private close-on-exec descriptors and points fd 0 at the null device and fd 1 at
   stderr (rebinding the Win32 std handles too). That covers the election's
   spawn -- but the bridge restores fd 0/1 to the wire when it returns, so the
   *respawn* after a lost leader (``_respawn_if_leader_gone``) runs with the
@@ -246,23 +246,15 @@ def test_the_detached_daemon_holds_none_of_the_clients_pipes(tmp_path: Path, sce
         else:
             for pid in live:
                 kill_process_tree(pid)
-            # The follower retries the dead leader for the recovery window and
-            # then cancels the bridge. The bridge returns -- restoring fd 0/1 to
-            # the client's pipes -- only once its stdin reader thread does,
-            # which a thread blocked in readline cannot do until the client
-            # writes (or closes stdin). A client's next call is that write; the
-            # stdin probe below needs stdin open, so send one.
-            serve.wait_for_stderr(
-                "leader_recovery_window_exhausted",
-                timeout=_LEADER_RECOVERY_WINDOW_SECONDS + STARTUP_TIMEOUT_SECONDS,
-            )
-            serve.send({"jsonrpc": "2.0", "id": "ping-after-leader-death", "method": "ping"})
-            # Then the respawn path spawns a replacement daemon, waits for it,
-            # and the follower exits.
+            # The follower retries the dead leader for the recovery window,
+            # cancels the bridge -- which restores fd 0/1 to the client's pipes
+            # -- spawns a replacement from the respawn path and exits. The
+            # client sends nothing meanwhile: an idle client must not hold the
+            # follower in its stdin read (``proxy_stdin``).
             respawned = serve.wait_for_stderr(
                 "SPAWNED ",
                 occurrence=2,
-                timeout=_LEADER_RECOVERY_WINDOW_SECONDS + STARTUP_TIMEOUT_SECONDS,
+                timeout=_LEADER_RECOVERY_WINDOW_SECONDS + 2 * STARTUP_TIMEOUT_SECONDS,
             )
             replacement = int(respawned.split()[-1])
             spawned.append(replacement)

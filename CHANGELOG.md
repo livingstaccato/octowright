@@ -90,6 +90,11 @@ a section that is already tagged and on PyPI.
   and only after the election finished. The follower now refuses that
   protocol itself with `-32022`, naming the versions it serves, and the
   client connects with the older handshake.
+- **A follower whose leader stays gone now exits and starts a new daemon
+  even when its client is idle.** After the leader recovery window ran out,
+  the follower waited for the client to send something or close its input
+  before it exited, so the replacement daemon started only then. It now
+  exits at the end of the window.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of
