@@ -75,14 +75,14 @@ async def _plain_screenshot(page: Any, target: Path) -> None:
     The same "Unable to capture screenshot" ``safe_screenshot`` retries; a
     reference shot failing on it says nothing about the redaction.
     """
-    for attempt in range(1, 4):
+    for attempt in range(1, safe_screenshot._CAPTURE_ATTEMPTS + 1):
         try:
             await page.screenshot(path=str(target))
             return
         except Exception as exc:
-            if "Unable to capture screenshot" not in str(exc) or attempt == 3:
+            if safe_screenshot._NO_FRAME not in str(exc) or attempt == safe_screenshot._CAPTURE_ATTEMPTS:
                 raise
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(safe_screenshot._CAPTURE_RETRY_SECONDS)
 
 
 async def _render(browser: object, html: str, target: Path) -> bytes:

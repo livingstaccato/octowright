@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from octowright import ssrf_guard
 from octowright.browser_pool.pool import BrowserPool
 from octowright.macros import execution
 from octowright.request_failures import settle_network
@@ -95,10 +96,15 @@ async def session(request: pytest.FixtureRequest, tmp_path: Path, page_url: str)
         pytest.skip(f"{request.param} unavailable: {exc}")
     try:
         session = pool.get(inst["instance_id"])
-        if inst.get("nav_warning"):
+        warning = inst.get("nav_warning")
+        if warning:
+            if "Timeout" not in warning:
+                # A failed (not slow) load is already in the network ledger the
+                # tests count, so loading again would not make them meaningful.
+                pytest.fail(f"{request.param} could not load the test page: {warning}")
             # The launch navigation timed out (seen on a Windows Firefox runner);
             # every test here needs the page, so load it again with room to spare.
-            await session.page.goto(page_url, timeout=60_000)
+            await ssrf_guard.guarded_navigation(session.page.main_frame, session.page.goto(page_url, timeout=60_000))
         yield session
     finally:
         await pool.close(inst["instance_id"], force=True)
