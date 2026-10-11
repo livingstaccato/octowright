@@ -94,7 +94,12 @@ async def session(request: pytest.FixtureRequest, tmp_path: Path, page_url: str)
         await pool.shutdown()
         pytest.skip(f"{request.param} unavailable: {exc}")
     try:
-        yield pool.get(inst["instance_id"])
+        session = pool.get(inst["instance_id"])
+        if inst.get("nav_warning"):
+            # The launch navigation timed out (seen on a Windows Firefox runner);
+            # every test here needs the page, so load it again with room to spare.
+            await session.page.goto(page_url, timeout=60_000)
+        yield session
     finally:
         await pool.close(inst["instance_id"], force=True)
         await pool.shutdown()

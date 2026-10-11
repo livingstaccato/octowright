@@ -19,6 +19,7 @@ import json
 import urllib.parse
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -68,12 +69,28 @@ async def _browser() -> AsyncIterator[object]:
         raise
 
 
+async def _plain_screenshot(page: Any, target: Path) -> None:
+    """Playwright's screenshot, asked again when Chrome has no frame yet.
+
+    The same "Unable to capture screenshot" ``safe_screenshot`` retries; a
+    reference shot failing on it says nothing about the redaction.
+    """
+    for attempt in range(1, 4):
+        try:
+            await page.screenshot(path=str(target))
+            return
+        except Exception as exc:
+            if "Unable to capture screenshot" not in str(exc) or attempt == 3:
+                raise
+            await asyncio.sleep(0.1)
+
+
 async def _render(browser: object, html: str, target: Path) -> bytes:
     page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
     try:
         await page.set_content(html)
         await page.wait_for_timeout(300)
-        await page.screenshot(path=str(target))
+        await _plain_screenshot(page, target)
     finally:
         await page.close()
     return target.read_bytes()
@@ -410,7 +427,7 @@ async def test_an_xhtml_page_with_prefixed_svg_elements_never_keeps_the_value(tm
             page = await browser.new_page(viewport=VIEWPORT)  # type: ignore[attr-defined]
             try:
                 await _load_xhtml(page, body)
-                await page.screenshot(path=str(tmp_path / f"{name}.png"))
+                await _plain_screenshot(page, tmp_path / f"{name}.png")
                 shots[name] = (tmp_path / f"{name}.png").read_bytes()
             finally:
                 await page.close()
