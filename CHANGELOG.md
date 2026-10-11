@@ -104,8 +104,9 @@ a section that is already tagged and on PyPI.
   counts as alive until it has exited, so a window close is judged as before.
 - **A redacted screenshot no longer fails when Chrome has no frame ready.**
   Chrome can answer a capture with "Unable to capture screenshot" when it has
-  not produced a frame yet. The capture is now asked again, up to three times;
-  the check after the capture still covers every change to the page.
+  not produced a frame yet. The capture is now tried up to three times in all,
+  unless the page is hidden or has no size and so can never produce one; the
+  check after the capture still covers every change to the page.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of

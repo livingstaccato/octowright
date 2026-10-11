@@ -84,12 +84,15 @@ ScreenshotHandler = Callable[..., Awaitable[tuple[int, int] | None]]
 _OPERATION = "macro_redacted_screenshot"
 
 # Chrome answers Page.captureScreenshot this way when it has no frame to copy
-# yet (seen on a loaded Linux CI runner, between two proofs that passed).
-# Nothing on the page changed, so the capture is asked again: the proof after it
-# still covers every change since counting began.
+# yet (seen on a loaded Linux CI runner, between two proofs that passed). The
+# capture is tried up to _CAPTURE_ATTEMPTS times in all: change counting stays
+# on across the retries and the proof after the capture still covers every
+# change since counting began. A page that is hidden or has no size can never
+# produce a frame, so it is not retried.
 _NO_FRAME = "Unable to capture screenshot"
 _CAPTURE_ATTEMPTS = 3
 _CAPTURE_RETRY_SECONDS = 0.1
+_CAN_PRODUCE_FRAME = "document.visibilityState === 'visible' && innerWidth > 0 && innerHeight > 0"
 
 
 def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
@@ -206,7 +209,7 @@ async def _capture(cdp: Any, target: Path) -> None:
             shot = await bounded(cdp.send("Page.captureScreenshot", {"format": image}), operation=_OPERATION)
             break
         except Exception as exc:
-            if _NO_FRAME not in str(exc) or attempt == _CAPTURE_ATTEMPTS:
+            if _NO_FRAME not in str(exc) or attempt == _CAPTURE_ATTEMPTS or not await _can_produce_frame(cdp):
                 raise
             log.debug("octowright.macro.redacted_screenshot.no_frame", attempt=attempt)
             await asyncio.sleep(_CAPTURE_RETRY_SECONDS)
@@ -217,6 +220,19 @@ async def _capture(cdp: Any, target: Path) -> None:
         temporary.write_bytes(data)
 
     await atomic_write_via_writer(target, write)
+
+
+async def _can_produce_frame(cdp: Any) -> bool:
+    """Whether asking again could succeed: the page is visible and has a size. Unknown reads as no."""
+    try:
+        reply = await bounded(
+            cdp.send("Runtime.evaluate", {"expression": _CAN_PRODUCE_FRAME, "returnByValue": True}),
+            operation=_OPERATION,
+        )
+    except Exception:
+        log.debug("octowright.macro.redacted_screenshot.frame_probe_failed", exc_info=True)
+        return False
+    return reply.get("result", {}).get("value") is True
 
 
 async def _pause_animations(freeze: AnimationFreeze) -> None:
