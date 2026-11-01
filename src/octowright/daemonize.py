@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
@@ -118,31 +119,80 @@ def daemon_log_path() -> Path:
     return _DAEMON_LOG
 
 
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec="seconds")
+
+
+def _stale_sink_note(file_mtime: float | None) -> str | None:
+    """Where the RUNNING leader's stderr really goes, when this file can't be it.
+
+    The redirect installed here only covers daemons THIS module spawned. A
+    leader started directly by a service manager — a systemd user unit such as
+    octowright.service whose ``ExecStart`` runs ``serve --daemon-mode`` —
+    connects stderr to the service journal instead, so the log file simply
+    stops advancing while the daemon is healthy. Observed live: the file froze
+    mid-month right after the host moved the daemon under systemd, and every
+    "read the daemon log" error message quoted a dead log for weeks. The
+    signature is a lockfile leader newer than the log: an election-spawned
+    leader writes the file at spawn, so a live lock whose ``started_at`` is
+    later than the file's mtime means this file is not that leader's stderr.
+
+    ``file_mtime`` None = the log file is missing entirely, in which case any
+    running leader is also logging elsewhere.
+    """
+    info = _sn.read_lock()
+    if info is None or _sn.is_stale(info):
+        return None
+    if file_mtime is not None and file_mtime >= info.started_at:
+        return None
+    written = "never created" if file_mtime is None else f"last written {_iso(file_mtime)}"
+    return (
+        f"(log sink: the running leader (pid {info.pid}, started {_iso(info.started_at)}) is not writing "
+        f"{_DAEMON_LOG} ({written}) — its stderr goes elsewhere. On a host running Octowright under a "
+        f"systemd user unit (e.g. octowright.service), the live daemon log is: "
+        f"journalctl --user -u octowright.service)"
+    )
+
+
+def _tail_lines(lines: list[str], *, started_mid_file: bool, max_lines: int) -> list[str]:
+    """The last ``max_lines`` non-empty lines, in order; a mid-file start drops
+    the first line, whose head was never read."""
+    if started_mid_file and lines:
+        lines = lines[1:]
+    kept = [line for line in lines if line.strip()]
+    return kept[-max_lines:]
+
+
 def daemon_log_tail(max_lines: int = _DAEMON_LOG_TAIL_LINES) -> str:
     """Last few lines of the daemon log, or a note saying why there are none.
 
     Callers print this when a spawn fails, so it must never raise: a missing
-    or unreadable log is itself the diagnostic.
+    or unreadable log is itself the diagnostic. When the file cannot be the
+    RUNNING leader's stderr (it predates that leader, or is missing with a
+    leader up), a ``_stale_sink_note`` line is appended pointing at the real
+    sink — quoting a dead log as "the daemon's log" was the failure mode that
+    hid the throttle storm for weeks.
     """
+    try:
+        file_mtime = _DAEMON_LOG.stat().st_mtime
+    except OSError:
+        file_mtime = None
+    note = _stale_sink_note(file_mtime)
+
+    def _out(body: str) -> str:
+        return f"{body}\n{note}" if note else body
+
     try:
         raw, started_mid_file = _read_log_tail_bytes()
         lines = raw.decode("utf-8", errors="replace").splitlines()
     except FileNotFoundError:
-        return f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)"
+        return _out(f"(no daemon log at {_DAEMON_LOG}; the daemon may never have started)")
     except OSError as exc:
         return f"(daemon log at {_DAEMON_LOG} unreadable: {exc})"
-    if started_mid_file and lines:
-        lines = lines[1:]
-    tail: list[str] = []
-    for line in reversed(lines):
-        if len(tail) >= max_lines:
-            break
-        if line.strip():
-            tail.append(line)
-    tail.reverse()
+    tail = _tail_lines(lines, started_mid_file=started_mid_file, max_lines=max_lines)
     if not tail:
-        return f"(daemon log at {_DAEMON_LOG} is empty)"
-    return "\n".join(tail)
+        return _out(f"(daemon log at {_DAEMON_LOG} is empty)")
+    return _out("\n".join(tail))
 
 
 def _detach_candidates() -> list[dict[str, Any]]:
@@ -202,6 +252,36 @@ def console_script_beside_interpreter() -> Path | None:
     suffix = ".exe" if sys.platform == "win32" else ""
     candidate = Path(sys.executable).parent / f"octowright{suffix}"
     return candidate if candidate.exists() else None
+
+
+def recommended_serve_command() -> tuple[str, list[str]]:
+    """The ``octowright serve`` launch every MCP client registration should use.
+
+    The installed console script, by absolute path — never ``uv --directory
+    <checkout> run octowright serve``. The singleton leader is whichever
+    client's server process wins the election, so pointing clients at a
+    source checkout makes a frozen checkout a candidate shared leader, and a
+    checkout follower against a packaged leader is the version skew that
+    produced the 429-throttle reconnect loop. One install serves every
+    client; a checkout is for contributing to Octowright.
+
+    The bare ``~/.local/bin/octowright`` shim is preferred when it resolves
+    to this install's script (the familiar, upgrade-stable path); otherwise
+    the script beside the running interpreter, which always exists for a real
+    install. With no console script at all (an unusual layout), the bare
+    ``octowright`` PATH form — a client whose PATH lacks it says so plainly
+    on connect, rather than silently launching the wrong tree.
+    """
+    script = console_script_beside_interpreter()
+    if script is None:
+        return "octowright", ["serve"]
+    shim = Path.home() / ".local" / "bin" / script.name
+    try:
+        if shim.exists() and shim.resolve() == script.resolve():
+            return str(shim), ["serve"]
+    except OSError as exc:
+        log.debug("octowright.daemonize.shim_resolve_failed", error=repr(exc))
+    return str(script), ["serve"]
 
 
 def _resolve_daemon_entrypoint() -> list[str]:

@@ -133,13 +133,26 @@ def install_skill_to_claude(*, dry_run: bool = False, force: bool = False) -> In
     return _install_skill_tree("claude_skill", _claude_skill_destination(), dry_run=dry_run, force=force)
 
 
+def _antigravity_mcp_config() -> str:
+    """The agy plugin's ``mcp_config.json``: the installed console script when
+    this machine has one, the packaged ``uvx octowright serve`` fallback
+    otherwise."""
+    from octowright.daemonize import console_script_beside_interpreter, recommended_serve_command
+
+    if console_script_beside_interpreter() is None:
+        return _packaged_manifest("antigravity-mcp-config.json")
+    command, args = recommended_serve_command()
+    return json.dumps({"mcpServers": {"octowright": {"command": command, "args": args}}}, indent=2) + "\n"
+
+
 def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) -> InstallResult:
     """Install the octowright skill and plugin manifest into the agy store.
 
     agy shares ~/.gemini/config/plugins/ as its plugin installation root.
     Each plugin dir contains plugin.json + mcp_config.json + a skills/
-    subdir with one subdir per skill. The mcp_config.json registers
-    ``uvx octowright serve`` as the MCP server so agy auto-wires it on
+    subdir with one subdir per skill. The mcp_config.json registers the
+    installed ``octowright serve`` when this machine has one and
+    ``uvx octowright serve`` otherwise, so agy auto-wires it on
     plugin install — no manual harness-config step required.
     """
     source = _packaged_skill_path()
@@ -195,8 +208,13 @@ def install_skill_to_antigravity(*, dry_run: bool = False, force: bool = False) 
     (destination / "plugin.json").write_text(manifest_content, encoding="utf-8", newline="\n")
 
     # mcp_config.json wires up the octowright MCP server so agy can spawn
-    # it without the user editing harness config by hand.
-    mcp_config_content = _packaged_manifest("antigravity-mcp-config.json")
+    # it without the user editing harness config by hand. On a machine that
+    # already has the packaged install this renders the installed script —
+    # the one-install-one-leader guidance, so agy's follower never drifts a
+    # version from the daemon the other clients use. A machine without it
+    # keeps the packaged ``uvx octowright serve`` fallback (a plugin install
+    # cannot assume the tool was installed first).
+    mcp_config_content = _antigravity_mcp_config()
     (destination / "mcp_config.json").write_text(mcp_config_content, encoding="utf-8", newline="\n")
 
     return InstallResult(
