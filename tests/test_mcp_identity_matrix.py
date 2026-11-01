@@ -19,15 +19,14 @@ from octowright import mcp_identity
 
 
 def test_instructions_render_the_matrix_verbatim() -> None:
+    """INSTRUCTIONS carries the matrix as-is: an entry added to RECONNECT_STEPS
+    without rendering would be advice the operator sees and the client never
+    hears (the drift this refactor exists to prevent)."""
     matrix = " ".join(mcp_identity.reconnect_matrix_lines())
-    assert matrix in mcp_identity.INSTRUCTIONS
-
-
-def test_every_in_instruction_entry_appears_in_instructions() -> None:
     for entry in mcp_identity.RECONNECT_STEPS:
-        if not entry.in_instructions or not entry.step:
-            continue
-        assert f"{entry.name} — {entry.step}." in mcp_identity.INSTRUCTIONS
+        if entry.in_instructions and entry.step:
+            assert f"{entry.name} — {entry.step}." in matrix
+    assert matrix in mcp_identity.INSTRUCTIONS
 
 
 def test_no_session_clients_are_named_as_one_group() -> None:

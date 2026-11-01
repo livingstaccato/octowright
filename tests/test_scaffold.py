@@ -283,3 +283,17 @@ class TestRecommendedServeCommand:
 
         monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: None)
         assert daemonize.recommended_serve_command() == ("octowright", ["serve"])
+
+    def test_beside_script_passed_through_when_no_shim_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``recommended_serve_command``'s middle branch: a real script next to
+        the interpreter, but no ~/.local/bin shim pointing at it."""
+        import octowright.daemonize as daemonize
+
+        script = tmp_path / "tool" / "bin" / "octowright"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: script)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        assert daemonize.recommended_serve_command() == (str(script), ["serve"])

@@ -22,14 +22,18 @@ clock-free, so what varies is only the observable the assertions read.
 
 from __future__ import annotations
 
+import contextlib
+import time
 from typing import Any
 
 import anyio
 import httpx2
 import pytest
+from mcp.shared.message import SessionMessage
 
 from octowright import proxy_retry
 from octowright import proxy_runtime as runtime
+from octowright import proxy_supervisor as supervisor
 from tests._proxy_supervisor_helpers import _tools_call
 
 
@@ -47,16 +51,32 @@ def _refusal_group(status: int, *, retry_after: str | None = None) -> ExceptionG
 
 
 class _RefusingLeader:
-    """Every connect raises the refusal the real transport surfaces."""
+    """Every connect raises the refusal the real transport surfaces — until
+    ``accepting`` flips it to handing out in-memory sessions."""
 
     def __init__(self, status: int = 429, *, retry_after: str | None = None) -> None:
         self.status = status
         self.retry_after = retry_after
         self.attempts = 0
+        self.accepting = False
+        self.sessions: list[tuple[Any, Any]] = []
 
     def client(self, _url: Any, **_kwargs: Any) -> Any:
         self.attempts += 1
-        raise _refusal_group(self.status, retry_after=self.retry_after)
+        if not self.accepting:
+            raise _refusal_group(self.status, retry_after=self.retry_after)
+        return self._accept()
+
+    @contextlib.asynccontextmanager
+    async def _accept(self):  # type: ignore[no-untyped-def]
+        read_send, read_recv = anyio.create_memory_object_stream[Any](20)
+        write_send, write_recv = anyio.create_memory_object_stream[Any](20)
+        self.sessions.append((read_send, write_recv))
+        try:
+            yield (read_recv, write_send)
+        finally:
+            await read_send.aclose()
+            await write_send.aclose()
 
 
 def _wire(monkeypatch: pytest.MonkeyPatch, leader: _RefusingLeader) -> tuple[Any, Any, list[dict[str, Any]]]:
@@ -162,3 +182,44 @@ async def test_a_client_call_during_throttle_gets_the_named_error(monkeypatch: p
     assert "leader throttled this follower" in text
     assert "HTTP 429" in text
     assert "vs leader v" in text
+
+
+@pytest.mark.anyio
+async def test_a_successful_connect_clears_the_throttle_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mirror-image failure mode: a follower that throttled and then
+    reconnects must not keep "last_error: throttled" in every later snapshot,
+    or the summary reads as still-broken."""
+    leader = _RefusingLeader(429, retry_after="0.05")
+    _local_in, _local_out, snapshots = _wire(monkeypatch, leader)
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: runtime.run_supervised_proxy(leader_mcp_url="http://127.0.0.1:6299/mcp/"))
+        await _await_snapshots(snapshots, 2)
+        assert snapshots[-1]["last_error"] is not None
+        leader.accepting = True
+        with anyio.fail_after(10.0):
+            while not any(snap["last_error"] is None for snap in snapshots[2:]):
+                await anyio.sleep(0.01)
+        tg.cancel_scope.cancel()
+    assert leader.sessions, "the follower reconnected once the leader accepted"
+
+
+@pytest.mark.anyio
+async def test_a_timeout_during_throttle_names_the_cause() -> None:
+    """The timeout text gets the same cause, so 'Octowright bridge error:
+    request timed out' during a throttle no longer reads as a hung leader."""
+    out_send, out_recv = anyio.create_memory_object_stream[SessionMessage](10)
+    sup = supervisor.BridgeSupervisor(local_read=None, local_write=out_send, request_timeout_seconds=20.0)
+    sup.connect_status_hint = (
+        "leader throttled this follower via its new-session rate limit (HTTP 429),"
+        " retry in 10.0s; follower v0.26.0 vs leader v0.26.0"
+    )
+    now = time.monotonic()
+    sup._in_flight["call-1"] = supervisor.InFlightRequest(
+        request_id="call-1", method="tools/call", started_at=now, deadline=now - 1.0
+    )
+    await sup._expire_overdue(now, None)
+    response = await out_recv.receive()
+    root = getattr(response.message, "root", response.message)
+    text = root.error.message
+    assert "timed out while waiting for leader response" in text
+    assert "leader throttled this follower" in text

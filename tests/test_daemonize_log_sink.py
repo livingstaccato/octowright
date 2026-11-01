@@ -74,3 +74,17 @@ def test_missing_log_with_a_running_leader_points_at_the_journal(
     tail = daemonize.daemon_log_tail()
     assert "no daemon log" in tail
     assert "journalctl --user -u octowright.service" in tail
+
+
+def test_an_empty_daemon_log_says_so_and_still_notes_the_sink(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    log_path = tmp_path / "logs" / "octowright-daemon.log"
+    log_path.parent.mkdir(parents=True)
+    log_path.write_text("", encoding="utf-8")
+    mtime = 1_000_000.0
+    os.utime(log_path, (mtime, mtime))
+    monkeypatch.setattr(daemonize, "_DAEMON_LOG", log_path)
+    monkeypatch.setattr(daemonize._sn, "read_lock", lambda: _lock(7489, 2_000_000.0))
+    monkeypatch.setattr(daemonize._sn, "pid_is_alive", lambda _pid: True)
+    tail = daemonize.daemon_log_tail()
+    assert "is empty" in tail
+    assert "journalctl --user -u octowright.service" in tail

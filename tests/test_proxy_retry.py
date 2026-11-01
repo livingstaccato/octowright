@@ -66,6 +66,12 @@ class TestRetryAfter:
         parsed = proxy_retry._retry_after_seconds(formatdate(time.time() + 30, usegmt=True))
         assert parsed is not None and 20 <= parsed <= 31
 
+    def test_http_date_without_timezone_is_treated_as_utc(self) -> None:
+        """An HTTP-date header missing its tz token: parsedate yields a naive
+        datetime, which must not silently become local time."""
+        parsed = proxy_retry._retry_after_seconds(formatdate(time.time() + 30).rsplit(" ", 1)[0])
+        assert parsed is not None and 0 <= parsed <= 31
+
     def test_garbage_is_absent_not_zero(self) -> None:
         assert proxy_retry._retry_after_seconds("soon") is None
         assert proxy_retry._retry_after_seconds(None) is None

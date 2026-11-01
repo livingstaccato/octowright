@@ -891,3 +891,55 @@ class TestFollowersThrottledBranch:
         assert "pid 100" in check.detail
         assert "/mcp -> select octowright -> Reconnect" in check.detail
         assert check.data["throttled_followers"] == 1
+
+
+class TestRemedyClause:
+    def test_clause_caps_at_three_and_counts_the_rest(self) -> None:
+        rows = [{"pid": 100 + i, "needs_attention": True, "client": "pi", "reconnect_step": "step-x"} for i in range(5)]
+        clause = _daemon._remedy_clause(rows)
+        assert clause.count("pid ") == 3
+        assert "+2 more" in clause
+
+    def test_no_flagged_rows_means_no_clause(self) -> None:
+        assert _daemon._remedy_clause([{"pid": 1, "needs_attention": False}]) == ""
+
+    def test_handshake_mismatch_row_is_flagged(self) -> None:
+        state = {
+            "followers": {
+                "100": {
+                    "follower_pid": 100,
+                    "follower_version": "0.26.0",
+                    "last_error": None,
+                    "handshake_mismatch": ["instructions"],
+                    "ts": 1.0,
+                }
+            },
+            "events": [],
+        }
+        rows = _daemon._follower_rows(state, "0.26.0", [(100, 1, "/usr/bin/octowright serve")])
+        (row,) = rows
+        assert row["needs_attention"] is True
+        assert row["handshake_mismatch"] == ["instructions"]
+
+    def test_tokens_cover_windows_exe_names(self) -> None:
+        assert "code" in _daemon._name_tokens("C:\\Program Files\\Code\\Code.exe")
+        assert "code" in _daemon._name_tokens("/opt/Code Helper (Renderer)/Code Helper (Renderer)")
+        assert _daemon._name_tokens("") == frozenset()
+
+    def test_rows_skip_dead_and_unparsable_followers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda pid: pid == 100)
+        state = {
+            "followers": {
+                "99": {"last_error": None},
+                "100": {"follower_version": "0.26.0", "last_error": None, "ts": 1.0},
+                "junk-key": {"last_error": "throttled by the leader (HTTP 429)"},
+            },
+            "events": [],
+        }
+        rows = _daemon._follower_rows(state, "0.26.0", [])
+        (row,) = rows
+        assert row["pid"] == 100
+
+    def test_detect_client_gives_up_when_owner_is_not_in_the_table(self) -> None:
+        assert _daemon._detect_client(42, [(1, 0, "init")]) is None
+        assert _daemon._detect_client(50, [(50, 51, "/usr/bin/octowright serve")]) is None

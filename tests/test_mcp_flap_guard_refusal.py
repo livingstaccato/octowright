@@ -188,3 +188,43 @@ async def test_continuations_are_never_counted(monkeypatch: pytest.MonkeyPatch) 
     mw = _middleware()
     statuses = [status for status, _ in [await _drive(mw, _scope(with_session=True)) for _ in range(30)]]
     assert statuses == [None] * 30
+
+
+async def test_log_and_refusal_bookkeeping_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keys are client-chosen, so every map the guard keeps has the same ceiling
+    the limiter's buckets have: flooding keys prunes the oldest, it never grows
+    without bound."""
+    monkeypatch.setattr(fg, "_MAX_TRACKED_SOURCES", 2)
+    clock = _patch_clock(monkeypatch)
+    mw = fg.McpNewSessionRateLimitMiddleware(
+        app=None,
+        limiter=fg.NewSessionRateLimiter(max_events=0, window_seconds=10.0),
+        retry_after=10.0,
+        refusal_span=20.0,
+    )
+    for pid in (b"1", b"2", b"3", b"4"):
+        clock["now"] += 1.0
+        await _drive(mw, {"type": "http", "method": "POST", "headers": [(b"x-octowright-follower", pid)]})
+    assert len(mw._throttled_since_log) <= 2
+    assert len(mw._last_log_at) <= 2
+    assert len(mw._rejections) <= 2
+
+
+class TestRefusalKnob:
+    """The knob's OFF/ON parsing: disabling must stay easy in an incident, and a
+    typo must fail toward the default (on), never silently wider."""
+
+    def test_default_is_five_windows(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS", raising=False)
+        assert fg.mcp_sustained_refusal_span() == pytest.approx(50.0)
+
+    def test_off_and_nonpositive_disable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for raw in ("off", "never", "0", "-3"):
+            monkeypatch.setenv("OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS", raw)
+            assert fg.mcp_sustained_refusal_span() is None, raw
+
+    def test_explicit_value_and_unparsable_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS", "30")
+        assert fg.mcp_sustained_refusal_span() == pytest.approx(30.0)
+        monkeypatch.setenv("OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS", "junk")
+        assert fg.mcp_sustained_refusal_span() == pytest.approx(50.0)
