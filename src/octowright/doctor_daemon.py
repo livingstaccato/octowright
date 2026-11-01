@@ -18,8 +18,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from octowright.doctor import Check
+from octowright.doctor import Check, Status
+from octowright.mcp_identity import RECONNECT_STEPS, ClientReconnect, client_step
 from octowright.singleton import pid_is_alive, read_lock
+
+_UNKNOWN_CLIENT_STEP = (
+    "the owning MCP client could not be identified from its process tree — reconnect whichever client "
+    "spawned it; as a last resort `octowright restart --kill-followers` cuts every follower at once"
+)
 
 
 async def check_daemon() -> Check:
@@ -148,6 +154,140 @@ async def check_canonical_port() -> Check:
     )
 
 
+def _argv0_tokens(argv0: str) -> set[str]:
+    """Tokens of a command name: itself plus its dash/space/dot pieces, so
+    "code-insiders" and "Code Helper" both match the "code" marker."""
+    argv0 = argv0.lower()
+    if argv0.endswith(".exe"):
+        argv0 = argv0[:-4]
+    if not argv0:
+        return set()
+    pieces = argv0.replace("_", "-").replace(".", "-").replace(" ", "-").split("-")
+    return {argv0, *(piece for piece in pieces if piece)}
+
+
+def _name_tokens(cmdline: str) -> frozenset[str]:
+    """Lowercase name tokens of a cmdline for client detection: argv0's
+    basename with its pieces, and full basenames of later executable-looking
+    args (so a client launched as ``node …/pi`` is found by its script name).
+    Full-token matching only — substrings would make any path under a
+    ``code/`` directory look like a VS Code client."""
+    tokens: set[str] = set()
+    fields = cmdline.split()
+    if fields:
+        tokens.update(_argv0_tokens(fields[0].replace("\\", "/").rsplit("/", 1)[-1]))
+    for field in fields[1:]:
+        if field.startswith("-"):
+            continue
+        base = field.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if base.endswith(".exe"):
+            base = base[:-4]
+        if base:
+            tokens.add(base)
+            tokens.add(base.split(".", 1)[0])
+    return frozenset(tokens)
+
+
+def _detect_client(follower_pid: int, table: list[tuple[int, int, str]]) -> ClientReconnect | None:
+    """The first ``RECONNECT_STEPS`` entry whose markers match an ancestor of
+    the follower (a follower's own argv is always octowright's). Walks parents
+    only, so the MCP client that spawned the follower is named rather than an
+    unrelated process; a dead or reparented owner ends the walk unidentified."""
+    by_pid = {pid: (ppid, cmd) for pid, ppid, cmd in table}
+    node = by_pid.get(follower_pid)
+    if node is None:
+        return None
+    ppid, _ = node
+    for _ in range(16):
+        parent = by_pid.get(ppid)
+        if parent is None:
+            return None
+        p_ppid, p_cmd = parent
+        tokens = _name_tokens(p_cmd)
+        for entry in RECONNECT_STEPS:
+            if any(marker in tokens for marker in entry.markers):
+                return entry
+        if p_ppid <= 1 or p_ppid == ppid:
+            return None
+        ppid = p_ppid
+    return None
+
+
+def _as_text(value: Any) -> str | None:
+    """A non-empty string field from an untyped snapshot, else None."""
+    return value if isinstance(value, str) and value else None
+
+
+def _as_str_list(value: Any) -> list[str]:
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
+def _snapshot_row(pid_key: str, snap: Any, leader: str) -> dict[str, Any] | None:
+    """One live follower's flag row, or None when the entry isn't one.
+
+    Liveness matches ``summarize_state``'s partition (dead followers are not
+    reported anywhere). "Throttled" reads the snapshot's ``last_error``: both
+    the pre-fix ExceptionGroup wrapping a 429 and the post-fix named throttle
+    text report it, so the row flags either codebase."""
+    from octowright.bridge_state import UNKNOWN_FOLLOWER_VERSION
+
+    if not isinstance(snap, dict):
+        return None
+    try:
+        pid = int(pid_key)
+    except (TypeError, ValueError):
+        return None
+    if not pid_is_alive(pid):
+        return None
+    version = _as_text(snap.get("follower_version")) or UNKNOWN_FOLLOWER_VERSION
+    last_error = _as_text(snap.get("last_error"))
+    mismatch = _as_str_list(snap.get("handshake_mismatch"))
+    stale = version != leader
+    throttled = last_error is not None and ("throttl" in last_error.lower() or "429" in last_error)
+    return {
+        "pid": pid,
+        "version": version,
+        "stale": stale,
+        "handshake_mismatch": mismatch or None,
+        "throttled": throttled,
+        "last_error": last_error,
+        "needs_attention": stale or bool(mismatch) or throttled,
+    }
+
+
+def _follower_rows(state: dict[str, Any], leader: str, table: list[tuple[int, int, str]]) -> list[dict[str, Any]]:
+    """Per-live-follower detail rows for the check's data and remedy clause."""
+    followers = state.get("followers") if isinstance(state, dict) else None
+    rows: list[dict[str, Any]] = []
+    if not isinstance(followers, dict):
+        return rows
+    for pid_key, snap in followers.items():
+        row = _snapshot_row(pid_key, snap, leader)
+        if row is None:
+            continue
+        if row["needs_attention"]:
+            entry = _detect_client(row["pid"], table)
+            row["client"] = (entry.detect_label or entry.name) if entry else None
+            row["reconnect_step"] = client_step(entry) if entry else _UNKNOWN_CLIENT_STEP
+        rows.append(row)
+    return rows
+
+
+def _remedy_clause(rows: list[dict[str, Any]]) -> str:
+    """ "; pid N (<client>): <reconnect step>" for the flagged rows, capped at 3.
+
+    Every flagged follower names its own owner and step: the remediation is
+    per-client and this clause is the whole point of the check."""
+    flagged = [r for r in rows if r.get("needs_attention")]
+    if not flagged:
+        return ""
+    bits = [f"pid {r['pid']} ({r.get('client') or 'client unknown'}): {r['reconnect_step']}" for r in flagged[:3]]
+    extra = len(flagged) - 3
+    if extra > 0:
+        bits.append(f"+{extra} more")
+    return " — " + "; ".join(bits)
+
+
 async def check_followers() -> Check:
     """Do the live followers run the same code as the daemon answering for them?
 
@@ -177,10 +317,18 @@ async def check_followers() -> Check:
     if leader is None:
         return Check("followers", "skip", "no daemon answering — nothing to compare followers against", {})
 
-    summary = summarize_state(read_state(defaults.BRIDGE_STATE_PATH))
+    state = read_state(defaults.BRIDGE_STATE_PATH)
+    summary = summarize_state(state)
     versions: dict[str, int] = summary.get("follower_versions") or {}
     live = summary.get("follower_count", 0)
     dead = summary.get("dead_follower_count", 0)
+    # Per-follower rows tie each flag to the client that must act on it:
+    # the remediation is per-client (only ITS reconnect spawns a fresh
+    # follower), so the check names the client and its step instead of
+    # repeating one generic line. table is read once for all detections.
+    from octowright.process_reaper import list_processes
+
+    rows = _follower_rows(state, leader, list_processes())
     # summarize_state compares against THIS process's VERSION; recompute against
     # the daemon that is actually answering, through the same shared predicate
     # so only the baseline differs.
@@ -190,6 +338,7 @@ async def check_followers() -> Check:
     # a summary from before the field existed.
     mismatched = summary.get("handshake_mismatch_count") or 0
     mismatch_fields: dict[str, int] = summary.get("handshake_mismatch_fields") or {}
+    throttled_rows = [row for row in rows if row["throttled"]]
     data = {
         "leader_version": leader,
         "follower_versions": versions,
@@ -198,28 +347,58 @@ async def check_followers() -> Check:
         "dead_followers_ignored": dead,
         "handshake_mismatches": mismatched,
         "handshake_mismatch_fields": mismatch_fields,
+        "throttled_followers": len(throttled_rows),
+        "followers": rows,
     }
     if not live:
         return Check("followers", "ok", f"no live followers (leader {leader})", data)
+    status, detail = _followers_verdict(
+        leader=leader,
+        live=live,
+        versions=versions,
+        stale=stale,
+        mismatched=mismatched,
+        mismatch_fields=mismatch_fields,
+        throttled_rows=throttled_rows,
+    )
+    return Check("followers", status, detail + _remedy_clause(rows), data)
+
+
+def _followers_verdict(
+    *,
+    leader: str,
+    live: int,
+    versions: dict[str, int],
+    stale: int,
+    mismatched: int,
+    mismatch_fields: dict[str, int],
+    throttled_rows: list[dict[str, Any]],
+) -> tuple[Status, str]:
+    """``(status, detail)`` for the followers check, first problem wins:
+    skew, then handshake drift, then the leader's 429 loop against a follower.
+    The per-client remedy clause is appended by the caller for any of these."""
     if stale:
         spread = ", ".join(f"{v} x{c}" for v, c in sorted(versions.items()) if v != leader)
-        return Check(
-            "followers",
+        return (
             "warn",
             f"{stale} of {live} live follower(s) behind leader {leader} ({spread}) — "
             "each client must reconnect; a daemon restart cannot update them",
-            data,
         )
     if mismatched:
         fields = ", ".join(sorted(mismatch_fields))
-        return Check(
-            "followers",
+        return (
             "warn",
             f"{mismatched} of {live} live follower(s) hold a client handshake that differs from "
             f"leader {leader} ({fields}) — each client must reconnect to pick up the leader's",
-            data,
         )
-    return Check("followers", "ok", f"all {live} live follower(s) on leader version {leader}", data)
+    if throttled_rows:
+        return (
+            "warn",
+            f"{len(throttled_rows)} of {live} live follower(s) are bouncing off the leader's "
+            "new-session rate limit (HTTP 429 loop) — a structural follower/leader mismatch, not "
+            "load; only each client's reconnect fixes it",
+        )
+    return "ok", f"all {live} live follower(s) on leader version {leader}"
 
 
 async def _running_leader_version() -> str | None:

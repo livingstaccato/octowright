@@ -75,14 +75,27 @@ driving browsers through followers releases behind the leader while every
 other check passes. It compares against the **running daemon's** version (read from `/api/health`), not this process's
 `VERSION`: doctor is usually invoked from a checkout already upgraded past the
 daemon, so its own version is what the daemon *will* be after a restart, and
-comparing against it would report skew against a version nobody is running --
+compares against it would report skew against a version nobody is running --
 and call a follower that matches the live daemon stale. It warns rather than
 fails (a deployment state, not a broken machine) and `--fix` deliberately does
 not touch it: killing a follower just breaks that client's session, since a
 client does not respawn a dead stdio server. It warns too when a live follower's client holds
 an `initialize` answer that differs from the running leader's
 (`handshake_mismatch_count` in the bridge summary), naming the fields: same
-version, different instructions or capabilities, and the same remedy.
+version, different instructions or capabilities, and the same remedy. It also
+warns on the throttle loop: a live follower whose snapshot `last_error`
+reports the leader's 429 (pre-fix the raw ExceptionGroup, post-fix the named
+throttle text) is bouncing off the new-session rate limit structurally, which
+no amount of waiting fixes.
+
+Because the remediation is per-client, each flagged follower's row (`data.followers`)
+carries the owning client and ITS reconnect step: `_detect_client` walks the
+follower's process-tree ancestry and matches structured markers from
+`mcp_identity.RECONNECT_STEPS` -- the same matrix rendered into the server's
+`INSTRUCTIONS` string, so the step doctor prints is the step the client was
+told, and adding a client (pi, omp) touches one table. A follower whose owner
+has exited walks to the top unidentified and gets the generic
+client-unknown step, which is honest: an orphaned follower serves nobody.
 
 **Dead followers are not counted.** `bridge_state._prune_dead_followers` drops
 exited followers, but only when a follower WRITES a snapshot -- and a follower
