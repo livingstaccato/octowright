@@ -13,6 +13,44 @@ exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
 ### Added
+- **The leader narrates follower throttling, and refuses sustained loops.**
+  The new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`) never logged
+  anything when it fired — invisible without telemetry enabled. It now logs
+  one rate-limited `octowright.mcp.new_session_throttled` warning per source
+  per window, naming the follower key, its admitted window count and the
+  rejections since the previous line, and the 429 body carries the source and
+  `retry_after_seconds`. A source that keeps tripping the limit across
+  `OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS` (default ~5 windows; `off`
+  disables) is switched from pacing to `410 Gone` with a body that says the
+  follower is too old or looping for this leader and to reconnect its MCP
+  client — a quiet source is forgiven, so there is no sticky lockout.
+- **Followers honor `Retry-After` and say who is throttling whom.** When the
+  leader rate-limits a reconnect (429) or refuses one (410), the follower now
+  unwraps the transport's ExceptionGroup (`proxy_retry.classify_connect_error`)
+  instead of showing the raw repr: it waits at least the leader's
+  `Retry-After` before retrying, and the bridge snapshot `last_error`, the
+  JSON-RPC error text and an `octowright.bridge.leader_throttled` log warning
+  all name the state as "leader throttled this follower …, retry in Ns;
+  follower vX vs leader vY". A streak of 5+ consecutive refusals escalates the
+  wording to a persistent follower/leader mismatch with the reconnect remedy,
+  instead of reading as a flaky network. A successful connect now also clears
+  the snapshot's stale `last_error`.
+- **`octowright doctor` names each problem follower's owner and its reconnect
+  step.** The `followers` check now flags a follower the leader is 429-throttling
+  (not only version skew), and every flagged row carries the owning client —
+  detected from the follower's process tree — with that client's exact
+  reconnect step, rendered from the same `mcp_identity.RECONNECT_STEPS` matrix
+  the server's own `instructions` string is built from (now including pi and
+  omp), so the two can't drift.
+- **`octowright init` registers the installed `octowright serve` by default.**
+  The printed MCP block, README and getting-started guide now point clients at
+  the packaged install (absolute path), and state plainly that a source
+  checkout is for contributors and that leader and every follower must then be
+  the same install. The agy/Gemini plugin manifest renders the same detection
+  at skill-install time (installed script when present, `uvx` fallback), and
+  `scripts/bridge_reconnect_smoke.py --follower previous|X.Y.Z` runs a
+  previous release's follower against this checkout's leader (isolated from
+  the real daemon) to prove N-1 bridge compatibility.
 - **Status reports a client holding a different handshake from the
   leader's.** A follower answers `initialize` itself before the election
   returns, and a client can reconnect to a leader restarted on another
@@ -65,6 +103,18 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **A stale daemon log is no longer quoted as the daemon's own.** When the
+  leader runs under a service manager (e.g. a systemd user unit whose
+  `ExecStart` runs `serve --daemon-mode`, wiring stderr to the journal), the
+  `octowright-daemon.log` file stops advancing while the daemon is healthy —
+  and every spawn-failure message kept pointing operators at it.
+  `daemon_log_tail()` now detects a live lockfile leader younger than the log
+  and appends the real sink (`journalctl --user -u octowright.service`) next
+  to the actual tail.
+- **A successful bridge reconnect clears the snapshot's `last_error`.** A
+  follower that throttled once and recovered kept showing the old failure in
+  every later snapshot, so the bridge summary read as still-broken hours
+  later; the error now clears when a session's handshake is answered.
 - **`octowright restart` no longer starts a second leader beside one that
   appeared while it waited.** A client that gave up waiting for the election
   lock could start serving inline, and restart then spawned its own daemon
