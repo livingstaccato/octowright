@@ -42,6 +42,7 @@ version. Two pieces, both on by default:
 
 from __future__ import annotations
 
+import json
 import time
 from collections import deque
 from threading import Lock
@@ -87,6 +88,17 @@ _NEW_SESSION_WINDOW_DEFAULT: Final[float] = 10.0
 # buckets is far past any real client population and costs well under a MB.
 _MAX_TRACKED_SOURCES: Final[int] = 4096
 
+# Sustained-throttle refusal: a source that keeps tripping the new-session
+# limit across whole windows is never going to settle (the observed case was a
+# follower too old for the leader's handshake — every reconnect trips the
+# guard, for days). Pacing that with 429s forever burns the leader's time for
+# nothing, so once a source's rejections span ~5 windows with at least this
+# many rejections, the guard shifts to a flat 410 telling it what the 429
+# never could: this follower cannot work with this leader. Off via the env
+# knob below; a source whose rejections stop for the span is forgiven.
+_REFUSAL_MIN_REJECTIONS: Final[int] = 6
+_REFUSAL_SPAN_FACTOR: Final[float] = 5.0
+
 _ANONYMOUS_SOURCE: Final[str] = "anonymous"
 _FOLLOWER_HEADER: Final[bytes] = b"x-octowright-follower"
 _SESSION_ID_HEADER: Final[bytes] = b"mcp-session-id"
@@ -129,6 +141,23 @@ def mcp_max_sessions(raw: str | None = None) -> int | None:
     return _parse_positive_int(
         os.environ.get("OCTOWRIGHT_MCP_MAX_SESSIONS") if raw is None else raw, _MAX_SESSIONS_DEFAULT
     )
+
+
+def mcp_sustained_refusal_span() -> float | None:
+    """Seconds of sustained throttling (span of a source's rejection window)
+    after which the guard answers 410 Gone instead of 429. Default 5 windows
+    (~50s at the default window); a falsey/non-positive value disables the
+    refusal tier, falling back to pure 429 pacing."""
+    import os
+
+    raw = os.environ.get("OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS")
+    if raw is not None and _is_falsey(raw):
+        return None
+    try:
+        value = float(raw) if raw is not None else _REFUSAL_SPAN_FACTOR * _NEW_SESSION_WINDOW_DEFAULT
+    except ValueError:
+        value = _REFUSAL_SPAN_FACTOR * _NEW_SESSION_WINDOW_DEFAULT
+    return value if value > 0 else None
 
 
 def mcp_new_session_rate() -> tuple[int, float] | None:
@@ -199,6 +228,17 @@ class NewSessionRateLimiter:
         with self._lock:
             self._prune_locked(now - self._window)
 
+    def in_window(self, key: str, now: float) -> int:
+        """Admitted events for ``key`` inside the current window. Read-only
+        (no re-ordering): advisory input for the throttle log line's request
+        count, so it must not perturb the limiter it's describing."""
+        cutoff = now - self._window
+        with self._lock:
+            dq = self._events.get(key)
+            if dq is None:
+                return 0
+            return sum(1 for ts in dq if ts >= cutoff)
+
     def _prune_locked(self, cutoff: float) -> None:
         for key in list(self._events):
             dq = self._events[key]
@@ -260,31 +300,134 @@ def select_eviction_victims(
 
 
 class McpNewSessionRateLimitMiddleware:
-    """Reject over-rate new-session ``/mcp`` requests with ``429`` before they
-    reach the transport (so a throttled creation never registers a session)."""
+    """Reject over-rate new-session ``/mcp`` requests with ``429`` (or ``410``
+    once throttling proves sustained) before they reach the transport, so a
+    throttled creation never registers a session."""
 
-    def __init__(self, app, limiter: NewSessionRateLimiter, *, retry_after: float) -> None:
+    def __init__(
+        self,
+        app,
+        limiter: NewSessionRateLimiter,
+        *,
+        retry_after: float,
+        refusal_span: float | None = None,
+    ) -> None:
         self.app = app
         self._limiter = limiter
         self._retry_after = max(1, round(retry_after))
+        self._refusal_span = refusal_span
+        # Bookkeeping for ONE log line per throttled source per window:
+        # rejections since that source's last line, and when its line went
+        # out. Logging every rejection is itself the storm — a looping
+        # follower hits this middleware many times a second, and the
+        # ``_THROTTLED`` counter is a no-op unless telemetry is enabled, so
+        # without this line a throttled leader says nothing anywhere.
+        # Bounded the same way the limiter bounds its buckets.
+        self._throttled_since_log: dict[str, int] = {}
+        self._last_log_at: dict[str, float] = {}
+        # Sustained tier (410): per-source rejection timestamps, pruned to the
+        # refusal span so a source that goes quiet for the span is forgiven.
+        self._rejections: dict[str, deque[float]] = {}
+        self._refusal_announced: set[str] = set()
+        self._refusal_lock = Lock()
 
     async def __call__(self, scope, receive, send) -> None:
-        if (
-            scope["type"] == "http"
-            and is_new_session_request(scope)
-            and not self._limiter.allow(source_key(scope), time.monotonic())
-        ):
-            _THROTTLED.add(1)
-            await self._reject(send)
-            return
+        if scope["type"] == "http" and is_new_session_request(scope):
+            key = source_key(scope)
+            now = time.monotonic()
+            if not self._limiter.allow(key, now):
+                _THROTTLED.add(1)
+                self._note_throttled(key, now)
+                await self._reject(send, key, gone=self._record_refusal(key, now))
+                return
         await self.app(scope, receive, send)
 
-    async def _reject(self, send) -> None:
-        body = b'{"error":"new-session rate limit exceeded; retry after backoff"}'
+    def _record_refusal(self, key: str, now: float) -> bool:
+        """Whether this rejection crosses into the sustained 410 tier.
+
+        A source whose rejections span the whole refusal window with at least
+        ``_REFUSAL_MIN_REJECTIONS`` events is never going to settle (a
+        follower too old for the leader's handshake trips the limit on every
+        reconnect), so pacing stops and the answer says so instead. A source
+        quiet for the span prunes empty and is forgiven.
+        """
+        if self._refusal_span is None:
+            return False
+        with self._refusal_lock:
+            dq = self._rejections.setdefault(key, deque())
+            if not dq:
+                self._refusal_announced.discard(key)
+            dq.append(now)
+            cutoff = now - self._refusal_span
+            while dq and dq[0] < cutoff:
+                dq.popleft()
+            sustained = len(dq) >= _REFUSAL_MIN_REJECTIONS and dq[-1] - dq[0] >= self._refusal_span
+            rejections = len(dq)
+            if len(self._rejections) > _MAX_TRACKED_SOURCES:
+                # Keys are client-chosen, so the map gets the limiter's own bound.
+                for stale_key in list(self._rejections)[: len(self._rejections) - _MAX_TRACKED_SOURCES]:
+                    self._rejections.pop(stale_key, None)
+        if sustained and key not in self._refusal_announced:
+            self._refusal_announced.add(key)
+            log.warning(
+                "octowright.mcp.sustained_throttle_refused",
+                source=key,
+                rejections=rejections,
+                span_seconds=self._refusal_span,
+            )
+        return sustained
+
+    def _note_throttled(self, key: str, now: float) -> None:
+        """Emit at most one throttle warning per source per window, with counts.
+
+        The line names the follower key and both halves an operator needs:
+        how many new-session requests this source were admitted into the
+        window, and how many were turned away since the previous line — the
+        difference between "burst at the limit" and "hard loop".
+        """
+        self._throttled_since_log[key] = self._throttled_since_log.get(key, 0) + 1
+        last = self._last_log_at.get(key)
+        if last is not None and now - last < self._retry_after:
+            return
+        refused = self._throttled_since_log.pop(key, 0)
+        log.warning(
+            "octowright.mcp.new_session_throttled",
+            source=key,
+            throttled_since_last_log=refused,
+            requests_in_window=self._limiter.in_window(key, now),
+            window_seconds=self._retry_after,
+        )
+        self._last_log_at[key] = now
+        self._bound_log_state()
+
+    def _bound_log_state(self) -> None:
+        """Cap the log bookkeeping at the limiter's own bucket ceiling: keys
+        come from a client-chosen header, so they need the same bound, and a
+        key flood large enough to trip it loses only diagnostic accuracy."""
+        for mapping in (self._last_log_at, self._throttled_since_log):
+            if len(mapping) <= _MAX_TRACKED_SOURCES:
+                continue
+            drop = len(mapping) - _MAX_TRACKED_SOURCES
+            for stale_key in list(mapping)[:drop]:
+                mapping.pop(stale_key, None)
+
+    async def _reject(self, send, key: str, *, gone: bool) -> None:
+        payload = {
+            "source": key,
+            "retry_after_seconds": self._retry_after,
+        }
+        if gone:
+            payload["error"] = (
+                "follower refused: sustained new-session throttling — this follower is too old or "
+                "looping for this leader; reconnect your MCP client so a current follower spawns"
+            )
+        else:
+            payload["error"] = "new-session rate limit exceeded; retry after backoff"
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         await send(
             {
                 "type": "http.response.start",
-                "status": 429,
+                "status": 410 if gone else 429,
                 "headers": [
                     (b"content-type", b"application/json"),
                     (b"retry-after", str(self._retry_after).encode("ascii")),

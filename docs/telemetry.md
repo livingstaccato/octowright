@@ -19,14 +19,14 @@ logging:
 # Human-readable local debugging
 export PROVIDE_LOG_LEVEL=DEBUG
 export PROVIDE_LOG_FORMAT=pretty
-uv run octowright serve
+octowright serve
 ```
 
 ```bash
 # Machine-friendly production logs
 export PROVIDE_LOG_LEVEL=INFO
 export PROVIDE_LOG_FORMAT=json
-uv run octowright serve
+octowright serve
 ```
 
 `octowright serve --log-level DEBUG` is a convenience wrapper that sets
@@ -42,7 +42,7 @@ export PROVIDE_METRICS_ENABLED=1
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 # optional auth/tenant headers
 export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer%20TOKEN,x-tenant-id=dev"
-uv run octowright serve
+octowright serve
 ```
 
 Signals are no-op if telemetry exporters are not configured/available. The
@@ -171,6 +171,12 @@ The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct val
 
 There is intentionally no counter for the ws-cache batched flush — the flush is purely a transport optimization and its frequency is not a useful operational signal.
 
+**Throttle states are log lines, not only counters.** The throttled counters above are no-ops unless metrics are enabled, so both bridge ends also log the state an operator actually needs:
+
+- Leader: `octowright.mcp.new_session_throttled` (warning, at most once per throttled source per window) with `source` (the follower key — its pid, or `anonymous`), `throttled_since_last_log` (rejections since the previous line for that source), `requests_in_window` (admitted new-session requests in the window), and `window_seconds`. The `429` body also carries `source` and `retry_after_seconds` so a current follower can name itself in its own diagnostics.
+- Leader, sustained tier: when one source's rejections span `OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS` (default ~5 windows; `off`/non-positive disables the tier back to pure 429 pacing), the guard answers `410 Gone` instead of `429` and logs `octowright.mcp.sustained_throttle_refused` (warning; `source`, `rejections`, `span_seconds`) on the crossing. The 410 body tells the follower's operator it is too old or looping for this leader and must reconnect its MCP client; a source quiet for the span is forgiven.
+- Follower: `octowright.bridge.leader_throttled` (warning, once per throttled connect) with `streak` (consecutive 429-throttled connects), `retry_in_s` (the sleep taken — the leader's `Retry-After` when larger than the local backoff), and `follower_version` vs `leader_version`. A streak that keeps growing is a structural mismatch (a follower too old for the leader's handshake), not network noise; the bridge snapshot's `last_error` and the JSON-RPC error text name the same versions and say so. A 410 refusal lands in the same surfaces with the remediation up front instead of the retry wording.
+
 ### MCP notifications (proactive, LLM-facing)
 
 Octowright builds JSON-RPC notifications for exceptional situations from `browser_pool` session-event-bus events (`server/mcp_notifications.notification_payload` / `_build_notification`) and delivers them over TWO paths so a client gets them regardless of transport: (1) **stdio** — the emitter (`run_with_notifications`) writes to the stdio server, used when the leader runs inline (`--no-singleton`); (2) **follower bridge** — the leader streams the event bus over the `GET /api/mcp-events` SSE endpoint (`http/routes/mcp_events.py`), and the follower's `proxy_runtime.consume_leader_notifications` re-injects each frame (rebuilt via `payload_to_message`) into the local stdio client write. Path (2) closes the daemon-mode gap: the HTTP-MCP transport the detached-daemon leader serves has no server-initiated-notification path of its own, so without it a stdio-client-through-follower (the normal deployment) would never see crash/driver/close notifications. The leader's own stdio emitter writes to the detached daemon's clientless stdout, so there is no double-delivery. A **direct** HTTP-MCP client that bypasses the follower still gets no push (SDK limitation) — so the LLM should still treat `octowright_status()` (health / crash.recent / pool.lost_sessions) as the authoritative check and notifications as best-effort. Covered end-to-end by `tests/test_mcp_events_daemon_live.py` (via-follower delivery) and `tests/test_mcp_notifications_daemon_live.py` (direct-client boundary).
@@ -226,7 +232,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://<host>/v1/logs
 # or, vendor-specific:
 # export OTEL_EXPORTER_OTLP_HEADERS="api-key=<token>"
 
-uv run octowright serve
+octowright serve
 ```
 
 The OTel SDK is pulled in as an extra (`provide-telemetry[otel]`); without it (or without `PROVIDE_TRACE_ENABLED=true`), the tracer/meter are noops and the cost is one cached attribute lookup per span entry — safe to leave the instrumentation in place.

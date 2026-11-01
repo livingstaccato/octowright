@@ -188,6 +188,13 @@ class BridgeSupervisor:
         self.request_timeouts = 0
         self.suspensions = 0
         self.last_error: str | None = None
+        # A short, current explanation of WHY the leader can't be reached, when
+        # one is known (set by the runtime on a throttled connect, cleared on
+        # the next answered handshake). Appended to the bridge errors built
+        # here so "Octowright bridge error: ..." names the cause — a leader
+        # rate-limiting this follower — instead of reading as a flaky
+        # connection the client should blindly retry.
+        self.connect_status_hint: str | None = None
         self.remote_session_id: str | None = None
         self.reconnect_attempts = 0
         # Identity of the leader process the current session talks to, set by
@@ -299,7 +306,10 @@ class BridgeSupervisor:
             return
         request_id = message_request_id(message)
         if is_request(message) and request_id is not None:
-            await self.local_write.send(bridge_error(request_id, "leader session unavailable; retry"))
+            reason = "leader session unavailable; retry"
+            if self.connect_status_hint is not None:
+                reason = f"leader session unavailable ({self.connect_status_hint}); retry"
+            await self.local_write.send(bridge_error(request_id, reason))
 
     async def forward_one_local_message(self, message: SessionMessage, remote_write_slot: _RemoteWriteSlot) -> None:
         request_id = message_request_id(message)
@@ -672,6 +682,8 @@ class BridgeSupervisor:
             self._discard_progress_token(current)
             self.request_timeouts += 1
             self.last_error = f"request {current.request_id!r} timed out while waiting for leader response"
+            if self.connect_status_hint is not None:
+                self.last_error += f" ({self.connect_status_hint})"
             # Record the full timeout duration so dashboards see the tail
             # latency, not just the success path.
             _BRIDGE_RPC_DURATION.record(

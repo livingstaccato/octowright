@@ -26,7 +26,7 @@ import httpx2
 from mcp.client.streamable_http import streamable_http_client
 from provide.telemetry import get_logger
 
-from octowright import bridge_state, singleton
+from octowright import bridge_state, proxy_retry, singleton
 from octowright._tracing import counter
 from octowright.defaults import (
     BRIDGE_CONNECT_TIMEOUT_SECONDS,
@@ -46,6 +46,7 @@ from octowright.proxy_supervisor import (
     _RemoteWriteSlot,
     bridge_http_client,
 )
+from octowright.version import VERSION
 
 log = get_logger(__name__)
 
@@ -377,6 +378,23 @@ async def leader_health_alive(health_url: str) -> bool:
     return response.status_code == 200
 
 
+async def _leader_health_version(health_url: str | None) -> str | None:
+    """The leader's self-reported version from ``/api/health``, for naming the
+    leader in throttle diagnostics. Best-effort: a degraded/absent leader
+    yields None (rendered as "unknown") — the caller is mid-failure and must
+    never get a second exception from a diagnostic."""
+    if health_url is None:
+        return None
+    try:
+        async with httpx2.AsyncClient(timeout=2.0) as client:
+            response = await client.get(health_url)
+        version = response.json().get("version")
+    except (httpx2.HTTPError, OSError, ValueError) as exc:
+        log.debug("octowright.bridge.leader_version_probe_failed", error=repr(exc))
+        return None
+    return version if isinstance(version, str) and version else None
+
+
 async def run_supervised_proxy(
     *,
     leader_mcp_url: str | None = None,
@@ -489,7 +507,28 @@ async def run_supervised_proxy(
                     remote_write_slot.ready = anyio.Event()
                     await supervisor_obj.fail_or_mark_for_resume(reason)
 
+                async def _snapshot(*, last_error: str | None, attempts: int = 0) -> None:
+                    """The one bridge-state write shape of the reconnect loop (success,
+                    throttled and generic-error paths were three drifting copies)."""
+                    await bridge_state.record_snapshot_async(
+                        path=BRIDGE_STATE_PATH,
+                        follower_pid=__import__("os").getpid(),
+                        remote_url=remote_url,
+                        remote_session_id=supervisor_obj.remote_session_id,
+                        last_error=last_error,
+                        in_flight=supervisor_obj.in_flight_count,
+                        reconnect_attempts=attempts,
+                        request_timeouts=supervisor_obj.request_timeouts,
+                        handshake_mismatch=supervisor_obj.handshake_mismatch,
+                    )
+
                 flap_attempt = 0
+                # Consecutive leader-throttled (429) connects, and the cached
+                # leader version used to name it in diagnostics. Reset on any
+                # success or non-throttle failure — a streak means "the SAME
+                # refusal, repeatedly", which is what the loud wording keys on.
+                throttle_streak = 0
+                throttle_leader_version: list[str | None] = [None]
                 while True:
                     # When this iteration's session became live (None until the
                     # stream opens). Used to detect a flap — a session that ends
@@ -555,6 +594,14 @@ async def run_supervised_proxy(
                                 # flap guard's.
                                 connected_at = anyio.current_time()
                                 attempt = 0
+                                # A session that answered its handshake clears
+                                # every failure marker: a snapshot showing a
+                                # stale last_error long after reconnection reads
+                                # as a still-broken follower (observed live).
+                                throttle_streak = 0
+                                throttle_leader_version[0] = None
+                                supervisor_obj.connect_status_hint = None
+                                supervisor_obj.last_error = None
                                 # Connected → the leader is back. If an outage was
                                 # observed (inline OR by the monitor's unstick), this
                                 # reconnect survived it — meter the recovery, then
@@ -567,17 +614,7 @@ async def run_supervised_proxy(
                                 await supervisor_obj.resume_in_flight(remote_write)
                                 remote_write_slot.write = remote_write
                                 remote_write_slot.ready.set()
-                                await bridge_state.record_snapshot_async(
-                                    path=BRIDGE_STATE_PATH,
-                                    follower_pid=__import__("os").getpid(),
-                                    remote_url=remote_url,
-                                    remote_session_id=supervisor_obj.remote_session_id,
-                                    last_error=supervisor_obj.last_error,
-                                    in_flight=supervisor_obj.in_flight_count,
-                                    reconnect_attempts=supervisor_obj.reconnect_attempts,
-                                    request_timeouts=supervisor_obj.request_timeouts,
-                                    handshake_mismatch=supervisor_obj.handshake_mismatch,
-                                )
+                                await _snapshot(last_error=supervisor_obj.last_error)
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
 
@@ -608,20 +645,64 @@ async def run_supervised_proxy(
                         # Flap guard (success path): throttle a clean instant session.
                         flap_attempt, _ = await _flap_backoff(connected_at, flap_attempt)
                     except Exception as exc:
+                        failure = proxy_retry.classify_connect_error(exc)
+                        if failure.kind in (proxy_retry.KIND_THROTTLED, proxy_retry.KIND_REFUSED):
+                            # The leader rate-limited THIS follower and named a
+                            # Retry-After (or, after sustained throttling, refused
+                            # it outright with a 410). Not a flaky connection:
+                            # honor the asked delay (floored at the ordinary
+                            # backoff), name the throttle everywhere a diagnosis
+                            # could start, and turn the wording loud once the
+                            # streak is clearly structural (a follower too old for
+                            # the leader's handshake loops here — the limit is by
+                            # design, so the fix is a fresh follower, which only
+                            # its client can spawn).
+                            throttle_streak += 1
+                            retry_in = max(
+                                failure.retry_after or 0.0,
+                                reconnect_delay(attempt, max_delay=BRIDGE_RECONNECT_MAX_SECONDS),
+                            )
+                            if failure.kind == proxy_retry.KIND_REFUSED:
+                                hint = proxy_retry.describe_refused(
+                                    retry_in=retry_in,
+                                    leader_version=throttle_leader_version[0],
+                                )
+                            else:
+                                hint = proxy_retry.describe_throttle(
+                                    failure,
+                                    streak=throttle_streak,
+                                    retry_in=retry_in,
+                                    leader_version=throttle_leader_version[0],
+                                )
+                            supervisor_obj.connect_status_hint = hint
+                            supervisor_obj.last_error = hint
+                            refused = failure.kind == proxy_retry.KIND_REFUSED
+                            _BRIDGE_RECONNECT.add(1, attributes={"reason": "refused" if refused else "throttled"})
+                            await _end_remote_session(f"remote leader session reset: {hint}")
+                            await _snapshot(last_error=hint, attempts=attempt)
+                            if not await _leader_recoverable():
+                                _mark_leader_health_failed()
+                                local_tg.cancel_scope.cancel()
+                                return
+                            if throttle_leader_version[0] is None:
+                                throttle_leader_version[0] = await _leader_health_version(health_target[0])
+                            log.warning(
+                                "octowright.bridge.leader_throttled",
+                                streak=throttle_streak,
+                                retry_in_s=round(retry_in, 1),
+                                follower_version=VERSION,
+                                leader_version=throttle_leader_version[0] or "unknown",
+                            )
+                            await anyio.sleep(retry_in)
+                            attempt += 1
+                            continue
+                        throttle_streak = 0
+                        throttle_leader_version[0] = None
+                        supervisor_obj.connect_status_hint = None
                         _BRIDGE_RECONNECT.add(1, attributes={"reason": type(exc).__name__})
                         await _end_remote_session(f"remote leader session reset: {exc!r}")
                         supervisor_obj.last_error = repr(exc)
-                        await bridge_state.record_snapshot_async(
-                            path=BRIDGE_STATE_PATH,
-                            follower_pid=__import__("os").getpid(),
-                            remote_url=remote_url,
-                            remote_session_id=supervisor_obj.remote_session_id,
-                            last_error=supervisor_obj.last_error,
-                            in_flight=supervisor_obj.in_flight_count,
-                            reconnect_attempts=attempt,
-                            request_timeouts=supervisor_obj.request_timeouts,
-                            handshake_mismatch=supervisor_obj.handshake_mismatch,
-                        )
+                        await _snapshot(last_error=supervisor_obj.last_error, attempts=attempt)
                         if not await _leader_recoverable():
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()

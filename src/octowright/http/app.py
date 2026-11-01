@@ -107,6 +107,7 @@ def _wrap_new_session_rate_limit(app: Any) -> Any:
         McpNewSessionRateLimitMiddleware,
         NewSessionRateLimiter,
         mcp_new_session_rate,
+        mcp_sustained_refusal_span,
     )
 
     rate = mcp_new_session_rate()
@@ -115,7 +116,10 @@ def _wrap_new_session_rate_limit(app: Any) -> Any:
     max_n, window = rate
     limiter = NewSessionRateLimiter(max_n, window)
     log.info("octowright.mcp.new_session_rate_limit_set", max=max_n, window_seconds=window)
-    return McpNewSessionRateLimitMiddleware(app, limiter, retry_after=window)
+    refusal_span = mcp_sustained_refusal_span()
+    if refusal_span is not None:
+        log.info("octowright.mcp.sustained_refusal_set", span_seconds=refusal_span)
+    return McpNewSessionRateLimitMiddleware(app, limiter, retry_after=window, refusal_span=refusal_span)
 
 
 # Tracker covering active streamable-HTTP MCP sessions; reset on every
