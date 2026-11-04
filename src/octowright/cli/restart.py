@@ -473,7 +473,7 @@ def _report_existing_leader(ctx: click.Context, found: tuple[str, int | None], h
     ctx.exit(1)
 
 
-def _spawn_daemon(http_host: str, http_port: int) -> int:
+def _spawn_daemon(http_host: str, http_port: int, *, under_election_lock: bool = True) -> int:
     """Spawn a fresh detached daemon. Returns the launcher pid.
 
     Passes the requested host/port through so the health probe that follows
@@ -497,7 +497,9 @@ def _spawn_daemon(http_host: str, http_port: int) -> int:
     # back as the daemon every follower talks to.
     from octowright import daemonize
 
-    pid = daemonize.spawn_daemon(http_host=http_host, http_port=http_port, idle_grace=None)
+    pid = daemonize.spawn_daemon(
+        http_host=http_host, http_port=http_port, idle_grace=None, under_election_lock=under_election_lock
+    )
     click.echo(f"spawned octowright serve (launcher pid={pid}) on {http_host}:{http_port}")
     return pid
 
@@ -609,8 +611,9 @@ def restart(
         # ours to serialize, and a follower replacing the leader we just stopped
         # is that path doing its job -- holding the lock would delay it and
         # prevent nothing. See _spawn_election_lock for the race this closes.
+        lock_held = False
         if not no_start:
-            stack.enter_context(_spawn_election_lock())
+            lock_held = stack.enter_context(_spawn_election_lock())
         stopped, killed, owned_browsers = _stop_leader(timeout, kill_followers=kill_followers, spawn_port=spawn_port)
         if not keep_browsers:
             _reap_browsers(owned_browsers)
@@ -635,7 +638,8 @@ def restart(
             )
             ctx.exit(1)
 
-        launcher_pid = _spawn_daemon(http_host, http_port)
+        # Unlocked (contention), the new daemon takes the lock for itself.
+        launcher_pid = _spawn_daemon(http_host, http_port, under_election_lock=lock_held)
         # Confirm health while STILL holding the lock: releasing before the new
         # daemon binds would let a waiting follower acquire it, still see no
         # leader, and spawn the competitor this exists to prevent.

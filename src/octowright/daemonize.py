@@ -340,6 +340,7 @@ def spawn_daemon(
     http_port: int | None,
     idle_grace: float | None,
     keep_alive: bool = False,
+    under_election_lock: bool = True,
 ) -> int:
     """Spawn a fully detached background ``octowright serve --daemon-mode`` process.
 
@@ -355,6 +356,10 @@ def spawn_daemon(
 
     Every daemon spawner (``restart`` included) comes through here, so the
     entrypoint, the detachment and the daemon log are the same for all of them.
+
+    ``under_election_lock`` tells the daemon its spawner holds the election
+    lock, so it must not wait for it (``cli/_daemon_startup``). Every caller
+    does, except a ``restart`` that proceeded after lock contention.
     """
     args: list[str] = [*_resolve_daemon_entrypoint(), "serve", "--daemon-mode"]
     if http_host:
@@ -366,10 +371,12 @@ def spawn_daemon(
     if keep_alive:
         args.append("--keep-alive")
 
-    return _spawn_detached(args)
+    from octowright.cli._daemon_startup import SPAWNED_UNDER_LOCK_ENV
+
+    return _spawn_detached(args, extra_env={SPAWNED_UNDER_LOCK_ENV: "1"} if under_election_lock else None)
 
 
-def _spawn_detached(args: list[str]) -> int:
+def _spawn_detached(args: list[str], extra_env: dict[str, str] | None = None) -> int:
     """Popen the daemon detached, walking the platform's candidate flag sets.
 
     The parent's copy of the log handle is closed once Popen has duplicated it
@@ -380,6 +387,11 @@ def _spawn_detached(args: list[str]) -> int:
     candidates = _detach_candidates()
     with _open_daemon_log() as log_handle:
         env = os.environ.copy()
+        # Never inherit a stale marker from this process's own environment.
+        from octowright.cli._daemon_startup import SPAWNED_UNDER_LOCK_ENV
+
+        env.pop(SPAWNED_UNDER_LOCK_ENV, None)
+        env.update(extra_env or {})
         for index, detach_kwargs in enumerate(candidates):
             try:
                 # Fixed argv (resolved entrypoint + flags); no shell.

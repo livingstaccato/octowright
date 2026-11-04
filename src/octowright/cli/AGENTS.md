@@ -43,9 +43,12 @@ cookies), `followers`, and, on macOS only, `audio:coreaudio`.
 `daemon:canonical-port` answers a question `daemon` structurally cannot: is a
 SECOND daemon also alive. `check_daemon` reports only on the leader the
 lockfile names, and a daemon started outside Octowright's election path -- a
-systemd unit whose `ExecStart` runs `serve --daemon-mode` directly skips the
-lock by design -- can bind a port while a CLI-triggered spawn lands on
-another. Both stay up; the lockfile records one; `daemon` reports a clean
+systemd unit whose `ExecStart` runs `serve --daemon-mode` directly -- could
+bind a port while a CLI-triggered spawn landed on another. Such a daemon now
+takes the election lock itself and declines to start beside a live leader
+(`cli/_daemon_startup`), so this is the backstop for what that guard cannot
+see: a leader started with a different state dir, or a lock held past its
+budget. Both stay up; the lockfile records one; `daemon` reports a clean
 single leader. Which one it records is a **race**, not a property:
 `cli/serve._on_http_bound` writes the lock with whatever port it actually
 bound, *after* the walk, for every non-`--no-singleton` leader. So the
