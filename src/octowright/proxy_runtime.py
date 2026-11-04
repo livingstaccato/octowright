@@ -38,13 +38,14 @@ from octowright.defaults import (
 )
 from octowright.proxy_inline import InlineLeader, serve_inline_leader
 from octowright.proxy_intake import LocalIntake
+from octowright.proxy_session_loss import arm as arm_session_loss
+from octowright.proxy_session_loss import bridge_http_client
 from octowright.proxy_stdin import stdio_server
 from octowright.proxy_supervisor import (
     _BRIDGE_RECONNECT,
     BridgeSupervisor,
     _RemoteResetSlot,
     _RemoteWriteSlot,
-    bridge_http_client,
 )
 from octowright.version import VERSION
 
@@ -424,6 +425,7 @@ async def run_supervised_proxy(
         async with anyio.create_task_group() as local_tg:
             remote_write_slot = _RemoteWriteSlot()
             remote_reset_slot = _RemoteResetSlot()
+            arm_session_loss(supervisor_obj, remote_write_slot, remote_reset_slot)
             leader_health_failed = False
             # When the leader was first seen unreachable in the current gap (None =
             # reachable). A 1-element list so BOTH the inline reconnect loop AND the
@@ -617,6 +619,8 @@ async def run_supervised_proxy(
                                 await _snapshot(last_error=supervisor_obj.last_error)
                                 async with anyio.create_task_group() as remote_tg:
                                     remote_reset_slot.cancel_scope = remote_tg.cancel_scope
+                                    if supervisor_obj.session_lost is not None:  # lost while resuming
+                                        remote_tg.cancel_scope.cancel()
 
                                     async def _remote_reader(reader: Any = remote_read) -> None:
                                         try:
@@ -637,7 +641,7 @@ async def run_supervised_proxy(
                         # restart, a reaped session) needs the same cleanup as an
                         # error, or its closed writer stays published and its
                         # in-flight calls are answered only by their deadline.
-                        await _end_remote_session("remote leader session ended")
+                        await _end_remote_session(supervisor_obj.session_lost or "remote leader session ended")
                         if not await _leader_recoverable():
                             _mark_leader_health_failed()
                             local_tg.cancel_scope.cancel()
@@ -645,7 +649,7 @@ async def run_supervised_proxy(
                         # Flap guard (success path): throttle a clean instant session.
                         flap_attempt, _ = await _flap_backoff(connected_at, flap_attempt)
                     except Exception as exc:
-                        failure = proxy_retry.classify_connect_error(exc)
+                        failure = proxy_retry.classify_connect_error(exc, supervisor_obj.connect_refusal)
                         if failure.kind in (proxy_retry.KIND_THROTTLED, proxy_retry.KIND_REFUSED):
                             # The leader rate-limited THIS follower and named a
                             # Retry-After (or, after sustained throttling, refused

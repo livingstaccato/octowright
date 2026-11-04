@@ -98,36 +98,37 @@ def _retry_after_seconds(value: str | None) -> float | None:
     return max(0.0, seconds) if seconds >= 0 else None
 
 
-def classify_connect_error(exc: BaseException) -> ConnectFailure:
+def _from_status(status: int, retry_after: str | None) -> ConnectFailure:
+    if status == 429:
+        return ConnectFailure(KIND_THROTTLED, status=status, retry_after=_retry_after_seconds(retry_after))
+    if status == 410:
+        # The leader's sustained-throttle refusal: pacing is over, this
+        # follower is structurally wrong for this leader. The 410 body
+        # still carries Retry-After, and honoring it keeps the follower's
+        # (pointless, but bounded) retry loop at the leader's pace.
+        return ConnectFailure(KIND_REFUSED, status=status, retry_after=_retry_after_seconds(retry_after))
+    return ConnectFailure(KIND_HTTP_ERROR, status=status)
+
+
+def classify_connect_error(exc: BaseException, observed: tuple[int, str | None] | None = None) -> ConnectFailure:
     """The failure kind of one raised leader connect.
 
-    The streamable-HTTP transport surfaces a refused POST the way the flap
-    guard's 429 arrives: an ``ExceptionGroup`` (the transport's task group)
-    whose leaf is an httpx ``HTTPStatusError`` carrying the response — the
-    only place the status and the Retry-After live. Anything without a
-    recoverable status keeps its existing handling (flat attempt backoff).
+    ``observed`` is the ``(status, Retry-After)`` of a session-creating
+    request the leader refused during this connect, as the bridge's HTTP
+    response hook saw it (``proxy_session_loss``). It is the path the real
+    transport takes: mcp's streamable-HTTP client does not raise for a POST
+    answered 429 or 410 but hands the replayed ``initialize`` a JSON-RPC
+    error frame, so the connect fails as a ``ReplayHandshakeError`` that
+    carries no status at all. An ``httpx`` ``HTTPStatusError`` leaf (nested
+    in the transport's ``ExceptionGroup``) is still honoured, for a
+    transport that does raise one. Anything without a recoverable status
+    keeps its existing handling (flat attempt backoff).
     """
     for leaf in _walk(exc):
-        if not isinstance(leaf, httpx2.HTTPStatusError):
-            continue
-        status = leaf.response.status_code
-        if status == 429:
-            return ConnectFailure(
-                KIND_THROTTLED,
-                status=status,
-                retry_after=_retry_after_seconds(leaf.response.headers.get("retry-after")),
-            )
-        if status == 410:
-            # The leader's sustained-throttle refusal: pacing is over, this
-            # follower is structurally wrong for this leader. The 410 body
-            # still carries Retry-After, and honoring it keeps the follower's
-            # (pointless, but bounded) retry loop at the leader's pace.
-            return ConnectFailure(
-                KIND_REFUSED,
-                status=status,
-                retry_after=_retry_after_seconds(leaf.response.headers.get("retry-after")),
-            )
-        return ConnectFailure(KIND_HTTP_ERROR, status=status)
+        if isinstance(leaf, httpx2.HTTPStatusError):
+            return _from_status(leaf.response.status_code, leaf.response.headers.get("retry-after"))
+    if observed is not None:
+        return _from_status(*observed)
     if isinstance(exc, TimeoutError):
         return ConnectFailure(KIND_TIMEOUT)
     return ConnectFailure(KIND_ERROR)

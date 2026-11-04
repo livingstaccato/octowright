@@ -28,7 +28,6 @@ from octowright._bridge_message_helpers import (
     message_root,
     message_tool_name,
 )
-from octowright._trace_propagation import build_tracing_http_client
 from octowright._tracing import counter, histogram, span
 from octowright.defaults import BRIDGE_TOOL_TIMEOUTS, env_float
 from octowright.proxy_handshake import answer_before_leader, compare_handshake
@@ -123,27 +122,13 @@ class InFlightRequest:
     # left the follower cannot have run anywhere, so it is safe to send to a
     # replacement leader -- see ``resume_in_flight``.
     delivered: bool = False
+    # Refused unrun (session lost: 404/401/403): re-sent after the reconnect whatever its key.
+    rejected_unrun: bool = False
     # Guards against the watchdog and the remote reader both popping the
     # same id concurrently — without this, a response arriving in the same
     # asyncio tick as deadline expiry produces two outbound frames for one
     # request, which is an MCP protocol violation.
     responded: bool = False
-
-
-def bridge_http_client(headers: dict[str, str], supervisor_obj: Any) -> Any:
-    """The follower's HTTP client for one leader connection.
-
-    MCP 2.0 takes a ready-made client instead of a factory, and its transport no
-    longer exposes ``get_session_id`` — so the session id is captured from the
-    response header here and pushed onto the supervisor, where bridge state (and
-    the leader's pid-liveness reaper) reads it.
-    """
-    supervisor_obj.remote_session_id = None
-
-    def _note_session_id(value: str) -> None:
-        supervisor_obj.remote_session_id = value
-
-    return build_tracing_http_client(headers=headers, on_session_id=_note_session_id)
 
 
 class ReplayHandshakeError(RuntimeError):
@@ -196,6 +181,10 @@ class BridgeSupervisor:
         # connection the client should blindly retry.
         self.connect_status_hint: str | None = None
         self.remote_session_id: str | None = None
+        # Per-connect HTTP observations (``proxy_session_loss``): a 429/410, and why a session was lost.
+        self.connect_refusal: tuple[int, str | None] | None = None
+        self.session_lost: str | None = None
+        self.on_session_lost: Callable[[], None] | None = None
         self.reconnect_attempts = 0
         # Identity of the leader process the current session talks to, set by
         # the runtime on each connect (``proxy_runtime.resolve_leader_generation``).
@@ -340,7 +329,7 @@ class BridgeSupervisor:
 
     def _mark_delivered(self, request_id: str | int | None) -> None:
         if request_id is not None and (tracked := self._in_flight.get(request_id)) is not None:
-            tracked.delivered = True
+            tracked.delivered = not tracked.rejected_unrun
 
     def _outgoing_frame(self, request_id: str | int | None, message: SessionMessage) -> SessionMessage:
         """The frame to forward: the tracked one (bridge ``_meta`` injected) when
@@ -614,21 +603,27 @@ class BridgeSupervisor:
         # settle that id dropped the client's real response later and disarmed
         # its deadline. Server requests pass through untouched.
         request_id = message_request_id(message) if is_response(message) else None
-        if request_id is not None and request_id in self._internal_replay_ids:
-            # Bridge-internal initialize replay: the local client has already
-            # been told the session is initialized; forwarding a second
-            # response would be a duplicate id from the client's perspective.
+        if request_id is not None and (
+            self._absorbed(request_id, message) or not self._settle_in_flight(request_id, message)
+        ):
+            return
+        if self._initialize_message is not None and request_id == message_request_id(self._initialize_message):
+            self._client_handshake = getattr(message_root(message), "result", None)
+        await self.local_write.send(message)
+
+    def _absorbed(self, request_id: Any, message: SessionMessage) -> bool:
+        """An answer the client must not see: the bridge's own initialize replay (a duplicate id to an
+        initialized client), or a refusal of a call the leader never ran (resumed after the reconnect)."""
+        if request_id in self._internal_replay_ids:
             self._internal_replay_ids.discard(request_id)
             waiter = self._replay_waiters.pop(request_id, None)
             if waiter is not None:
                 self._replay_answers[request_id] = message_root(message)
                 waiter.set()
-            return
-        if request_id is not None and not self._settle_in_flight(request_id, message):
-            return
-        if self._initialize_message is not None and request_id == message_request_id(self._initialize_message):
-            self._client_handshake = getattr(message_root(message), "result", None)
-        await self.local_write.send(message)
+            return True
+        held = self._in_flight.get(request_id)
+        rejected = held is not None and held.rejected_unrun and not held.responded
+        return rejected and isinstance(message_root(message), JSONRPCError)
 
     def _handle_suspension(self, gap: float) -> None:
         """The follower process was suspended ~``gap`` seconds (a client froze us,
@@ -712,7 +707,10 @@ class BridgeSupervisor:
 
     def _is_resumable(self, item: InFlightRequest) -> bool:
         """A keyed tools/call with resume budget left can be safely re-sent: the
-        leader dedups on its idempotency key, so a re-send won't double-execute."""
+        leader dedups on its idempotency key, so a re-send won't double-execute.
+        A request the leader refused unrun is resumable whatever its key."""
+        if item.rejected_unrun:
+            return item.outgoing is not None and item.resume_count < defaults.BRIDGE_RESUME_MAX_ATTEMPTS
         return (
             defaults.IDEMPOTENCY_ENABLED
             and item.idempotency_key is not None
@@ -750,27 +748,30 @@ class BridgeSupervisor:
         """
         now = time.monotonic()
         for item in list(self._in_flight.values()):
-            if item.responded or not self._is_resumable(item) or item.outgoing is None:
+            if not await self._ready_to_resume(item):
                 continue
-            if item.leader_generation != self.leader_generation:
-                if item.delivered:
-                    # The leader that received this call is gone and its dedup
-                    # cache with it: the replacement would run the call again. It
-                    # may or may not have committed on the old leader, so say
-                    # exactly that.
-                    await self._fail_in_flight(item, LEADER_REPLACED_REASON, outcome="unknown")
-                    continue
-                # Never left the follower, so it ran nowhere: the replacement
-                # leader is now the one it belongs to.
-                item.leader_generation = self.leader_generation
             item.resume_count += 1
             item.deadline = now + (item.timeout or self.request_timeout_seconds)
             _BRIDGE_RESUME.add(1, attributes={"method": item.method or "unknown"})
+            was_rejected, item.rejected_unrun = item.rejected_unrun, False
             try:
                 await remote_write.send(item.outgoing)
             except Exception as exc:
                 # The fresh session died again mid-resume; leave it in-flight for the
                 # next reconnect cycle (or eventual budget exhaustion).
+                item.rejected_unrun = item.rejected_unrun or was_rejected
                 log.debug("octowright.bridge.resume_failed", request_id=item.request_id, error=repr(exc))
                 return
-            item.delivered = True
+            item.delivered = not item.rejected_unrun
+
+    async def _ready_to_resume(self, item: Any) -> bool:
+        """Whether to re-send ``item`` now. Delivered to a leader that is gone, it fails (its dedup cache went
+        with it, so it may or may not have committed); never delivered, it moves to the replacement."""
+        if item.responded or not self._is_resumable(item) or item.outgoing is None:
+            return False
+        if item.leader_generation != self.leader_generation:
+            if item.delivered:
+                await self._fail_in_flight(item, LEADER_REPLACED_REASON, outcome="unknown")
+                return False
+            item.leader_generation = self.leader_generation
+        return True
