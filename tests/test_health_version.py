@@ -73,6 +73,33 @@ async def test_unreadable_metadata_never_breaks_the_probe(monkeypatch: pytest.Mo
     assert await _payload() == {"ok": True, "version": VERSION}
 
 
+def test_the_installed_version_is_read_at_most_once_per_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every follower probes /api/health every couple of seconds on the
+    leader's loop; a dist-info scan per probe is wasted work, but an upgrade
+    must still surface within the TTL."""
+    reads: list[str] = []
+    installed = ["1.0.0"]
+
+    def _read() -> str:
+        reads.append(installed[0])
+        return installed[0]
+
+    clock = [1000.0]
+    monkeypatch.setattr(health, "_read_installed_version", _read)
+    monkeypatch.setattr(health, "_installed_cache", None)
+    monkeypatch.setattr(health.time, "monotonic", lambda: clock[0])
+
+    assert health._installed_version() == "1.0.0"
+    installed[0] = "2.0.0"
+    clock[0] += health.INSTALLED_VERSION_TTL_SECONDS - 1
+    assert health._installed_version() == "1.0.0"
+    assert len(reads) == 1
+
+    clock[0] += 2
+    assert health._installed_version() == "2.0.0"
+    assert len(reads) == 2
+
+
 # ─── the same class on the /new-tab status strip ─────────────────────────────
 
 
