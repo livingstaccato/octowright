@@ -195,17 +195,32 @@ INSTRUCTIONS = (
 )
 
 
+def _mcp_sends_empty_experimental() -> bool:
+    """Whether the installed mcp's server advertises ``experimental: {}``
+    (up to 2.2) rather than omitting the field (2.3 on)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        major, minor = (int(part) for part in version("mcp").split(".")[:2])
+    except (PackageNotFoundError, ValueError):
+        return False
+    return (major, minor) < (2, 3)
+
+
 def server_capabilities() -> Any:
     """The capabilities the leader advertises in its ``initialize`` result.
 
     MCPServer derives them from the request handlers it registers, which are
     the same whatever the tool profile: tools, prompts and resources, none of
-    them announcing list changes.
+    them announcing list changes. mcp 2.2 sends an empty ``experimental``
+    object and 2.3 omits it; the field follows the installed mcp, because
+    probing a real server for it would import starlette into the follower's
+    early handshake.
     """
     from mcp.types import PromptsCapability, ResourcesCapability, ServerCapabilities, ToolsCapability
 
     return ServerCapabilities(
-        experimental={},
+        experimental={} if _mcp_sends_empty_experimental() else None,
         prompts=PromptsCapability(list_changed=False),
         resources=ResourcesCapability(subscribe=False, list_changed=False),
         tools=ToolsCapability(list_changed=False),
