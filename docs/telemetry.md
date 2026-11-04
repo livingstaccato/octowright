@@ -19,14 +19,14 @@ logging:
 # Human-readable local debugging
 export PROVIDE_LOG_LEVEL=DEBUG
 export PROVIDE_LOG_FORMAT=pretty
-uv run octowright serve
+octowright serve
 ```
 
 ```bash
 # Machine-friendly production logs
 export PROVIDE_LOG_LEVEL=INFO
 export PROVIDE_LOG_FORMAT=json
-uv run octowright serve
+octowright serve
 ```
 
 `octowright serve --log-level DEBUG` is a convenience wrapper that sets
@@ -42,7 +42,7 @@ export PROVIDE_METRICS_ENABLED=1
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
 # optional auth/tenant headers
 export OTEL_EXPORTER_OTLP_HEADERS="authorization=Bearer%20TOKEN,x-tenant-id=dev"
-uv run octowright serve
+octowright serve
 ```
 
 Signals are no-op if telemetry exporters are not configured/available. The
@@ -135,7 +135,7 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 | `octowright_browser_launch_failed_total` | counter | `kind`, `error` | Launches an engine attempted and failed. `error` is the exception class name. Machinery only — a request an input guard refused (`InvalidRequestError`) is counted by `octowright_launch_refused_total` instead, so this counter stays a per-engine health signal. |
 | `octowright_browser_evicted_total` | counter | `kind` | Browsers removed from the pool by an external close signal (not `pool.close`). |
 | `octowright_macro_run_total` | counter | `macro`, `status` | Macro runs (`status` is `ok`/`failed`). |
-| `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. |
+| `octowright_bridge_reconnect_total` | counter | `reason` | Times the follower bridge reconnected to the leader. `reason` is the failed connect's exception type, or `session_flap`, `throttled`, `refused` (410), or `session_lost` (the leader answered the current session 404/401/403). |
 | `octowright_bridge_rpc_total` | counter | `method` | JSON-RPC messages forwarded local→remote. |
 | `octowright_bridge_resume_total` | counter | — | In-flight requests re-sent to the leader after a reconnect (idempotent resume). |
 | `octowright_bridge_suspension_total` | counter | — | Follower-process suspensions detected by the deadline watchdog (a client froze the follower, e.g. an MCP-client compaction SIGSTOP). |
@@ -170,6 +170,13 @@ The follower→leader chain is glued together by the W3C `traceparent` header. O
 The `macro` label is capped at `OCTOWRIGHT_METRICS_MACRO_LABEL_CAP` distinct values (default 256); beyond the cap, names land in an `(overflow)` bucket so long-lived deployments don't unbound their time-series count. The `error` and `method` labels are intrinsically bounded by code paths; `kind` is bounded to the three browser engines plus `unknown`. `octowright_status()["metrics"]` surfaces `macro_labels_seen` and `macro_label_overflow_count` so an operator can see when dynamic macro names (e.g. `migrate-table-{uuid}`) have saturated the cap. The recovery escape hatch is `octowright.macros.execution.reset_macro_label_seen()` — in-process only (not exposed as an MCP tool, by design) for tests or operator process access.
 
 There is intentionally no counter for the ws-cache batched flush — the flush is purely a transport optimization and its frequency is not a useful operational signal.
+
+**Throttle states are log lines, not only counters.** The throttled counters above are no-ops unless metrics are enabled, so both bridge ends also log the state an operator actually needs:
+
+- Leader: `octowright.mcp.new_session_throttled` (warning, at most once per throttled source per window) with `source` (the follower key — its pid, or `anonymous`), `throttled_since_last_log` (rejections since the previous line for that source), `requests_in_window` (admitted new-session requests in the window), and `window_seconds`. The `429` body also carries `source` and `retry_after_seconds` so a current follower can name itself in its own diagnostics.
+- Leader, sustained tier: when one source's rejections span `OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS` (default ~5 windows; `off`/non-positive disables the tier back to pure 429 pacing), the guard answers `410 Gone` instead of `429` and logs `octowright.mcp.sustained_throttle_refused` (warning; `source`, `rejections`, `span_seconds`) on the crossing. The 410 body tells the follower's operator it is too old or looping for this leader and must reconnect its MCP client; a source quiet for the span is forgiven.
+- Follower: `octowright.bridge.leader_throttled` (warning, once per throttled connect) with `streak` (consecutive 429-throttled connects), `retry_in_s` (the sleep taken — the leader's `Retry-After` when larger than the local backoff), and `follower_version` vs `leader_version`. A streak that keeps growing is a structural mismatch (a follower too old for the leader's handshake), not network noise; the bridge snapshot's `last_error` and the JSON-RPC error text name the same versions and say so. A 410 refusal lands in the same surfaces with the remediation up front instead of the retry wording. The status and `Retry-After` are read by the follower's HTTP response hook (`proxy_session_loss`), since the MCP client library turns a refused POST into a JSON-RPC error answer rather than raising.
+- Follower, lost session: `octowright.bridge.session_lost` (warning, once per session) with `status` (404: the leader no longer knows the session; 401/403: its credential, e.g. a restarted leader's rotated bridge token, is no longer accepted), `remote_session_id`, `rejected_requests` and `in_flight`. The follower reconnects and re-sends the refused requests, which the leader never ran.
 
 ### MCP notifications (proactive, LLM-facing)
 
@@ -226,7 +233,7 @@ export OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://<host>/v1/logs
 # or, vendor-specific:
 # export OTEL_EXPORTER_OTLP_HEADERS="api-key=<token>"
 
-uv run octowright serve
+octowright serve
 ```
 
 The OTel SDK is pulled in as an extra (`provide-telemetry[otel]`); without it (or without `PROVIDE_TRACE_ENABLED=true`), the tracer/meter are noops and the cost is one cached attribute lookup per span entry — safe to leave the instrumentation in place.

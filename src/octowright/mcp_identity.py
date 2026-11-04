@@ -21,12 +21,114 @@ server at connect and another after it has no way to tell it happened.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 SERVER_NAME = "octowright"
 
 # MCPServer does not set a version, so the leader advertises an empty one.
 SERVER_VERSION = ""
+
+
+@dataclass(frozen=True)
+class ClientReconnect:
+    """How ONE MCP client respawns its Octowright follower.
+
+    Single source for the per-client reconnect matrix: rendered into
+    ``INSTRUCTIONS`` (so the LLM can hand the user the exact step) and read by
+    ``octowright doctor``'s followers check, which matches ``markers`` against
+    the process tree of a stale/looping follower to name THAT client's step.
+    Before this lived as prose inside the instructions string, the doctor
+    surface had to restate it in its own words, and the two drifted.
+
+    ``markers`` are lowercase substrings of a cmdline's executable basename
+    (see doctor's matcher for the token rule); they identify the client's own
+    process in a follower's ancestry, not the follower's. ``step`` empty =
+    no in-session path: the client must be restarted. ``in_instructions=False``
+    keeps a detection-only entry out of the server handshake (the VS Code
+    extension host is undetectable as Cline-vs-Copilot from a process table).
+    """
+
+    name: str
+    step: str
+    markers: tuple[str, ...] = ()
+    in_instructions: bool = True
+    # Friendlier short label in doctor output; defaults to ``name``.
+    detect_label: str | None = None
+
+
+RECONNECT_STEPS: tuple[ClientReconnect, ...] = (
+    ClientReconnect(
+        "Claude Code",
+        "/mcp -> select octowright -> Reconnect (if the first try silently fails, choose Reconnect a "
+        "second time; the first attempt is a known no-op)",
+        ("claude",),
+    ),
+    ClientReconnect("Cursor", "Settings -> Tools & MCP -> toggle octowright off then back on", ("cursor",)),
+    ClientReconnect("Cline (VS Code)", "MCP Servers panel -> octowright -> Restart Server", ("cline",)),
+    ClientReconnect("Copilot in VS Code", "Command Palette -> 'MCP: List Servers' -> octowright -> Restart"),
+    ClientReconnect("Windsurf", "Cascade plugins (MCP) panel -> Refresh", ("windsurf",)),
+    ClientReconnect(
+        "Gemini CLI",
+        "/mcp disable octowright then /mcp enable octowright (or /mcp refresh)",
+        ("gemini",),
+    ),
+    ClientReconnect("GitHub Copilot CLI", "/mcp reload octowright", ("copilot",)),
+    ClientReconnect(
+        "Continue or Zed",
+        "re-save the MCP config file (it hot-reloads the server)",
+        ("continue", "zed"),
+    ),
+    ClientReconnect(
+        "pi",
+        "/mcp reconnect octowright (or /mcp reload)",
+        ("pi",),
+    ),
+    ClientReconnect(
+        "omp",
+        "/mcp reconnect octowright (or /mcp reload)",
+        ("omp",),
+    ),
+    ClientReconnect(
+        "Codex CLI, OpenCode, and Amp",
+        "",
+        ("codex", "opencode", "amp"),
+        detect_label="Codex CLI / OpenCode / Amp",
+    ),
+    # Detection-only: from a process table the Cline and Copilot extension
+    # hosts are the same "code" binary, so name both steps together.
+    ClientReconnect(
+        "VS Code",
+        "Cline: MCP Servers panel -> octowright -> Restart Server; Copilot: Command Palette -> "
+        "'MCP: List Servers' -> octowright -> Restart",
+        ("code",),
+        in_instructions=False,
+    ),
+)
+
+
+def reconnect_matrix_lines() -> list[str]:
+    """The per-client reconnect sentences as they appear in ``INSTRUCTIONS``."""
+    lines = [f"{entry.name} — {entry.step}." for entry in RECONNECT_STEPS if entry.in_instructions and entry.step]
+    no_session = [entry.name for entry in RECONNECT_STEPS if entry.in_instructions and not entry.step]
+    if no_session:
+        lines.append(
+            f"{', and '.join(no_session)} have NO in-session reconnect: the user must restart the "
+            "client, which loses the current conversation."
+        )
+    lines.append(
+        "Universal fallback for any other/unknown client: fully restart the client (recovers the server "
+        "but loses the session). If you don't know the client, ask which one they're using."
+    )
+    return lines
+
+
+def client_step(entry: ClientReconnect) -> str:
+    """The reconnect sentence for one detected client, as doctor reports it."""
+    if entry.step:
+        return entry.step
+    return "no in-session reconnect — the user must restart the client, which loses the current conversation"
+
 
 INSTRUCTIONS = (
     "Launch and drive multiple headed Playwright browsers in parallel. "
@@ -86,21 +188,23 @@ INSTRUCTIONS = (
     "Instead: tell the user Octowright is disconnected and give them the reconnect step for THEIR "
     "MCP client, then wait for them to confirm before resuming. Reconnect by client (these keep the "
     "conversation unless noted): "
-    "Claude Code — /mcp -> select octowright -> Reconnect (if the first try silently fails, choose "
-    "Reconnect a second time; the first attempt is a known no-op). "
-    "Cursor — Settings -> Tools & MCP -> toggle octowright off then back on. "
-    "Cline (VS Code) — MCP Servers panel -> octowright -> Restart Server. "
-    "Copilot in VS Code — Command Palette -> 'MCP: List Servers' -> octowright -> Restart. "
-    "Windsurf — Cascade plugins (MCP) panel -> Refresh. "
-    "Gemini CLI — /mcp disable octowright then /mcp enable octowright (or /mcp refresh). "
-    "GitHub Copilot CLI — /mcp reload octowright. "
-    "Continue or Zed — re-save the MCP config file (it hot-reloads the server). "
-    "Codex CLI, OpenCode, and Amp have NO in-session reconnect: the user must restart the client, "
-    "which loses the current conversation. "
-    "Universal fallback for any other/unknown client: fully restart the client (recovers the server "
-    "but loses the session). If you don't know the client, ask which one they're using. "
-    "Wait for the user to confirm reconnection before resuming."
+    # The per-client sentences come from RECONNECT_STEPS so the matrix a client
+    # is told, doctor's remedy text and AGENTS.md's matrix cannot drift apart.
+    + " ".join(reconnect_matrix_lines())
+    + " Wait for the user to confirm reconnection before resuming."
 )
+
+
+def _mcp_sends_empty_experimental() -> bool:
+    """Whether the installed mcp's server advertises ``experimental: {}``
+    (up to 2.2) rather than omitting the field (2.3 on)."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        major, minor = (int(part) for part in version("mcp").split(".")[:2])
+    except (PackageNotFoundError, ValueError):
+        return False
+    return (major, minor) < (2, 3)
 
 
 def server_capabilities() -> Any:
@@ -108,12 +212,15 @@ def server_capabilities() -> Any:
 
     MCPServer derives them from the request handlers it registers, which are
     the same whatever the tool profile: tools, prompts and resources, none of
-    them announcing list changes.
+    them announcing list changes. mcp 2.2 sends an empty ``experimental``
+    object and 2.3 omits it; the field follows the installed mcp, because
+    probing a real server for it would import starlette into the follower's
+    early handshake.
     """
     from mcp.types import PromptsCapability, ResourcesCapability, ServerCapabilities, ToolsCapability
 
     return ServerCapabilities(
-        experimental={},
+        experimental={} if _mcp_sends_empty_experimental() else None,
         prompts=PromptsCapability(list_changed=False),
         resources=ResourcesCapability(subscribe=False, list_changed=False),
         tools=ToolsCapability(list_changed=False),

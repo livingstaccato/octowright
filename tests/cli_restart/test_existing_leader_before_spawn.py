@@ -60,7 +60,7 @@ def _stub(
 
     monkeypatch.setattr(restart_mod, "_wait_for_port_free", _port)
     monkeypatch.setattr(restart_mod, "_live_leader_before_spawn", _probe)
-    monkeypatch.setattr(restart_mod, "_spawn_daemon", lambda *_a: (events.append("spawn"), 4242)[1])
+    monkeypatch.setattr(restart_mod, "_spawn_daemon", lambda *_a, **_kw: (events.append("spawn"), 4242)[1])
     monkeypatch.setattr(restart_mod, "_wait_for_health", lambda *_a: "http://127.0.0.1:6286/")
 
 

@@ -320,8 +320,10 @@ class TestInstallSkillToAntigravity:
         import json as _json
 
         parsed = _json.loads(mcp_config.read_text())
-        assert parsed["mcpServers"]["octowright"]["command"] == "uvx"
-        assert parsed["mcpServers"]["octowright"]["args"] == ["octowright", "serve"]
+        # The install machine always has a console script here, so the config
+        # names it (the uvx fallback is covered in TestAntigravityMcpConfig).
+        assert parsed["mcpServers"]["octowright"]["command"].endswith("/octowright")
+        assert parsed["mcpServers"]["octowright"]["args"] == ["serve"]
 
     def test_destination_str_in_result(self, antigravity_home_fixture: Path) -> None:
         """destination field is the str of the resolved plugin directory."""
@@ -430,3 +432,31 @@ class TestInstallPluginManifests:
         # Content restored.
         content = (tmp_path / ".claude-plugin" / "plugin.json").read_text()
         assert "drift" not in content
+
+
+# ─── agy mcp_config rendering ───────────────────────────────────────────────
+
+
+class TestAntigravityMcpConfig:
+    """The generated mcp_config.json must match the one-install-one-leader
+    guidance whenever an install exists, and keep the uvx fallback only for
+    machines without one (a plugin install cannot assume the tool)."""
+
+    def test_installed_machine_renders_the_installed_script(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import octowright.daemonize as daemonize
+        import octowright.skill_distribution as sd
+
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: Path("/tool/bin/octowright"))
+        monkeypatch.setattr(
+            daemonize, "recommended_serve_command", lambda: ("/home/x/.local/bin/octowright", ["serve"])
+        )
+        config = json.loads(sd._antigravity_mcp_config())
+        assert config["mcpServers"]["octowright"] == {"command": "/home/x/.local/bin/octowright", "args": ["serve"]}
+
+    def test_machine_without_install_falls_back_to_uvx(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import octowright.daemonize as daemonize
+        import octowright.skill_distribution as sd
+
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: None)
+        config = json.loads(sd._antigravity_mcp_config())
+        assert config["mcpServers"]["octowright"] == {"command": "uvx", "args": ["octowright", "serve"]}

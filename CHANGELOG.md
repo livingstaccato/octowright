@@ -13,6 +13,46 @@ exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
 ### Added
+- **The leader narrates follower throttling, and refuses sustained loops.**
+  The new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`) never logged
+  anything when it fired — invisible without telemetry enabled. It now logs
+  one rate-limited `octowright.mcp.new_session_throttled` warning per source
+  per window, naming the follower key, its admitted window count and the
+  rejections since the previous line, and the 429 body carries the source and
+  `retry_after_seconds`. A source that keeps tripping the limit across
+  `OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS` (default ~5 windows; `off`
+  disables) is switched from pacing to `410 Gone` with a body that says the
+  follower is too old or looping for this leader and to reconnect its MCP
+  client — a quiet source is forgiven, so there is no sticky lockout.
+- **Followers honor `Retry-After` and say who is throttling whom.** When the
+  leader rate-limits a reconnect (429) or refuses one (410), the follower now
+  reads the status and `Retry-After` from the HTTP response it got while
+  connecting (mcp's client reports a refused POST as an error answer to the
+  replayed `initialize`, not as an exception) instead of treating it as an
+  ordinary failed connect: it waits at least the leader's
+  `Retry-After` before retrying, and the bridge snapshot `last_error`, the
+  JSON-RPC error text and an `octowright.bridge.leader_throttled` log warning
+  all name the state as "leader throttled this follower …, retry in Ns;
+  follower vX vs leader vY". A streak of 5+ consecutive refusals escalates the
+  wording to a persistent follower/leader mismatch with the reconnect remedy,
+  instead of reading as a flaky network. A successful connect now also clears
+  the snapshot's stale `last_error`.
+- **`octowright doctor` names each problem follower's owner and its reconnect
+  step.** The `followers` check now flags a follower the leader is 429-throttling
+  (not only version skew), and every flagged row carries the owning client —
+  detected from the follower's process tree — with that client's exact
+  reconnect step, rendered from the same `mcp_identity.RECONNECT_STEPS` matrix
+  the server's own `instructions` string is built from (now including pi and
+  omp), so the two can't drift.
+- **`octowright init` registers the installed `octowright serve` by default.**
+  The printed MCP block, README and getting-started guide now point clients at
+  the packaged install (absolute path), and state plainly that a source
+  checkout is for contributors and that leader and every follower must then be
+  the same install. The agy/Gemini plugin manifest renders the same detection
+  at skill-install time (installed script when present, `uvx` fallback), and
+  `scripts/bridge_reconnect_smoke.py --follower previous|X.Y.Z` runs a
+  previous release's follower against this checkout's leader (isolated from
+  the real daemon) to prove N-1 bridge compatibility.
 - **Status reports a client holding a different handshake from the
   leader's.** A follower answers `initialize` itself before the election
   returns, and a client can reconnect to a leader restarted on another
@@ -65,6 +105,74 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **MCP clients no longer drop their Octowright connection after 30 idle
+  minutes.** mcp 2.2.0 changed its session manager's default idle timeout
+  from never to 30 minutes, and `OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS`, off by
+  default, implemented "off" by leaving the manager alone. Any client that
+  paused for 30 minutes had its session reaped, got `Session not found` on
+  its next call, and needed a manual reconnect. The leader now passes the
+  setting to the session manager when it is built (`None` when off) and reads
+  it back: a manager that did not take it logs
+  `octowright.mcp.session_idle_timeout_unconfirmed`, and a value that is not
+  a number (`1800s`, `30m`) still means off but logs
+  `octowright.mcp.session_idle_timeout_unparsable`.
+- **A follower now recovers when the leader forgets its session.** When the
+  leader ended a follower's session (the idle reaper, the session-table cap,
+  the dead-follower reaper) or was restarted with a fresh bridge token, every
+  later call through that follower failed with "Session not found" or "Server
+  returned an error response" until its MCP client was reconnected by hand:
+  the MCP client library reports such a refusal as an error answer rather
+  than a broken connection, so the bridge never reconnected. The follower now
+  reads the HTTP status itself. A 404, 401 or 403 on its current session
+  drops that session, logs `octowright.bridge.session_lost`, reconnects, and
+  re-sends the calls the leader refused; those never ran, so they are
+  re-sent even when they could not otherwise be resumed, and the client sees
+  the real answer instead of the error.
+- **Restarting a service-managed daemon no longer leaves two leaders.** A
+  daemon started by a service manager (for example a systemd user unit
+  running `serve --daemon-mode`) took no election lock, so a client that
+  connected while it was still starting up spawned a daemon of its own, and
+  the second one moved to the next port: two leaders, with browsers split
+  between them. Such a daemon now holds the election lock from before its
+  slow startup until it has published its lockfile, and does not start at
+  all when a live leader is already serving.
+- **A session-creation storm no longer evicts a real client's quiet
+  session.** When the leader's session table goes over its cap it used to
+  shed sessions silent for more than two minutes first, oldest first, so a
+  client that had simply paused lost its session to make room for the
+  storm's fresh ones. Sessions a running follower reports as its own are now
+  evicted last, and among the other silent sessions the newest go first. The
+  cap still holds if live followers alone exceed it, and the leader logs
+  when that happens.
+- **A sandboxed or containerised client's session is no longer cut off by
+  the dead-follower cleanup.** The leader decided a follower was dead when
+  the process id it recorded was gone, but a follower started inside a
+  sandbox or container that shares the state directory records an id from
+  its own process namespace, which means nothing to the leader, so its live
+  session was closed on every cleanup pass. On Linux a follower now also
+  records its process namespace and start time: one from another namespace
+  is left alone, and a reused process id is recognised as the old follower
+  being gone. A session that sent a request in the last two minutes is
+  never closed by this cleanup, which also protects followers too old to
+  record the new fields.
+- **Requests naming an unknown or expired MCP session no longer count as
+  activity.** Such a request is answered 404, but it still counted towards
+  the active-session total the idle watchdog reads and left an entry behind.
+  A request now counts only once its response succeeds.
+- **A follower's early `initialize` answer matches an mcp 2.3 leader again.**
+  mcp 2.3 stopped sending an empty `experimental` object in the server's
+  capabilities, so the answer a follower gives before the election returns
+  differed from the leader's, and every such follower reported a
+  `capabilities` handshake mismatch. The follower now matches whichever mcp
+  is installed.
+- **A stale daemon log is no longer quoted as the daemon's own.** When the
+  leader runs under a service manager (e.g. a systemd user unit whose
+  `ExecStart` runs `serve --daemon-mode`, wiring stderr to the journal), the
+  `octowright-daemon.log` file stops advancing while the daemon is healthy —
+  and every spawn-failure message kept pointing operators at it.
+  `daemon_log_tail()` now detects a live lockfile leader younger than the log
+  and appends the real sink (`journalctl --user -u octowright.service`) next
+  to the actual tail.
 - **`octowright restart` no longer starts a second leader beside one that
   appeared while it waited.** A client that gave up waiting for the election
   lock could start serving inline, and restart then spawned its own daemon
@@ -692,6 +800,16 @@ a section that is already tagged and on PyPI.
   0.44 ms instead of 1.1 ms with 256.
 
 ### Changed
+- **Octowright now requires mcp 2.2.0 or later** (was 2.1.0). 2.2.0 is the
+  first release whose `streamable_http_app()` takes the session idle timeout,
+  which is how the leader now keeps idle sessions open.
+- **The health probe and the follower's tool-list copy do less disk work.**
+  `/api/health` re-reads the installed package version at most once every 30
+  seconds instead of on every probe, which every connected follower sends every
+  couple of seconds on the leader's event loop; a pending upgrade still shows
+  up as `installed_version` within that time. A follower that already wrote an
+  identical `tools/list` answer to its on-disk copy, and finds the file
+  unchanged since, no longer reads it back to compare.
 - **Behaviour change: a macro credential in an `inject_headers` header now
   needs `forward_on_redirect`, even to the session's own origin.** For a
   `fetch`/XHR the pattern scopes only the first request. The browser re-sends

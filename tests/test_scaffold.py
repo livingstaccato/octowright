@@ -239,3 +239,61 @@ def test_init_cli_force_flag_overwrites(tmp_path: Path, monkeypatch: pytest.Monk
         result = runner.invoke(cli, ["init", "--force"])
     assert result.exit_code == 0
     assert "(overwritten)" in result.output
+
+
+class TestRegistrationBlockDefault:
+    """The block ``octowright init`` prints by default must launch the packaged
+    install, not a checkout — a client pointed at ``uv --directory <checkout>
+    run`` can elect a frozen checkout as the shared leader and mix
+    follower/leader versions (the 429-loop incident class)."""
+
+    def test_default_uses_the_recommended_installed_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import octowright.daemonize as daemonize
+
+        monkeypatch.setattr(
+            daemonize, "recommended_serve_command", lambda: ("/home/x/.local/bin/octowright", ["serve"])
+        )
+        parsed = json.loads(scaffold.mcp_registration_block())
+        server = parsed["mcpServers"]["octowright"]
+        assert server == {"command": "/home/x/.local/bin/octowright", "args": ["serve"]}
+
+    def test_uv_directory_form_survives_only_as_the_explicit_contributor_variant(self, tmp_path: Path) -> None:
+        parsed = json.loads(scaffold.mcp_registration_block(install_dir=tmp_path))
+        assert parsed["mcpServers"]["octowright"]["command"] == "uv"
+
+
+class TestRecommendedServeCommand:
+    def test_prefers_the_local_bin_shim_of_this_install(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        import octowright.daemonize as daemonize
+
+        venv_bin = tmp_path / "tool" / "bin"
+        venv_bin.mkdir(parents=True)
+        script = venv_bin / "octowright"
+        script.write_text("", encoding="utf-8")
+        shim_dir = tmp_path / "home" / ".local" / "bin"
+        shim_dir.mkdir(parents=True)
+        shim = shim_dir / "octowright"
+        shim.symlink_to(script)
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: script)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        assert daemonize.recommended_serve_command() == (str(shim), ["serve"])
+
+    def test_falls_back_to_the_beside_script_and_then_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import octowright.daemonize as daemonize
+
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: None)
+        assert daemonize.recommended_serve_command() == ("octowright", ["serve"])
+
+    def test_beside_script_passed_through_when_no_shim_matches(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """``recommended_serve_command``'s middle branch: a real script next to
+        the interpreter, but no ~/.local/bin shim pointing at it."""
+        import octowright.daemonize as daemonize
+
+        script = tmp_path / "tool" / "bin" / "octowright"
+        script.parent.mkdir(parents=True)
+        script.write_text("", encoding="utf-8")
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: script)
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path / "home"))
+        assert daemonize.recommended_serve_command() == (str(script), ["serve"])

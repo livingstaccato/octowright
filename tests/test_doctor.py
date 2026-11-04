@@ -777,3 +777,169 @@ class TestDaemonCheck:
         check = await _daemon.check_daemon()
         assert check.status == "warn"
         assert check.data["stale"] is True
+
+
+class TestFollowerRows:
+    """Per-follower detail: flags and the client-specific remedy behind them.
+
+    The remedy for a stale or leader-throttled follower is per-client, so the
+    check must name the client and ITS step (from the same matrix the server
+    renders into INSTRUCTIONS) rather than repeat one generic line.
+    """
+
+    def _row_state(self) -> dict[str, Any]:
+        return {
+            "followers": {
+                "100": {
+                    "follower_pid": 100,
+                    "follower_version": "0.26.0",
+                    "last_error": "ExceptionGroup('unhandled errors in a TaskGroup', "
+                    "[HTTPStatusError(\"Client error '429 Too Many Requests' for url\")])",
+                    "ts": 1.0,
+                }
+            },
+            "events": [],
+        }
+
+    def test_throttled_last_error_flags_the_row_and_names_the_client(self) -> None:
+        table = [(100, 50, "/usr/bin/octowright serve"), (50, 1, "/home/tim/.pi/agent/bin/pi")]
+        rows = _daemon._follower_rows(self._row_state(), "0.26.0", table)
+        (row,) = rows
+        assert row["throttled"] is True
+        assert row["needs_attention"] is True
+        assert row["client"] == "pi", "the follower's client is found by walking its ancestry"
+        assert row["reconnect_step"] == "/mcp reconnect octowright (or /mcp reload)"
+
+    def test_stale_codex_row_gets_restart_guidance(self) -> None:
+        state = self._row_state()
+        state["followers"]["100"]["follower_version"] = "0.13.8"
+        state["followers"]["100"]["last_error"] = None
+        table = [(100, 50, "/usr/bin/octowright serve"), (50, 1, "/home/tim/.codex/packages/codex app-server")]
+        rows = _daemon._follower_rows(state, "0.26.0", table)
+        (row,) = rows
+        assert row["stale"] is True
+        assert row["client"] == "Codex CLI / OpenCode / Amp"
+        assert "restart the client" in row["reconnect_step"]
+
+    def test_unmatched_ancestry_gets_the_honest_fallback(self) -> None:
+        table = [(100, 1, "/usr/bin/octowright serve")]
+        rows = _daemon._follower_rows(self._row_state(), "0.26.0", table)
+        (row,) = rows
+        assert row["client"] is None
+        assert "could not be identified" in row["reconnect_step"]
+
+    def test_matching_quiet_follower_is_not_flagged(self) -> None:
+        state = self._row_state()
+        state["followers"]["100"]["last_error"] = None
+        rows = _daemon._follower_rows(state, "0.26.0", [(100, 1, "/usr/bin/octowright serve")])
+        (row,) = rows
+        assert row["needs_attention"] is False
+        assert "reconnect_step" not in row
+
+
+class TestNameTokens:
+    def test_argv0_subtokens_match_known_clients(self) -> None:
+        assert "code" in _daemon._name_tokens(
+            "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code --reuse-window"
+        )
+        assert "codex" in _daemon._name_tokens(
+            "/home/tim/.codex/packages/app-server-daemon/releases/0.166/bin/codex app-server --listen unix://"
+        )
+        assert "pi" in _daemon._name_tokens("node /home/tim/.pi/agent/bin/pi")
+
+    def test_a_path_under_a_code_directory_is_not_vs_code(self) -> None:
+        """Marker matching is per-token: a checkout under ~/code must not read
+        as a VS Code client, or every developer's follower names the wrong step."""
+        tokens = _daemon._name_tokens("/home/tim/.local/bin/octowright serve")
+        assert "code" not in tokens
+
+
+class TestFollowersThrottledBranch:
+    async def test_a_throttled_follower_at_the_leader_version_warns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Version-match does NOT clear the flag: a current follower can still
+        be the one looping (a bug of its own), and the check distinguishes it."""
+        from octowright.bridge_state import summarize_state as _real_summarize
+
+        state = {
+            "followers": {
+                "100": {
+                    "follower_pid": 100,
+                    "follower_version": "0.26.0",
+                    "last_error": "leader throttled this follower via its new-session rate limit (HTTP 429), retry in 10s; follower v0.26.0 vs leader v0.26.0",
+                    "ts": 1.0,
+                }
+            },
+            "events": [],
+        }
+
+        async def _leader() -> str:
+            return "0.26.0"
+
+        monkeypatch.setattr(_daemon, "_running_leader_version", _leader)
+        monkeypatch.setattr("octowright.bridge_state.read_state", lambda _p: state)
+        monkeypatch.setattr(
+            "octowright.bridge_state.summarize_state", lambda s: _real_summarize(s, is_alive=lambda _pid: True)
+        )
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda _pid: True)
+        monkeypatch.setattr(
+            "octowright.process_reaper.list_processes",
+            lambda: [(100, 50, "/usr/bin/octowright serve"), (50, 1, "/usr/bin/claude")],
+        )
+        check = await _daemon.check_followers()
+        assert check.status == "warn"
+        assert "429" in check.detail
+        assert "pid 100" in check.detail
+        assert "/mcp -> select octowright -> Reconnect" in check.detail
+        assert check.data["throttled_followers"] == 1
+
+
+class TestRemedyClause:
+    def test_clause_caps_at_three_and_counts_the_rest(self) -> None:
+        rows = [{"pid": 100 + i, "needs_attention": True, "client": "pi", "reconnect_step": "step-x"} for i in range(5)]
+        clause = _daemon._remedy_clause(rows)
+        assert clause.count("pid ") == 3
+        assert "+2 more" in clause
+
+    def test_no_flagged_rows_means_no_clause(self) -> None:
+        assert _daemon._remedy_clause([{"pid": 1, "needs_attention": False}]) == ""
+
+    def test_handshake_mismatch_row_is_flagged(self) -> None:
+        state = {
+            "followers": {
+                "100": {
+                    "follower_pid": 100,
+                    "follower_version": "0.26.0",
+                    "last_error": None,
+                    "handshake_mismatch": ["instructions"],
+                    "ts": 1.0,
+                }
+            },
+            "events": [],
+        }
+        rows = _daemon._follower_rows(state, "0.26.0", [(100, 1, "/usr/bin/octowright serve")])
+        (row,) = rows
+        assert row["needs_attention"] is True
+        assert row["handshake_mismatch"] == ["instructions"]
+
+    def test_tokens_cover_windows_exe_names(self) -> None:
+        assert "code" in _daemon._name_tokens("C:\\Program Files\\Code\\Code.exe")
+        assert "code" in _daemon._name_tokens("/opt/Code Helper (Renderer)/Code Helper (Renderer)")
+        assert _daemon._name_tokens("") == frozenset()
+
+    def test_rows_skip_dead_and_unparsable_followers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda pid: pid == 100)
+        state = {
+            "followers": {
+                "99": {"last_error": None},
+                "100": {"follower_version": "0.26.0", "last_error": None, "ts": 1.0},
+                "junk-key": {"last_error": "throttled by the leader (HTTP 429)"},
+            },
+            "events": [],
+        }
+        rows = _daemon._follower_rows(state, "0.26.0", [])
+        (row,) = rows
+        assert row["pid"] == 100
+
+    def test_detect_client_gives_up_when_owner_is_not_in_the_table(self) -> None:
+        assert _daemon._detect_client(42, [(1, 0, "init")]) is None
+        assert _daemon._detect_client(50, [(50, 51, "/usr/bin/octowright serve")]) is None

@@ -405,6 +405,47 @@ def local_leader_started_monotonic() -> float | None:
     return _LOCAL_LEADER_STARTED_MONOTONIC
 
 
+class HeldElectionLock:
+    """The election lock held across an await that no ``with`` block can span.
+
+    A daemon started outside an election holds it from before its slow imports
+    until its HTTP server is bound and its lockfile written -- a span that ends
+    in a callback, not at the end of a block. ``release`` is idempotent, so the
+    callback, a safety timer and a ``finally`` can all call it.
+    """
+
+    def __init__(self, fh: Any | None) -> None:
+        self._fh = fh
+
+    @property
+    def held(self) -> bool:
+        return self._fh is not None
+
+    @classmethod
+    async def acquire(cls, path: Path = LOCK_PATH, *, timeout: float = 10.0) -> HeldElectionLock:
+        """Wait up to ``timeout`` for the lock; raises ``TimeoutError`` on contention."""
+        fh = _election_paths(path).open("a+", encoding="utf-8")
+        deadline = time.monotonic() + timeout
+        try:
+            while not _try_election_lock(fh):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out waiting {timeout:.1f}s for election lock at {path}")
+                await anyio.sleep(0.05)
+        except BaseException:
+            fh.close()
+            raise
+        return cls(fh)
+
+    def release(self) -> None:
+        fh, self._fh = self._fh, None
+        if fh is None:
+            return
+        try:
+            _release_election_lock(fh)
+        finally:
+            fh.close()
+
+
 # How long a leader shutting down waits for the election lock before leaving
 # its lockfile alone. Contention means another process is electing right now,
 # and that process decides what the lockfile says next; a lock left naming our

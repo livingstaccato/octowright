@@ -96,9 +96,13 @@ def test_health_route_survives_unreadable_package_metadata(monkeypatch: pytest.M
 def test_health_route_flags_an_upgrade_waiting_on_a_restart(monkeypatch: pytest.MonkeyPatch) -> None:
     """A newer package on disk is the "restart to pick it up" signal -- reported
     separately, never as the running version."""
+    from octowright.http.routes import health
     from octowright.version import VERSION
 
     monkeypatch.setattr("importlib.metadata.version", lambda _name: "99.0.0")
+    # The installed version is cached for a TTL; an earlier test's /api/health
+    # call would otherwise answer from the cache.
+    monkeypatch.setattr(health, "_installed_cache", None)
     with TestClient(_http_app.build_app()) as client:
         body = client.get("/api/health").json()
 

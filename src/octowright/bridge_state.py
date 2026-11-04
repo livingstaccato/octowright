@@ -10,6 +10,7 @@ import contextlib
 import errno
 import itertools
 import json
+import os
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ from typing import Any
 
 from provide.telemetry import get_logger
 
+from octowright import process_identity
 from octowright.version import VERSION
 
 log = get_logger(__name__)
@@ -323,7 +325,10 @@ def _partition_live(
 
     An unparsable PID key is treated as LIVE, matching ``_prune_dead_followers``:
     the conservative direction is to over-report a follower, not to silently
-    drop one that exists.
+    drop one that exists. So is one recorded from another pid namespace
+    (``process_identity.follower_verdict``): its pid means nothing here, and a
+    follower in a sandbox must not prune the host's followers or be pruned by
+    them.
     """
     live: dict[str, Any] = {}
     dead = 0
@@ -332,7 +337,7 @@ def _partition_live(
             live[key] = snap
             continue
         try:
-            alive = is_alive(int(key))
+            alive = process_identity.follower_verdict(int(key), snap, is_alive) != "dead"
         except (TypeError, ValueError):
             alive = True
         if alive:
@@ -552,6 +557,10 @@ def record_snapshot(
         "request_timeouts": request_timeouts,
         "handshake_mismatch": handshake_mismatch,
     }
+    if follower_pid == os.getpid():
+        # pid namespace + start time, so a reader in another namespace leaves
+        # this entry alone and a reused pid is not mistaken for this process.
+        snapshot.update(process_identity.self_identity())
     with _state_lock(path) as locked:
         if not locked:
             return False

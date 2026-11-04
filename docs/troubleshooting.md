@@ -241,6 +241,18 @@ section in the getting-started guide for worked examples.
    If this succeeds, the daemon and a new MCP client are healthy; the remaining
    failure is isolated to the already-attached client handle.
 
+   To prove the exact wiring an upgrade leaves behind — a **previous release's
+   follower** against **this checkout's leader** (spawned isolated, your real
+   daemon untouched) — run:
+
+   ```bash
+   uv run python scripts/bridge_reconnect_smoke.py --follower previous
+   ```
+
+   It prints the pairing (`leader=… follower=…`) and fails if the two releases
+   cannot even complete the MCP handshake, which is the version-skew boundary
+   that otherwise only shows up in clients weeks later.
+
 4. Run `octowright restart` only if daemon health fails or you intentionally
    want to discard the current daemon and orphan browser state.
 
