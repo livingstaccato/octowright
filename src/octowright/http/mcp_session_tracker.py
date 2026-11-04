@@ -87,9 +87,13 @@ class McpSessionTrackingMiddleware:
     """ASGI middleware that updates an ``McpSessionTracker`` from the mounted
     MCP transport's request/response metadata.
 
-    - Any request carrying ``Mcp-Session-Id`` marks that id active (continuation).
-    - Any response carrying ``Mcp-Session-Id`` marks that id active (creation
-      via the ``initialize`` flow, where the request doesn't yet have an id).
+    - A request carrying ``Mcp-Session-Id`` marks that id active
+      (continuation) once its response starts with a status below 400. An
+      unknown or expired id is answered 404 by the transport, so it neither
+      counts as active nor leaves a tracker entry behind.
+    - A response carrying ``Mcp-Session-Id`` with a status below 400 marks that
+      id active (creation via the ``initialize`` flow, where the request
+      doesn't yet have an id).
     - A successful ``DELETE`` with a session id marks it closed immediately.
     """
 
@@ -105,18 +109,20 @@ class McpSessionTrackingMiddleware:
         request_session_id = _extract_session_id_from_headers(scope.get("headers", []))
         is_delete = scope.get("method", "").upper() == "DELETE"
 
-        if request_session_id and not is_delete:
-            self.tracker.mark_active(request_session_id)
-
+        continued_session_id = request_session_id if not is_delete else None
         deleted_session_id = request_session_id if is_delete else None
 
         async def _send(message: Message) -> None:
             if message["type"] == "http.response.start":
+                status = int(message.get("status", 500))
                 response_session_id = _extract_session_id_from_headers(message.get("headers", []))
-                if response_session_id:
-                    self.tracker.mark_active(response_session_id)
-                if deleted_session_id and 200 <= int(message.get("status", 500)) < 400:
-                    self.tracker.mark_closed(deleted_session_id)
+                if status < 400:
+                    if continued_session_id:
+                        self.tracker.mark_active(continued_session_id)
+                    if response_session_id:
+                        self.tracker.mark_active(response_session_id)
+                    if deleted_session_id and status >= 200:
+                        self.tracker.mark_closed(deleted_session_id)
             await send(message)
 
         await self.app(scope, receive, _send)

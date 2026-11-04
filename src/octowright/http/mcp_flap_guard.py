@@ -35,9 +35,10 @@ version. Two pieces, both on by default:
    by a housekeeping job): when the manager's live session table exceeds
    ``max_sessions``, the most-idle sessions are evicted back down to the cap.
    Activity-agnostic, so it never false-reaps a quietly-waiting live session the
-   way a fixed idle timer would — it only sheds genuine over-capacity, and sheds
-   sessions that have gone silent (absent from the activity tracker) before any
-   recently-active one.
+   way a fixed idle timer would — it only sheds genuine over-capacity. Sessions
+   a live follower names in bridge-state.json go last; among the rest, silent
+   ones (absent from the activity tracker) go first, newest-created first, then
+   recently-active ones, least-recently-seen first.
 """
 
 from __future__ import annotations
@@ -277,26 +278,35 @@ def select_eviction_victims(
     recent_ids: set[str],
     last_seen: dict[str, float],
     over: int,
+    protected_ids: frozenset[str] | set[str] = frozenset(),
 ) -> list[str]:
-    """Pick ``over`` sessions to evict, most-abandoned first.
+    """Pick ``over`` sessions to evict, least-valuable first.
 
-    ``instance_ids`` is the manager's table in creation order. Sessions absent
-    from ``recent_ids`` (no activity within the tracker TTL) are shed first,
-    oldest-created first; only if that isn't enough are recently-active sessions
-    evicted, least-recently-seen first. So a quietly-waiting live session is the
-    last thing touched, and only when the table is genuinely over the cap.
+    ``instance_ids`` is the manager's table in creation order;
+    ``protected_ids`` are sessions a live follower names in bridge-state.json.
+    Order:
+
+    1. Unprotected sessions absent from ``recent_ids`` (silent past the tracker
+       TTL), **newest-created first**: a storm's sessions are the newest, and a
+       quiet session that has survived longest is the likelier real client.
+    2. Unprotected recently-active sessions, least-recently-seen first.
+    3. Protected sessions, most idle first (silent before recent, then by
+       ``last_seen``), only when the unprotected ones cannot cover ``over``:
+       the cap stays a hard memory bound.
+
+    A real follower that has been quiet longer than the TTL therefore outlives
+    any number of fresh storm sessions as long as its process is alive.
     """
     if over <= 0:
         return []
-    abandoned = [s for s in instance_ids if s not in recent_ids]
-    if len(abandoned) >= over:
-        return abandoned[:over]
-    victims = list(abandoned)
-    remaining = over - len(victims)
-    recents = [s for s in instance_ids if s in recent_ids]
-    recents.sort(key=lambda s: last_seen.get(s, 0.0))
-    victims.extend(recents[:remaining])
-    return victims
+    unprotected = [s for s in instance_ids if s not in protected_ids]
+    abandoned = [s for s in reversed(unprotected) if s not in recent_ids]
+    recents = sorted((s for s in unprotected if s in recent_ids), key=lambda s: last_seen.get(s, 0.0))
+    protected = sorted(
+        (s for s in instance_ids if s in protected_ids),
+        key=lambda s: (s in recent_ids, last_seen.get(s, 0.0)),
+    )
+    return (abandoned + recents + protected)[:over]
 
 
 class McpNewSessionRateLimitMiddleware:

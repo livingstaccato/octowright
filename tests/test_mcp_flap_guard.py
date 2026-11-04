@@ -122,10 +122,51 @@ def test_evict_none_when_not_over() -> None:
     assert fg.select_eviction_victims(["a", "b"], {"a", "b"}, {}, over=-1) == []
 
 
-def test_evict_abandoned_first_oldest_created() -> None:
+def test_evict_abandoned_first_newest_created() -> None:
     # instance order = creation order; s1,s2 abandoned (not recent), s3,s4 active.
     victims = fg.select_eviction_victims(["s1", "s2", "s3", "s4"], recent_ids={"s3", "s4"}, last_seen={}, over=2)
-    assert victims == ["s1", "s2"]
+    assert victims == ["s2", "s1"]
+    # Only one needed: the newest abandoned one goes, the oldest survives.
+    assert fg.select_eviction_victims(["s1", "s2", "s3"], recent_ids=set(), last_seen={}, over=1) == ["s3"]
+
+
+def test_evict_quiet_live_follower_survives_a_storm() -> None:
+    # "real" is the oldest session and silent past the TTL (not recent), but a
+    # live follower names it; the storm's fresh sessions are all recent.
+    storm = [f"storm{i}" for i in range(6)]
+    victims = fg.select_eviction_victims(
+        ["real", *storm],
+        recent_ids=set(storm),
+        last_seen={s: float(i) for i, s in enumerate(storm)},
+        over=4,
+        protected_ids={"real"},
+    )
+    assert "real" not in victims
+    assert victims == storm[:4]  # least-recently-seen storm sessions first
+
+
+def test_evict_unprotected_abandoned_before_unprotected_recent() -> None:
+    victims = fg.select_eviction_victims(
+        ["p", "a1", "r1", "a2"],
+        recent_ids={"r1"},
+        last_seen={"r1": 1.0},
+        over=3,
+        protected_ids={"p"},
+    )
+    assert victims == ["a2", "a1", "r1"]
+
+
+def test_evict_protected_when_they_alone_exceed_cap_most_idle_first() -> None:
+    # The cap stays a hard bound: protected sessions are evicted once nothing
+    # else is left -- silent ones first, then least-recently-seen.
+    victims = fg.select_eviction_victims(
+        ["p1", "p2", "p3", "u"],
+        recent_ids={"p1", "p2"},
+        last_seen={"p1": 9.0, "p2": 3.0},
+        over=3,
+        protected_ids={"p1", "p2", "p3"},
+    )
+    assert victims == ["u", "p3", "p2"]
 
 
 def test_evict_falls_through_to_least_recently_seen_active() -> None:
@@ -247,6 +288,79 @@ async def test_cap_job_evicts_abandoned_down_to_cap(monkeypatch: pytest.MonkeyPa
 
     remaining = set(manager._server_instances)
     assert remaining == {"s3", "s4"}  # abandoned evicted, active kept
+
+
+def _record_follower(path: Any, pid: int, session_id: str) -> None:
+    from octowright import bridge_state
+
+    bridge_state.record_snapshot(
+        path=path,
+        follower_pid=pid,
+        remote_url="http://127.0.0.1/mcp/",
+        remote_session_id=session_id,
+        last_error=None,
+        in_flight=0,
+        reconnect_attempts=0,
+        request_timeouts=0,
+    )
+
+
+@pytest.mark.anyio
+async def test_cap_job_keeps_quiet_live_follower_session_over_storm(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    import os
+
+    from octowright import defaults, housekeeping
+    from octowright.http import app as http_app
+    from octowright.http.mcp_session_tracker import McpSessionTracker
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    _record_follower(path, os.getpid(), "real")  # a live follower names "real"
+    _record_follower(path, 1_000_000_000, "ghost")  # a dead one protects nothing
+
+    monkeypatch.setenv("OCTOWRIGHT_MCP_MAX_SESSIONS", "3")
+    storm = [f"storm{i}" for i in range(4)]
+    manager = _FakeManager(["real", "ghost", *storm])
+    monkeypatch.setattr("octowright.http.app.mcp_session_manager", lambda _mcp_server: manager, raising=False)
+    tracker = McpSessionTracker()  # "real" is silent past the TTL; the storm is fresh
+    for sid in storm:
+        tracker.mark_active(sid)
+    monkeypatch.setattr(http_app, "_session_tracker", tracker)
+
+    await housekeeping._enforce_mcp_session_cap_once(log=_QuietLog())
+
+    remaining = set(manager._server_instances)
+    assert len(remaining) == 3
+    assert "real" in remaining
+    assert "ghost" not in remaining
+
+
+@pytest.mark.anyio
+async def test_cap_job_still_bounds_and_logs_when_live_followers_exceed_cap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    import os
+    from unittest.mock import MagicMock
+
+    from octowright import defaults, housekeeping
+
+    path = tmp_path / "bridge-state.json"
+    monkeypatch.setattr(defaults, "BRIDGE_STATE_PATH", path)
+    _record_follower(path, os.getpid(), "p1")
+    _record_follower(path, os.getppid(), "p2")
+
+    monkeypatch.setenv("OCTOWRIGHT_MCP_MAX_SESSIONS", "1")
+    manager = _FakeManager(["p1", "p2"])
+    monkeypatch.setattr("octowright.http.app.mcp_session_manager", lambda _mcp_server: manager, raising=False)
+    log = MagicMock()
+
+    await housekeeping._enforce_mcp_session_cap_once(log=log)
+
+    assert len(manager._server_instances) == 1
+    events = [c.args[0] for c in log.warning.call_args_list]
+    assert "octowright.housekeeping.evicted_live_follower_sessions" in events
 
 
 @pytest.mark.anyio
