@@ -739,14 +739,14 @@ async def test_page_animations_hold_still_for_the_capture_and_resume_after(
     capture = safe_screenshot._capture
     read = {"expression": _ANIMATION_STATE, "returnByValue": True}
 
-    async def capture_while_watching_the_clock(cdp: object, target: Path) -> None:
+    async def capture_while_watching_the_clock(cdp: object, image: str) -> bytes:
         reads.append([])
         for _ in range(2):
             reply = await cdp.send("Runtime.evaluate", read)  # type: ignore[attr-defined]
             value = reply["result"]["value"]
             reads[-1].append({"time": float(value["time"]), "opacity": float(value["opacity"])})
             await asyncio.sleep(0.2)
-        await capture(cdp, target)
+        return await capture(cdp, image)
 
     monkeypatch.setattr(safe_screenshot, "_capture", capture_while_watching_the_clock)
     html = (

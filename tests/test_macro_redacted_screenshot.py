@@ -126,6 +126,16 @@ class FakeCDP:
         return {"computedStyle": []}
 
     async def _Runtime_evaluate(self, params: dict[str, Any]) -> dict[str, Any]:
+        page = self.page
+        if params["expression"] == safe_screenshot._settle_expression():
+            # Rendering settles: what the page had pending lands now, before anything is counted.
+            assert params["awaitPromise"] is True and params["returnByValue"] is True
+            page.settles.append(list(page.calls))
+            for method, event in page.events.pop("settle", ()):
+                self.emit(method, event)
+            if page.settle_error is not None:
+                raise page.settle_error
+            return page.settle_reply
         assert params["expression"] == "document"
         return {"result": {"objectId": "document"}}
 
@@ -179,11 +189,13 @@ class FakeCDP:
         page = self.page
         assert params == {"format": page.image_format}
         page.calls.append("screenshot")
-        for method, event in page.events.pop("screenshot", ()):
+        events = page.events.get("screenshot", ()) if page.repeat_capture_events else page.events.pop("screenshot", ())
+        for method, event in events:
             self.emit(method, event)
         if page.capture_error is not None:
             raise page.capture_error
-        return {"data": base64.b64encode(PNG).decode()}
+        image = page.capture_images.pop(0) if page.capture_images else PNG
+        return {"data": base64.b64encode(image).decode()}
 
     async def detach(self) -> None:
         self.page.calls.append("detach")
@@ -219,6 +231,10 @@ class FakePage:
         resume_error: Exception | None = None,
         chromium: bool = True,
         image_format: str = "png",
+        settle_reply: dict[str, Any] | None = None,
+        settle_error: Exception | None = None,
+        capture_images: tuple[bytes, ...] = (),
+        repeat_capture_events: bool = False,
     ) -> None:
         self.calls: list[str] = []
         self.reports = list(reports)
@@ -234,6 +250,11 @@ class FakePage:
         self.resume_error = resume_error
         self.chromium = chromium
         self.image_format = image_format
+        self.settle_reply = settle_reply or {"result": {"value": True}}
+        self.settle_error = settle_error
+        self.settles: list[list[str]] = []
+        self.capture_images = list(capture_images)
+        self.repeat_capture_events = repeat_capture_events
         self.redacted_values: list[str] | None = None
         self.redact_arguments: list[dict[str, Any]] | None = None
         self.resolved: list[int] = []
@@ -377,13 +398,16 @@ async def test_a_page_that_changed_before_the_capture_is_refused(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_a_page_that_changed_during_the_capture_loses_its_screenshot(tmp_path: Path) -> None:
-    page = FakePage(reports=(CLEAN, {"changed": 2, "remaining": 0}))
+async def test_a_page_that_changed_during_both_captures_loses_its_screenshot(tmp_path: Path) -> None:
+    # The first change sends the page round once more (restored, redacted again); the second refuses.
+    changed = {"changed": 2, "remaining": 0}
+    page = FakePage(reports=(CLEAN, changed, CLEAN, changed))
 
     with pytest.raises(RuntimeError, match="page changed after"):
         await _shoot(page, tmp_path / "shot.png")
 
-    assert page.calls == _refused("redact", "watch", "verify", "snapshot", "screenshot", "verify")
+    attempt = ["redact", "watch", "verify", "snapshot", "screenshot", "verify"]
+    assert page.calls == _refused(*attempt, "restore", "view_transitions", *attempt)
     assert not (tmp_path / "shot.png").exists()
 
 
@@ -410,7 +434,8 @@ async def test_a_report_without_a_view_transition_count_refuses(tmp_path: Path) 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["verify", "screenshot"])
 async def test_a_change_devtools_reports_once_counting_began_refuses(stage: str, tmp_path: Path) -> None:
-    page = FakePage(events={stage: (("DOM.characterDataModified", {"nodeId": 7}),)})
+    # A change during the capture is tried once more, so it changes during both captures here.
+    page = FakePage(events={stage: (("DOM.characterDataModified", {"nodeId": 7}),)}, repeat_capture_events=True)
 
     with pytest.raises(RuntimeError, match="page changed before" if stage == "verify" else "page changed after"):
         await _shoot(page, tmp_path / "shot.png")
