@@ -98,7 +98,11 @@ def view_transition_pseudo_elements(node: Mapping[str, Any]) -> list[str]:
 
 
 class PageChanges:
-    """Counts the page changes Chrome reports over one DevTools session."""
+    """Counts the page changes Chrome reports over one DevTools session.
+
+    ``kinds`` counts them by event name (``DOM.childNodeInserted``, ...), which names the kind of change and never
+    a node, a value or a selector, so a refusal can say what changed.
+    """
 
     def __init__(self, cdp: Any) -> None:
         self._cdp = cdp
@@ -106,6 +110,7 @@ class PageChanges:
         self._sheets: set[str] = set()
         self._counting = False
         self.count = 0
+        self.kinds: dict[str, int] = {}
 
     async def start(self) -> list[int]:
         """Subscribe, enable the DOM and CSS domains, and return the closed shadow roots."""
@@ -147,6 +152,7 @@ class PageChanges:
             if method in _STYLE_ATTRIBUTE_EVENTS and params.get("name") == "style":
                 return
             self.count += 1
+            self.kinds[method] = self.kinds.get(method, 0) + 1
 
         return handle
 

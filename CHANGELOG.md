@@ -107,6 +107,19 @@ a section that is already tagged and on PyPI.
   not produced a frame yet. The capture is now tried up to three times in all,
   unless the page is hidden or has no size and so can never produce one; the
   check after the capture still covers every change to the page.
+- **A redacted screenshot says what changed, and survives one change during
+  the capture.** A classified run could be refused at a different screenshot
+  each time with "the page changed after the redacted screenshot" and only a
+  count behind it. Rendering is now let settle (two animation frames, at most
+  250 ms) after the redaction and before anything is counted, so work the
+  redaction left pending no longer counts as a change. A page that changes
+  during the capture loses that image, which is never written, and is
+  restored, redacted and captured once more; a second change still refuses.
+  The refusal message, its `screenshot_refused.changes` field and the
+  `octowright.macro.screenshot_refused` warning count the changes by kind (a
+  DevTools event such as `DOM.childNodeInserted`, or `focusout`, `hashchange`,
+  `inline style`, ...), never a value or a selector. The image is now written
+  only after the second check passed and the page was restored.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of

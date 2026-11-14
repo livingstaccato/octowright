@@ -420,7 +420,11 @@ order:
      stylesheet holds a value), checked, indeterminate, selected and validity state,
      focus, and the location hash. Inline style changes that could reveal nothing,
      such as a spinner's transform, do not count.
-   - Before and after the capture, it refuses the screenshot and deletes any file if
+   - Before counting begins it lets rendering settle (two animation frames, at most
+     250 ms), so work the redaction left pending, such as a style flush or the focus
+     moving off an element it hid, is not counted as a change. A page that does not
+     settle in time is still checked and captured.
+   - Before and after the capture, it refuses the screenshot if
      it counted a change, if a view transition is running anywhere it redacted or Chrome
      still draws one in any root (including a shadow root attached after the redaction
      collected its roots), if the redacted page still
@@ -431,7 +435,12 @@ order:
      (`content: url()` included). Its text is matched joined, reversed, in visual
      order, and with up to a few unrelated text boxes between the parts of a value.
    - It captures through the same DevTools session (`Page.captureScreenshot`), not
-     Playwright's screenshot helper, which writes styles onto the page first.
+     Playwright's screenshot helper, which writes styles onto the page first. The image
+     is held in memory and written only once the check after the capture passed and the
+     page was restored.
+   - A change counted after the capture costs that image, which is never written: the
+     page is restored, redacted again and captured once more, counting afresh. A second
+     change refuses, as does a change before the capture or a page whose restore failed.
    - It then restores the page. A text, control value, attribute or style property is
      written back only while it still holds what the redaction left, so a value the page
      changed meanwhile stays, and so do the page's other style changes. Hidden elements
@@ -445,8 +454,8 @@ order:
      it. An attribute node the page moved to another element is restored there, unless the
      page changed its value. Any other attribute the page removed stays removed, unless the
      page put back exactly what the redaction wrote under the same namespace and local
-     name, which then gets the original value. If the restore fails or is cancelled, the
-     screenshot is deleted.
+     name, which then gets the original value. If the restore fails or is cancelled, no
+     screenshot is written.
 3. Otherwise the screenshot is refused.
 
 The in-page state is held through Octowright's own DevTools session, not on a page
@@ -497,6 +506,14 @@ and the payload carries
   `styles not applied`, `no rendered-surface snapshot` (not Chromium), `handler
   refused`, or `no privacy handler` (the default `refuse` policy).
 - `stage` is `before` or `after` the capture, when the refusal has one.
+- `changes`, on a `page changed` refusal only, counts what changed by kind: a
+  DevTools event name (`DOM.childNodeInserted`, `DOM.pseudoElementAdded`,
+  `CSS.styleSheetChanged`, ...) or one of the page controller's own kinds
+  (`inline style`, `checked`, `indeterminate`, `selected`, `custom validity`,
+  `focusin`, `focusout`, `hashchange`), and `unreported` for any it could not
+  name. The message lists them too, as in `the page changed after the redacted
+  screenshot (focusout x1); screenshot refused`. Kinds are names, never a node, a
+  value or a selector.
 - `tiers` (`credential`, `identity`, `contextual`, strongest first) and `args` (the
   argument path, as `scrub_exempt_args` reports it) come from where the session
   ledger admitted each value. For a rendered-surface refusal they name the values

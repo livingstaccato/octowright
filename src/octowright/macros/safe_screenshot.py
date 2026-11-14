@@ -15,7 +15,8 @@ proves again, and restores the page, all through one DevTools session:
    spelling of the run's values in the document and in open and closed shadow roots,
    masks text controls holding one, and hides elements whose pixels or resource
    addresses cannot be redacted.
-2. From then on the page's changes are counted, by Chrome for DOM and stylesheet changes
+2. Rendering is let settle (two animation frames, bounded), so work the redaction left
+   pending lands before counting. From then on the page's changes are counted, by Chrome for DOM and stylesheet changes
    (:mod:`octowright.macros.page_devtools`) and by the controller for style, form state
    and focus changes. Before and after the capture the count must be zero, the
    controller must find no remaining value, and Chrome's rendered surface
@@ -26,7 +27,12 @@ proves again, and restores the page, all through one DevTools session:
    (``Page.captureScreenshot``). Playwright's screenshot helper is not used, because it
    writes styles onto the page before capturing and a page can react to them.
 4. The page is restored whatever happened. A refused or unrestorable screenshot leaves
-   no file.
+   no file: the image is written only after the second proof passed and the page was
+   restored.
+
+A page that changed during the capture loses that image, is restored, redacted again and
+captured once more; a second change refuses. Every "page changed" refusal names the kinds
+of change counted (a DevTools event name or a kind the controller counts), never a value.
 
 Opt in per session with :func:`enable_redacted_screenshots`, or for every session with
 ``OCTOWRIGHT_MACRO_CLASSIFIED_SCREENSHOTS=redact``. A caller-installed handler still
@@ -51,7 +57,7 @@ import asyncio
 import base64
 import contextlib
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
@@ -59,6 +65,7 @@ from provide.telemetry import get_logger
 
 from octowright import defaults
 from octowright._paths import atomic_write_via_writer, reject_unsafe_path
+from octowright.macros import redaction_page_js as page_js
 from octowright.macros.animation_freeze import AnimationFreeze
 from octowright.macros.page_devtools import (
     PageChanges,
@@ -93,6 +100,27 @@ _NO_FRAME = "Unable to capture screenshot"
 _CAPTURE_ATTEMPTS = 3
 _CAPTURE_RETRY_SECONDS = 0.1
 _CAN_PRODUCE_FRAME = "document.visibilityState === 'visible' && innerWidth > 0 && innerHeight > 0"
+
+# Rendering is let settle after the redaction and before anything is counted, so work the page or the
+# redaction left pending (a style flush, the focus fix-up when the focused element was hidden) lands then
+# rather than inside the capture, where it would be counted as a change. Two animation frames, bounded in
+# the page and again here. Settling decides nothing: a page that does not settle is still proved and captured.
+_SETTLE_FRAMES = 2
+_SETTLE_TIMEOUT_SECONDS = 0.25
+# A page that changed during the capture loses that image and is redacted and captured once more; a second
+# change refuses. A change found before the capture refuses at once.
+_CHANGE_ATTEMPTS = 2
+_UNREPORTED = "unreported"
+
+
+class _PageChanged(Exception):
+    """The page changed since counting began: which kinds, and whether the redaction was undone after it."""
+
+    def __init__(self, stage: str, kinds: dict[str, int]) -> None:
+        super().__init__(stage)
+        self.stage = stage
+        self.kinds = kinds
+        self.restored = False
 
 
 def classified_screenshot_policy() -> ClassifiedScreenshotPolicy:
@@ -179,13 +207,35 @@ def built_in_redaction_applies(session: Any) -> bool:
     return classified_screenshot_policy() == "redact"
 
 
+def _change_kinds(report: Mapping[str, Any], changes: PageChanges) -> dict[str, int]:
+    """How many changes of each kind were counted, by name only; any the page cannot name is ``unreported``."""
+    kinds = dict(changes.kinds)
+    named = unreported = 0
+    reported = report.get("kinds")
+    for kind, raw in (reported if isinstance(reported, Mapping) else {}).items():
+        count = raw if isinstance(raw, int) and not isinstance(raw, bool) and raw > 0 else 1
+        if kind in page_js.CHANGE_KINDS:
+            kinds[kind] = kinds.get(kind, 0) + count
+            named += count
+        else:
+            unreported += count
+    try:
+        total = int(report.get("changed", 1))
+    except (TypeError, ValueError):
+        total = 1
+    unreported += max(total - named - unreported, 0)
+    if unreported:
+        kinds[_UNREPORTED] = unreported
+    return kinds
+
+
 async def _require_unrendered(
     controller: PageController, changes: PageChanges, cdp: Any, values: list[str], refusals: Refusals, *, stage: str
 ) -> None:
     """Raise unless the page is unchanged since redaction and renders no classified value."""
     report = await bounded(controller.verify(), operation=_OPERATION)
     if int(report.get("changed", 1)) or changes.count:
-        raise refusals.refuse(f"the page changed {stage} the redacted screenshot", "page changed", stage=stage)
+        raise _PageChanged(stage, _change_kinds(report, changes))
     if int(report.get("remaining", 1)):
         head = f"classified values are still in the page {stage} the screenshot"
         raise refusals.refuse(head, "value left in the page", stage=stage)
@@ -201,9 +251,29 @@ async def _require_unrendered(
         raise refusals.rendered(snapshot, leaks, stage=stage)
 
 
-async def _capture(cdp: Any, target: Path) -> None:
-    """Write the screenshot from ``Page.captureScreenshot``, atomically."""
-    image = "jpeg" if target.suffix.lower() in {".jpg", ".jpeg"} else "png"
+def _settle_expression() -> str:
+    """Page script resolving true after `_SETTLE_FRAMES` animation frames, or false after the timeout."""
+    frames = "resolve(true)"
+    for _ in range(_SETTLE_FRAMES):
+        frames = f"requestAnimationFrame(() => {frames})"
+    timeout_ms = int(_SETTLE_TIMEOUT_SECONDS * 1000)
+    return f"new Promise((resolve) => {{ setTimeout(() => resolve(false), {timeout_ms}); {frames}; }})"
+
+
+async def _settle(cdp: Any) -> None:
+    """Let rendering settle before counting begins; a page that does not settle is logged, not refused."""
+    params = {"expression": _settle_expression(), "awaitPromise": True, "returnByValue": True}
+    try:
+        reply = await asyncio.wait_for(cdp.send("Runtime.evaluate", params), timeout=2 * _SETTLE_TIMEOUT_SECONDS)
+    except Exception as exc:
+        log.info("octowright.macro.redacted_screenshot.unsettled", error=type(exc).__name__)
+        return
+    if reply.get("result", {}).get("value") is not True:
+        log.info("octowright.macro.redacted_screenshot.unsettled", error=None)
+
+
+async def _capture(cdp: Any, image: str) -> bytes:
+    """The screenshot's bytes from ``Page.captureScreenshot``; nothing is written."""
     for attempt in range(1, _CAPTURE_ATTEMPTS + 1):
         try:
             shot = await bounded(cdp.send("Page.captureScreenshot", {"format": image}), operation=_OPERATION)
@@ -213,7 +283,11 @@ async def _capture(cdp: Any, target: Path) -> None:
                 raise
             log.debug("octowright.macro.redacted_screenshot.no_frame", attempt=attempt)
             await asyncio.sleep(_CAPTURE_RETRY_SECONDS)
-    data = base64.b64decode(shot["data"])
+    return base64.b64decode(shot["data"])
+
+
+async def _write(target: Path, data: bytes) -> None:
+    """Write a proved screenshot, atomically."""
     target.parent.mkdir(parents=True, exist_ok=True)
 
     async def write(temporary: Path) -> None:
@@ -233,6 +307,10 @@ async def _can_produce_frame(cdp: Any) -> bool:
         log.debug("octowright.macro.redacted_screenshot.frame_probe_failed", exc_info=True)
         return False
     return reply.get("result", {}).get("value") is True
+
+
+def _image_format(target: Path) -> str:
+    return "jpeg" if target.suffix.lower() in {".jpg", ".jpeg"} else "png"
 
 
 async def _pause_animations(freeze: AnimationFreeze) -> None:
@@ -256,58 +334,91 @@ async def _apply_styles(changes: PageChanges, refusals: Refusals) -> None:
         raise refusals.refuse("the page's styles could not be applied", "styles not applied") from exc
 
 
-async def _release(cdp: Any, changes: PageChanges, freeze: AnimationFreeze) -> None:
-    """Stop counting, resume animations and detach; each step is attempted even if an earlier one failed."""
-    with contextlib.suppress(Exception):
-        await bounded(changes.close(), operation=_OPERATION)
+async def _release(cdp: Any, freeze: AnimationFreeze) -> None:
+    """Resume animations and detach; each step is attempted even if an earlier one failed."""
     with contextlib.suppress(Exception):
         await freeze.resume()
     with contextlib.suppress(Exception):
         await cdp.detach()
 
 
-async def _restore(controller: PageController, target: Path, *, quiet: bool) -> None:
-    """Undo the redaction. On failure or cancellation the screenshot is deleted.
+async def _restore(controller: PageController, *, quiet: bool) -> bool:
+    """Undo the redaction; whether it was undone. The screenshot is written only after this succeeded.
 
-    ``quiet`` logs a failure instead of raising; a cancellation always propagates.
+    ``quiet`` logs a failure and returns False instead of raising; a cancellation always propagates.
     """
     try:
         await bounded(controller.restore(), operation=_OPERATION)
     except BaseException as exc:
-        # A cancelled restore may have left the page redacted, so it loses the screenshot like a failed one.
-        target.unlink(missing_ok=True)
         log.warning("octowright.macro.redacted_screenshot.restore_failed", error=type(exc).__name__)
         if not quiet or not isinstance(exc, Exception):
             raise
+        return False
     finally:
         with contextlib.suppress(Exception):
             await bounded(controller.dispose(), operation=_OPERATION)
+    return True
 
 
 async def _redact_and_capture(
-    cdp: Any, changes: PageChanges, freeze: AnimationFreeze, values: list[str], target: Path, refusals: Refusals
-) -> PageController:
-    """Pause, redact, count, prove, capture and prove again; on any failure restore and re-raise."""
+    cdp: Any, changes: PageChanges, values: list[str], image: str, refusals: Refusals
+) -> tuple[PageController, bytes]:
+    """Redact, settle, count, prove, capture and prove again; on any failure restore and re-raise."""
     controller: PageController | None = None
     try:
-        await _pause_animations(freeze)
         await _end_view_transitions(cdp, refusals)
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
         controller = await bounded(PageController.create(cdp, values), operation=_OPERATION)
         await bounded(controller.redact(closed_roots), operation=_OPERATION)
+        await _settle(cdp)
         await _apply_styles(changes, refusals)
         latent = await bounded(changes.sheets_hold(values), operation=_OPERATION)
         await bounded(controller.watch(latent), operation=_OPERATION)
         changes.begin()
         await _require_unrendered(controller, changes, cdp, values, refusals, stage="before")
-        await _capture(cdp, target)
+        data = await _capture(cdp, image)
         await _require_unrendered(controller, changes, cdp, values, refusals, stage="after")
-    except BaseException:
-        target.unlink(missing_ok=True)
-        if controller is not None:
-            await _restore(controller, target, quiet=True)
+    except _PageChanged as changed:
+        # The image, if any, is dropped here: it is never returned or written.
+        changed.restored = controller is not None and await _restore(controller, quiet=True)
         raise
-    return controller
+    except BaseException:
+        if controller is not None:
+            await _restore(controller, quiet=True)
+        raise
+    return controller, data
+
+
+async def _proved_capture(
+    cdp: Any, freeze: AnimationFreeze, values: list[str], image: str, refusals: Refusals
+) -> bytes:
+    """Pause animations, then redact, prove, capture, prove again and restore; once more after a capture-time change.
+
+    Only a change found after the capture, on a page whose redaction was undone, is tried again, and only once;
+    each attempt counts afresh. Any other refusal, or a second change, refuses.
+    """
+    await _pause_animations(freeze)
+    attempt = 1
+    while True:
+        changes = PageChanges(cdp)
+        try:
+            controller, data = await _redact_and_capture(cdp, changes, values, image, refusals)
+            await _restore(controller, quiet=False)
+            return data
+        except _PageChanged as changed:
+            if changed.stage == "after" and changed.restored and attempt < _CHANGE_ATTEMPTS:
+                log.warning(
+                    "octowright.macro.redacted_screenshot.changed_during_capture",
+                    attempt=attempt,
+                    changes=changed.kinds,
+                )
+                attempt += 1
+                continue
+            head = f"the page changed {changed.stage} the redacted screenshot"
+            raise refusals.refuse(head, "page changed", stage=changed.stage, changes=changed.kinds) from None
+        finally:
+            with contextlib.suppress(Exception):
+                await bounded(changes.close(), operation=_OPERATION)
 
 
 async def redacted_screenshot(
@@ -319,8 +430,8 @@ async def redacted_screenshot(
 ) -> tuple[int, int]:
     """Pause animations, end a view transition, redact, prove nothing is rendered, screenshot, prove again, restore.
 
-    Returns ``(executed, skipped)``. No file survives unless both proofs passed and the
-    page was restored. Refusals raise `ScreenshotRefused` (a ``RuntimeError``) naming
+    Returns ``(executed, skipped)``. No file is written unless both proofs passed and the
+    page was restored; a capture the page changed during is redacted and taken once more. Refusals raise `ScreenshotRefused` (a ``RuntimeError``) naming
     what was found, its tier and argument, never the value (see `screenshot_refusal`).
 
     Every value is matched anywhere, word-bounded ledger values included
@@ -349,13 +460,12 @@ async def redacted_screenshot(
         except Exception as exc:
             head = "a redacted screenshot needs a Chromium page to read what is rendered"
             raise refusals.refuse(head, "no rendered-surface snapshot") from exc
-        changes = PageChanges(cdp)
         freeze = AnimationFreeze(cdp)
         try:
-            controller = await _redact_and_capture(cdp, changes, freeze, values, target, refusals)
-            await _restore(controller, target, quiet=False)
+            data = await _proved_capture(cdp, freeze, values, _image_format(target), refusals)
+            await _write(target, data)
         finally:
-            await _release(cdp, changes, freeze)
+            await _release(cdp, freeze)
         recorder = getattr(session, "recorder", None)
         if recorder is not None:
             recorder.record("screenshot", path=str(target))
