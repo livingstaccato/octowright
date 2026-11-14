@@ -117,13 +117,13 @@ async def test_the_redaction_removes_the_value_from_what_the_screenshot_sees(
     seen: list[dict[str, object]] = []
     capture = safe_screenshot._capture
 
-    async def capture_and_look(cdp: object, target: Path) -> None:
+    async def capture_and_look(cdp: object, image: str) -> bytes:
         reply = await cdp.send(  # type: ignore[attr-defined]
             "Runtime.evaluate",
             {"expression": f"({_STATE_JS})()", "returnByValue": True},
         )
         seen.append(reply["result"]["value"])
-        await capture(cdp, target)
+        return await capture(cdp, image)
 
     monkeypatch.setattr(safe_screenshot, "_capture", capture_and_look)
     try:

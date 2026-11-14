@@ -29,7 +29,8 @@ controller:
   style change could reveal); a change of checked, indeterminate, selected or custom
   validity state; a focus change; and a change of the location hash. DevTools counts
   every other DOM and stylesheet change.
-- ``verify()`` reports how many such changes it counted, how many classified
+- ``verify()`` reports how many such changes it counted and of which kinds
+  (:data:`CHANGE_KINDS`), how many classified
   spellings the redacted roots still hold outside what it hid or masked, and whether a
   view transition is running on the document or on any element in the redacted roots
   (its raster of the old state cannot be redacted).
@@ -146,6 +147,12 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   let observer = null;
   let latent = false;
   let changed = 0;
+  // Each change counted, by its kind: a fixed name, never a node, value or selector.
+  const kinds = new Map();
+  const note = (kind) => {
+    changed += 1;
+    kinds.set(kind, (kinds.get(kind) || 0) + 1);
+  };
   let restored = false;
   const collectRoots = (closedRoots) => {
     const found = [document, ...closedRoots];
@@ -286,7 +293,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
   };
   const count = (records) => {
     for (const record of records) {
-      if (latent || styled.has(record.target) || holds(record.target.getAttribute('style'))) changed += 1;
+      if (latent || styled.has(record.target) || holds(record.target.getAttribute('style'))) note('inline style');
     }
   };
   const hookSetter = (prototype, name) => {
@@ -295,7 +302,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     const counted = function counted(value) {
       const before = descriptor.get.call(this);
       descriptor.set.call(this, value);
-      if (descriptor.get.call(this) !== before) changed += 1;
+      if (descriptor.get.call(this) !== before) note(name);
     };
     Object.defineProperty(prototype, name, {...descriptor, set: counted});
     unhooks.push(() => Object.defineProperty(prototype, name, descriptor));
@@ -307,7 +314,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     const counted = function setCustomValidity(message) {
       const before = this.validationMessage;
       const result = original.call(this, message);
-      if (this.validationMessage !== before) changed += 1;
+      if (this.validationMessage !== before) note('custom validity');
       return result;
     };
     Object.defineProperty(prototype, 'setCustomValidity', {...descriptor, value: counted});
@@ -377,7 +384,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
         hookValidity(type.prototype);
       }
       for (const type of ['focusin', 'focusout', 'hashchange']) {
-        const listener = () => { changed += 1; };
+        const listener = () => { note(type); };
         window.addEventListener(type, listener, true);
         listeners.push([type, listener]);
       }
@@ -401,7 +408,7 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
         }
         if (EDITABLE.has(tag(node)) && !masked.has(node) && holds(node.value)) remaining += 1;
       });
-      return {changed, remaining, transitioning: viewTransitionRunning()};
+      return {changed, kinds: Object.fromEntries(kinds), remaining, transitioning: viewTransitionRunning()};
     },
     restore() {
       if (restored) return;
@@ -414,6 +421,12 @@ CONTROLLER_JS = r"""({values, digits, ignorable, separators, loading, hrefLoadin
     },
   };
 }"""
+
+
+#: The kinds of change the controller counts itself (``verify()``'s ``kinds``); DevTools names every other kind.
+CHANGE_KINDS = frozenset(
+    {"inline style", "checked", "indeterminate", "selected", "custom validity", "focusin", "focusout", "hashchange"}
+)
 
 
 #: Ends every running view transition, whose raster of its scope's old state no redaction reaches, and waits

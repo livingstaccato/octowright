@@ -13,7 +13,7 @@ import pytest
 
 from octowright import defaults
 from octowright.macros.page_devtools import view_transition_pseudo_elements
-from tests.test_macro_redacted_screenshot import FakePage, _refused, _shoot
+from tests._redacted_screenshot_fakes import FakePage, _refused, _shoot
 
 
 @pytest.fixture(autouse=True)

@@ -15,6 +15,10 @@ source to diagnose. Every refusal in `safe_screenshot` is now a
   refusal before or beside that scan, why it was refused ("page changed",
   "no privacy handler", ...);
 - ``stage``: ``before`` or ``after`` the capture, when the refusal has one;
+- ``changes``: for "page changed", how many changes of each kind were counted,
+  by a DevTools event name or one of the page controller's fixed kinds
+  (``focusout``, ``inline style``, ...; ``unreported`` for any it could not
+  name) -- names of kinds, never a node, a value or a selector;
 - ``tiers`` and ``args``: the tier (credential/identity/contextual) and the
   argument path of the values responsible, read from the session ledger's
   provenance. For a rendered-surface refusal that is the values the page was
@@ -61,6 +65,8 @@ class ScreenshotRefused(SafetyStop, RuntimeError):
 
 def _detail(fields: Mapping[str, Any], *, with_reasons: bool) -> str:
     parts = [", ".join(fields.get("reasons") or ())] if with_reasons else []
+    if fields.get("changes"):
+        parts.append(", ".join(f"{kind} x{count}" for kind, count in sorted(fields["changes"].items())))
     if fields.get("tiers"):
         parts.append(f"tier {', '.join(fields['tiers'])}")
     if fields.get("args"):
@@ -102,17 +108,28 @@ class Refusals:
         head = f"classified values are still rendered {stage} the screenshot"
         return self._refuse(head, reasons, stage=stage, values=drawn, with_reasons=True)
 
-    def refuse(self, head: str, reason: str, *, stage: str | None = None) -> ScreenshotRefused:
+    def refuse(
+        self, head: str, reason: str, *, stage: str | None = None, changes: Mapping[str, int] | None = None
+    ) -> ScreenshotRefused:
         """Any other refusal, attributed to every held value: that is why the screenshot was classified."""
-        return self._refuse(head, [reason], stage=stage, values=self._held, with_reasons=False)
+        return self._refuse(head, [reason], stage=stage, values=self._held, with_reasons=False, changes=changes)
 
     def _refuse(
-        self, head: str, reasons: list[str], *, stage: str | None, values: Iterable[str], with_reasons: bool
+        self,
+        head: str,
+        reasons: list[str],
+        *,
+        stage: str | None,
+        values: Iterable[str],
+        with_reasons: bool,
+        changes: Mapping[str, int] | None = None,
     ) -> ScreenshotRefused:
         tiers, args = held_provenance(self._session, values)
         fields: dict[str, Any] = {"reasons": list(reasons)}
         if stage is not None:
             fields["stage"] = stage
+        if changes:
+            fields["changes"] = dict(changes)
         fields["tiers"] = tiers
         fields["args"] = [self._shown(path) for path in args]
         log.warning("octowright.macro.screenshot_refused", **fields)

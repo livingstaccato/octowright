@@ -133,13 +133,13 @@
   },
   {
     "module": "octowright.macros.safe_screenshot",
-    "function": "_capture",
+    "function": "_write",
     "callee": "atomic_write_via_writer",
     "shape": "call"
   },
   {
     "module": "octowright.macros.safe_screenshot",
-    "function": "_capture.write",
+    "function": "_write.write",
     "callee": "write_bytes",
     "shape": ".temporary"
   },

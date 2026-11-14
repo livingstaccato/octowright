@@ -25,7 +25,7 @@ import pytest
 from octowright import runner
 from octowright.macros import execution, safe_screenshot, screenshot_refusal, sequence_steps
 from octowright.macros.privacy import BLIND_SCRUB_POLICY_ENV, SESSION_PRIVACY_LEDGER_ATTR
-from tests.test_macro_redacted_screenshot import FakePage, _session
+from tests._redacted_screenshot_fakes import FakePage, _session
 
 # Stands in for the BMF lab's "admin": short, ordinary, rendered in the header.
 # Not "admin" itself, because the value-absent checks scan the whole payload and
