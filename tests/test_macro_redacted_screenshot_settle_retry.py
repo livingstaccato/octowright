@@ -31,7 +31,7 @@ from octowright import defaults
 from octowright.macros import safe_screenshot
 from octowright.macros.page_devtools import PageChanges
 from octowright.macros.screenshot_refusal import ScreenshotRefused
-from tests.test_macro_redacted_screenshot import CLEAN, PNG, TAKEN, FakePage, _shoot
+from tests._redacted_screenshot_fakes import CLEAN, PNG, TAKEN, FakePage, _shoot
 
 #: One attempt's protocol after the animations are paused: up to and including the restore.
 _ATTEMPT = ["view_transitions", "redact", "watch", "verify", "snapshot", "screenshot", "verify", "snapshot", "restore"]
@@ -123,11 +123,12 @@ async def test_a_refusal_names_the_controllers_own_change_kinds(tmp_path: Path) 
 async def test_change_kinds_the_page_cannot_name_are_reported_as_unreported(
     report: dict[str, Any], expected: dict[str, int], tmp_path: Path
 ) -> None:
-    with pytest.raises(ScreenshotRefused) as raised:
+    with structlog.testing.capture_logs() as logs, pytest.raises(ScreenshotRefused) as raised:
         await _shoot(FakePage(reports=(report,)), tmp_path / "shot.png")
 
     assert raised.value.fields["changes"] == expected
     assert "secret" not in str(raised.value)
+    assert _warnings(logs) and "secret" not in repr(_warnings(logs))
 
 
 # --- settle before counting ---------------------------------------------------------------------
@@ -225,6 +226,48 @@ async def test_the_discarded_image_is_never_written(tmp_path: Path, monkeypatch:
 
     assert writes == [((tmp_path / "shot.png").resolve(), PNG)]
     assert _png_writes(tmp_path) == [tmp_path / "shot.png"]
+
+
+def _holders(exc: BaseException, marker: bytes) -> list[str]:
+    """Every frame local, along the exception chain and its tracebacks, that holds bytes containing *marker*."""
+    found: list[str] = []
+    seen: set[int] = set()
+    pending: list[BaseException | None] = [exc]
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        assert marker not in repr(current.args).encode()
+        pending.extend((current.__cause__, current.__context__))
+        tb = current.__traceback__
+        while tb is not None:
+            for name, value in tb.tb_frame.f_locals.items():
+                # The marker itself is this test's own local; only a captured image extends it.
+                if isinstance(value, (bytes, bytearray)) and marker in value and value != marker:
+                    found.append(f"{tb.tb_frame.f_code.co_name}.{name}")
+            tb = tb.tb_next
+    return found
+
+
+@pytest.mark.parametrize(
+    "reports",
+    [
+        (CLEAN, {**CLEAN, "changed": 1}, CLEAN, {**CLEAN, "changed": 1}),  # changed during both captures
+        (CLEAN, {**CLEAN, "remaining": 1}),  # a value left after the capture
+    ],
+    ids=["changed-twice", "value-left-after"],
+)
+async def test_a_refusal_after_the_capture_keeps_no_reference_to_the_image(
+    reports: tuple[dict[str, Any], ...], tmp_path: Path
+) -> None:
+    marker = b"unproved-image-canary"
+    page = FakePage(reports=reports, capture_images=(marker + b"-1", marker + b"-2"))
+
+    with pytest.raises(ScreenshotRefused) as raised:
+        await _shoot(page, tmp_path / "shot.png")
+
+    assert _holders(raised.value, marker) == []
 
 
 async def test_a_change_before_the_capture_is_not_tried_again(tmp_path: Path) -> None:

@@ -309,7 +309,7 @@ _SECRET = "pw-classified-4c2e"  # pragma: allowlist secret
 def _classified_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, opt_in: bool) -> tuple[Any, Any]:
     from octowright import defaults
     from octowright.macros import safe_screenshot
-    from tests.test_macro_redacted_screenshot import FakePage, _session
+    from tests._redacted_screenshot_fakes import FakePage, _session
 
     # The run directory sits outside the recordings root, so the screenshot is
     # written only because the artifact run names its own run dir as the root.
@@ -328,7 +328,7 @@ async def test_a_classified_screenshot_is_redacted_into_the_run_dir(
 ) -> None:
     from octowright.artifacts.evidence import EvidenceBuilder
     from octowright.macros import artifacts
-    from tests.test_macro_redacted_screenshot import TAKEN
+    from tests._redacted_screenshot_fakes import TAKEN
 
     page, session = _classified_session(monkeypatch, tmp_path, opt_in=True)
     evidence = EvidenceBuilder()

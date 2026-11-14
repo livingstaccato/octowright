@@ -31,7 +31,7 @@ from octowright.macros import redaction_page_js as page_js
 from octowright.macros.privacy_ledger import SESSION_PRIVACY_LEDGER_ATTR, SessionPrivacyLedger
 from octowright.macros.screenshot_refusal import ScreenshotRefused
 from octowright.session.timeouts import SessionCallTimeoutError
-from tests.test_macro_redacted_screenshot import CLEAN, PNG, FakeCDP, FakePage
+from tests._redacted_screenshot_fakes import CLEAN, PNG, FakeCDP, FakePage
 
 PASSWORD = "B7-REDACT-PASSWORD-CANARY-4c2e"  # pragma: allowlist secret
 POLICY_ENV = safe_screenshot.POLICY_ENV
