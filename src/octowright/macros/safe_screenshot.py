@@ -264,7 +264,8 @@ async def _settle(cdp: Any) -> None:
     """Let rendering settle before counting begins; a page that does not settle is logged, not refused."""
     params = {"expression": _settle_expression(), "awaitPromise": True, "returnByValue": True}
     try:
-        reply = await asyncio.wait_for(cdp.send("Runtime.evaluate", params), timeout=2 * _SETTLE_TIMEOUT_SECONDS)
+        evaluated = cdp.send("Runtime.evaluate", params)
+        reply = await bounded(evaluated, operation=_OPERATION, timeout=2 * _SETTLE_TIMEOUT_SECONDS)
     except Exception as exc:
         log.info("octowright.macro.redacted_screenshot.unsettled", error=type(exc).__name__)
         return
@@ -363,8 +364,13 @@ async def _restore(controller: PageController, *, quiet: bool) -> bool:
 async def _redact_and_capture(
     cdp: Any, changes: PageChanges, values: list[str], image: str, refusals: Refusals
 ) -> tuple[PageController, bytes]:
-    """Redact, settle, count, prove, capture and prove again; on any failure restore and re-raise."""
+    """Redact, settle, count, prove, capture and prove again; on any failure restore and re-raise.
+
+    On failure the captured image is dropped before re-raising, so the exception's traceback, which keeps this
+    frame, holds no reference to the unproved image.
+    """
     controller: PageController | None = None
+    data: bytes | None = None
     try:
         await _end_view_transitions(cdp, refusals)
         closed_roots = await bounded(changes.start(), operation=_OPERATION)
@@ -380,9 +386,11 @@ async def _redact_and_capture(
         await _require_unrendered(controller, changes, cdp, values, refusals, stage="after")
     except _PageChanged as changed:
         # The image, if any, is dropped here: it is never returned or written.
+        data = None
         changed.restored = controller is not None and await _restore(controller, quiet=True)
         raise
     except BaseException:
+        data = None
         if controller is not None:
             await _restore(controller, quiet=True)
         raise
@@ -401,9 +409,14 @@ async def _proved_capture(
     attempt = 1
     while True:
         changes = PageChanges(cdp)
+        refused: tuple[str, dict[str, int]] | None = None
         try:
             controller, data = await _redact_and_capture(cdp, changes, values, image, refusals)
-            await _restore(controller, quiet=False)
+            try:
+                await _restore(controller, quiet=False)
+            except BaseException:
+                del data  # the traceback keeps this frame: it must not keep the image
+                raise
             return data
         except _PageChanged as changed:
             if changed.stage == "after" and changed.restored and attempt < _CHANGE_ATTEMPTS:
@@ -414,11 +427,14 @@ async def _proved_capture(
                 )
                 attempt += 1
                 continue
-            head = f"the page changed {changed.stage} the redacted screenshot"
-            raise refusals.refuse(head, "page changed", stage=changed.stage, changes=changed.kinds) from None
+            refused = (changed.stage, changed.kinds)
         finally:
             with contextlib.suppress(Exception):
                 await bounded(changes.close(), operation=_OPERATION)
+        # Raised outside the handler, so the refusal carries no context chain back to the attempt's frames.
+        stage, kinds = refused
+        head = f"the page changed {stage} the redacted screenshot"
+        raise refusals.refuse(head, "page changed", stage=stage, changes=kinds)
 
 
 async def redacted_screenshot(
