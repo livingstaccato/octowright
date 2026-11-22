@@ -203,6 +203,16 @@ CASES: dict[str, Case] = {
         ["**/sentinel-mock/**", "201", "sentinel-body", "text/sentinel"],
     ),
     "unmock_route": (lambda s, _p: _mock_then_unmock(s), ["**/sentinel-mock/**"]),
+    "abort_route": (
+        lambda s, _p: s.abort_route("**/sentinel-refused/**", error_code="connectionrefused"),
+        ["**/sentinel-refused/**", "connectionrefused"],
+    ),
+    "set_offline": (lambda s, _p: s.set_offline(True), ["True", "true"]),
+    "set_safe_area": (lambda s, _p: s.set_safe_area(bottom=34, top=12), ["bottom", "34", "top", "12"]),
+    "scroll": (
+        lambda s, _p: s.scroll(delta_x=12, delta_y=345, selector="#sentinel-feed"),
+        ["#sentinel-feed", "12", "345"],
+    ),
     "set_dialog_policy": (lambda s, _p: s.set_dialog_policy("dismiss"), ["dismiss"]),
     "set_input_files": (lambda s, p: s.set_input_files("#sentinel-input", [p]), ["#sentinel-input", "{path}"]),
     "upload_files": (lambda s, p: _upload(s, p), ["#sentinel-upload", "{path}"]),
