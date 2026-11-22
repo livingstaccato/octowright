@@ -9,11 +9,11 @@ SPDX-Comment: Part of octowright.
 
 The guard measures a **core** install in a child process with its config dirs redirected, because an empty `OCTOWRIGHT_PLUGINS` falls through to the operator's `plugins.yaml` — so an in-process count reads 141 on a machine that enables the terminal plugin and 134 in CI. The `terminals` row below is therefore checked against the totals arithmetic rather than against registration.
 
-Current totals: **97** profile-scoped + **7** always-on + **30** all-only = **134 total**.
+Current totals: **97** profile-scoped + **7** always-on + **34** all-only = **138 total**.
 
 With the `terminal` session-kind plugin enabled (`OCTOWRIGHT_PLUGINS=terminal` —
 on PyPI as of core 0.19.2, see `packages/octowright-terminal/README.md`), the
-`terminals` profile it declares adds 7 more tools for **141 total**.
+`terminals` profile it declares adds 7 more tools for **145 total**.
 
 ## Profiles
 
@@ -29,7 +29,7 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 | `goldens` | 5 | Accessibility-tree snapshot baselines + diff. |
 | `terminals` | 7 | Optional PTY/SSH/telnet terminal sessions; declared by the `terminal` session-kind plugin and only present when it is enabled via `OCTOWRIGHT_PLUGINS`. |
 | _(always-on)_ | 7 | Registers under every profile (and under no profile). Status, dashboard, takeover detection, Advisor. |
-| _(all-only)_ | 30 | Registers only when **no** `--profile` filter is active. Frames/tabs/popups, network mocking, request headers, dialog policy, traces, roster fan-out, interaction extras including atomic upload, macro-artifact extras, cleanup. |
+| _(all-only)_ | 34 | Registers only when **no** `--profile` filter is active. Frames/tabs/popups, network mocking and aborts, offline mode, wheel scrolling, phone safe-area emulation, request headers, dialog policy, traces, roster fan-out, interaction extras including atomic upload, macro-artifact extras, cleanup. |
 
 ## Per-profile tool list
 
@@ -65,8 +65,8 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 
 `octowright_advisor_record_macro_observation`, `octowright_advisor_set_preference`, `octowright_advisor_status`, `octowright_check_takeover`, `octowright_dashboard_url`, `octowright_status`, `octowright_storage_report`
 
-### All-only (30) — register only when no `--profile` filter is active
+### All-only (34) — register only when no `--profile` filter is active
 
-`browser_a11y_dragdrop`, `browser_capture_and_close`, `browser_drag`, `browser_hover`, `browser_inject_headers`, `browser_list_frames`, `browser_mock_route`, `browser_navigate_back`, `browser_open_trace`, `browser_open_url`, `browser_reset_frame`, `browser_select_option`, `browser_set_dialog_policy`, `browser_set_extra_http_headers`, `browser_set_input_files`, `browser_spawn_roster`, `browser_switch_frame`, `browser_uninject_headers`, `browser_unmock_route`, `browser_upload_files`, `macro_artifact_critical_points_get`, `macro_artifact_critical_points_set`, `macro_artifact_delete`, `macro_artifact_status`, `macro_artifact_verify`, `page_close`, `page_list`, `page_switch`, `recordings_cleanup`, `run_test_suite`
+`browser_a11y_dragdrop`, `browser_abort_route`, `browser_capture_and_close`, `browser_drag`, `browser_hover`, `browser_inject_headers`, `browser_list_frames`, `browser_mock_route`, `browser_navigate_back`, `browser_open_trace`, `browser_open_url`, `browser_reset_frame`, `browser_scroll`, `browser_select_option`, `browser_set_dialog_policy`, `browser_set_extra_http_headers`, `browser_set_input_files`, `browser_set_offline`, `browser_set_safe_area`, `browser_spawn_roster`, `browser_switch_frame`, `browser_uninject_headers`, `browser_unmock_route`, `browser_upload_files`, `macro_artifact_critical_points_get`, `macro_artifact_critical_points_set`, `macro_artifact_delete`, `macro_artifact_status`, `macro_artifact_verify`, `page_close`, `page_list`, `page_switch`, `recordings_cleanup`, `run_test_suite`
 
 Close-capable tools (`browser_close`, `browser_close_all`, `browser_capture_and_close`) honor protected sessions. They refuse protected browsers unless the caller passes `force=True`; `browser_capture_and_close` performs that check before screenshot/snapshot capture so refused calls do not create artifacts.

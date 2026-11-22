@@ -13,6 +13,18 @@ exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
 ### Added
+- **Mouse-wheel, offline mode, connection refusal and phone safe-area
+  emulation are available as browser tools.** `browser_scroll` issues native
+  mouse-wheel deltas (optionally bringing a selector into view first) and
+  returns post-scroll metrics. `browser_set_offline` takes the whole context
+  offline. `browser_abort_route` aborts matching requests with Playwright's
+  failure codes (`connectionrefused` by default) instead of patching page
+  JavaScript. `browser_set_safe_area` sets all four CSS safe-area insets via
+  Chromium's `Emulation.setSafeAreaInsets` (explicitly rejected on other
+  engines), so fixed bottom bars can respect `env(safe-area-inset-bottom)`.
+  All four are recorded with the other session actions and replay in macros,
+  export scripts and route carry into replacement sessions.
+
 - **Status reports a client holding a different handshake from the
   leader's.** A follower answers `initialize` itself before the election
   returns, and a client can reconnect to a leader restarted on another
@@ -65,6 +77,16 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **`browser_mock_route` accepts a JSON-string body again.** MCP's argument
+  pre-parser decoded it to a dict before validation rejected it as not a
+  string, so no JSON response could be stubbed. The tool normalizes that
+  parsed value back to compact JSON before handing it to Playwright, leaving
+  plain strings and `None` untouched and returning the JSON object the caller
+  intended.
+- **`badge=False` suppresses the viewport status pill too.** It was injected
+  unconditionally even when a caller had disabled the corner badge, leaving a
+  stray `fixed 390x844` corner label visible. The same launch flag now gates
+  both overlays; title tagging and macro status remain independently wired.
 - **`octowright restart` no longer starts a second leader beside one that
   appeared while it waited.** A client that gave up waiting for the election
   lock could start serving inline, and restart then spawned its own daemon
