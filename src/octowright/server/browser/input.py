@@ -167,6 +167,31 @@ async def browser_click(
 @mcp.tool(
     structured_output=False,
     description=(
+        "Emit a native mouse-wheel event: delta_x/delta_y in CSS pixels (negative delta_y scrolls "
+        "towards the top, positive towards the bottom). Requires no focus; the event travels "
+        "like Playwright's real input rather than JS window.scrollTo, so page wheel handlers, "
+        "infinite-scroll snapshots and sticky headers all react. Optional `selector` first brings "
+        "an element into view, so a scroll can target a specific panel. Returns the measured "
+        "post-scroll {x, y, height, innerHeight}. Useful for asserting wheel-offcanvas behavior "
+        "without patching application code. Pass response_mode='outline' for a compact browser_page_outline in the same call."
+    ),
+)
+async def browser_scroll(
+    instance_id: str,
+    delta_x: int = 0,
+    delta_y: int = 0,
+    selector: str | None = None,
+    response_mode: str | None = None,
+) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_scroll") as session:
+        return await _with_outline(
+            instance_id, await session.scroll(delta_x=delta_x, delta_y=delta_y, selector=selector), response_mode
+        )
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Type text into an element ONE KEYSTROKE AT A TIME (with optional delay_ms). "
         "Use this when the page reacts to per-keystroke events (autocomplete, masked "
         "inputs, app-level keystroke handlers). For ordinary form fields prefer "

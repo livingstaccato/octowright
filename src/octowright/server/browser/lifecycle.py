@@ -32,6 +32,7 @@ from octowright.server.browser.lifecycle_navigate import (
     browser_navigate_back,
     browser_open_url,
     browser_resize,
+    browser_set_safe_area,
     browser_viewport_status,
     browser_viewport_sync,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "browser_relaunch_fluid",
     "browser_resize",
     "browser_set_protected",
+    "browser_set_safe_area",
     "browser_spawn_roster",
     "browser_suggest_for_url",
     "browser_viewport_status",

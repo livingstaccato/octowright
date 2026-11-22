@@ -105,6 +105,28 @@ async def browser_resize(instance_id: str, width: int, height: int) -> dict[str,
 
 @mcp.tool(
     structured_output=False,
+    description=(
+        "Set the emulated phone's CSS safe-area insets: top/right/bottom/left in CSS pixels "
+        "(bottom especially, for bottom-fixed navigation bars that need env(safe-area-inset-bottom)). "
+        "Compile with viewport-fit=cover on the page and these become visible in CSS env(safe-area-inset-*). "
+        "Chromium only, via CDP Emulation.setSafeAreaInsets; other engines reject rather than "
+        "silently pretending to emulate it. All four default to 0, so calling with no arguments "
+        "clears a previous override."
+    ),
+)
+async def browser_set_safe_area(
+    instance_id: str,
+    top: int = 0,
+    right: int = 0,
+    bottom: int = 0,
+    left: int = 0,
+) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_set_safe_area") as session:
+        return await session.set_safe_area(top=top, right=right, bottom=bottom, left=left)
+
+
+@mcp.tool(
+    structured_output=False,
     description="Return fixed/fluid viewport status and measured page/window dimensions.",
 )
 async def browser_viewport_status(instance_id: str) -> dict[str, Any]:

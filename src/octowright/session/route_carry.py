@@ -74,18 +74,25 @@ class MockSpec:
     #: The page it was installed on: a mock is a PAGE route, so it covers that
     #: page only (a popup or a page switched to afterwards never had it).
     page: Any = field(default=None, compare=False, repr=False)
+    #: The route's abort reason, when this spec is a ``route.abort`` rather
+    #: than a fulfil mock. ``None`` exactly matches an ordinary fulfil: the
+    #: replay dispatch must branch on this, not turn an abort into a response
+    #: the browser never had.
+    error_code: str | None = field(default=None, compare=False)
     #: Crash recovery gave up on ``page`` while it was not the active page: the
     #: mock fulfils nothing any more. Kept so ``unmock_route`` still answers for
     #: it, but neither carried nor warned about (the incident said so once).
     page_crashed: bool = field(default=False, compare=False)
 
     def kwargs(self) -> dict[str, Any]:
-        return {
+        kwargs: dict[str, Any] = {
             "status": self.status,
             "body": self.body,
             "content_type": self.content_type,
             "headers": dict(self.headers),
         }
+        kwargs["error_code"] = self.error_code
+        return kwargs
 
 
 def _page_gone(spec: MockSpec) -> bool:
@@ -175,7 +182,12 @@ async def replay_onto_session(session: Any, carry: RouteCarry) -> list[str]:
     for pattern, headers in carry.injected:
         await _step("inject_headers", pattern, session.inject_headers(pattern, dict(headers)))
     for pattern, spec in carry.mocks:
-        await _step("mock_route", pattern, session.mock_route(pattern, **spec.kwargs()))
+        if spec.error_code is not None:
+            await _step("abort_route", pattern, session.abort_route(pattern, error_code=spec.error_code))
+        else:
+            payload = spec.kwargs()
+            payload.pop("error_code", None)
+            await _step("mock_route", pattern, session.mock_route(pattern, **payload))
     if carry.page_headers:
         await _step("set_extra_http_headers", "", session.set_extra_http_headers(dict(carry.page_headers)))
     for warning in carry.not_carried:

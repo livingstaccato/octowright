@@ -102,6 +102,9 @@ class _FakeLocator:
     async def focus(self) -> None:
         self._rec.record(f"locator.focus:{self._label}")
 
+    async def scroll_into_view_if_needed(self) -> None:
+        self._rec.record(f"locator.scroll_into_view_if_needed:{self._label}")
+
     async def evaluate(self, expression: str, *args: Any) -> Any:
         """a11y_dragdrop's grab predicate. ``"() => false"`` is a deliberate
         sentinel other expressions never carry, letting a test force a False
@@ -173,11 +176,27 @@ class _FakeKeyboard:
             raise RuntimeError("boom")
 
 
+class _FakeCDPSession:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def send(self, method: str, params: dict[str, Any]) -> None:
+        self._rec.record("cdp.send", method, params)
+
+
 class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.pages: list[_FakePage] = []
         self.handlers: dict[str, list[Any]] = {}
+        self.cdp = _FakeCDPSession(rec)
+
+    async def set_offline(self, offline: bool) -> None:
+        self._rec.record("context.set_offline", offline)
+
+    async def new_cdp_session(self, page: Any) -> _FakeCDPSession:
+        self._rec.record("context.new_cdp_session", page.tag)
+        return self.cdp
 
     def on(self, event: str, handler: Any) -> None:
         self.handlers.setdefault(event, []).append(handler)
@@ -203,6 +222,14 @@ class _FakeContext:
         self._rec.record("context.unroute", pattern)
 
 
+class _FakeMouse:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def wheel(self, delta_x: int, delta_y: int) -> None:
+        self._rec.record("mouse.wheel", delta_x, delta_y)
+
+
 class _FakePage:
     """Records every call the generated dispatch bodies can make on a page."""
 
@@ -210,6 +237,7 @@ class _FakePage:
         self._rec, self.tag = rec, tag
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
+        self.mouse = _FakeMouse(rec)
         self.context = context or _FakeContext(rec)
         self.handlers: dict[str, list[Any]] = {}
         self.rendered_text = "hello world"
@@ -397,6 +425,10 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "set_input_files", "selector": "#file", "paths": ["a.txt"]},
     {"action": "upload_files", "selector": "#pick-file", "paths": ["b.txt"], "timeout_ms": 321},
     {"action": "resize", "width": 1280, "height": 800},
+    {"action": "scroll", "selector": "#gallery", "delta_x": 10, "delta_y": 320},
+    {"action": "set_safe_area", "top": 0, "right": 0, "bottom": 34, "left": 0},
+    {"action": "set_offline", "offline": True},
+    {"action": "set_offline", "offline": False},
     {"action": "navigate_back"},
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
     {"action": "unmock_route", "pattern": "**/api/*"},
@@ -409,6 +441,7 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "switch_frame", "selector": "iframe#pay"},
     {"action": "reset_frame"},
     {"action": "close_page", "index": 1},
+    {"action": "abort_route", "pattern": "**/api/refused", "error_code": "connectionrefused"},
 ]
 
 

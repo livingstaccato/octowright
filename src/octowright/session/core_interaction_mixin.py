@@ -39,6 +39,27 @@ log = get_logger(__name__)
 if TYPE_CHECKING:
     from octowright.session.core import BrowserSession
 
+# Error codes accepted by Playwright's route.abort(error_code): the network
+# failures a test should be able to cause without patching page JavaScript.
+_ABORT_ERROR_CODES = frozenset(
+    {
+        "aborted",
+        "accessdenied",
+        "addressunreachable",
+        "blockedbyclient",
+        "blockedbyresponse",
+        "connectionaborted",
+        "connectionclosed",
+        "connectionfailed",
+        "connectionrefused",
+        "connectionreset",
+        "internetdisconnected",
+        "namenotresolved",
+        "timedout",
+        "failed",
+    }
+)
+
 
 def _reject_redacted_headers(headers: dict[str, str]) -> None:
     """Refuse to replay a value the recorder scrubbed.
@@ -273,6 +294,56 @@ class SessionInteractionMixin(SessionLike):
             headers=headers or {},
         )
         return {"ok": True, "pattern": url_pattern, "status": status}
+
+    @gated_operation("browser_abort_route")
+    async def abort_route(self, url_pattern: str, *, error_code: str = "connectionrefused") -> dict[str, Any]:
+        """Abort matching requests with a network-layer error, so a test can
+        simulate connection refusal without patching application code.
+
+        Registered and unwound just like a fulfil mock: a later unmock_route
+        removes the handler, and replacement sessions reinstall it as an abort
+        (never accidentally as a fulfil).
+        """
+        if error_code not in _ABORT_ERROR_CODES:
+            raise ValueError(f"error_code must be one of {sorted(_ABORT_ERROR_CODES)}, got {error_code!r}")
+        validate_url_pattern(url_pattern, field="url_pattern")
+
+        async def _handler(route: Any) -> None:
+            await route.abort(error_code)
+
+        if url_pattern in self._header_routes:
+            log.warning(
+                "octowright.session.header_injection_shadowed_by_mock",
+                instance_id=self.instance_id,
+                pattern=url_pattern,
+                hint="an aborting route has the same precedence as mock_route, so its headers will not apply",
+            )
+        if url_pattern in self._active_routes and (old_page := self._mock_unroute_target(url_pattern)) is not None:
+            await bounded(
+                old_page.unroute(url_pattern, self._active_routes[url_pattern]),
+                operation="browser_abort_route",
+            )
+        await bounded(self.page.route(url_pattern, _handler), operation="browser_abort_route")
+        self._active_routes.pop(url_pattern, None)
+        self._active_routes[url_pattern] = _handler
+        self._mock_specs.pop(url_pattern, None)
+        self._mock_specs[url_pattern] = MockSpec(
+            status=500, body=None, content_type="text/plain", headers={}, page=self.page, error_code=error_code
+        )
+        self.recorder.record("abort_route", pattern=url_pattern, error_code=error_code)
+        return {"ok": True, "pattern": url_pattern, "error_code": error_code}
+
+    @gated_operation("browser_set_offline")
+    async def set_offline(self, offline: bool) -> dict[str, Any]:
+        """Toggle the context's network-online flag. ``True`` means offline:
+        every subsequent request is dropped by the engine as it would be without
+        a connection, which is what offline read paths must be tested against.
+        """
+        if not isinstance(offline, bool):
+            raise ValueError(f"offline must be a boolean, got {offline!r}")
+        await bounded(self.context.set_offline(offline), operation="browser_set_offline")
+        self.recorder.record("set_offline", offline=offline)
+        return {"ok": True, "offline": offline}
 
     @gated_operation("browser_inject_headers")
     async def inject_headers(self, url_pattern: str, headers: dict[str, str]) -> dict[str, Any]:

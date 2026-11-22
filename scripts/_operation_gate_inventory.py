@@ -236,6 +236,10 @@ BYPASSES: dict[str, tuple[str, str]] = {
         "event-critical",
         "route fulfill must unblock the network request awaited by the active operation",
     ),
+    "session/core_interaction_mixin.py:SessionInteractionMixin.abort_route._handler": (
+        "event-critical",
+        "route abort must unblock the network request awaited by the active operation",
+    ),
     "session/core_interaction_mixin.py:SessionInteractionMixin.inject_headers._handler": (
         "event-critical",
         "route fallback must unblock the network request awaited by the active operation",
