@@ -49,7 +49,7 @@ JSON shapes:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
@@ -76,7 +76,7 @@ _CONTAINER_KEYS = ("actions", "branches", "then", "else")
 
 
 @contextmanager
-def written_steps_scope() -> Iterator[None]:
+def written_steps_scope() -> Generator[None, None, None]:
     """Hold the written twins of a macro run's steps until the run ends; nested runs share it."""
     if _WRITTEN_STEPS.get() is not None:
         yield

@@ -13,6 +13,12 @@ exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
 ### Added
+- **Kimi Code is a documented MCP client.** `docs/getting-started.md` names
+  its config file (`~/.kimi-code/mcp.json`, or `$KIMI_CODE_HOME/mcp.json`,
+  in the usual `mcpServers` shape), and the reconnect matrix lists it with
+  Codex CLI, OpenCode and Amp as having no in-session reconnect: Kimi Code
+  2.5.0's `/mcp` only shows server status, so the user restarts it.
+  `octowright doctor` names a follower spawned by `kimi` (native or `node …/bin/kimi`).
 - **The leader narrates follower throttling, and refuses sustained loops.**
   The new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`) never logged
   anything when it fired — invisible without telemetry enabled. It now logs
@@ -53,6 +59,24 @@ a section that is already tagged and on PyPI.
   `scripts/bridge_reconnect_smoke.py --follower previous|X.Y.Z` runs a
   previous release's follower against this checkout's leader (isolated from
   the real daemon) to prove N-1 bridge compatibility.
+- **Mouse-wheel, offline mode, connection refusal and phone safe-area
+  emulation are available as browser tools.** `browser_scroll` issues native
+  mouse-wheel deltas (optionally revealing and hovering a selector first) and
+  reports window metrics with a `settled` flag. It observes rendered stability
+  for up to one second after dispatch; unsettled metrics are provisional (or
+  null if unavailable) and do not mean the input should be repeated. Observation
+  runs in the page's main world, so page scripts can block or forge both the
+  `settled` flag and metrics. Failed optional outline capture preserves the
+  delivered-input result with `outline: null` and `outline_error`.
+  `browser_set_offline` takes the whole context
+  offline. `browser_abort_route` aborts matching requests with Playwright's
+  failure codes (`connectionrefused` by default) instead of patching page
+  JavaScript. `browser_set_safe_area` sets all four CSS safe-area insets via
+  Chromium's `Emulation.setSafeAreaInsets` (explicitly rejected on other
+  engines), so fixed bottom bars can respect `env(safe-area-inset-bottom)`.
+  All four are recorded with the other session actions and replay in macros,
+  export scripts and route carry into replacement sessions.
+
 - **Status reports a client holding a different handshake from the
   leader's.** A follower answers `initialize` itself before the election
   returns, and a client can reconnect to a leader restarted on another
@@ -173,6 +197,16 @@ a section that is already tagged and on PyPI.
   `daemon_log_tail()` now detects a live lockfile leader younger than the log
   and appends the real sink (`journalctl --user -u octowright.service`) next
   to the actual tail.
+- **`browser_mock_route` accepts a JSON-string body again.** MCP's argument
+  pre-parser decoded it to a dict before validation rejected it as not a
+  string, so no JSON response could be stubbed. The tool normalizes that
+  parsed value back to compact JSON before handing it to Playwright, leaving
+  plain strings and `None` untouched and returning the JSON object the caller
+  intended.
+- **`badge=False` suppresses the viewport status pill too.** It was injected
+  unconditionally even when a caller had disabled the corner badge, leaving a
+  stray `fixed 390x844` corner label visible. The same launch flag now gates
+  both overlays; title tagging and macro status remain independently wired.
 - **`octowright restart` no longer starts a second leader beside one that
   appeared while it waited.** A client that gave up waiting for the election
   lock could start serving inline, and restart then spawned its own daemon
@@ -203,6 +237,31 @@ a section that is already tagged and on PyPI.
   the follower waited for the client to send something or close its input
   before it exited, so the replacement daemon started only then. It now
   exits at the end of the window.
+- **A browser killed by a signal is no longer sometimes reported as a closed
+  window.** A browser process drops its connection while the kernel is still
+  tearing it down, before it shows as exited, and on a loaded host the close
+  could arrive in that gap. Such a crash was recorded as `user_close`, so no
+  crash incident or `browser_crashed` notification was raised. A process
+  already exiting on a signal now counts as gone; one exiting by itself still
+  counts as alive until it has exited, so a window close is judged as before.
+- **A redacted screenshot no longer fails when Chrome has no frame ready.**
+  Chrome can answer a capture with "Unable to capture screenshot" when it has
+  not produced a frame yet. The capture is now tried up to three times in all,
+  unless the page is hidden or has no size and so can never produce one; the
+  check after the capture still covers every change to the page.
+- **A redacted screenshot says what changed, and survives one change during
+  the capture.** A classified run could be refused at a different screenshot
+  each time with "the page changed after the redacted screenshot" and only a
+  count behind it. Rendering is now let settle (two animation frames, at most
+  250 ms) after the redaction and before anything is counted, so work the
+  redaction left pending no longer counts as a change. A page that changes
+  during the capture loses that image, which is never written, and is
+  restored, redacted and captured once more; a second change still refuses.
+  The refusal message, its `screenshot_refused.changes` field and the
+  `octowright.macro.screenshot_refused` warning count the changes by kind (a
+  DevTools event such as `DOM.childNodeInserted`, or `focusout`, `hashchange`,
+  `inline style`, ...), never a value or a selector. The image is now written
+  only after the second check passed and the page was restored.
 - **Mocks on a crashed page that recovery gave up on stop producing
   warnings.** Once crash recovery gives up on a crashed page that is not the
   active one, its mocks are named once in the crash incident instead of

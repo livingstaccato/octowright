@@ -89,11 +89,13 @@ RECONNECT_STEPS: tuple[ClientReconnect, ...] = (
         "/mcp reconnect octowright (or /mcp reload)",
         ("omp",),
     ),
+    # Kimi Code 2.5.0: `/mcp` only shows server status; reconnect exists as an
+    # SDK RPC but no TUI command or panel action reaches it.
     ClientReconnect(
-        "Codex CLI, OpenCode, and Amp",
+        "Codex CLI, OpenCode, Kimi Code, and Amp",
         "",
-        ("codex", "opencode", "amp"),
-        detect_label="Codex CLI / OpenCode / Amp",
+        ("codex", "opencode", "kimi", "amp"),
+        detect_label="Codex CLI / OpenCode / Kimi Code / Amp",
     ),
     # Detection-only: from a process table the Cline and Copilot extension
     # hosts are the same "code" binary, so name both steps together.

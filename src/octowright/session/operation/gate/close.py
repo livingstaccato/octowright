@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from typing import Literal, LiteralString, TypeVar
 
@@ -135,7 +135,7 @@ class _CloseGateMixin:
             return reservation
 
     @asynccontextmanager
-    async def close_operation(self, reservation: CloseReservation) -> AsyncIterator[None]:
+    async def close_operation(self, reservation: CloseReservation) -> AsyncGenerator[None, None]:
         if reservation.teardown_only:
             yield
             return

@@ -34,7 +34,7 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator, Collection, Iterator
+from collections.abc import AsyncGenerator, Collection, Generator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -308,7 +308,7 @@ def _release_election_lock(fh: Any) -> None:
 
 
 @contextlib.contextmanager
-def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[None]:
+def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Generator[None, None, None]:
     """Synchronous leader-election lock.
 
     Kept for non-async callers; the async path should use
@@ -339,7 +339,7 @@ def election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> Iterator[
 
 
 @contextlib.asynccontextmanager
-async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> AsyncIterator[None]:
+async def async_election_lock(path: Path = LOCK_PATH, *, timeout: float = 10.0) -> AsyncGenerator[None, None]:
     """Async-friendly version of :func:`election_lock`.
 
     Uses ``anyio.sleep`` for back-off so contention doesn't stall the

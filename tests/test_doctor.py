@@ -787,6 +787,12 @@ class TestFollowerRows:
     renders into INSTRUCTIONS) rather than repeat one generic line.
     """
 
+    @pytest.fixture(autouse=True)
+    def _follower_100_is_alive(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Rows are only built for live followers; pid 100 exists on most dev
+        # hosts but not on a CI runner.
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda pid: pid == 100)
+
     def _row_state(self) -> dict[str, Any]:
         return {
             "followers": {
@@ -818,7 +824,7 @@ class TestFollowerRows:
         rows = _daemon._follower_rows(state, "0.26.0", table)
         (row,) = rows
         assert row["stale"] is True
-        assert row["client"] == "Codex CLI / OpenCode / Amp"
+        assert row["client"] == "Codex CLI / OpenCode / Kimi Code / Amp"
         assert "restart the client" in row["reconnect_step"]
 
     def test_unmatched_ancestry_gets_the_honest_fallback(self) -> None:
@@ -903,7 +909,8 @@ class TestRemedyClause:
     def test_no_flagged_rows_means_no_clause(self) -> None:
         assert _daemon._remedy_clause([{"pid": 1, "needs_attention": False}]) == ""
 
-    def test_handshake_mismatch_row_is_flagged(self) -> None:
+    def test_handshake_mismatch_row_is_flagged(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(_daemon, "pid_is_alive", lambda pid: pid == 100)
         state = {
             "followers": {
                 "100": {

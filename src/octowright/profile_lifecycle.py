@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncGenerator, Iterable
 from dataclasses import dataclass, field
 
 
@@ -37,7 +37,7 @@ def profile_names_match(left: str | None, right: str | None) -> bool:
 
 
 @contextlib.asynccontextmanager
-async def profile_lifecycle_lock(kind: str, name: str | None) -> AsyncIterator[None]:
+async def profile_lifecycle_lock(kind: str, name: str | None) -> AsyncGenerator[None, None]:
     """Serialize launch/delete transitions for one engine profile.
 
     ``None`` is a deliberate no-op so callers can wrap ephemeral and persistent
@@ -72,7 +72,7 @@ async def profile_lifecycle_lock(kind: str, name: str | None) -> AsyncIterator[N
 
 
 @contextlib.asynccontextmanager
-async def profile_lifecycle_locks(keys: Iterable[tuple[str, str]]) -> AsyncIterator[None]:
+async def profile_lifecycle_locks(keys: Iterable[tuple[str, str]]) -> AsyncGenerator[None, None]:
     """Acquire a de-duplicated set of profile locks in stable order."""
     ordered = sorted(set(keys))
     async with contextlib.AsyncExitStack() as stack:

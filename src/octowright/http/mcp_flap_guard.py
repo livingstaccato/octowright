@@ -338,6 +338,9 @@ class McpNewSessionRateLimitMiddleware:
         # Sustained tier (410): per-source rejection timestamps, pruned to the
         # refusal span so a source that goes quiet for the span is forgiven.
         self._rejections: dict[str, deque[float]] = {}
+        # The episode can outlive its recent-count window; pruning timestamps
+        # must not move its start forward on every rejection.
+        self._first_rejection_at: dict[str, float] = {}
         self._refusal_announced: set[str] = set()
         self._refusal_lock = Lock()
 
@@ -355,8 +358,8 @@ class McpNewSessionRateLimitMiddleware:
     def _record_refusal(self, key: str, now: float) -> bool:
         """Whether this rejection crosses into the sustained 410 tier.
 
-        A source whose rejections span the whole refusal window with at least
-        ``_REFUSAL_MIN_REJECTIONS`` events is never going to settle (a
+        A rejection episode lasting the whole refusal span with at least
+        ``_REFUSAL_MIN_REJECTIONS`` recent events is never going to settle (a
         follower too old for the leader's handshake trips the limit on every
         reconnect), so pacing stops and the answer says so instead. A source
         quiet for the span prunes empty and is forgiven.
@@ -364,21 +367,19 @@ class McpNewSessionRateLimitMiddleware:
         if self._refusal_span is None:
             return False
         with self._refusal_lock:
-            dq = self._rejections.setdefault(key, deque())
-            if not dq:
-                self._refusal_announced.discard(key)
-            dq.append(now)
-            cutoff = now - self._refusal_span
-            while dq and dq[0] < cutoff:
-                dq.popleft()
-            sustained = len(dq) >= _REFUSAL_MIN_REJECTIONS and dq[-1] - dq[0] >= self._refusal_span
+            dq = self._record_rejection_locked(key, now, self._refusal_span)
+            sustained = len(dq) >= _REFUSAL_MIN_REJECTIONS and now - self._first_rejection_at[key] >= self._refusal_span
             rejections = len(dq)
             if len(self._rejections) > _MAX_TRACKED_SOURCES:
                 # Keys are client-chosen, so the map gets the limiter's own bound.
                 for stale_key in list(self._rejections)[: len(self._rejections) - _MAX_TRACKED_SOURCES]:
                     self._rejections.pop(stale_key, None)
-        if sustained and key not in self._refusal_announced:
-            self._refusal_announced.add(key)
+                    self._first_rejection_at.pop(stale_key, None)
+                    self._refusal_announced.discard(stale_key)
+            announce = sustained and key not in self._refusal_announced
+            if announce:
+                self._refusal_announced.add(key)
+        if announce:
             log.warning(
                 "octowright.mcp.sustained_throttle_refused",
                 source=key,
@@ -386,6 +387,20 @@ class McpNewSessionRateLimitMiddleware:
                 span_seconds=self._refusal_span,
             )
         return sustained
+
+    def _record_rejection_locked(self, key: str, now: float, span: float) -> deque[float]:
+        """Update the episode and recent history while holding the refusal lock."""
+        dq = self._rejections.setdefault(key, deque())
+        cutoff = now - span
+        if dq and dq[-1] < cutoff:
+            dq.clear()
+        if not dq:
+            self._refusal_announced.discard(key)
+            self._first_rejection_at[key] = now
+        dq.append(now)
+        while dq and dq[0] < cutoff:
+            dq.popleft()
+        return dq
 
     def _note_throttled(self, key: str, now: float) -> None:
         """Emit at most one throttle warning per source per window, with counts.

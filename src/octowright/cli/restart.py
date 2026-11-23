@@ -42,7 +42,7 @@ import signal
 import subprocess
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
 
 import click
 
@@ -369,7 +369,7 @@ def _reap_browsers(owned_browser_pids: Sequence[int] = ()) -> None:
 
 
 @contextlib.contextmanager
-def _spawn_election_lock() -> Iterator[bool]:
+def _spawn_election_lock() -> Generator[bool, None, None]:
     """Hold the leader-election lock across restart's kill-and-respawn.
 
     Restart was the ONE spawner that never took this lock. Every other path

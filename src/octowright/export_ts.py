@@ -424,6 +424,25 @@ _TS_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "switch_frame": _ts_switch_frame,
     "reset_frame": lambda _e: "  uploadTarget = page;",
     "mock_route": _ts_mock_route,
+    "abort_route": lambda e: (
+        f"  await page.route({json.dumps(_route_pattern(e))}, route => route.abort({json.dumps(e.get('error_code', 'connectionrefused'))}));"
+    ),
+    "set_offline": lambda e: f"  await page.context().setOffline({json.dumps(bool(e['offline']))});",
+    "scroll": lambda e: (
+        (
+            f"  await page.locator({json.dumps(e['selector'])}).scrollIntoViewIfNeeded();\n"
+            f"  await page.locator({json.dumps(e['selector'])}).hover();\n"
+            if e.get("selector")
+            else ""
+        )
+        + f"  await page.mouse.wheel({int(e['delta_x'])}, {int(e['delta_y'])});"
+    ),
+    "set_safe_area": lambda e: (
+        "  {\n"
+        "    const cdp = await page.context().newCDPSession(page);\n"
+        f"    await cdp.send('Emulation.setSafeAreaInsets', {{ insets: {{{', '.join(f'{edge}: {int(e.get(edge, 0))}' for edge in ('top', 'right', 'bottom', 'left'))}}} }});\n"
+        "  }"
+    ),
     "unmock_route": lambda e: f"  await page.unroute({json.dumps(_route_pattern(e))});",
     "set_dialog_policy": _ts_set_dialog_policy,
     "set_input_files": lambda e: (

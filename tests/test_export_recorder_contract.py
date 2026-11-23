@@ -40,10 +40,11 @@ from octowright.session.core import BrowserSession
 
 def _locator() -> MagicMock:
     locator = MagicMock()
-    for name in ("click", "fill", "inner_text", "aria_snapshot", "count", "wait_for"):
+    for name in ("click", "fill", "inner_text", "aria_snapshot", "count", "wait_for", "hover"):
         setattr(locator, name, AsyncMock(return_value=""))
     # The password probe's shape for an ordinary text box, so values are recorded.
     locator.evaluate = AsyncMock(return_value={"type": "text", "ac": ""})
+    locator.scroll_into_view_if_needed = AsyncMock()
     locator.first = locator
     return locator
 
@@ -51,15 +52,22 @@ def _locator() -> MagicMock:
 def _page() -> AsyncMock:
     page = AsyncMock()
     page.url = "https://recorded.test/current"
+    page.mouse = AsyncMock(wheel=AsyncMock())
     page.is_closed = MagicMock(return_value=False)
     page.on = MagicMock()
     page.locator = MagicMock(side_effect=lambda *_a, **_k: _locator())
     for finder in ("get_by_role", "get_by_label", "get_by_text", "get_by_test_id"):
         setattr(page, finder, MagicMock(side_effect=lambda *_a, **_k: _locator()))
     page.frames = []
+
     # Truthy only for the cases' own expressions: the session also evaluates
     # its own probes (is this a password field?), which must answer no.
-    page.evaluate = AsyncMock(side_effect=lambda expression, *_a: "sentinel" in str(expression))
+    def _evaluate(expression: Any, *_a: Any) -> Any:
+        if "scrollY" in str(expression):
+            return {"x": 0, "y": 345, "height": 1688, "innerHeight": 844}
+        return "sentinel" in str(expression)
+
+    page.evaluate = AsyncMock(side_effect=_evaluate)
     return page
 
 
@@ -67,6 +75,10 @@ def _session(tmp_path: Path) -> BrowserSession:
     page = _page()
     context = MagicMock()
     context.new_page = AsyncMock(return_value=_page())
+    # CDP safe-area must yield an awaitable session too (a bare MagicMock
+    # does not implement __await__).
+    context.new_cdp_session = AsyncMock(return_value=AsyncMock(send=AsyncMock()))
+    context.set_offline = AsyncMock()
     return BrowserSession(
         instance_id="contract",
         kind="chromium",
@@ -203,6 +215,16 @@ CASES: dict[str, Case] = {
         ["**/sentinel-mock/**", "201", "sentinel-body", "text/sentinel"],
     ),
     "unmock_route": (lambda s, _p: _mock_then_unmock(s), ["**/sentinel-mock/**"]),
+    "abort_route": (
+        lambda s, _p: s.abort_route("**/sentinel-refused/**", error_code="connectionrefused"),
+        ["**/sentinel-refused/**", "connectionrefused"],
+    ),
+    "set_offline": (lambda s, _p: s.set_offline(True), ["offline"]),
+    "set_safe_area": (lambda s, _p: s.set_safe_area(bottom=34, top=12), ["bottom", "34", "top", "12"]),
+    "scroll": (
+        lambda s, _p: s.scroll(delta_x=12, delta_y=345, selector="#sentinel-feed"),
+        ["#sentinel-feed", "12", "345"],
+    ),
     "set_dialog_policy": (lambda s, _p: s.set_dialog_policy("dismiss"), ["dismiss"]),
     "set_input_files": (lambda s, p: s.set_input_files("#sentinel-input", [p]), ["#sentinel-input", "{path}"]),
     "upload_files": (lambda s, p: _upload(s, p), ["#sentinel-upload", "{path}"]),
@@ -256,6 +278,10 @@ async def test_the_exported_source_carries_what_the_recorder_wrote(staging: Path
     if fmt == "python":
         compile(source, "<exported>", "exec")
     rendered = source.split("sentinel-launch.test", 1)[1]
+    if kind == "set_offline":
+        # Boolean spellings differ by target language: Python's repr is
+        # True/False, JSON's is true/false.
+        expected = ["true" if fmt == "ts" else "True"]
     for value in expected:
         # A Windows upload path has backslashes, which both a Python repr and a
         # JSON string spell doubled.

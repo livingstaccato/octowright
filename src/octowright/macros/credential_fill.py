@@ -17,7 +17,7 @@ dispatch all happens in the run's own task.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -69,7 +69,7 @@ _SEQUENCE: ContextVar[frozenset[str]] = ContextVar("octowright_sequence_credenti
 
 
 @contextmanager
-def sequence_credentials(names: frozenset[str]) -> Iterator[None]:
+def sequence_credentials(names: frozenset[str]) -> Generator[None, None, None]:
     """Hold every run inside to the page-code refusal of *names*, the sequence's credential args."""
     token = _SEQUENCE.set(names)
     try:
@@ -117,7 +117,7 @@ def offsite_fields(audit: FillAudit) -> dict[str, Any]:
 
 
 @asynccontextmanager
-async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) -> AsyncIterator[None]:
+async def credential_fill_guard(session: SessionLike, action: dict[str, Any]) -> AsyncGenerator[None, None]:
     """Refuse (or, in warn mode, record) a credential typed onto a foreign origin.
 
     Page code in a run that carries a credential is refused here too, so a

@@ -57,8 +57,10 @@ is often `.mcp.json`; for Claude Code's global config, use `~/.claude.json`:
 
 Per-client config files: Claude Code reads `~/.claude.json`; project-scoped
 clients often read `.mcp.json`; **pi** reads `~/.pi/agent/mcp.json`; **omp**
-reads `~/.omp/agent/mcp.json` — all in this `mcpServers` shape. (In a running
-pi/omp session, `/mcp reload` picks up the new server without a restart.)
+reads `~/.omp/agent/mcp.json`; **Kimi Code** reads `~/.kimi-code/mcp.json`
+(or `$KIMI_CODE_HOME/mcp.json`) — all in this `mcpServers` shape. (In a running
+pi/omp session, `/mcp reload` picks up the new server without a restart; Kimi
+Code has no in-session reload, so restart it after editing the file.)
 
 That is the installed script from step 1; `"command": "octowright"` alone works
 when the client inherits a PATH containing `~/.local/bin`, and the absolute path
@@ -113,7 +115,7 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is currently 134 tools on a core install. When a workflow only needs a slice (driving
+The full MCP surface is currently 138 tools on a core install. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 

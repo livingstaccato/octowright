@@ -86,6 +86,10 @@ _SIMPLE_REQUIRED: dict[str, tuple[str, ...]] = {
     "open_url": ("url",),
     "switch_page": ("index",),
     "close_page": ("index",),
+    "scroll": ("delta_x", "delta_y"),
+    "set_safe_area": (),
+    "abort_route": ("pattern",),
+    "set_offline": ("offline",),
 }
 
 # Lifecycle / inspection actions that the runtime silently skips during

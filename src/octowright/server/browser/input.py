@@ -167,6 +167,43 @@ async def browser_click(
 @mcp.tool(
     structured_output=False,
     description=(
+        "Emit a native mouse-wheel event: delta_x/delta_y in CSS pixels (negative delta_y scrolls "
+        "towards the top, positive towards the bottom). Requires no focus; the event travels "
+        "like Playwright's real input rather than JS window.scrollTo, so page wheel handlers, "
+        "infinite-scroll snapshots and sticky headers all react. Optional `selector` first brings "
+        "an element into view and hovers it, so a scroll can target a specific panel. Returns the measured "
+        "{x, y, height, innerHeight} plus settled: whether best-effort page observation saw rendered stability "
+        "within one second after dispatch. ok means input was delivered; when settled=false, metrics are "
+        "provisional (or null if unavailable) and input should not be blindly retried. Main-world observation "
+        "is page-visible: page scripts can block or forge settled and metrics. "
+        "An unavailable optional outline returns outline=null with outline_error after successful input. "
+        "Useful for asserting wheel-offcanvas behavior "
+        "without patching application code. Pass response_mode='outline' for a compact browser_page_outline in the same call."
+    ),
+)
+async def browser_scroll(
+    instance_id: str,
+    delta_x: int = 0,
+    delta_y: int = 0,
+    selector: str | None = None,
+    response_mode: str | None = None,
+) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_scroll") as session:
+        result = await session.scroll(delta_x=delta_x, delta_y=delta_y, selector=selector)
+        try:
+            return await _with_outline(instance_id, result, response_mode)
+        except Exception:
+            # Optional observation must not turn delivered input into a retry.
+            return {
+                **result,
+                "outline": None,
+                "outline_error": "Outline unavailable after scroll input was delivered.",
+            }
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
         "Type text into an element ONE KEYSTROKE AT A TIME (with optional delay_ms). "
         "Use this when the page reacts to per-keystroke events (autocomplete, masked "
         "inputs, app-level keystroke handlers). For ordinary form fields prefer "

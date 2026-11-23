@@ -131,6 +131,32 @@ async def test_quiet_source_is_forgiven(monkeypatch: pytest.MonkeyPatch) -> None
     assert statuses == [None, 429]
 
 
+async def test_non_aligned_sustained_rejections_escalate_and_restart_after_quiet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = _Log()
+    monkeypatch.setattr(fg, "log", log)
+    clock = _patch_clock(monkeypatch)
+    mw = _middleware(window_seconds=1_000.0, refusal_span=50.0)
+    statuses = await _statuses(mw, clock, [i * 0.137 for i in range(2_000)])
+    # The first rejection is at .137; the first crossing is 50.142.
+    assert statuses[:366] == [None] + [429] * 365
+    assert statuses[366:] == [410] * 1_634
+    # A quiet gap clears the episode even when the limiter still rejects.
+    assert await _statuses(mw, clock, [400.0]) == [429]
+    statuses = await _statuses(mw, clock, [400.0 + i * 0.137 for i in range(1, 367)])
+    assert statuses == [429] * 364 + [410, 410]
+    refused = [event for event, _ in log.events if event == "octowright.mcp.sustained_throttle_refused"]
+    assert len(refused) == 2
+
+
+async def test_long_episode_still_requires_six_recent_rejections(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _patch_clock(monkeypatch)
+    mw = _middleware(window_seconds=1_000.0, refusal_span=50.0)
+    statuses = await _statuses(mw, clock, [0.0, 1.0, 10.0, 20.0, 30.0, 40.0, 51.1, 52.0])
+    assert statuses == [None, 429, 429, 429, 429, 429, 429, 410]
+
+
 async def test_refusal_disabled_is_pure_pacing(monkeypatch: pytest.MonkeyPatch) -> None:
     clock = _patch_clock(monkeypatch)
     mw = _middleware(refusal_span=None)
@@ -203,11 +229,17 @@ async def test_log_and_refusal_bookkeeping_are_bounded(monkeypatch: pytest.Monke
         refusal_span=20.0,
     )
     for pid in (b"1", b"2", b"3", b"4"):
-        clock["now"] += 1.0
-        await _drive(mw, {"type": "http", "method": "POST", "headers": [(b"x-octowright-follower", pid)]})
+        scope = {"type": "http", "method": "POST", "headers": [(b"x-octowright-follower", pid)]}
+        start = clock["now"]
+        for elapsed in (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 20.0):
+            clock["now"] = start + elapsed
+            status, _ = await _drive(mw, scope)
+        assert status == 410
     assert len(mw._throttled_since_log) <= 2
     assert len(mw._last_log_at) <= 2
     assert len(mw._rejections) <= 2
+    assert len(mw._first_rejection_at) <= 2
+    assert len(mw._refusal_announced) <= 2
 
 
 class TestRefusalKnob:

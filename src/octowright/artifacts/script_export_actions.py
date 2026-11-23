@@ -344,6 +344,36 @@ if handler is None:
 await _page(state).unroute(pattern, handler)
 executed += 1
 """,
+    "abort_route": """
+pattern = action.get("pattern") or action["url_pattern"]
+error_code = action["error_code"]
+if pattern in state["routes"]:
+    await _page(state).unroute(pattern, state["routes"][pattern])
+async def _abort_with_reason(route):
+    await route.abort(error_code)
+await _page(state).route(pattern, _abort_with_reason)
+state["routes"][pattern] = _abort_with_reason
+executed += 1
+""",
+    "set_offline": """
+await _page(state).context.set_offline(bool(action["offline"]))
+executed += 1
+""",
+    "scroll": """
+if action.get("selector"):
+    await _target(state).locator(action["selector"]).scroll_into_view_if_needed()
+    await _target(state).locator(action["selector"]).hover()
+await _page(state).mouse.wheel(int(action["delta_x"]), int(action["delta_y"]))
+executed += 1
+""",
+    "set_safe_area": """
+if action.get("kind") and action["kind"] != "chromium":
+    raise RuntimeError("safe-area emulation is Chromium-only (CDP Emulation.setSafeAreaInsets)")
+insets = {edge: int(action.get(edge, 0)) for edge in ("top", "right", "bottom", "left")}
+cdp = await _page(state).context.new_cdp_session(_page(state))
+await cdp.send("Emulation.setSafeAreaInsets", {"insets": insets})
+executed += 1
+""",
     # Per-endpoint injection, on the CONTEXT so it follows popups and pages
     # opened later -- matching the live session method. A page route dies at the
     # page boundary, so the exported script would silently drop the header on

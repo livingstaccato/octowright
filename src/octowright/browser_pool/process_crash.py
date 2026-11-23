@@ -34,7 +34,13 @@ webkit    alive; wrapper exits 21-29 ms later     already dead, 13-23 ms earlier
 A browser closing its own windows is still running while it tells us so; a
 crashed one is gone before Playwright notices the pipe dropped. So the rule is:
 **the browser process was already gone when its first evicting close signal
-reached octowright** (:func:`exit_verdict`).
+reached octowright** (:func:`exit_verdict`). For a process killed by a signal,
+"gone" starts when the kernel marks it exiting (``PF_EXITING``), not when it
+becomes a zombie: it drops the pipe in between, still ``R`` or ``D``, and on a
+loaded arm64 runner a SIGTRAP's close arrived inside that gap and read as a user
+close. Only a signal death counts that early -- an exit code with no signal in
+it waits for the zombie as before -- so the orderly-close margins below, which
+were measured to the zombie, still hold.
 
 Liveness has one weakness: a stalled event loop delivers the orderly close late,
 after the browser has exited, and would read as a crash. For a headed Chromium
@@ -103,6 +109,20 @@ _PROCESS_CRASHED = counter(
 # Zombie / dead in /proc/<pid>/stat. A zombie has exited and is only waiting
 # for the driver to reap it -- the measured state of a crashed browser.
 _DEAD_STATES: Final = frozenset({"Z", "X", "x"})
+
+# PF_EXITING in /proc/<pid>/stat's flags (field 9): set as the process starts
+# to exit, before it closes its descriptors. A signalled browser drops its pipe
+# -- the close Playwright reports -- while its state still reads R or D, until
+# the kernel makes it a zombie; under load that gap outlasted the close's
+# arrival (a SIGTRAP read as a user close on an arm64 CI runner).
+_PF_EXITING: Final = 0x4
+_FLAGS_FIELD: Final = 6  # field 9, counted from the state (field 3)
+# exit_code (field 52, Linux 3.5+): do_exit stores it after PF_EXITING and
+# before closing descriptors, so it is set by the time the pipe drops. A signal
+# death keeps the signal in the low 7 bits; exit(n) stores n << 8. Without
+# ptrace read access the kernel reports 0, which reads as "not signalled".
+_EXIT_CODE_FIELD: Final = 49  # field 52, counted from the state (field 3)
+_SIGNAL_BITS: Final = 0x7F
 
 _SINGLETON_LOCK: Final = "SingletonLock"
 
@@ -227,7 +247,7 @@ async def resolve_browser_process(kind: str, user_data_dir: Path | str) -> Brows
 
 
 def process_state(pid: int, *, proc_root: Path | None = None) -> ProcessState:
-    """``alive``, ``dead`` (zombie or reaped), or ``unknown`` (no ``/proc``)."""
+    """``alive``, ``dead`` (exiting on a signal, zombie or reaped), or ``unknown`` (no ``/proc``)."""
     root = proc_root if proc_root is not None else PROC_ROOT
     if not root.is_dir():
         return "unknown"
@@ -238,7 +258,18 @@ def process_state(pid: int, *, proc_root: Path | None = None) -> ProcessState:
     if not fields:
         # Reaped between the exists() and the read, or unreadable.
         return "dead" if not pid_dir.exists() else "unknown"
-    return "dead" if fields[0] in _DEAD_STATES else "alive"
+    if fields[0] in _DEAD_STATES or _exiting_on_a_signal(fields):
+        return "dead"
+    return "alive"
+
+
+def _exiting_on_a_signal(fields: list[str]) -> bool:
+    """Already exiting, killed by a signal. An orderly exit still counts as alive until it is a zombie."""
+    try:
+        exiting = int(fields[_FLAGS_FIELD]) & _PF_EXITING
+        return bool(exiting and int(fields[_EXIT_CODE_FIELD]) & _SIGNAL_BITS)
+    except (IndexError, ValueError):
+        return False
 
 
 def exit_verdict(proc: BrowserProcess | None, *, proc_root: Path | None = None) -> ExitVerdict | None:

@@ -21,6 +21,7 @@ from octowright.defaults import DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_NAV_TIMEOUT_M
 from octowright.session._constants import DEFAULT_PREVIEW_CHARS
 from octowright.session._protocols import SessionLike
 from octowright.session.a11y_dragdrop import run_a11y_dragdrop
+from octowright.session.emulation_mixin import SessionEmulationMixin
 from octowright.session.operation.gate import gated_operation
 from octowright.session.timeouts import SessionCallTimeoutError, bounded
 from octowright.session.viewport_ops import SessionViewportMixin
@@ -106,7 +107,7 @@ def _html_preview(html: str, html_preview_chars: int) -> str | None:
 # than listed alongside the other mixins on BrowserSession so that anything
 # holding a SessionOpsMixin — the ops tests build one directly — still finds
 # the viewport ops where they have always been.
-class SessionOpsMixin(SessionViewportMixin, SessionLike):
+class SessionOpsMixin(SessionEmulationMixin, SessionViewportMixin, SessionLike):
     active_frame: Any | None
     video_path: Path | None
     trace_path: Path | None

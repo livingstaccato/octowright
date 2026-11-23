@@ -14,7 +14,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -71,7 +71,7 @@ _THREAD_LOCKS: dict[str, _ThreadLockEntry] = {}
 
 
 @contextlib.contextmanager
-def _thread_state_lock(path: Path, *, timeout: float | None = None) -> Iterator[bool]:
+def _thread_state_lock(path: Path, *, timeout: float | None = None) -> Generator[bool, None, None]:
     """Boundedly serialize same-process threads before the OS file lock."""
     key = str(path.expanduser().absolute())
     with _THREAD_LOCKS_GUARD:
@@ -100,7 +100,7 @@ def _prepare_windows_lock_file(fh: Any) -> None:
 
 
 @contextlib.contextmanager
-def _state_lock(path: Path) -> Iterator[bool]:
+def _state_lock(path: Path) -> Generator[bool, None, None]:
     """Exclusive cross-process lock for one read-modify-replace transaction.
 
     The atomic tmp-then-``os.replace`` write prevents torn JSON but NOT lost

@@ -101,16 +101,17 @@ class CredentialInputHalted(CredentialSafetyStop, RuntimeError):
 
 
 # Recorded keys that need renaming to match the method's parameter names.
-# mock_route/unmock_route: session/core_interaction_mixin.py's recorder.record()
+# mock_route/unmock_route/abort_route: session/core_interaction_mixin.py's recorder.record()
 # writes the field as "pattern" (matching macros/lint.py's required-field name),
 # but the session methods' parameter is "url_pattern" — without this rename,
-# every recorded mock_route/unmock_route replay raised TypeError: unexpected
+# every recorded route replay raised TypeError: unexpected
 # keyword argument 'pattern', dead on arrival since the two sides disagreed
 # on the field name.
 REPLAY_RENAME_KEYS: dict[str, dict[str, str]] = {
     "drag": {"source": "source_selector", "target": "target_selector"},
     "mock_route": {"pattern": "url_pattern"},
     "unmock_route": {"pattern": "url_pattern"},
+    "abort_route": {"pattern": "url_pattern"},
     # Same split, same reason: the recorder writes "pattern", the session
     # method's parameter is "url_pattern".
     "inject_headers": {"pattern": "url_pattern"},

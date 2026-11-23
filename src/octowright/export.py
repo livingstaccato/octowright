@@ -383,6 +383,23 @@ _PY_HANDLERS: dict[str, Callable[[dict], str | None]] = {
     "switch_frame": _py_switch_frame,
     "reset_frame": lambda _e: "        _upload_target = page",
     "mock_route": _py_mock_route,
+    "abort_route": lambda e: (
+        f"        await page.route({_route_pattern(e)!r}, lambda route: route.abort({e.get('error_code', 'connectionrefused')!r}))"
+    ),
+    "set_offline": lambda e: f"        await page.context.set_offline({bool(e['offline'])!r})",
+    "scroll": lambda e: (
+        (
+            f"        await page.locator({e['selector']!r}).scroll_into_view_if_needed()\n"
+            f"        await page.locator({e['selector']!r}).hover()\n"
+            if e.get("selector")
+            else ""
+        )
+        + f"        await page.mouse.wheel({int(e['delta_x'])}, {int(e['delta_y'])})"
+    ),
+    "set_safe_area": lambda e: (
+        "        cdp = await page.context.new_cdp_session(page)\n"
+        f"        await cdp.send('Emulation.setSafeAreaInsets', {{'insets': {{{', '.join(f'{edge!r}: {int(e.get(edge, 0))}' for edge in ('top', 'right', 'bottom', 'left'))}}}}})"
+    ),
     "unmock_route": lambda e: f"        await page.unroute({_route_pattern(e)!r})",
     "set_dialog_policy": _py_set_dialog_policy,
     # _upload_target, not page: the session method resolves the selector in the

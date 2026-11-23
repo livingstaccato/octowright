@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
@@ -198,6 +199,22 @@ async def browser_set_dialog_policy(
         return await session.set_dialog_policy(policy, prompt_text)
 
 
+def _mock_body_text(body: Any) -> str | None:
+    """The request body as response text, compatible with MCP's argument pre-parser.
+
+    MCP 2.x JSON-decodes a JSON-looking string argument *before* schema validation
+    whenever a parameter is not annotated exactly ``str`` (see
+    ``FuncMetadata.pre_parse_json``). So a caller asking for a JSON response body
+    arrives as a Python dict/list and used to be rejected as "Input should be a
+    valid string". Re-encode structured values into compact JSON text; plain
+    strings and ``None`` pass through unchanged, so no caller-valid stub changes
+    meaning.
+    """
+    if body is None or isinstance(body, str):
+        return body
+    return json.dumps(body, separators=(",", ":"))
+
+
 @mcp.tool(
     structured_output=False,
     description=(
@@ -205,14 +222,17 @@ async def browser_set_dialog_policy(
         "your response instead of hitting the network. Use this to make tests deterministic "
         "(freeze a /api/time endpoint, return a fixed user list, simulate a 500 error). "
         "Don't use this to OBSERVE traffic — it short-circuits the request. "
-        "`url_pattern` is a glob ('**/api/users') or regex (Playwright auto-detects)."
+        "`url_pattern` is a glob ('**/api/users') or regex (Playwright auto-detects). "
+        "`body` is the response text (usually a JSON string such as '{\"ok\":true}'); "
+        "an already-parsed object is encoded back to JSON, so the same response can be "
+        "stubbed either way. Pass an empty string for an empty body."
     ),
 )
 async def browser_mock_route(
     instance_id: str,
     url_pattern: str,
     status: int = 200,
-    body: str | None = None,
+    body: Any = None,
     content_type: str = "application/json",
     headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -220,7 +240,7 @@ async def browser_mock_route(
         return await session.mock_route(
             url_pattern,
             status=status,
-            body=body,
+            body=_mock_body_text(body),
             content_type=content_type,
             headers=headers,
         )
@@ -276,11 +296,47 @@ async def browser_set_extra_http_headers(instance_id: str, headers: dict[str, st
 
 @mcp.tool(
     structured_output=False,
-    description=("Remove a previously-installed mock for `url_pattern`. Raises if no mock was active."),
+    description=("Remove a previously-installed mock or abort for `url_pattern`. Raises if none was active."),
 )
 async def browser_unmock_route(instance_id: str, url_pattern: str) -> dict[str, Any]:
     async with browser_operation(pool, instance_id, "browser_unmock_route") as session:
         return await session.unmock_route(url_pattern)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Abort matching requests with a network failure instead of fulfilling a mock. Use to "
+        "simulate connection refusal (default `error_code='connectionrefused'`) without patching "
+        "fetch in the page. Other Playwright codes: connectionfailed, connectionreset, "
+        "internetdisconnected, namenotresolved, timedout, addressunreachable (`unreachable` is not "
+        "an alias), aborted, accessdenied, blockedbyclient, blockedbyresponse, connectionaborted, "
+        "connectionclosed. Remove with browser_unmock_route; a later replacement session "
+        "reinstalls the abort as an abort, not as a fulfil."
+    ),
+)
+async def browser_abort_route(
+    instance_id: str,
+    url_pattern: str,
+    error_code: str = "connectionrefused",
+) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_abort_route") as session:
+        return await session.abort_route(url_pattern, error_code=error_code)
+
+
+@mcp.tool(
+    structured_output=False,
+    description=(
+        "Toggle the browser context's network connection offline (`offline=True`) or back online "
+        "(`offline=False`). Everything after the toggle fails as it would with no network, "
+        "including later navigations. Restoring offline=False afterwards is your job — there is "
+        "no automatic deadline. To simulate one endpoint refusing rather than the whole "
+        "connection, use browser_abort_route with its error_code."
+    ),
+)
+async def browser_set_offline(instance_id: str, offline: bool) -> dict[str, Any]:
+    async with browser_operation(pool, instance_id, "browser_set_offline") as session:
+        return await session.set_offline(offline)
 
 
 @mcp.tool(

@@ -31,7 +31,7 @@ from octowright.macros import redaction_page_js as page_js
 from octowright.macros.privacy_ledger import SESSION_PRIVACY_LEDGER_ATTR, SessionPrivacyLedger
 from octowright.macros.screenshot_refusal import ScreenshotRefused
 from octowright.session.timeouts import SessionCallTimeoutError
-from tests.test_macro_redacted_screenshot import CLEAN, PNG, FakeCDP, FakePage
+from tests._redacted_screenshot_fakes import CLEAN, PNG, FakeCDP, FakePage
 
 PASSWORD = "B7-REDACT-PASSWORD-CANARY-4c2e"  # pragma: allowlist secret
 POLICY_ENV = safe_screenshot.POLICY_ENV
@@ -210,10 +210,15 @@ def test_a_handler_installed_by_hand_is_never_the_built_in_redaction() -> None:
         (
             ({"remaining": 0, "transitioning": 0},),
             "before",
-            "the page changed before the redacted screenshot",
+            "the page changed before the redacted screenshot (unreported x1)",
             "page changed",
         ),
-        ((CLEAN, {**CLEAN, "changed": 1}), "after", "the page changed after the redacted screenshot", "page changed"),
+        (
+            (CLEAN, {**CLEAN, "changed": 1}, CLEAN, {**CLEAN, "changed": 1}),
+            "after",
+            "the page changed after the redacted screenshot (unreported x1)",
+            "page changed",
+        ),
         (
             ({"changed": 0, "transitioning": 0},),
             "before",
@@ -250,7 +255,8 @@ async def test_each_page_report_refusal_says_what_and_when(
         await _shoot(page, tmp_path / "shot.png")
 
     assert str(raised.value) == f"{message}; screenshot refused"
-    assert raised.value.fields == {"reasons": [reason], "stage": stage, "tiers": [], "args": []}
+    changes = {"changes": {"unreported": 1}} if reason == "page changed" else {}
+    assert raised.value.fields == {"reasons": [reason], "stage": stage, **changes, "tiers": [], "args": []}
     assert not (tmp_path / "shot.png").exists()
 
 

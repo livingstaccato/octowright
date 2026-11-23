@@ -11,7 +11,7 @@ classifier and the ledgers each fit a module.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -488,7 +488,9 @@ class RunPrivacyLedger(PrivacyLedger):
 
 
 @contextmanager
-def run_privacy_ledger(session: Any, supplied: RunPrivacyLedger | None = None) -> Iterator[RunPrivacyLedger]:
+def run_privacy_ledger(
+    session: Any, supplied: RunPrivacyLedger | None = None
+) -> Generator[RunPrivacyLedger, None, None]:
     """A run's ledger, its session scope closed however the run ends.
 
     A *supplied* ledger is yielded as it is and left open: it belongs to an

@@ -24,7 +24,7 @@ grep-able operation boundary instead of requiring call-graph analysis.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, LiteralString
 
@@ -40,7 +40,7 @@ async def browser_operation(
     browser_pool: BrowserPool,
     instance_id: str,
     operation_name: LiteralString,
-) -> AsyncIterator[BrowserSession]:
+) -> AsyncGenerator[BrowserSession, None]:
     session = browser_pool.get(instance_id)
     async with session.operation(operation_name):
         yield session

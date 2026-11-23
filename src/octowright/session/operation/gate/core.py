@@ -11,7 +11,7 @@ import os
 import threading
 import time
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
+from collections.abc import AsyncGenerator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum
@@ -547,7 +547,7 @@ class SessionOperationGate(_CloseGateMixin, _CeilingGateMixin):
         operation_name: LiteralString,
         *,
         wait_timeout_seconds: float | UseDefault | None = USE_DEFAULT,
-    ) -> AsyncIterator[None]:
+    ) -> AsyncGenerator[None, None]:
         """Acquire (or re-enter) the gate's lease for *operation_name*.
 
         A cancellation ``enforce_active_timeout`` requested on THIS lease's

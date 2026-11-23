@@ -31,7 +31,7 @@ def test_instructions_render_the_matrix_verbatim() -> None:
 
 def test_no_session_clients_are_named_as_one_group() -> None:
     text = " ".join(mcp_identity.reconnect_matrix_lines())
-    assert "Codex CLI, OpenCode, and Amp have NO in-session reconnect" in text
+    assert "Codex CLI, OpenCode, Kimi Code, and Amp have NO in-session reconnect" in text
     assert text.index("have NO in-session") > text.index("Continue or Zed"), (
         "the no-session group sentence comes after the in-session steps"
     )

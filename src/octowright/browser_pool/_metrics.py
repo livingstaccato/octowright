@@ -11,7 +11,7 @@ instrument declarations. Noop when metrics are disabled.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -46,7 +46,7 @@ LAUNCH_DURATION = histogram(
 
 
 @asynccontextmanager
-async def launch_span(kind_hint: str) -> AsyncIterator[Any]:
+async def launch_span(kind_hint: str) -> AsyncGenerator[Any, None]:
     """Wrap pool.launch() with span + LAUNCH_FAILED counter on exception.
 
     An ``InvalidRequestError`` is MOVED to ``LAUNCH_REFUSED``, not dropped, for

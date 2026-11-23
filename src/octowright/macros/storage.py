@@ -10,7 +10,7 @@ import copy
 import json
 import re
 import threading
-from collections.abc import Iterator
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -56,7 +56,7 @@ class MacroWriteLockTimeout(TimeoutError):
 
 
 @contextlib.contextmanager
-def macro_write_lock() -> Iterator[None]:
+def macro_write_lock() -> Generator[None, None, None]:
     """Hold the macro write lock, or raise `MacroWriteLockTimeout` after a bounded wait.
 
     Blocking: an async caller runs whatever takes it in a worker thread.
