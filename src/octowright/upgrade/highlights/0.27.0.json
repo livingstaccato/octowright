@@ -1,0 +1,26 @@
+[
+  {
+    "title": "MCP clients stay connected through idle periods and session loss",
+    "body": "MCP clients no longer lose their Octowright connection after a 30-minute pause. Followers reconnect when the leader forgets a session and resend requests the leader refused before running. Startup answers initialize before the election finishes, and a cached tool list helps clients with short startup timeouts. Keep the leader and followers on the same installed release."
+  },
+  {
+    "title": "Daemon restarts and reconnect storms keep one leader in charge",
+    "body": "A service-managed daemon now holds the election lock through startup and declines to start beside a live leader. Session cleanup protects quiet clients whose followers remain alive, including sandboxed clients. Followers honor Retry-After when throttled; sustained reconnect loops receive an explicit refusal and reconnect guidance from octowright doctor."
+  },
+  {
+    "title": "Drive native scrolling, offline mode and request failures",
+    "body": "Use browser_scroll to send native wheel input, with an optional selector to reveal and hover a panel first. Its settled flag reports best-effort rendering observation; unavailable or invalid metrics return null without repeating delivered input. Page scripts can block or forge observations. browser_set_offline changes context connectivity, browser_abort_route simulates request failures, and browser_set_safe_area controls Chromium phone insets. Recordings replay and export these actions."
+  },
+  {
+    "title": "Redacted screenshots recover from one page change during capture",
+    "body": "Redacted macro screenshots settle the page before counting sensitive content and retry once when it changes during capture. A refusal explains what changed and retains no unproved image. Capture retries also handle a missing Chromium frame, while animation handling avoids leaving the application paused after the screenshot."
+  },
+  {
+    "title": "JSON route mocks and exported replays preserve their inputs",
+    "body": "browser_mock_route accepts JSON-string response bodies without decoding them into a different value. Recorded abort routes replay with the correct argument name, selector-based scroll exports hover their target, and TypeScript exports support repeated safe-area changes. Macro export refuses recordings it cannot reproduce faithfully instead of emitting an incomplete script."
+  },
+  {
+    "title": "Upgrade notices, diagnostics and the dashboard handle long sessions better",
+    "body": "The dashboard reconnects live tails, refreshes after event-stream recovery and keeps console cursors and filters usable through long recordings. Doctor identifies stale follower owners and how to reconnect their clients, including Kimi Code. The browser tools now keep strict numeric scroll metrics, and optional outline failures preserve delivered input with a fixed diagnostic message."
+  }
+]

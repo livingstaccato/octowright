@@ -12,6 +12,8 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.27.0] - 2026-11-23
+
 ### Added
 - **Kimi Code is a documented MCP client.** `docs/getting-started.md` names
   its config file (`~/.kimi-code/mcp.json`, or `$KIMI_CODE_HOME/mcp.json`,
@@ -4252,7 +4254,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/livingstaccato/octowright/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/livingstaccato/octowright/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/livingstaccato/octowright/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0
