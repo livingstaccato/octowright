@@ -21,6 +21,7 @@ it made. It is the test that would have caught ``mock_route``'s ``pattern`` vs
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import sys
 import types
@@ -476,6 +477,65 @@ def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]]) -> tupl
     # Executing the generated artefact is the point of this module.
     exec(source, namespace)
     return asyncio.run(namespace["run_everything"]()), rec
+
+
+@pytest.mark.parametrize("pattern_field", ["pattern", "url_pattern"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_abort_routes_keep_their_own_delayed_reason(
+    monkeypatch: pytest.MonkeyPatch, pattern_field: str, replace: bool
+) -> None:
+    installed: list[tuple[str, Any]] = []
+    removed: list[tuple[str, Any]] = []
+
+    async def route(_page: _FakePage, pattern: str, handler: Any) -> None:
+        installed.append((pattern, handler))
+
+    async def unroute(_page: _FakePage, pattern: str, handler: Any) -> None:
+        removed.append((pattern, handler))
+
+    monkeypatch.setattr(_FakePage, "route", route)
+    monkeypatch.setattr(_FakePage, "unroute", unroute)
+    second = "**/first" if replace else "**/second"
+    result, _rec = _run(
+        monkeypatch,
+        [
+            {"action": "abort_route", pattern_field: "**/first", "error_code": "connectionrefused"},
+            {"action": "abort_route", pattern_field: second, "error_code": "connectionreset"},
+        ],
+    )
+    assert result == {"executed": 2, "skipped": 0}
+    assert [pattern for pattern, _handler in installed] == ["**/first", second]
+    assert removed == ([installed[0]] if replace else [])
+    reasons: list[str] = []
+
+    class Route:
+        async def abort(self, reason: str) -> None:
+            reasons.append(reason)
+
+    async def delayed_requests() -> None:
+        for _pattern, handler in installed:
+            # Playwright passes request as a second argument when a callback
+            # declares one, including a defaulted capture parameter.
+            assert len(inspect.signature(handler).parameters) == 1
+            await handler(Route())
+
+    asyncio.run(delayed_requests())
+    assert reasons == ["connectionrefused", "connectionreset"]
+
+
+def test_scroll_after_switch_frame_resolves_the_main_page_locator(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, rec = _run(
+        monkeypatch,
+        [
+            {"action": "switch_frame", "selector": "iframe#child"},
+            {"action": "scroll", "selector": "#panel", "delta_x": 0, "delta_y": 200},
+            {"action": "scroll", "delta_x": 10, "delta_y": 0},
+        ],
+    )
+    assert result == {"executed": 3, "skipped": 0}
+    resolved = [(name, args) for name, args, _kw in rec.calls if name.startswith("locator.resolve:")]
+    assert resolved == [("locator.resolve:main", ("#panel",)), ("locator.resolve:main", ("#panel",))]
+    assert [args for name, args, _kw in rec.calls if name == "mouse.wheel"] == [(0, 200), (10, 0)]
 
 
 def test_the_fixture_covers_every_dispatchable_kind() -> None:

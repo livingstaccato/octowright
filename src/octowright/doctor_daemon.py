@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from octowright import process_identity
 from octowright.doctor import Check, Status
 from octowright.mcp_identity import RECONNECT_STEPS, ClientReconnect, client_step
 from octowright.singleton import pid_is_alive, read_lock
@@ -237,7 +238,8 @@ def _snapshot_row(pid_key: str, snap: Any, leader: str) -> dict[str, Any] | None
         pid = int(pid_key)
     except (TypeError, ValueError):
         return None
-    if not pid_is_alive(pid):
+    verdict = process_identity.follower_verdict(pid, snap, pid_is_alive)
+    if verdict == "dead":
         return None
     version = _as_text(snap.get("follower_version")) or UNKNOWN_FOLLOWER_VERSION
     last_error = _as_text(snap.get("last_error"))
@@ -246,6 +248,7 @@ def _snapshot_row(pid_key: str, snap: Any, leader: str) -> dict[str, Any] | None
     throttled = last_error is not None and ("throttl" in last_error.lower() or "429" in last_error)
     return {
         "pid": pid,
+        "pid_namespace_foreign": verdict == "foreign",
         "version": version,
         "stale": stale,
         "handshake_mismatch": mismatch or None,
@@ -266,7 +269,8 @@ def _follower_rows(state: dict[str, Any], leader: str, table: list[tuple[int, in
         if row is None:
             continue
         if row["needs_attention"]:
-            entry = _detect_client(row["pid"], table)
+            # A foreign numeric PID can name an unrelated host process.
+            entry = None if row["pid_namespace_foreign"] else _detect_client(row["pid"], table)
             row["client"] = (entry.detect_label or entry.name) if entry else None
             row["reconnect_step"] = client_step(entry) if entry else _UNKNOWN_CLIENT_STEP
         rows.append(row)

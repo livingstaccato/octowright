@@ -346,13 +346,20 @@ executed += 1
 """,
     "abort_route": """
 pattern = action.get("pattern") or action["url_pattern"]
-error_code = action["error_code"]
+
+
+def _make_abort_handler(error_code):
+    async def _abort_with_reason(route):
+        await route.abort(error_code)
+
+    return _abort_with_reason
+
+
+handler = _make_abort_handler(action["error_code"])
 if pattern in state["routes"]:
     await _page(state).unroute(pattern, state["routes"][pattern])
-async def _abort_with_reason(route):
-    await route.abort(error_code)
-await _page(state).route(pattern, _abort_with_reason)
-state["routes"][pattern] = _abort_with_reason
+await _page(state).route(pattern, handler)
+state["routes"][pattern] = handler
 executed += 1
 """,
     "set_offline": """
@@ -361,8 +368,8 @@ executed += 1
 """,
     "scroll": """
 if action.get("selector"):
-    await _target(state).locator(action["selector"]).scroll_into_view_if_needed()
-    await _target(state).locator(action["selector"]).hover()
+    await _page(state).locator(action["selector"]).scroll_into_view_if_needed()
+    await _page(state).locator(action["selector"]).hover()
 await _page(state).mouse.wheel(int(action["delta_x"]), int(action["delta_y"]))
 executed += 1
 """,

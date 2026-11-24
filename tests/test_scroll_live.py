@@ -212,6 +212,41 @@ async def test_exported_scroll_targets_panel(scroll_session, exporter) -> None:
     assert await scroll_session.page.evaluate("window.scrollY") == 0
 
 
+@pytest.mark.parametrize("replayer", ["session", "python", "cli"])
+async def test_scroll_after_frame_switch_keeps_main_document_target(scroll_session, replayer) -> None:
+    session = scroll_session
+    page = session.page
+    await page.evaluate("""() => {
+        const iframe = document.createElement('iframe');
+        iframe.name = 'child';
+        iframe.style = 'position:fixed;left:10px;top:350px;width:350px;height:200px';
+        iframe.srcdoc = '<div id="panel" style="height:100px;overflow:auto"><div style="height:3000px">Inner</div></div>';
+        document.body.append(iframe);
+    }""")
+    await page.frame_locator("iframe").locator("#panel").wait_for()
+    await session.switch_frame(name="child")
+    frame = session.active_frame
+    assert frame is not None
+    action = {"selector": "#panel", "delta_x": 0, "delta_y": 200}
+    if replayer == "session":
+        await session.scroll(**action)
+    else:
+        fragment = py_export._PY_HANDLERS["scroll"](action) if replayer == "python" else EXPORT_DISPATCH["scroll"]
+        namespace = {
+            "page": page,
+            "state": {"pages": [page], "index": 0, "frame": frame},
+            "action": action,
+            "_page": lambda state: page,
+            "_target": lambda state: frame,
+        }
+        body = "executed = 0\n" + textwrap.dedent(fragment)
+        exec("async def replay():\n" + textwrap.indent(body, "    "), namespace)
+        await namespace["replay"]()
+    await page.wait_for_function("document.querySelector('#panel').scrollTop === 200", timeout=2000)
+    assert await frame.locator("#panel").evaluate("panel => panel.scrollTop") == 0
+    assert await page.evaluate("window.scrollY") == 0
+
+
 def test_typescript_export_scroll_targets_panel_in_real_browser() -> None:
     # The wheel fragment is valid JavaScript as well as TypeScript. Execute it
     # using Playwright's bundled Node API, without an npm install or TS shim.

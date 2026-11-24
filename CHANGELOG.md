@@ -141,6 +141,14 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **Exported macro CLIs preserve route failures and scroll targets.** Each
+  abort route keeps its own error code when several handlers are installed.
+  Selector scrolling continues to target the main document after a frame
+  switch, matching live sessions and recording exports.
+- **Doctor applies follower identity checks consistently.** Followers from
+  foreign PID namespaces retain their detail rows, throttle warnings and
+  reconnect guidance without being attributed to unrelated host processes.
+  Reused PIDs are excluded from both the summary and follower details.
 - **Playwright 1.65 driver health checks recognize the current connection
   layout.** Healthy drivers are no longer mistaken for dead ones because
   connection state moved; older supported layouts retain their checks.
