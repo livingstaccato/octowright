@@ -15,6 +15,7 @@
     let record = false;
     let destroyed = false;
     let revision = 0;
+    let configured = false;
     /** @type {HTMLElement | null} */
     let root = null;
     /** @type {ShadowRoot | null} */
@@ -30,6 +31,8 @@
     const fading = new Map();
     /** @type {{at:number,x:number,y:number,type:string,button:number,marker:HTMLElement|null}|null} */
     let lastTap = null;
+    /** @type {{payload:OctowrightInteractionPayload,marker:HTMLElement|null,previous:HTMLElement|null,doubled:boolean}|null} */
+    let mouseRelease = null;
     /** @type {Map<string, {finish:(geometry:Geometry)=>void,timer:number}>} */
     const pending = new Map();
     /** @typedef {{x:number,y:number,width:number,height:number}} Geometry */
@@ -269,6 +272,7 @@
         if (!event.isTrusted || (!show && !record) || contacts.size >= 16) return;
         const payload = payloadFor(event, "down");
         if (!payload) return;
+        if (payload.pointer_type !== "mouse") mouseRelease = null;
         const previous = contacts.get(payload.pointer_id);
         if (previous) {
             stop(previous.hold);
@@ -346,6 +350,7 @@
         emit(payload);
         mappedContacts.delete(event.pointerId);
         if (cancelled) {
+            mouseRelease = null;
             contact.cancelled = true;
             remove(contact.marker);
             lastTap = null;
@@ -376,7 +381,31 @@
                   }
                 : null;
         }
+        if (payload.pointer_type === "mouse") {
+            mouseRelease = {
+                payload,
+                marker: contact.marker,
+                previous: mouseRelease?.marker ?? null,
+                doubled: Boolean(double),
+            };
+        }
         fade(contact.marker, double ? "double" : "up");
+    };
+    /** @param {MouseEvent} event */
+    const nativeDouble = (event) => {
+        const released = mouseRelease;
+        if (!event.isTrusted || !released || released.doubled || event.button !== released.payload.button)
+            return;
+        // Native mouse classification is authoritative outside the local tap
+        // heuristic. The release flag deduplicates the quick-click path.
+        released.doubled = true;
+        remove(released.previous);
+        if (released.marker) {
+            released.marker.textContent = "Double";
+            released.marker.dataset.phase = "double";
+        }
+        lastTap = null;
+        emit({ ...released.payload, phase: "double", at: epoch() });
     };
     /** @param {WheelEvent} event */
     const wheel = (event) => {
@@ -418,6 +447,7 @@
         remove(contact.marker);
         contacts.delete(id);
         mappedContacts.delete(id);
+        mouseRelease = null;
         lastTap = null;
     };
     /** @param {PointerEvent} event */
@@ -433,6 +463,7 @@
         timers.clear();
         pending.clear();
         fading.clear();
+        mouseRelease = null;
         lastTap = null;
         root?.remove();
         root = null;
@@ -442,7 +473,9 @@
     const configure = (options) => {
         if (destroyed || !options || typeof options.show !== "boolean" || typeof options.record !== "boolean")
             return;
-        if (options.show !== show || options.record !== record) reset();
+        configured = true;
+        if (options.show === show && options.record === record) return;
+        reset();
         revision++;
         show = options.show;
         record = options.record;
@@ -464,16 +497,19 @@
     listen("pointercancel", up);
     listen("pointerout", leave);
     listen("wheel", wheel);
-    listen("blur", reset);
+    listen("dblclick", nativeDouble);
+    listen("blur", (event) => {
+        // Capture also sees ordinary element focus transitions within this page.
+        if (event.target === window || event.target === document) reset();
+    });
     listen("pagehide", reset);
     listen("message", relay);
     const controller = { configure, destroy, ready: Promise.resolve() };
     window.__octowrightInteractions = controller;
-    const initialRevision = revision;
     controller.ready = (async () => {
         try {
             const options = await configBinding?.({ time_origin: performance.timeOrigin });
-            if (revision === initialRevision && options) configure(options);
+            if (!configured && options) configure(options);
         } catch {
             /* A missing/closed host leaves this document inert. */
         }

@@ -258,3 +258,49 @@ async def test_feedback_preserves_application_text_locators(observer_page: Any) 
     assert await page.get_by_text("Hold", exact=True).count() == 1
     assert await page.get_by_text("Hold", exact=True).get_attribute("id") == "target"
     await page.mouse.up()
+
+
+async def test_native_input_focus_transition_preserves_click(observer_page: Any) -> None:
+    page, events = observer_page
+    await page.evaluate("""() => {
+      for (const [id,top] of [['inputA',30],['inputB',90]]) {
+        const node=document.createElement('input'); node.id=id;
+        node.style.cssText=`position:absolute;left:220px;top:${top}px`; document.body.append(node);
+      }
+    }""")
+
+    async def actions() -> list[Any]:
+        await page.evaluate("appEvents=[]")
+        await page.locator("#inputA").click()
+        await page.locator("#inputB").click()
+        return await page.evaluate("appEvents")
+
+    await page.evaluate("__octowrightInteractions.configure({show:false,record:false})")
+    baseline = await actions()
+    await page.evaluate("__octowrightInteractions.configure({show:true,record:true})")
+    assert await actions() == baseline
+    assert await page.evaluate("document.activeElement.id") == "inputB"
+    recorded = [await asyncio.wait_for(events.get(), 5) for _ in range(4)]
+    assert [event["phase"] for event in recorded] == ["down", "up", "down", "up"]
+
+
+@pytest.mark.parametrize("delay", [0, 200])
+async def test_native_delayed_double_click_is_recorded_once(observer_page: Any, delay: int) -> None:
+    page, events = observer_page
+
+    async def actions() -> list[Any]:
+        await page.evaluate("appEvents=[]")
+        await page.mouse.dblclick(80, 70, delay=delay)
+        return await page.evaluate("appEvents")
+
+    await page.evaluate("__octowrightInteractions.configure({show:false,record:false})")
+    baseline = await actions()
+    await page.evaluate("__octowrightInteractions.configure({show:true,record:true})")
+    actual = await actions()
+    assert actual == baseline
+    assert sum(event[0] == "dblclick" for event in actual) == 1
+    recorded = []
+    while not events.empty():
+        recorded.append(events.get_nowait())
+    assert [event["phase"] for event in recorded] == ["down", "up", "down", "up", "double"]
+    assert sum(node["phase"] == "double" for node in await markers(page)) == 1

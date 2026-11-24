@@ -243,6 +243,63 @@ const cases = {
         }
         assert.equal(s.events.filter((event) => event.phase === "double").length, 1);
     },
+    async noop_configure_frame() {
+        const s = scheduler(source);
+        await s.window.__octowrightInteractions.ready;
+        const messages = [];
+        const parent = { postMessage: (data) => messages.push(data) };
+        s.window.parent = parent;
+        const answer = (message) =>
+            s.fire("message", {
+                source: parent,
+                data: {
+                    type: "octowright:interaction:mapped",
+                    id: message.id,
+                    x: 120,
+                    y: 130,
+                    width: 800,
+                    height: 600,
+                },
+            });
+        s.fire("pointerdown");
+        s.window.__octowrightInteractions.configure({ show: true, record: true });
+        answer(messages[0]);
+        s.fire("pointerup");
+        answer(messages[1]);
+        assert.deepEqual(
+            s.events.map((event) => event.phase),
+            ["down", "up"],
+        );
+    },
+    async noop_before_ready() {
+        const s = scheduler(source);
+        s.window.__octowrightInteractions.configure({ show: false, record: false });
+        await s.window.__octowrightInteractions.ready;
+        s.fire("pointerdown");
+        assert.equal(s.events.length, 0);
+        assert.equal(s.markers().length, 0);
+    },
+    async native_slow_double() {
+        const s = scheduler(source);
+        await s.window.__octowrightInteractions.ready;
+        for (let click = 0; click < 2; click++) {
+            s.fire("pointerdown");
+            await s.tick(200);
+            s.fire("pointerup");
+            if (click === 0) await s.tick(200);
+        }
+        assert.equal(s.events.filter((event) => event.phase === "double").length, 0);
+        s.fire("dblclick", { detail: 2, isTrusted: false });
+        assert.equal(s.events.filter((event) => event.phase === "double").length, 0);
+        s.fire("dblclick", { detail: 2 });
+        s.fire("dblclick", { detail: 2 });
+        assert.deepEqual(
+            s.events.map((event) => event.phase),
+            ["down", "up", "down", "up", "double"],
+        );
+        assert.equal(s.markers().length, 1);
+        assert.equal(s.markers()[0].textContent, "Double");
+    },
     async malformed() {
         const s = scheduler(source);
         assert.ok(s.window.__octowrightInteractions, "document controller must be installed");

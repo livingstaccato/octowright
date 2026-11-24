@@ -28,6 +28,9 @@ ASSET = ROOT / "src/octowright/browser_pool/_assets/interactions.js"
         "late_replies",
         "reused_contact",
         "simultaneous_touch_not_double",
+        "noop_configure_frame",
+        "noop_before_ready",
+        "native_slow_double",
         "malformed",
     ],
 )

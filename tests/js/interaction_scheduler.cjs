@@ -105,6 +105,7 @@ function scheduler(source, options = { show: true, record: true }) {
     const fire = (type, values = {}) => {
         const event = {
             type,
+            target: vm.runInContext("window", context),
             isTrusted: true,
             pointerId: 1,
             pointerType: "mouse",
