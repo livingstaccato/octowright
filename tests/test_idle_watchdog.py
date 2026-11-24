@@ -73,16 +73,13 @@ async def test_watchdog_fires_after_pool_drains() -> None:
     pool = _stub(sessions, [])
     scenarios = _stub([], [])
 
-    async def _drain_after_short_delay() -> None:
-        await asyncio.sleep(0.05)
-        sessions.clear()
-
-    drainer = asyncio.create_task(_drain_after_short_delay())
+    # Drain on the watchdog's third poll, after it has observed the session.
+    clock = _FakeClock({3: sessions.clear})
     await asyncio.wait_for(
-        idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01),
+        idle_watchdog(pool, scenarios, grace_seconds=5, poll_seconds=1, clock=clock.now, sleep=clock.sleep),
         timeout=1.0,
     )
-    await drainer
+    assert clock.now() == 8
 
 
 @pytest.mark.asyncio
@@ -148,26 +145,20 @@ async def test_watchdog_arm_immediately_resets_on_activity() -> None:
 
 @pytest.mark.asyncio
 async def test_watchdog_treats_live_scenario_as_active() -> None:
-    """A live scenario alone (no browsers) keeps the watchdog quiet."""
+    """A scenario alone arms and holds the watchdog, then starts a full grace on drain.
+
+    The scenario stays live until t=12, beyond the five-second grace. The
+    watchdog must return exactly at t=12+5=17, with no browsers ever present.
+    """
     scenarios_list: list = [{"scenario_id": "s"}]
     pool = _stub([], [])
     scenarios = _stub([], scenarios_list)
 
-    # Even though sessions never existed, a scenario being live arms+holds the watchdog.
-    with pytest.raises(asyncio.TimeoutError):
-        await asyncio.wait_for(
-            idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01),
-            timeout=0.3,
-        )
-
-    # Drain the scenario partway through a fresh watchdog and confirm it fires.
-    async def _drain_scenario_after_short_delay() -> None:
-        await asyncio.sleep(0.05)
-        scenarios_list.clear()
-
-    drainer = asyncio.create_task(_drain_scenario_after_short_delay())
+    # A separate timed drainer can run before the first poll on a loaded runner,
+    # leaving a fresh watchdog correctly unarmed. Tie the drain to observed polls.
+    clock = _FakeClock({12: scenarios_list.clear})
     await asyncio.wait_for(
-        idle_watchdog(pool, scenarios, grace_seconds=0.05, poll_seconds=0.01),
+        idle_watchdog(pool, scenarios, grace_seconds=5, poll_seconds=1, clock=clock.now, sleep=clock.sleep),
         timeout=1.0,
     )
-    await drainer
+    assert clock.now() == 17
