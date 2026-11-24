@@ -10,6 +10,7 @@ from typing import Any
 from octowright.http.routes import (
     events,
     health,
+    interactions,
     mcp_events,
     media,
     meta,
@@ -28,6 +29,7 @@ def all_routes(*, mcp_token: str = "") -> list[Any]:
     routes.extend(sessions.routes())
     routes.extend(sessions_recording.routes())
     routes.extend(events.routes())
+    routes.extend(interactions.routes())
     routes.extend(mcp_events.routes(mcp_token=mcp_token))
     routes.extend(screencast.routes())
     routes.extend(media.routes())

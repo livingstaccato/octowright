@@ -9,6 +9,19 @@ const asset = process.argv[2];
 // An empty observer makes the missing feature an assertion failure, not an I/O error.
 const source = fs.existsSync(asset) ? fs.readFileSync(asset, "utf8") : "";
 const cases = {
+    async bootstrap_geometry() {
+        const requests = [];
+        const s = scheduler(source, (request) => {
+            requests.push(request);
+            return { show: false, record: false };
+        });
+        await s.window.__octowrightInteractions.ready;
+        assert.equal(requests.length, 1);
+        assert.equal(requests[0].time_origin, 1700000000000);
+        assert.equal(requests[0].width, 800);
+        assert.equal(requests[0].height, 600);
+        assert.equal(requests[0].dpr, 2);
+    },
     async hold() {
         const s = scheduler(source);
         assert.ok(s.window.__octowrightInteractions, "document controller must be installed");

@@ -19,6 +19,7 @@ ASSET = ROOT / "src/octowright/browser_pool/_assets/interactions.js"
     "case",
     [
         "hold",
+        "bootstrap_geometry",
         "buttons_contacts",
         "double",
         "drag_wheel",

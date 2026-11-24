@@ -11,7 +11,7 @@ the MCP tool wrapper lives in ``server/macros.py`` and the CLI command in
 ``cli.py``.
 
 Classification rules:
-  * ``.jsonl``                                  → ``recording``
+  * session ``.jsonl`` (excluding sidecars)       → ``recording``
   * ``.png``                                    → ``screenshot``
   * ``.zip``                                    → ``trace``
   * any file under ``<recordings_dir>/videos/`` → ``video``
@@ -63,7 +63,9 @@ def _classify(path: Path, recordings_dir: Path) -> str:
 
     suffix = path.suffix.lower()
     if suffix == ".jsonl":
-        return "recording"
+        from octowright.http.recording_sidecars import is_session_recording
+
+        return "recording" if is_session_recording(path.name) else "other"
     if suffix == ".png":
         return "screenshot"
     if suffix == ".zip":

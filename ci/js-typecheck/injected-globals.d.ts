@@ -100,7 +100,7 @@ interface OctowrightInteractionPayload {
 }
 interface Window {
   __octowrightInteractionConfig?: (
-    request: { time_origin: number },
+    request: { time_origin: number; width: number; height: number; dpr: number },
   ) => Promise<{ show: boolean; record: boolean }>;
   __octowrightInteractionEvent?: (payload: OctowrightInteractionPayload) => Promise<void>;
   __octowrightInteractions?: {

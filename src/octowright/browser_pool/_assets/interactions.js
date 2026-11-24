@@ -508,7 +508,12 @@
     window.__octowrightInteractions = controller;
     controller.ready = (async () => {
         try {
-            const options = await configBinding?.({ time_origin: performance.timeOrigin });
+            const options = await configBinding?.({
+                time_origin: performance.timeOrigin,
+                width: window.innerWidth,
+                height: window.innerHeight,
+                dpr: window.devicePixelRatio,
+            });
             if (!configured && options) configure(options);
         } catch {
             /* A missing/closed host leaves this document inert. */

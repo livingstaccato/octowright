@@ -61,6 +61,7 @@ function scheduler(source, options = { show: true, record: true }) {
         document,
         innerWidth: 800,
         innerHeight: 600,
+        devicePixelRatio: 2,
         performance: { timeOrigin: 1700000000000, now: () => now },
         crypto: { getRandomValues: randomFillSync },
         setTimeout: (callback, delay) => {
@@ -74,7 +75,8 @@ function scheduler(source, options = { show: true, record: true }) {
             listeners.get(type).add(callback);
         },
         removeEventListener: (type, callback) => listeners.get(type)?.delete(callback),
-        __octowrightInteractionConfig: async () => options,
+        __octowrightInteractionConfig: async (request) =>
+            typeof options === "function" ? options(request) : options,
         __octowrightInteractionEvent: async (payload) => events.push(payload),
     };
     window.top = window;

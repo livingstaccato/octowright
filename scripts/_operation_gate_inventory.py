@@ -22,6 +22,26 @@ OPERATION_NAME_FORWARDERS: dict[str, str] = {
 }
 
 BYPASSES: dict[str, tuple[str, str]] = {
+    "interactions.py:InteractionController.install": (
+        "launch-time-before-session-publication",
+        "installs fixed context bindings/init script before target navigation and publication; "
+        "all IPC is bounded and runtime propagation separately takes the session gate",
+    ),
+    "interactions.py:InteractionController._new_page": (
+        "event-critical",
+        "page listener registers a close callback and caches host identity synchronously; "
+        "it performs no browser IPC and cannot wait behind the operation creating the page",
+    ),
+    "interactions.py:InteractionController._probe_origin": (
+        "event-critical",
+        "bounded lifecycle-only probe of a new page's initial blank document; navigation failure "
+        "keeps the original host estimate and input callbacks never call this helper",
+    ),
+    "interactions.py:InteractionController._prepare_page": (
+        "event-critical",
+        "one bounded lifecycle worker per new page caches public clock/video identity; "
+        "a hard 64-task cap prevents unbounded work, and no input callback invokes browser IPC",
+    ),
     # Resources do not belong to a published BrowserSession yet.
     "browser_pool/cleanup.py:safe_close": (
         "launch-time-before-session-publication",

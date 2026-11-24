@@ -30,7 +30,7 @@ _LABEL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
 #: Not imported from there: that would pull the HTTP stack into the recorder.
 #: tests/test_recorder_branches.py walks the real list, so a new sidecar
 #: suffix fails the test until it is added here.
-_SIDECAR_SHAPED_LABEL_TAILS: tuple[str, ...] = (".websocket",)
+_SIDECAR_SHAPED_LABEL_TAILS: tuple[str, ...] = (".websocket", ".interactions")
 
 # Falsey tokens that opt OUT of owner-only recording permissions.
 _PRIVATE_OFF = frozenset({"0", "off", "false", "no", "never", "none", "disabled"})
