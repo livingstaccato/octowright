@@ -88,20 +88,35 @@ def _connection_of(pw: Any) -> Any:
     return pw._impl_obj._connection
 
 
-def _flagged_dead(connection: Any) -> bool:
+def _transport_of(pw: Any) -> Any:
+    """Driver transport on 1.63's connection or 1.65's context-manager client.
+
+    No public process handle exists. Since 1.65 the bound public ``stop``
+    method owns the context manager whose client holds the transport.
+    """
+    transport = getattr(_connection_of(pw), "_transport", None)
+    if transport is not None:
+        return transport
+    manager = getattr(pw.stop, "__self__", None)
+    return getattr(getattr(manager, "_client", None), "_transport", None)
+
+
+def _flagged_dead(connection: Any, transport: Any = None) -> bool:
     """Authoritative local evidence that the driver is gone, no round trip.
 
     Measured on 1.63: after ``Playwright.stop()`` the connection's
     ``_closed_error`` is set; after the node driver is SIGKILLed,
     ``_closed_error`` stays ``None`` but the transport's ``on_error_future`` is
-    done and the process has a ``returncode``. A hung (SIGSTOPped) driver
+    done and the process has a ``returncode``. On 1.65 both may be flagged,
+    so consume the transport error even when the connection is closed. A hung (SIGSTOPped) driver
     shows none of these -- only the round trip catches it."""
-    if getattr(connection, "_closed_error", None) is not None:
-        return True
-    transport = getattr(connection, "_transport", None)
+    if transport is None:
+        transport = getattr(connection, "_transport", None)
     on_error = getattr(transport, "on_error_future", None)
     if on_error is not None and on_error.done():
         _consume(on_error)  # read it, so asyncio does not log it as never retrieved
+        return True
+    if getattr(connection, "_closed_error", None) is not None:
         return True
     proc = getattr(transport, "_proc", None)
     return getattr(proc, "returncode", None) is not None
@@ -159,7 +174,10 @@ async def _probe_send(connection: Any) -> Any:
     """
     if getattr(connection, "_error", None) is not None:
         return _LISTENER_ERROR_PENDING
-    return await connection.local_utils._channel.send("traceDiscarded", None, {"stacksId": ""})
+    local_utils = connection.local_utils
+    if callable(local_utils):  # 1.65: typed channels replaced Channel.send.
+        return await local_utils().trace_discarded({"stacksId": ""})
+    return await local_utils._channel.send("traceDiscarded", None, {"stacksId": ""})
 
 
 def _restore_error(connection: Any, stored: BaseException | None) -> None:
@@ -207,7 +225,8 @@ async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> boo
     for _attempt in range(2):
         try:
             connection = _connection_of(pw)
-            if _flagged_dead(connection):
+            transport = _transport_of(pw)
+            if _flagged_dead(connection, transport):
                 return True
             task = _start_probe(connection)
         except Exception as exc:
@@ -218,23 +237,23 @@ async def driver_confirmed_dead(pw: Any, *, timeout: float | None = None) -> boo
         if not done or task.cancelled():
             log.info("octowright.pool.driver_probe_unanswered", timeout_s=bound, cancelled=bool(done))
             return False
-        verdict = _finished_verdict(task, connection)
+        verdict = _finished_verdict(task, connection, transport)
         if verdict is not None:
             return verdict
     return False
 
 
-def _finished_verdict(task: asyncio.Future[Any], connection: Any) -> bool | None:
+def _finished_verdict(task: asyncio.Future[Any], connection: Any, transport: Any) -> bool | None:
     """The verdict of a probe that finished; ``None`` = a listener's error got
     there first (``_probe_send``), so it stays for the caller and the round
     trip is tried again."""
     error = task.exception()
     if error is None and task.result() == _LISTENER_ERROR_PENDING:
         return None
-    return _answer_verdict(error, connection)
+    return _answer_verdict(error, connection, transport)
 
 
-def _answer_verdict(error: BaseException | None, connection: Any) -> bool:
+def _answer_verdict(error: BaseException | None, connection: Any, transport: Any) -> bool:
     """Confirmed-dead verdict for a probe that finished.
 
     A listener's error never reaches here (``_probe_send``), so anything that
@@ -245,7 +264,7 @@ def _answer_verdict(error: BaseException | None, connection: Any) -> bool:
     the caller's next, unrelated call."""
     if error is None:
         return False
-    if _is_target_closed(error) or _flagged_dead(connection):
+    if _flagged_dead(connection, transport) or _is_target_closed(error):
         return True
     if isinstance(error, PlaywrightError):
         return False  # the driver answered, with a refusal
@@ -270,7 +289,11 @@ async def stop_driver(pw: Any) -> None:
         return
     log.warning("octowright.pool.driver_stop_timed_out", timeout_s=DRIVER_STOP_TIMEOUT_SECONDS)
     try:
-        pw._impl_obj._connection._transport._proc.kill()
+        transport = _transport_of(pw)
+        on_error = getattr(transport, "on_error_future", None)
+        if on_error is not None:
+            on_error.add_done_callback(_consume)
+        transport._proc.kill()
     except (AttributeError, ProcessLookupError, OSError) as exc:
         log.warning("octowright.pool.driver_kill_failed", error=repr(exc))
         return

@@ -44,6 +44,10 @@ class _Scheduler:
 def scheduler(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Scheduler]:
     scheduler = _Scheduler()
     monkeypatch.setattr(scheduler.loop, "time", scheduler.time)
+    # Control precision along with time: asyncio dispatches timers up to one
+    # clock-resolution tick early. A host's coarse tick (notably on Windows)
+    # would otherwise make the 1 ms-before case share the expiry's turn.
+    monkeypatch.setattr(scheduler.loop, "_clock_resolution", 1e-9)
     try:
         yield scheduler
     finally:
