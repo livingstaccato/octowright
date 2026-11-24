@@ -167,11 +167,19 @@ async def test_nested_cross_origin_frame_coordinates_and_relay_validation(observ
     target = inner.locator("#target")
     box = await target.bounding_box()
     assert box
-    await page.mouse.click(box["x"] + 30 * 0.8, box["y"] + 25 * 0.8)
-    event = await take(events, "down")
-    assert event["x"] == pytest.approx(box["x"] + 30 * 0.8, abs=1)
-    assert event["y"] == pytest.approx(box["y"] + 25 * 0.8, abs=1)
-    assert (event["width"], event["height"]) == (800, 600)
+    await page.mouse.move(box["x"] + 30 * 0.8, box["y"] + 25 * 0.8)
+    await page.mouse.down()
+    try:
+        event = await take(events, "down")
+        assert event["x"] == pytest.approx(box["x"] + 30 * 0.8, abs=1)
+        assert event["y"] == pytest.approx(box["y"] + 25 * 0.8, abs=1)
+        assert (event["width"], event["height"]) == (800, 600)
+        # Inspect the contact while held; a released marker legitimately fades.
+        local = await markers(inner_frame)
+        assert len(local) == 1
+        assert float(local[0]["x"].removesuffix("px")) == pytest.approx(50, abs=1)
+    finally:
+        await page.mouse.up()
     await take(events, "up")
     # A page-generated mapping request/response has no pending native observation to release.
     await inner_frame.evaluate("""() => {
@@ -180,8 +188,6 @@ async def test_nested_cross_origin_frame_coordinates_and_relay_validation(observ
     }""")
     await page.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))")
     assert events.empty()
-    local = await markers(inner_frame)
-    assert float(local[0]["x"].removesuffix("px")) == pytest.approx(50, abs=1)
     await inner_frame.goto("http://inner.test/next")
     await inner_frame.evaluate("__octowrightInteractions.ready")
     await inner.locator("#target").click(position={"x": 30, "y": 25})
@@ -296,6 +302,12 @@ async def test_native_delayed_double_click_is_recorded_once(observer_page: Any, 
     await page.evaluate("__octowrightInteractions.configure({show:false,record:false})")
     baseline = await actions()
     await page.evaluate("__octowrightInteractions.configure({show:true,record:true})")
+    # Snapshot after the observer handles native dblclick, before its pulse fades.
+    # Keep the real input delay so this still exercises native slow-double handling.
+    await page.evaluate("""() => addEventListener('dblclick', () => {
+      const shadow=window.__observerShadows.get(document.getElementById('__octowright_interactions__'));
+      window.__doubleMarkerPhases=[...shadow.querySelectorAll('[data-phase]')].map(node=>node.dataset.phase);
+    }, {once:true})""")
     actual = await actions()
     assert actual == baseline
     assert sum(event[0] == "dblclick" for event in actual) == 1
@@ -303,4 +315,4 @@ async def test_native_delayed_double_click_is_recorded_once(observer_page: Any, 
     while not events.empty():
         recorded.append(events.get_nowait())
     assert [event["phase"] for event in recorded] == ["down", "up", "down", "up", "double"]
-    assert sum(node["phase"] == "double" for node in await markers(page)) == 1
+    assert sum(phase == "double" for phase in await page.evaluate("__doubleMarkerPhases")) == 1
