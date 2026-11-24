@@ -40,6 +40,9 @@ from octowright.session.operation.gate import (
 from octowright.session.route_carry import MockSpec
 from octowright.session.timeouts import SessionCallTimeoutError
 
+if TYPE_CHECKING:
+    from octowright.interactions import InteractionController
+
 log = get_logger(__name__)
 
 # octowright_status()["crash"]["recent"] is built from octowright.incidents,
@@ -128,6 +131,7 @@ class BrowserSession(
     # a launch option cannot be lost by a hand-kept copy list. repr=False: it
     # holds the launch headers.
     launch_options: LaunchOptions | None = field(default=None, kw_only=True, repr=False)
+    interaction_controller: InteractionController | None = field(default=None, kw_only=True, repr=False)
     viewport_mode: str = _VIEWPORT_MODE_UNKNOWN
     viewport_width: int | None = None
     viewport_height: int | None = None
@@ -480,3 +484,21 @@ class BrowserSession(
             return {"instance_id": self.instance_id, "protected": protected}
 
         return await self._operation_gate.control_update("browser_set_protected", _commit)
+
+    async def set_interaction_visuals(self, *, show: bool | None = None, record: bool | None = None) -> dict[str, Any]:
+        """Persist requested state before bounded, best-effort document propagation."""
+        if show is None and record is None:
+            raise ValueError("provide an interaction setting")
+        if any(value is not None and type(value) is not bool for value in (show, record)):
+            raise ValueError("interaction settings must be boolean")
+        async with self.operation("browser_set_interaction_visuals"):
+            controller = self.interaction_controller
+            if controller is None:
+                raise ValueError("interaction controller not installed")
+            if self.launch_options is not None:
+                self.launch_options = replace(
+                    self.launch_options,
+                    show_interactions=controller.show if show is None else show,
+                    record_interactions=controller.record if record is None else record,
+                )
+            return await controller.configure(show=show, record=record)

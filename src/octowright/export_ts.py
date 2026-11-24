@@ -17,6 +17,7 @@ from octowright._export_shared import (
     _UNSUPPORTED,
     _has_semantic_locator,
     _input_file_paths,
+    _interaction_launch_note,
     _launch_viewport,
     _route_pattern,
     _safe_int,
@@ -147,6 +148,8 @@ def _ts_cond_while(e: dict) -> str | None:
 
 
 def _ts_launch(entry: dict) -> str:
+    note = _interaction_launch_note(entry)
+    comment = f"  // {note}\n" if note else ""
     kind = _validate_kind(entry["kind"], action="launch")
     vp = _launch_viewport(entry)
     headed = entry.get("headed", True)
@@ -159,7 +162,7 @@ def _ts_launch(entry: dict) -> str:
     )
     if user_data_dir:
         return (
-            f"{kind_lookup}"
+            comment + f"{kind_lookup}"
             f"  ctx = await engine.launchPersistentContext({json.dumps(user_data_dir)}, {{\n"
             f"    headless: {str(not headed).lower()},\n"
             f"    viewport: {{ width: {vp['w']}, height: {vp['h']} }},\n"
@@ -169,7 +172,7 @@ def _ts_launch(entry: dict) -> str:
             f"  await page.goto(resolveBundleUrl({json.dumps(url)}));"
         )
     return (
-        f"{kind_lookup}"
+        comment + f"{kind_lookup}"
         f"  browser = await engine.launch({{ headless: {str(not headed).lower()} }});\n"
         f"  ctx = await browser.newContext({{ viewport: {{ width: {vp['w']}, height: {vp['h']} }} }});\n"
         f"  page = await ctx.newPage();\n"

@@ -573,6 +573,8 @@ def _record_launch_event(
     session: bool,
     disable_automation_controlled: bool,
     wayland_native: bool | None = None,
+    show_interactions: bool = False,
+    record_interactions: bool = False,
 ) -> None:
     """Emit the JSONL `launch` event with all the conditional fields. Pulled
     out of launch() to keep its complexity rank below the gate."""
@@ -588,6 +590,8 @@ def _record_launch_event(
         viewport=log_viewport,
         stabilize=stabilize,
         record_video=record_video,
+        show_interactions=show_interactions,
+        record_interactions=record_interactions,
         video_dir=str(video_dir) if video_dir else None,
         trace=trace,
         har=bool(har_path),

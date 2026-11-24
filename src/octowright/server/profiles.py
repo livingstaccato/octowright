@@ -51,6 +51,7 @@ PROFILES: dict[str, list[str]] = {
         "browser_close",
         "browser_close_all",
         "browser_set_protected",
+        "browser_set_interaction_visuals",
         "browser_fields",
         "browser_fill",
         "browser_find_field",

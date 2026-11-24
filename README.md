@@ -425,7 +425,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 138 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 139 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -436,7 +436,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
-| `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 24 |
+| `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 25 |
 | `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 33 |
 | `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
@@ -444,11 +444,11 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; `pip install octowright-terminal`, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every core-install tool registers. | 138 |
+| `all` (or unset) | Default — every core-install tool registers. | 139 |
 
 ```bash
-octowright serve --profile=core              # 31 tools — core + always-on
-octowright serve --profile=core,macros       # 46 tools — browser + macro pipeline + always-on
+octowright serve --profile=core              # 32 tools — core + always-on
+octowright serve --profile=core,macros       # 47 tools — browser + macro pipeline + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 

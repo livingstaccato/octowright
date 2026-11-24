@@ -9,11 +9,11 @@ SPDX-Comment: Part of octowright.
 
 The guard measures a **core** install in a child process with its config dirs redirected, because an empty `OCTOWRIGHT_PLUGINS` falls through to the operator's `plugins.yaml` — so an in-process count reads 141 on a machine that enables the terminal plugin and 134 in CI. The `terminals` row below is therefore checked against the totals arithmetic rather than against registration.
 
-Current totals: **97** profile-scoped + **7** always-on + **34** all-only = **138 total**.
+Current totals: **98** profile-scoped + **7** always-on + **34** all-only = **139 total**.
 
 With the `terminal` session-kind plugin enabled (`OCTOWRIGHT_PLUGINS=terminal` —
 on PyPI as of core 0.19.2, see `packages/octowright-terminal/README.md`), the
-`terminals` profile it declares adds 7 more tools for **145 total**.
+`terminals` profile it declares adds 7 more tools for **146 total**.
 
 ## Profiles
 
@@ -21,7 +21,7 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 
 | Profile | Tools | Purpose |
 |---|---:|---|
-| `core` | 24 | Minimum browser-driving surface plus compact DOM and HTTP-first discovery. |
+| `core` | 25 | Minimum browser-driving surface plus compact DOM and HTTP-first discovery. |
 | `advanced` | 33 | Inspection, assertions, ARIA locators, summaries, viewport sync, capture cache, artifact manifest, export script, relaunch. |
 | `macros` | 15 | Record → save → repair → replay pipeline + artifact bundles. |
 | `scenarios` | 12 | Multi-browser orchestration. |
@@ -33,9 +33,9 @@ A profile is selected with `OCTOWRIGHT_PROFILE=<name>[,<name>...]` (env var) or 
 
 ## Per-profile tool list
 
-### `core` (24)
+### `core` (25)
 
-`browser_brief`, `browser_click`, `browser_close`, `browser_close_all`, `browser_set_protected`, `browser_fields`, `browser_fill`, `browser_find_field`, `browser_find_link`, `browser_launch`, `browser_links`, `browser_list`, `browser_navigate`, `browser_page_outline`, `browser_press_key`, `browser_quick_launch`, `browser_read_markdown`, `browser_screenshot`, `browser_suggest_for_url`, `browser_type`, `browser_wait_for`, `web_find_links`, `web_page_outline`, `web_site_links`
+`browser_brief`, `browser_click`, `browser_close`, `browser_close_all`, `browser_set_protected`, `browser_set_interaction_visuals`, `browser_fields`, `browser_fill`, `browser_find_field`, `browser_find_link`, `browser_launch`, `browser_links`, `browser_list`, `browser_navigate`, `browser_page_outline`, `browser_press_key`, `browser_quick_launch`, `browser_read_markdown`, `browser_screenshot`, `browser_suggest_for_url`, `browser_type`, `browser_wait_for`, `web_find_links`, `web_page_outline`, `web_site_links`
 
 ### `advanced` (33)
 

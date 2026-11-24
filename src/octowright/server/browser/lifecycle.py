@@ -238,6 +238,9 @@ async def browser_launch(
     disable_automation_controlled: StrictBool = False,
     wayland_native: StrictBool | None = None,
     response_mode: str | None = None,
+    *,
+    show_interactions: StrictBool = False,
+    record_interactions: StrictBool = False,
 ) -> dict[str, Any]:
     # When no label/profile is given and the launch isn't explicitly ephemeral,
     # apply context-aware defaults so the browser has a human name and a
@@ -268,6 +271,8 @@ async def browser_launch(
         viewport_h=viewport_h,
         stabilize=stabilize,
         record_video=record_video,
+        show_interactions=show_interactions,
+        record_interactions=record_interactions,
         trace=trace,
         har=har,
         har_path=har_path,
@@ -357,6 +362,9 @@ async def browser_quick_launch(
     protected: bool | None = None,
     wayland_native: StrictBool | None = None,
     response_mode: str | None = None,
+    *,
+    show_interactions: StrictBool = False,
+    record_interactions: StrictBool = False,
 ) -> dict[str, Any]:
     if not isinstance(url, str) or not url:
         raise ValueError("url is required")
@@ -387,6 +395,8 @@ async def browser_quick_launch(
             viewport_h=viewport_h,
             stabilize=stabilize,
             record_video=record_video,
+            show_interactions=show_interactions,
+            record_interactions=record_interactions,
             trace=trace,
             har=har,
             har_path=har_path,
@@ -543,7 +553,7 @@ async def browser_relaunch_fluid(instance_id: str) -> dict[str, Any]:
     description=(
         "Launch several browsers in parallel from a list of launch specs. Each spec "
         "is a dict accepting any subset of browser_launch's launch options: kind, url, "
-        "headed, label, profile, viewport_w, viewport_h, stabilize, record_video, trace, "
+        "headed, label, profile, viewport_w, viewport_h, stabilize, record_video, show_interactions, record_interactions, trace, "
         "har, har_path, har_mode, har_url_filter, har_content, badge, badge_position, "
         "tile, ephemeral, session, protected, and the rest. A null value means unset; "
         "an unknown key (e.g. headless) fails that spec rather than being ignored. "

@@ -13,6 +13,7 @@ from octowright._export_shared import (
     _UNSUPPORTED,
     _has_semantic_locator,
     _input_file_paths,
+    _interaction_launch_note,
     _launch_viewport,
     _route_pattern,
     _safe_int,
@@ -86,6 +87,8 @@ def _py_semantic_with_fallback(semantic_call: str, fallback_call: str) -> str:
 
 
 def _py_launch(entry: dict) -> str:
+    note = _interaction_launch_note(entry)
+    comment = f"        # {note}\n" if note else ""
     kind = _validate_kind(entry["kind"], action="launch")
     vp = _launch_viewport(entry)
     headed = entry.get("headed", True)
@@ -93,7 +96,7 @@ def _py_launch(entry: dict) -> str:
     user_data_dir = entry.get("user_data_dir")
     if user_data_dir:
         return (
-            f"        _kind = {kind!r}\n"
+            comment + f"        _kind = {kind!r}\n"
             f"        ctx = await getattr(p, _kind).launch_persistent_context(\n"
             f"            {user_data_dir!r},\n"
             f"            headless={not headed},\n"
@@ -105,7 +108,7 @@ def _py_launch(entry: dict) -> str:
             f"        await page.goto(_resolve_bundle_url({url!r}))"
         )
     return (
-        f"        _kind = {kind!r}\n"
+        comment + f"        _kind = {kind!r}\n"
         f"        browser = await getattr(p, _kind).launch(headless={not headed})\n"
         f"        ctx = await browser.new_context(viewport={{'width': {vp['w']}, 'height': {vp['h']}}})\n"
         f"        page = await ctx.new_page()\n"

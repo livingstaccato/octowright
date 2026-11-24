@@ -696,7 +696,11 @@ class SessionOpsMixin(SessionEmulationMixin, SessionViewportMixin, SessionLike):
                 raise
             await _teardown.resolve_video_path_after_close(self)
         finally:
-            await _teardown.close_browser_handle_after_context_close(self, fast_timeout=context_close_timed_out)
+            try:
+                await _teardown.close_browser_handle_after_context_close(self, fast_timeout=context_close_timed_out)
+            finally:
+                if self.interaction_controller is not None:
+                    await self.interaction_controller.close()
             _teardown.flush_and_close_websocket_fh(self)
             self.recorder.record("close", **_teardown.close_recorder_fields(self, reason))
             self.recorder.close()

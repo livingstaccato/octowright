@@ -170,6 +170,8 @@ def build_launch_result(
     log_viewport: Any,
     protected: bool = False,
     protected_reason: str = "explicit",
+    show_interactions: bool = False,
+    record_interactions: bool = False,
     video_dir: Path | None,
 ) -> dict[str, Any]:
     """Assemble the dict returned to MCP callers from ``BrowserPool.launch``.
@@ -185,6 +187,8 @@ def build_launch_result(
         "url": target_url,
         "log_path": str(log_path),
         "record_video": record_video,
+        "show_interactions": show_interactions,
+        "record_interactions": record_interactions,
         "trace": trace,
         "har": bool(har_path),
         "viewport": log_viewport,
@@ -347,6 +351,8 @@ async def post_context_setup(
                 target_url=target_url,
                 log_path=log_path,
                 record_video=launch_options.record_video,
+                show_interactions=launch_options.show_interactions,
+                record_interactions=launch_options.record_interactions,
                 trace=launch_options.trace,
                 har_path=har_path,
                 har_mode=launch_options.har_mode,

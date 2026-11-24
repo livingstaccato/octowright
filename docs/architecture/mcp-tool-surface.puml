@@ -3,7 +3,7 @@
 ' SPDX-Comment: Part of octowright.
 
 @startuml mcp-tool-surface
-title MCP tool inventory by capability profile (138 tools total — slim with --profile=core,...)
+title MCP tool inventory by capability profile (139 tools total — slim with --profile=core,...)
 
 skinparam backgroundColor #ffffff
 skinparam defaultFontColor #333333
@@ -31,7 +31,7 @@ note as LEGEND #fef3c7
 end note
 
 package "Row 1 — profiles you usually compose" as ROW1 #ffffff {
-  package "core (24)" as P_CORE #eff6ff {
+  package "core (25)" as P_CORE #eff6ff {
     rectangle "minimum browser-driving + cheap orientation:\nbrowser_launch / list / close / close_all\nbrowser_navigate / suggest_for_url / quick_launch\nbrowser_click / fill / type / press_key\nbrowser_screenshot / brief / read_markdown\nbrowser_wait_for / set_protected\nbrowser_links / find_link / fields / find_field\nbrowser_page_outline / web_page_outline / web_find_links / web_site_links" as R_CORE
   }
   package "advanced (33)" as P_ADV #fef3c7 {

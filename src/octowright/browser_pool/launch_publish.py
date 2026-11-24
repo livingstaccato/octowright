@@ -287,6 +287,8 @@ async def _prepare_session_before_publication(
         log_viewport=log_viewport,
         stabilize=launch_options.stabilize,
         record_video=launch_options.record_video,
+        show_interactions=launch_options.show_interactions,
+        record_interactions=launch_options.record_interactions,
         video_dir=video_dir,
         trace=launch_options.trace,
         har_path=har_path,
@@ -324,61 +326,84 @@ async def _prepare_session_before_publication(
         viewport_info=viewport_info,
         operation_queue_timeout_seconds=pool.operation_queue_timeout_seconds,
     )
-    if user_data_dir is not None:
-        # Playwright never says whether its browser died on a signal or closed
-        # its windows; the OS does. See process_crash. Resolved before the
-        # close evictor is wired below, so its first signal can be judged.
-        new_session._browser_process = await process_crash.resolve_browser_process(kind, user_data_dir)
-    new_session.attach_console()
-    await new_session.measure_frame_inset(page)
-    await pool._expose_viewport_binding(context, new_session)
-    # Order matters: the close-evictor and user-nav logger publish handler
-    # factories on the session so that subsequent _wire_listeners calls
-    # (for popup pages) pick them up automatically. Install them BEFORE
-    # the initial _wire_listeners call so the initial page also gets them.
-    _wire_close_evictor(pool, new_session)
-    _wire_user_navigation_logger(new_session)
-    _wire_listeners(new_session, page)
-    context.on("page", new_session._register_popup)
-    # Chromium redirects new tabs via the service-worker extension (see
-    # _build_launch_kwargs) — attaching the page-event redirector there too
-    # would race it and uselessly attempt a goto on the detach-prone NTP.
-    # Firefox/WebKit have no extension hook, so they use the redirector.
-    if kind != "chromium":
-        context.on("page", _make_new_tab_redirector(new_session))
-    # A context can be handed back already holding pages -- Chromium session
-    # restore is the observed case -- and those fire no "page" event, so they
-    # would stay untracked and unwired. Deliberately AFTER the registrations
-    # above: a page created in the gap is then caught by one or the other.
-    adopted = adopt_untracked_pages(new_session, context)
-    if adopted:
-        log.warning(
-            "browser.adopted_untracked_pages",
+    from octowright.browser_pool.cleanup import cleanup_unregistered_launch
+    from octowright.interactions import InteractionController
+    from octowright.session_manifest import wait_task_after_cancellation
+
+    # The local session may never reach post_context_setup on failure. Attach
+    # ownership before installation, then durably roll back every later await.
+    new_session.interaction_controller = InteractionController(
+        log_path, show=launch_options.show_interactions, record=launch_options.record_interactions
+    )
+    try:
+        await new_session.interaction_controller.install(new_session)
+        if user_data_dir is not None:
+            # Playwright never says whether its browser died on a signal or closed
+            # its windows; the OS does. See process_crash. Resolved before the
+            # close evictor is wired below, so its first signal can be judged.
+            new_session._browser_process = await process_crash.resolve_browser_process(kind, user_data_dir)
+        new_session.attach_console()
+        await new_session.measure_frame_inset(page)
+        await pool._expose_viewport_binding(context, new_session)
+        # Order matters: the close-evictor and user-nav logger publish handler
+        # factories on the session so that subsequent _wire_listeners calls
+        # (for popup pages) pick them up automatically. Install them BEFORE
+        # the initial _wire_listeners call so the initial page also gets them.
+        _wire_close_evictor(pool, new_session)
+        _wire_user_navigation_logger(new_session)
+        _wire_listeners(new_session, page)
+        context.on("page", new_session._register_popup)
+        # Chromium redirects new tabs via the service-worker extension (see
+        # _build_launch_kwargs) — attaching the page-event redirector there too
+        # would race it and uselessly attempt a goto on the detach-prone NTP.
+        # Firefox/WebKit have no extension hook, so they use the redirector.
+        if kind != "chromium":
+            context.on("page", _make_new_tab_redirector(new_session))
+        # A context can be handed back already holding pages -- Chromium session
+        # restore is the observed case -- and those fire no "page" event, so they
+        # would stay untracked and unwired. Deliberately AFTER the registrations
+        # above: a page created in the gap is then caught by one or the other.
+        adopted = adopt_untracked_pages(new_session, context)
+        if adopted:
+            log.warning(
+                "browser.adopted_untracked_pages",
+                instance_id=instance_id,
+                kind=kind,
+                adopted=adopted,
+                page_count=new_session.page_count,
+                hint="the context opened with pages octowright did not create (session restore?); they are now tracked",
+            )
+
+        await wire_init_scripts(
+            context,
+            profile=profile,
+            label=label,
             instance_id=instance_id,
             kind=kind,
-            adopted=adopted,
-            page_count=new_session.page_count,
-            hint="the context opened with pages octowright did not create (session restore?); they are now tracked",
+            badge=launch_options.badge,
+            badge_position=launch_options.badge_position,
+            stabilize=launch_options.stabilize,
+            viewport_mode=new_session.viewport_mode,
+            viewport_width=new_session.viewport_width,
+            viewport_height=new_session.viewport_height,
+            viewport_frame_inset_w=new_session.viewport_frame_inset_w,
+            viewport_frame_inset_h=new_session.viewport_frame_inset_h,
+            viewport_token=new_session.viewport_action_token,
         )
 
-    await wire_init_scripts(
-        context,
-        profile=profile,
-        label=label,
-        instance_id=instance_id,
-        kind=kind,
-        badge=launch_options.badge,
-        badge_position=launch_options.badge_position,
-        stabilize=launch_options.stabilize,
-        viewport_mode=new_session.viewport_mode,
-        viewport_width=new_session.viewport_width,
-        viewport_height=new_session.viewport_height,
-        viewport_frame_inset_w=new_session.viewport_frame_inset_w,
-        viewport_frame_inset_h=new_session.viewport_frame_inset_h,
-        viewport_token=new_session.viewport_action_token,
-    )
-
-    if launch_options.trace:
-        await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        if launch_options.trace:
+            await context.tracing.start(screenshots=True, snapshots=True, sources=True)
+    except BaseException:
+        cleanup = asyncio.create_task(
+            cleanup_unregistered_launch(
+                context=context,
+                browser=browser,
+                video_dir=video_dir,
+                recorder=recorder,
+                interaction_controller=new_session.interaction_controller,
+            )
+        )
+        await wait_task_after_cancellation(cleanup)
+        raise
 
     return new_session

@@ -60,6 +60,8 @@ def _every_field_set(tmp_path: Path) -> LaunchOptions:
         base_url="https://dev.test",
         stabilize=True,
         record_video=True,
+        show_interactions=True,
+        record_interactions=True,
         trace=True,
         har=True,
         har_path=str(_existing(tmp_path / "a.har")),

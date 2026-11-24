@@ -103,3 +103,18 @@ _UNSUPPORTED = (
     "{kind} is not supported by browser_export_script: it needs state a linear script "
     "does not keep. Export with macro_export_cli, which runs it"
 )
+
+
+def _interaction_launch_note(entry: dict) -> str:
+    """Preserve Octowright-only settings without passing them to Playwright."""
+    show = entry.get("show_interactions", False)
+    record = entry.get("record_interactions", False)
+    if type(show) is not bool or type(record) is not bool:
+        raise ValueError("interaction launch settings must be boolean")
+    if not show and not record:
+        return ""
+    return (
+        f"Octowright launch settings: show_interactions={str(show).lower()}, "
+        f"record_interactions={str(record).lower()}. "
+        "Standalone Playwright export omits Octowright interaction feedback/capture."
+    )

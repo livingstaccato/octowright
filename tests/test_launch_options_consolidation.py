@@ -89,6 +89,8 @@ class TestToPoolKwargs:
             "profile": "cosmo",
             "stabilize": True,
             "record_video": True,
+            "show_interactions": False,
+            "record_interactions": False,
             "trace": True,
             "har": True,
             "har_path": "captures/a.har",
