@@ -56,6 +56,7 @@ from octowright.session.route_carry import replay_onto_session
 if TYPE_CHECKING:
     from octowright.browser_pool.options import LaunchOptions
     from octowright.browser_pool.pool import BrowserPool
+    from octowright.interactions import InteractionController
 
 log = get_logger(__name__)
 
@@ -81,6 +82,7 @@ async def cleanup_failed_launch(
     video_dir: Path | None,
     recorder: Recorder | None,
     pre_register: bool,
+    interaction_controller: InteractionController | None = None,
 ) -> None:
     """Unified cleanup for both launch-failure paths.
 
@@ -99,6 +101,7 @@ async def cleanup_failed_launch(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
         )
 
 
@@ -131,6 +134,7 @@ async def cancel_cleanup_launch(
     browser: Any,
     video_dir: Path | None,
     recorder: Recorder | None,
+    interaction_controller: InteractionController | None = None,
 ) -> None:
     """Complete launch rollback despite level or repeated cancellation."""
     from octowright.session_manifest import wait_task_after_cancellation
@@ -148,6 +152,7 @@ async def cancel_cleanup_launch(
                 video_dir=video_dir,
                 recorder=recorder,
                 pre_register=False,
+                interaction_controller=interaction_controller,
             )
         )
     await wait_task_after_cancellation(cleanup_task)
@@ -252,6 +257,7 @@ async def post_context_setup(
     same root operation instead of racing the initial goto.
     """
     recorder: Recorder | None = None
+    interaction_controller: InteractionController | None = None
     registered = False
     try:
         recorder = Recorder(log_path)
@@ -277,6 +283,10 @@ async def post_context_setup(
             user_data_dir=user_data_dir,
             session=session,
         )
+
+        # Preparation owns failures until it returns; keep the controller in
+        # this rollback scope until registry publication transfers ownership.
+        interaction_controller = new_session.interaction_controller
 
         async with new_session.operation("browser_launch_navigation"):
             # Register the session BEFORE navigating so a failed goto doesn't
@@ -380,6 +390,7 @@ async def post_context_setup(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
         )
         raise
     except Exception as exc:
@@ -389,6 +400,7 @@ async def post_context_setup(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
             pre_register=False,
         )
         wrapped = maybe_wrap_playwright_error(exc, kind=kind)

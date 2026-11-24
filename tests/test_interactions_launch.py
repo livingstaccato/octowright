@@ -100,3 +100,63 @@ async def test_normal_teardown_closes_controller_after_context(monkeypatch: pyte
     assert controller._closed
     assert not controller._tasks
     assert controller._sink._stream.closed
+
+
+@pytest.mark.parametrize("failure", ["cancel", "error"])
+async def test_rollback_before_publication_closes_prepared_controller(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: str
+) -> None:
+    from octowright.browser_pool import launch_pipeline
+
+    registry_waiting = asyncio.Event()
+    fail_acquire = asyncio.Event()
+
+    class RegistryLock(asyncio.Lock):
+        async def acquire(self) -> bool:
+            if self.locked():
+                registry_waiting.set()
+                if failure == "error":
+                    await fail_acquire.wait()
+                    raise RuntimeError("publication lock failed")
+            return await super().acquire()
+
+    context = FakeContext()
+    browser = FakeBrowser(context)
+    pool = BrowserPool(recordings_dir=tmp_path)
+    pool._pw = SimpleNamespace(chromium=FakeBrowserType(browser))
+    pool._sessions_lock = RegistryLock()
+    prepare = launch_pipeline._prepare_session_before_publication
+    sessions: list[Any] = []
+
+    async def capture_prepared(*args: Any, **kwargs: Any) -> Any:
+        session = await prepare(*args, **kwargs)
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(launch_pipeline, "_prepare_session_before_publication", capture_prepared)
+    try:
+        async with pool._sessions_lock:
+            task = asyncio.create_task(pool.launch(kind="chromium", headed=False, record_interactions=True))
+            async with asyncio.timeout(2):
+                await registry_waiting.wait()
+            session = sessions[0]
+            controller = session.interaction_controller
+            assert not controller._sink._stream.closed
+            assert not task.done()
+            assert not pool.has_session(session.instance_id)
+            if failure == "cancel":
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            else:
+                fail_acquire.set()
+                with pytest.raises(RuntimeError, match="publication lock failed"):
+                    await task
+        assert context.closed and browser.closed
+        assert not pool.has_session(session.instance_id)
+        assert controller._closed
+        assert controller._sink._stream.closed
+        assert not controller._tasks
+    finally:
+        if sessions:
+            await sessions[0].interaction_controller.close()
