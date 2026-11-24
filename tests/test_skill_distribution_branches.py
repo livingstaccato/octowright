@@ -303,9 +303,22 @@ def antigravity_home_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
 
 
 class TestInstallSkillToAntigravity:
-    def test_fresh_install_writes_skill_tree(self, antigravity_home_fixture: Path) -> None:
+    @pytest.mark.parametrize(
+        "installed_command",
+        [
+            pytest.param("/tool/bin/octowright", id="posix-script"),
+            pytest.param(r"C:\tool\.venv\Scripts\octowright.exe", id="windows-script"),
+        ],
+    )
+    def test_fresh_install_writes_skill_tree(
+        self, antigravity_home_fixture: Path, monkeypatch: pytest.MonkeyPatch, installed_command: str
+    ) -> None:
         """No existing destination → installed=True, skill files copied,
         plugin.json + mcp_config.json written so agy auto-wires the server."""
+        import octowright.daemonize as daemonize
+
+        monkeypatch.setattr(daemonize, "console_script_beside_interpreter", lambda: Path(installed_command))
+        monkeypatch.setattr(daemonize, "recommended_serve_command", lambda: (installed_command, ["serve"]))
         result = install_skill_to_antigravity()
         assert result.installed is True
         assert result.updated is False
@@ -320,9 +333,9 @@ class TestInstallSkillToAntigravity:
         import json as _json
 
         parsed = _json.loads(mcp_config.read_text())
-        # The install machine always has a console script here, so the config
-        # names it (the uvx fallback is covered in TestAntigravityMcpConfig).
-        assert parsed["mcpServers"]["octowright"]["command"].endswith("/octowright")
+        # Preserve the installed script exactly, including Windows separators
+        # and its .exe suffix (uvx fallback is covered in TestAntigravityMcpConfig).
+        assert parsed["mcpServers"]["octowright"]["command"] == installed_command
         assert parsed["mcpServers"]["octowright"]["args"] == ["serve"]
 
     def test_destination_str_in_result(self, antigravity_home_fixture: Path) -> None:

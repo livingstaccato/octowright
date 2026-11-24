@@ -16,6 +16,7 @@ from pathlib import Path
 
 import playwright
 import pytest
+import pytest_asyncio
 from playwright.async_api import async_playwright
 
 from octowright import export as py_export
@@ -24,15 +25,12 @@ from octowright.artifacts.script_export_actions import EXPORT_DISPATCH
 from octowright.recorder import Recorder
 from octowright.session import BrowserSession
 
-pytestmark = [pytest.mark.anyio, pytest.mark.live_browser]
+# Playwright's fixture and tests must share pytest-asyncio's loop. Mixing an
+# AnyIO mark with asyncio_mode=auto makes fixture ownership plugin-order dependent.
+pytestmark = pytest.mark.live_browser
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
-@pytest.fixture
+@pytest_asyncio.fixture
 async def scroll_session(tmp_path):
     async with asyncio.timeout(20), async_playwright() as pw:
         engine_name = os.environ.get("OCTOWRIGHT_TEST_SCROLL_ENGINE", "chromium")
@@ -71,6 +69,7 @@ async def scroll_session(tmp_path):
             await browser.close()
 
 
+@pytest.mark.asyncio
 async def test_selector_wheel_reaches_visible_panel_instead_of_previous_pointer(scroll_session) -> None:
     session = scroll_session
     await session.scroll(delta_x=0, delta_y=300, selector="#panel")
@@ -78,12 +77,14 @@ async def test_selector_wheel_reaches_visible_panel_instead_of_previous_pointer(
     assert await session.page.evaluate("window.scrollY") == 0
 
 
+@pytest.mark.asyncio
 async def test_window_metrics_include_the_delivered_wheel(scroll_session) -> None:
     result = await scroll_session.scroll(delta_x=0, delta_y=300)
     assert result["y"] == 300
     assert result["settled"] is True
 
 
+@pytest.mark.asyncio
 async def test_slow_dispatch_keeps_observation_armed_until_wheel_arrives(scroll_session, monkeypatch) -> None:
     wheel = scroll_session.page.mouse.wheel
 
@@ -97,6 +98,7 @@ async def test_slow_dispatch_keeps_observation_armed_until_wheel_arrives(scroll_
     assert result["y"] == 300
 
 
+@pytest.mark.asyncio
 async def test_wheel_before_delayed_ack_keeps_full_render_observation_budget(scroll_session, monkeypatch) -> None:
     page = scroll_session.page
     await page.evaluate("""() => {
@@ -133,6 +135,7 @@ async def test_wheel_before_delayed_ack_keeps_full_render_observation_budget(scr
 
 
 @pytest.mark.parametrize("mode", ["zero", "boundary", "prevented", "missing_event", "no_frames", "stalled_callbacks"])
+@pytest.mark.asyncio
 async def test_scroll_wait_is_bounded_when_position_cannot_change(scroll_session, mode) -> None:
     page = scroll_session.page
     if mode == "prevented":
@@ -156,6 +159,7 @@ async def test_scroll_wait_is_bounded_when_position_cannot_change(scroll_session
     assert result["settled"] is (mode not in {"missing_event", "no_frames", "stalled_callbacks"})
 
 
+@pytest.mark.asyncio
 async def test_cancelling_scroll_removes_render_wait_and_releases_gate(scroll_session) -> None:
     page = scroll_session.page
     await page.evaluate("""() => {
@@ -187,6 +191,7 @@ async def test_cancelling_scroll_removes_render_wait_and_releases_gate(scroll_se
 
 
 @pytest.mark.parametrize("exporter", ["python", "cli"])
+@pytest.mark.asyncio
 async def test_exported_scroll_targets_panel(scroll_session, exporter) -> None:
     action = {"selector": "#panel", "delta_x": 0, "delta_y": 300}
     if exporter == "python":
