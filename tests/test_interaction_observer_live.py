@@ -94,7 +94,13 @@ async def test_native_buttons_drag_wheel_and_application_sequence(observer_page:
     await page.evaluate("__octowrightInteractions.configure({show:false,record:false})")
     baseline = await actions()
     baseline_focus = await page.evaluate("document.activeElement.id")
-    await page.evaluate("scrollTo(0,0);__octowrightInteractions.configure({show:true,record:true})")
+    # Wheel delivery can precede compositor scrolling. Start the observed pass
+    # in a fresh page so a pending baseline scroll cannot move its input targets.
+    url = page.url
+    page = await page.context.new_page()
+    await page.goto(url)
+    await page.evaluate("__octowrightInteractions.ready")
+    await page.evaluate("__octowrightInteractions.configure({show:true,record:true})")
     actual = await actions()
     assert actual == baseline
     assert await page.evaluate("document.activeElement.id") == baseline_focus
