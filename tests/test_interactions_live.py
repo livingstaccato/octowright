@@ -28,7 +28,7 @@ async def capture(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncIterat
     async with async_playwright() as playwright:
         browser = await getattr(playwright, request.param).launch()
         context = await browser.new_context(
-            record_video_dir=tmp_path / "videos", viewport={"width": 640, "height": 480}
+            record_video_dir=tmp_path / "videos", viewport={"width": 640, "height": 480}, has_touch=True
         )
         await context.route(
             "http://**/*", lambda route: route.fulfill(body="<button>App</button>", content_type="text/html")
@@ -94,3 +94,27 @@ async def test_navigation_and_tabs_keep_estimated_video_origins(capture: Any) ->
             await asyncio.sleep(0.01)
     assert len({r["video"] for r in latest.values()}) == 2
     assert all("/" not in r["video"] for r in latest.values())
+
+
+async def test_native_touch_reaches_video_sidecar(capture: Any) -> None:
+    controller, context, log = capture
+    page = context.pages[0]
+    await page.goto("http://capture.test/touch")
+    await page.evaluate("__octowrightInteractions.ready")
+    await controller.configure(show=True, record=True)
+    await page.touchscreen.tap(80, 70)
+    async with asyncio.timeout(5):
+        while True:
+            rows = read_interactions(log)["events"]
+            touch = [r for r in rows if r["type"] == "interaction" and r["pointer_type"] == "touch"]
+            if any(r["phase"] == "up" for r in touch):
+                break
+            await asyncio.sleep(0.01)
+    assert [r["phase"] for r in touch] == ["down", "up"]
+    assert all(r["shown"] and r["x"] == 80 and r["y"] == 70 for r in touch)
+    assert touch[0]["pointer_id"] == touch[1]["pointer_id"]
+    video = Path(await page.video.path())
+    await context.close()
+    await controller.close()
+    assert video.is_file() and video.stat().st_size > 0
+    assert any(r["type"] == "page" and r["video"] == video.name for r in read_interactions(log)["events"])

@@ -101,7 +101,7 @@ def test_refuses_symlink_and_nonregular_sink_and_reader(tmp_path: Path) -> None:
         api.InteractionSink(log)
     with pytest.raises((ValueError, OSError)):
         api.read_interactions(log)
-    assert outside.read_text() == "secret"
+    assert outside.read_text(encoding="utf-8") == "secret"
 
 
 def test_refuses_nonregular_sink(tmp_path: Path) -> None:

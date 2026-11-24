@@ -60,6 +60,7 @@ def _build(tmp_path: Path, **overrides: Any) -> SessionOpsMixin:
     inst.websocket_path = None
     inst.trace = False
     inst._video = None
+    inst.interaction_controller = None
     inst._bg_tasks = set()
     inst.instance_id = "abc123"
     inst.log_path = tmp_path / "session.jsonl"

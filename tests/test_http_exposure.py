@@ -79,6 +79,7 @@ SENSITIVE_ROUTE_PATTERNS = {
     ("DELETE", "/api/sessions/{id}/recording"),
     ("POST", "/api/sessions/{id}/relaunch"),
     ("GET", "/api/sessions/{id}/events"),
+    ("GET", "/api/sessions/{id}/interactions"),
     ("GET", "/api/dashboard/events"),
     ("GET", "/api/mcp-events"),
     ("GET", "/api/sessions/{id}/console"),

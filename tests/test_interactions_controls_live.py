@@ -41,7 +41,7 @@ async def test_launch_installs_independent_flags_and_runtime_controls(
         assert result["show_interactions"] is show
         assert result["record_interactions"] is record
         assert pool.list_sessions()[0]["show_interactions"] is show
-        launch = json.loads(session.log_path.read_text().splitlines()[0])
+        launch = json.loads(session.log_path.read_text(encoding="utf-8").splitlines()[0])
         assert (launch["show_interactions"], launch["record_interactions"]) == (show, record)
         assert read_interactions(session.log_path)["available"] is record
         await session.page.evaluate("__octowrightInteractions.ready")

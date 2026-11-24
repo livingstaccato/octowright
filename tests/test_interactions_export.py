@@ -35,7 +35,7 @@ def test_export_preserves_flags_as_inactive_comments(tmp_path: Path, fmt: str, p
     # Observations live beside, never inside, the action recording.
     log.with_suffix(".interactions.jsonl").write_text(json.dumps({"type": "interaction", "phase": "down", "x": 99}))
     out = export_script(log, tmp_path / ("out.py" if fmt == "python" else "out.ts"), fmt)
-    source = out.read_text()
+    source = out.read_text(encoding="utf-8")
     prefix = "#" if fmt == "python" else "//"
     assert f"{prefix} Octowright launch settings: show_interactions=true, record_interactions=false" in source
     assert "Standalone Playwright export omits Octowright interaction feedback/capture" in source

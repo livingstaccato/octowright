@@ -50,7 +50,7 @@ async def observer_page(request: pytest.FixtureRequest) -> AsyncIterator[tuple[P
             window.__observerShadows.set(this,shadow); return shadow;
           };
         })();"""
-        await context.add_init_script(inspect_shadow + (ASSET.read_text() if ASSET.exists() else ""))
+        await context.add_init_script(inspect_shadow + (ASSET.read_text(encoding="utf-8") if ASSET.exists() else ""))
         await context.route("http://**/*", lambda route: route.fulfill(body=PAGE, content_type="text/html"))
         page = await context.new_page()
         await page.goto("http://observer.test/")

@@ -93,6 +93,11 @@ class _FakeRequestEvent:
     def on(self, event: str, callback: Any) -> None:
         self.handlers.setdefault(event, []).append(callback)
 
+    def remove_listener(self, event: str, callback: Any) -> None:
+        callbacks = self.handlers.get(event, [])
+        if callback in callbacks:
+            callbacks.remove(callback)
+
     def fire(self, event: str, *args: Any) -> None:
         for cb in self.handlers.get(event, []):
             cb(*args)
@@ -112,6 +117,8 @@ class _FakePage(_FakeRequestEvent):
         # Stub frame for framenavigated tests in the dedicated test module.
         self.main_frame = MagicMock()
         self.main_frame.url = "about:blank"
+        self.main_frame.evaluate = AsyncMock(return_value=True)
+        self.frames = [self.main_frame]
 
     def is_closed(self) -> bool:
         return self._closed
@@ -128,6 +135,7 @@ class _FakeContext(_FakeRequestEvent):
         self.pages: list[_FakePage] = []
         self.tracing = MagicMock()
         self.add_init_script = AsyncMock(return_value=None)
+        self.expose_binding = AsyncMock(return_value=None)
         self.close = AsyncMock(return_value=None)
         self.unroute = AsyncMock(return_value=None)
         self.route = AsyncMock(return_value=None)

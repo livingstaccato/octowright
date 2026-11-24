@@ -83,7 +83,9 @@ def test_a_stale_count_is_reported_even_when_the_list_is_right(guard) -> None:
     passed it. Both are checked.
     """
     text = (ROOT / "docs" / "architecture" / "mcp-tool-inventory.md").read_text(encoding="utf-8")
-    mangled = text.replace("### `core` (24)", "### `core` (23)")
+    count = len(guard.core_surface()["profiles"]["core"])
+    mangled = text.replace(f"### `core` ({count})", "### `core` (23)")
+    assert mangled != text
     problems = guard.problems(mangled, (ROOT / "README.md").read_text(encoding="utf-8"))
     assert any("core" in p and "23" in p for p in problems), problems
 
@@ -134,10 +136,14 @@ def test_the_diagram_carries_the_same_counts_and_is_checked(guard) -> None:
     text = (ROOT / "docs" / "architecture" / "mcp-tool-surface.puml").read_text(encoding="utf-8")
     assert guard.diagram_problems(text, guard.core_surface()) == []
 
-    stale = text.replace('package "core (24)"', 'package "core (22)"')
+    surface = guard.core_surface()
+    count = len(surface["profiles"]["core"])
+    stale = text.replace(f'package "core ({count})"', 'package "core (22)"')
+    assert stale != text
     assert any("core" in p and "22" in p for p in guard.diagram_problems(stale, guard.core_surface()))
 
-    stale_title = text.replace("(138 tools total", "(126 tools total")
+    stale_title = text.replace(f"({surface['total']} tools total", "(126 tools total")
+    assert stale_title != text
     assert any("126" in p for p in guard.diagram_problems(stale_title, guard.core_surface()))
 
 
@@ -145,7 +151,11 @@ def test_a_stale_readme_total_is_reported(guard) -> None:
     """README's own total drifted while the sentence above it stayed right."""
     text = (ROOT / "docs" / "architecture" / "mcp-tool-inventory.md").read_text(encoding="utf-8")
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    mangled = readme.replace("every core-install tool registers. | 138 |", "every core-install tool registers. | 129 |")
+    total = guard.core_surface()["total"]
+    mangled = readme.replace(
+        f"every core-install tool registers. | {total} |", "every core-install tool registers. | 129 |"
+    )
+    assert mangled != readme
     problems = guard.problems(text, mangled)
     assert any("README" in p and "129" in p for p in problems), problems
 

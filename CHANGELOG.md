@@ -15,6 +15,16 @@ a section that is already tagged and on PyPI.
 ## [0.27.0] - 2026-11-23
 
 ### Added
+- **Optional interaction indicators cover manual and automated input.** Launch
+  with independent `show_interactions` and `record_interactions` flags (both
+  default false), or change them with `browser_set_interaction_visuals`.
+  Labelled feedback covers clicks, right/middle clicks, taps, doubles, holds,
+  drags and wheel direction across Chromium, Firefox and WebKit. With native
+  video recording enabled, the dashboard's separate Show interactions toggle
+  displays captured metadata with estimated timing and suppresses duplicate
+  markers already drawn into video pixels. Baked indicators cannot be erased;
+  unsupported geometry, including resized Firefox segments, suppresses metadata
+  markers with an explanation. See `docs/interaction-indicators.md`.
 - **Kimi Code is a documented MCP client.** `docs/getting-started.md` names
   its config file (`~/.kimi-code/mcp.json`, or `$KIMI_CODE_HOME/mcp.json`,
   in the usual `mcpServers` shape), and the reconnect matrix lists it with
@@ -131,6 +141,9 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **Playwright 1.65 driver health checks recognize the current connection
+  layout.** Healthy drivers are no longer mistaken for dead ones because
+  connection state moved; older supported layouts retain their checks.
 - **MCP clients no longer drop their Octowright connection after 30 idle
   minutes.** mcp 2.2.0 changed its session manager's default idle timeout
   from never to 30 minutes, and `OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS`, off by

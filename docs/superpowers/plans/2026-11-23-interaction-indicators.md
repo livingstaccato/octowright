@@ -10,8 +10,8 @@
 
 ## Global Constraints
 
-- Work only in `/home/tim/.codex/worktrees/bb16/octowright` on `feat/interaction-indicators`; never modify original dirty worktrees. The separately-owned driver fix is in integration checkout60d9.
-- User approved `/tmp/octowright-interaction-indicators-design.md` and inclusion in v0.27.0. The committed spec is `docs/superpowers/specs/2026-11-23-interaction-indicators-design.md`.
+- Work in an isolated feature checkout on `feat/interaction-indicators`; never modify original dirty worktrees. Preserve the separately reviewed driver compatibility fix during integration.
+- User approved the [interaction indicator spec](../specs/2026-11-23-interaction-indicators-design.md) and inclusion in v0.27.0.
 - `show_interactions=False` and `record_interactions=False` are independent opt-ins. Dashboard playback has its own display toggle. Drawn video pixels cannot be erased; suppress a second dashboard marker for an event whose live marker was enabled.
 - Cover clicks, taps, right/middle clicks, double clicks/taps, holds after500ms, drags, wheel direction, and distinct touch contacts. Indicators use fixed labels/shapes as well as color. Never consume input, move focus, prevent default, or dispatch substitute application events.
 - Support all three engines, navigation/new pages and frames. Clean contacts/frames/timers on cancellation, blur/pagehide, disable and destroy. Observations are page-visible and best effort.
@@ -116,3 +116,19 @@ HTTP reader: `GET /api/sessions/{id}/interactions?cursor=0&limit=1000`, same ses
 - [ ] Update changelog and0.27.0 highlights with user-facing controls and the driver fix. Update usage/tool docs and packaging/typecheck inventory; run release-note validators and wheel asset checks.
 - [ ] Run `make lint`, the broad nonlive/non-memory suite, focused3engine feature/live driver tests, frontend full suite and build. Review the complete branch against the approved spec and source; resolve concrete findings before release.
 - [ ] Merge feature into integration checkout without disturbing original worktrees. Push final candidate to PR285. Wait required GitHub checks, merge, wait main CI, signed-tag/push v0.27.0, draft/verify/publish release, wait PyPI, install published wheel and restart/verify local daemon. Keep exact audit/evidence in release-state files and final report.
+
+## Implementation clarifications
+
+The final bootstrap config binding accepts read-only document geometry alongside
+its clock: `{time_origin, width, height, dpr}`. Host page metadata records a stable
+estimated video origin, engine, initial viewport dimensions and device scale.
+These values support best-effort playback mapping; they do not promise frame-exact
+synchronization. Missing geometry and Firefox observations after a viewport resize
+suppress independent markers. Native markers already captured in video remain.
+
+Standalone Python, TypeScript and macro CLI exports create ordinary Playwright
+contexts and omit Octowright interaction feedback/capture. Relevant requested
+launch values survive as explicitly labelled comments; application actions remain
+executable. There is no standalone interaction recorder or daemon dependency.
+Actual Octowright launch-record recovery and replacement retain both flags.
+Interaction observations stay in the sidecar and never enter macro action replay.

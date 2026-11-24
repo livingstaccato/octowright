@@ -527,3 +527,7 @@ Prints the list of registered tools without needing a live MCP client.
 - [docs/troubleshooting.md](https://github.com/livingstaccato/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
 - [docs/architecture/](https://github.com/livingstaccato/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
 - [CHANGELOG.md](https://github.com/livingstaccato/octowright/blob/main/CHANGELOG.md): release summaries.
+
+Optional [interaction indicators](docs/interaction-indicators.md) show manual and
+automated clicks, taps, holds, drags and wheel direction live or over recorded
+video. Live display and metadata recording are independent and default off.

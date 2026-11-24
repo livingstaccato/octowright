@@ -120,8 +120,8 @@ a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 
 ```bash
-octowright serve --profile=core              # 31 tools — browser core + always-on diagnostics
-octowright serve --profile=core,macros       # 46 tools — browser + macro replay + always-on diagnostics
+octowright serve --profile=core              # 32 tools — browser core + always-on diagnostics
+octowright serve --profile=core,macros       # 47 tools — browser + macro replay + always-on diagnostics
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
@@ -138,3 +138,6 @@ and is what the daemon process inherits when `octowright serve` spawns one.
 - Read [personas.md](personas.md) to learn the identity/profile model.
 - Read [macros.md](macros.md) to record and replay flows.
 - Read [scenarios.md](scenarios.md) to orchestrate multiple browsers as a unit.
+
+For optional live pointer feedback and video playback metadata, see
+[Interaction indicators](interaction-indicators.md). Both settings default off.

@@ -560,6 +560,8 @@ def test_launch_kwargs_fall_back_to_defaults_without_a_persona() -> None:
         "stabilize": False,
         "record_video": False,
         "trace": False,
+        "show_interactions": False,
+        "record_interactions": False,
     }
 
 
@@ -585,6 +587,8 @@ def test_launch_kwargs_take_the_persona_url_unless_the_participant_sets_one(dirs
         "stabilize": True,
         "record_video": True,
         "trace": True,
+        "show_interactions": False,
+        "record_interactions": False,
     }
     p.url = "https://own.test"
     assert scenarios.resolve_launch_kwargs(p)["url"] == "https://own.test"

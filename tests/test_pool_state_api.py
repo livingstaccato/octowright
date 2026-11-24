@@ -28,6 +28,7 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
         log_path="/tmp/demo.jsonl",
         har_path=None,
         protected=False,
+        interaction_controller=None,
         operation_snapshot=gate.snapshot,
         header_state=lambda: {},
     )
@@ -47,6 +48,8 @@ def test_pool_public_state_api_reads_sessions_without_private_callers() -> None:
             "log_path": "/tmp/demo.jsonl",
             "har_path": None,
             "protected": False,
+            "show_interactions": False,
+            "record_interactions": False,
             # New: what the browser is actually sending. Empty here because the
             # double sets no headers; the key is always present so a consumer
             # can read "no extra headers" rather than "not reported".

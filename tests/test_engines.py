@@ -142,6 +142,12 @@ async def test_canonical_pool_launch_wraps_initial_navigation_error(monkeypatch:
         def on(self, *_: Any) -> None:
             pass
 
+        async def expose_binding(self, *_: Any) -> None:
+            pass
+
+        def remove_listener(self, *_: Any) -> None:
+            pass
+
         async def add_init_script(self, **_: Any) -> None:
             pass
 

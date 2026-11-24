@@ -1,5 +1,9 @@
 [
   {
+    "title": "See manual and automated interactions live and in recorded video",
+    "body": "Enable show_interactions for live feedback and record_interactions for metadata independently; both default off. Clicks, right/middle clicks, taps, doubles, holds, drags and wheel direction have labelled indicators across all three engines. With record_video enabled, the dashboard has its own Show interactions toggle with estimated timing. It suppresses duplicate markers already baked into video; those pixels cannot be erased. Missing geometry and resized Firefox segments suppress independent markers."
+  },
+  {
     "title": "MCP clients stay connected through idle periods and session loss",
     "body": "MCP clients no longer lose their Octowright connection after a 30-minute pause. Followers reconnect when the leader forgets a session and resend requests the leader refused before running. Startup answers initialize before the election finishes, and a cached tool list helps clients with short startup timeouts. Keep the leader and followers on the same installed release."
   },
@@ -22,5 +26,9 @@
   {
     "title": "Upgrade notices, diagnostics and the dashboard handle long sessions better",
     "body": "The dashboard reconnects live tails, refreshes after event-stream recovery and keeps console cursors and filters usable through long recordings. Doctor identifies stale follower owners and how to reconnect their clients, including Kimi Code. The browser tools now keep strict numeric scroll metrics, and optional outline failures preserve delivered input with a fixed diagnostic message."
+  },
+  {
+    "title": "Playwright 1.65 driver checks stay compatible",
+    "body": "Driver health checks support the Playwright 1.65 connection layout while retaining older supported layouts. Healthy drivers no longer appear dead because their connection state moved, avoiding unnecessary browser recovery."
   }
 ]

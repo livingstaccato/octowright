@@ -133,7 +133,10 @@ async def test_rejects_untrusted_payload_and_source(tmp_path: Path, invalid: dic
 
 
 @pytest.mark.asyncio
-async def test_rate_loss_resets_contacts_and_bounds_accepted_events(tmp_path: Path) -> None:
+async def test_rate_loss_resets_contacts_and_bounds_accepted_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(backend(), "time", SimpleNamespace(time=time.time, monotonic=lambda: 0.0))
     controller, context, source = await installed(tmp_path / "x.jsonl", record=True)
     callback = context.bindings["__octowrightInteractionEvent"]
     for n in range(200):
