@@ -87,6 +87,10 @@ async def test_native_buttons_drag_wheel_and_application_sequence(observer_page:
         await page.mouse.down()
         await page.mouse.move(150, 90, steps=3)
         await page.mouse.up()
+        # Wheel hit testing can happen after scrolling. Use the body away from
+        # the button so scrolling cannot change the target under the pointer.
+        await page.mouse.move(300, 150)
+        assert await page.evaluate("document.elementFromPoint(300,150) === document.body")
         await page.mouse.wheel(0, 80)
         await page.wait_for_function("appEvents.some(e=>e[0]==='wheel')")
         return await page.evaluate("appEvents")
