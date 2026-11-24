@@ -9,6 +9,7 @@ import {
   getDownloads,
   getEvents,
   getHealth,
+  getInteractions,
   getMacro,
   getMacroRepairPreview,
   getMacros,
@@ -335,4 +336,14 @@ describe("url helpers", () => {
     );
     expect(liveScreenshotUrl("a", { quality: 75 })).toBe("/api/sessions/a/screenshot/now?format=png");
   });
+});
+
+it("loads interaction pages through paired JSON fetch with cancellation", async () => {
+  setDashboardBearer({ bearer: "secret", expires_at: Date.now() / 1000 + 3600 });
+  const calls = installFetch({ available: false, events: [], next_cursor: 0, complete: true, truncated: false });
+  const abort = new AbortController();
+  await getInteractions("a/b c", 50, 123, abort.signal);
+  expect(calls[0]?.url).toBe("/api/sessions/a%2Fb%20c/interactions?cursor=50&limit=123");
+  expect(new Headers(calls[0]?.init?.headers).get("Authorization")).toBe("Bearer secret");
+  expect(calls[0]?.init?.signal).toBe(abort.signal);
 });

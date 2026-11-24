@@ -5,6 +5,7 @@ import type {
   DownloadListResponse,
   EventsResponse,
   HealthResponse,
+  InteractionsResponse,
   MacroDetail,
   MacroRepairPreview,
   MacroSummary,
@@ -330,4 +331,17 @@ export function screencastWsUrl(id: string, opts: { fps?: number } = {}): string
   const host = typeof window !== "undefined" ? window.location.host : "localhost";
   const qs = opts.fps !== undefined ? `?fps=${encodeURIComponent(String(opts.fps))}` : "";
   return `${proto}//${host}/api/sessions/${encodeURIComponent(id)}/screencast${qs}`;
+}
+
+export function getInteractions(
+  id: string,
+  cursor = 0,
+  limit = 1000,
+  signal?: AbortSignal,
+): Promise<InteractionsResponse> {
+  const qs = new URLSearchParams({ cursor: String(cursor), limit: String(limit) });
+  return fetchJson<InteractionsResponse>(
+    `/api/sessions/${encodeURIComponent(id)}/interactions?${qs}`,
+    signal ? { signal } : {},
+  );
 }

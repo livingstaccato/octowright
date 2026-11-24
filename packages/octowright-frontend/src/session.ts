@@ -22,6 +22,7 @@ import { clearDashboardMediaAuth, configureDashboardMediaAuth } from "./dashboar
 import { renderDownloadsPanel } from "./downloads-panel.js";
 import { getAllEvents } from "./events-pager.js";
 import { formatDateTime } from "./format.js";
+import { mountInteractionOverlay } from "./interaction-overlay.js";
 import { mountLivePreview } from "./live-preview.js";
 import { renderPairingGate } from "./pairing-gate.js";
 import type { MountStream, StreamContext } from "./plugin-contract.js";
@@ -778,6 +779,13 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   const refs = buildLayout(root);
   renderHeader(refs.header, detail);
   const videoEl = renderVideo(refs.videoSlot, detail);
+  const interactionOverlay = videoEl
+    ? mountInteractionOverlay(refs.videoSlot, {
+        sessionId: detail.id,
+        video: videoEl,
+        videoBasename: detail.video_path,
+      })
+    : null;
   let videoCleanup: (() => void) | null = null;
   let videoAbort: AbortController | null = null;
   let videoDisposed = false;
@@ -796,6 +804,7 @@ export async function bootSession(root: HTMLElement, sessionId: string, opts: Bo
   }
   const disposeVideo = (): void => {
     videoDisposed = true;
+    interactionOverlay?.destroy();
     videoAbort?.abort();
     if (videoCleanup) videoCleanup();
     else clearDashboardMediaAuth();
