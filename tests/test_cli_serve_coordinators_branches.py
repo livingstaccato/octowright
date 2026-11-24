@@ -261,6 +261,18 @@ class TestServeTelemetryLifecycle:
 
 
 class TestServeAsyncDispatch:
+    @pytest.fixture(autouse=True)
+    def _unelected_start_is_clear(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Routing is under test here, not the startup lock or the live-leader
+        probes in cli/_daemon_startup (tests/test_daemon_startup_lock.py)."""
+        from octowright import singleton as _sn
+        from octowright.cli import _daemon_startup
+
+        async def _clear(**_kw: Any) -> Any:
+            return _sn.HeldElectionLock(None)
+
+        monkeypatch.setattr(_daemon_startup, "claim_daemon_start", _clear)
+
     @pytest.mark.anyio
     async def test_daemon_mode_routes_to_run_leader_with_arm_immediate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """daemon_mode=True → _run_leader called with arm_watchdog_immediately=True."""

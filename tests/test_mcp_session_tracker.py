@@ -219,3 +219,38 @@ def test_middleware_ignores_non_ascii_session_id_bytes() -> None:
     )
 
     assert tracker.active_count() == 0
+
+
+def test_middleware_unknown_session_404_creates_no_entry() -> None:
+    """A request naming an unknown/expired session is answered 404 by the
+    transport; it must not count as active (the idle watchdog reads the count)
+    nor leave a ``last_seen`` entry behind."""
+    tracker = McpSessionTracker()
+    mw = McpSessionTrackingMiddleware(_passthrough_app, tracker)
+
+    _run_middleware(mw, method="POST", headers=[(b"mcp-session-id", b"gone")], response_status=404)
+
+    assert tracker.active_count() == 0
+    assert tracker.last_seen_snapshot() == {}
+
+
+def test_middleware_error_response_session_header_creates_no_entry() -> None:
+    tracker = McpSessionTracker()
+    mw = McpSessionTrackingMiddleware(_passthrough_app, tracker)
+
+    _run_middleware(mw, method="POST", headers=[], response_headers=[(b"mcp-session-id", b"x")], response_status=400)
+
+    assert tracker.last_seen_snapshot() == {}
+
+
+def test_middleware_known_session_404_does_not_refresh_last_seen(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_now = [1000.0]
+    monkeypatch.setattr("octowright.http.mcp_session_tracker.time.monotonic", lambda: fake_now[0])
+    tracker = McpSessionTracker()
+    tracker.mark_active("sess-1")
+    mw = McpSessionTrackingMiddleware(_passthrough_app, tracker)
+
+    fake_now[0] = 1050.0
+    _run_middleware(mw, method="POST", headers=[(b"mcp-session-id", b"sess-1")], response_status=404)
+
+    assert tracker.last_seen_snapshot() == {"sess-1": 1000.0}

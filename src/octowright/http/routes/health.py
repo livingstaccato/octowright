@@ -22,9 +22,17 @@ The upgrade-detection intent was still worth something, so it is kept as a
 SEPARATE, honestly-named field: ``installed_version`` appears only when the
 on-disk package differs from the running one, which is exactly the "restart to
 pick this up" signal the original comment was reaching for.
+
+Reading that metadata is a dist-info scan, and every follower probes this
+endpoint every couple of seconds on the leader's event loop, so the on-disk
+version is re-read at most once per ``INSTALLED_VERSION_TTL_SECONDS``. An
+install lands on disk at human speed and a restart takes longer than that, so a
+reading up to that old still answers "restart to pick this up" correctly.
 """
 
 from __future__ import annotations
+
+import time
 
 from starlette.requests import Request
 from starlette.routing import Route
@@ -32,8 +40,14 @@ from starlette.routing import Route
 from octowright.http.json_response import SafeJSONResponse
 from octowright.version import VERSION
 
+# How long one reading of the on-disk version is reused (see the module docstring).
+INSTALLED_VERSION_TTL_SECONDS = 30.0
 
-def _installed_version() -> str | None:
+# (monotonic time read, value); None until the first request.
+_installed_cache: tuple[float, str | None] | None = None
+
+
+def _read_installed_version() -> str | None:
     """Version recorded in on-disk package metadata, or ``None`` if unreadable."""
     try:
         from importlib.metadata import version
@@ -41,6 +55,18 @@ def _installed_version() -> str | None:
         return version("octowright")
     except Exception:
         return None
+
+
+def _installed_version() -> str | None:
+    """The on-disk version, re-read at most once per ``INSTALLED_VERSION_TTL_SECONDS``."""
+    global _installed_cache
+    now = time.monotonic()
+    cached = _installed_cache
+    if cached is not None and now - cached[0] < INSTALLED_VERSION_TTL_SECONDS:
+        return cached[1]
+    value = _read_installed_version()
+    _installed_cache = (now, value)
+    return value
 
 
 async def health_endpoint(_request: Request) -> SafeJSONResponse:

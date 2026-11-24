@@ -286,3 +286,52 @@ export interface PersonaDetail {
   disk_bytes: number;
   engine_bytes: Record<string, number>;
 }
+
+export interface VideoGeometry {
+  engine: "chromium" | "firefox" | "webkit";
+  viewport_width: number;
+  viewport_height: number;
+  device_scale_factor: number;
+}
+export interface InteractionPageRow {
+  type: "page";
+  v: 1;
+  page_id: number;
+  video: string | null;
+  time_origin: number;
+  time_origin_kind: "estimate";
+  video_geometry: VideoGeometry | null;
+}
+export interface InteractionRow {
+  type: "interaction";
+  v: 1;
+  page_id: number;
+  video: string | null;
+  t: number;
+  phase: "down" | "move" | "up" | "cancel" | "double" | "wheel";
+  pointer_type: "mouse" | "touch" | "pen";
+  pointer_id: number;
+  button: 0 | 1 | 2;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  at: number;
+  shown: boolean;
+  dx?: number;
+  dy?: number;
+}
+export type InteractionSidecarRow =
+  | InteractionPageRow
+  | InteractionRow
+  | { type: "settings"; v: 1; at: number; show: boolean; record: boolean; reset: boolean }
+  | { type: "reset"; v: 1; at: number; reset: true; reason: "loss" }
+  | { type: "reset"; v: 1; at: number; reset: true; reason: "page_closed"; page_id: number }
+  | { type: "truncated"; v: 1; at: number; reason: "capacity" };
+export interface InteractionsResponse {
+  available: boolean;
+  events: InteractionSidecarRow[];
+  next_cursor: number;
+  complete: boolean;
+  truncated: boolean;
+}

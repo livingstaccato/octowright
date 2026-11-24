@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -103,6 +103,45 @@ def _fake_pw(
     return pw, channel
 
 
+def _modern_pw(pw: Any, channel: _Channel) -> Any:
+    """Playwright 1.65: callable local utils and separately owned transport."""
+    connection = pw._impl_obj._connection
+    transport = connection._transport
+    del connection._transport
+
+    async def trace_discarded(params: dict[str, Any]) -> None:
+        await channel.send("traceDiscarded", None, params)
+
+    connection.local_utils = lambda: SimpleNamespace(trace_discarded=trace_discarded)
+    manager = SimpleNamespace(_client=SimpleNamespace(_transport=transport))
+
+    async def stop(_self: Any) -> None:
+        await _noop()
+
+    pw.stop = MethodType(stop, manager)
+    return pw
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("modern", [False, True], ids=["1.63", "1.65"])
+@pytest.mark.parametrize("behaviour", ["ok", "protocol_error", "hang_and_resist_cancel"])
+async def test_probe_handles_both_protocol_shapes(modern: bool, behaviour: str) -> None:
+    pw, channel = _fake_pw(behaviour)
+    if modern:
+        _modern_pw(pw, channel)
+    assert await driver_health.driver_confirmed_dead(pw, timeout=0.05) is False
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("flag", ["returncode", "transport_error"])
+async def test_modern_transport_flags_confirm_death_without_sending(flag: str) -> None:
+    flags = {flag: -9 if flag == "returncode" else True}
+    pw, channel = _fake_pw(**flags)
+    _modern_pw(pw, channel)
+    assert await driver_health.driver_confirmed_dead(pw) is True
+    assert channel.calls == []
+
+
 async def _noop() -> None:
     return None
 
@@ -182,6 +221,57 @@ async def test_probe_falls_back_to_dead_when_internals_are_missing() -> None:
     """A Playwright upgrade that moves these internals must degrade to the old
     behaviour (reset on the text verdict), not to never resetting a dead driver."""
     assert await driver_health.driver_confirmed_dead(SimpleNamespace()) is True
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("phase", ["already_closed", "dies_during_probe", "hung_stop"])
+async def test_driver_death_consumes_the_transports_error(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    """1.65 closes Connection independently of its transport's error future."""
+    import gc
+
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+
+    async def exercise() -> None:
+        if phase != "hung_stop":
+            pw, channel = _fake_pw()
+            transport = pw._impl_obj._connection._transport
+            _modern_pw(pw, channel)
+            connection = pw._impl_obj._connection
+
+            async def closes(*_a: Any) -> None:
+                transport.on_error_future.set_exception(Exception("driver transport closed"))
+                connection._closed_error = TargetClosedError()
+                raise connection._closed_error
+
+            if phase == "already_closed":
+                connection._closed_error = TargetClosedError()
+                transport.on_error_future.set_exception(Exception("driver transport closed"))
+            else:
+                channel.send = closes
+            assert await driver_health.driver_confirmed_dead(pw) is True
+        else:
+            monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.01)
+            hung = _HungStopDriver()
+            transport = hung._impl_obj._connection._transport
+            transport.on_error_future = loop.create_future()
+
+            def kill() -> None:
+                transport.on_error_future.set_exception(Exception("driver transport closed"))
+                hung._kill()
+
+            transport._proc.kill = kill
+            await driver_health.stop_driver(hung)
+
+    try:
+        await exercise()
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+    assert not [c for c in reported if "never retrieved" in str(c.get("message", ""))], reported
 
 
 # ─── the pool's use of it ────────────────────────────────────────────────────
@@ -342,6 +432,22 @@ async def test_reset_driver_bounds_a_hung_stop_and_kills_the_driver(monkeypatch:
 
 
 @pytest.mark.anyio
+async def test_modern_driver_stop_kills_the_separately_owned_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.05)
+    hung = _HungStopDriver()
+    connection = hung._impl_obj._connection
+    manager = SimpleNamespace(_client=SimpleNamespace(_transport=connection._transport))
+    del connection._transport
+
+    async def stop(_self: Any) -> None:
+        await hung.killed.wait()
+
+    hung.stop = MethodType(stop, manager)  # type: ignore[method-assign]
+    await driver_health.stop_driver(hung)
+    assert hung.killed.is_set()
+
+
+@pytest.mark.anyio
 async def test_pool_shutdown_bounds_a_hung_stop_and_kills_the_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shutdown stops the same shared driver a reset does, and a hung one
     held daemon exit forever: it must go through the same bounded stop."""
@@ -380,7 +486,8 @@ class _InnerSendChannel(_Channel):
 
 
 @pytest.mark.anyio
-async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed() -> None:
+@pytest.mark.parametrize("modern", [False, True], ids=["1.63", "1.65"])
+async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed(modern: bool) -> None:
     """Measured on 1.63: a sync ``console`` listener that raises leaves the
     exception on ``Connection._error`` for the next API call. The probe used to
     be that call: it reported a healthy driver dead and swallowed the error the
@@ -391,6 +498,8 @@ async def test_a_stored_listener_error_neither_reads_as_death_nor_is_consumed() 
     connection._error = stored
     channel = _InnerSendChannel(connection)
     connection.local_utils = SimpleNamespace(_channel=channel)
+    if modern:
+        _modern_pw(pw, channel)
 
     assert await driver_health.driver_confirmed_dead(pw) is False
     assert channel.calls, "the round trip must still reach the driver"
@@ -422,12 +531,15 @@ async def test_the_probes_own_failure_is_never_planted_for_the_callers_next_call
 
 
 @pytest.mark.anyio
-async def test_a_listener_error_raised_while_the_probe_is_scheduled_is_kept() -> None:
+@pytest.mark.parametrize("modern", [False, True], ids=["1.63", "1.65"])
+async def test_a_listener_error_raised_while_the_probe_is_scheduled_is_kept(modern: bool) -> None:
     """The window between lifting the stored error off and the send starting."""
     pw, _ = _fake_pw("ok")
     connection = pw._impl_obj._connection
     channel = _InnerSendChannel(connection)
     connection.local_utils = SimpleNamespace(_channel=channel)
+    if modern:
+        _modern_pw(pw, channel)
     late = ValueError("listener boom, late")
     asyncio.get_running_loop().call_soon(lambda: setattr(connection, "_error", late))
 

@@ -97,6 +97,34 @@ def test_an_error_answer_or_an_unknown_handshake_keeps_nothing(cache_path: Path)
     assert not cache_path.exists()
 
 
+def test_an_unchanged_answer_skips_the_disk_and_an_outside_rewrite_is_repaired(
+    cache_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """remember runs on the bridge loop for every tools/list answer: an answer
+    this process already wrote, to a file nobody touched since, costs a stat,
+    not a read-back. A file another process replaced is still compared and
+    rewritten."""
+    monkeypatch.setattr(proxy_tools_cache, "_last_written", None)
+    proxy_tools_cache.remember(_list(), _answer(_TOOLS), _HANDSHAKE)
+    written = cache_path.read_text(encoding="utf-8")
+
+    reads: list[Path] = []
+    real_read_text = Path.read_text
+
+    def _counting_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        reads.append(self)
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _counting_read_text)
+    proxy_tools_cache.remember(_list(), _answer(_TOOLS), _HANDSHAKE)
+    assert reads == []
+
+    monkeypatch.setattr(Path, "read_text", real_read_text)
+    cache_path.write_text("{}", encoding="utf-8")
+    proxy_tools_cache.remember(_list(), _answer(_TOOLS), _HANDSHAKE)
+    assert cache_path.read_text(encoding="utf-8") == written
+
+
 def test_an_unreadable_copy_answers_nothing(cache_path: Path) -> None:
     cache_path.parent.mkdir(parents=True)
     cache_path.write_text("{not json", encoding="utf-8")

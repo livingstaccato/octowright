@@ -416,6 +416,8 @@ class BrowserPool:
                 "log_path": str(s.log_path),
                 "har_path": str(s.har_path) if s.har_path else None,
                 "protected": s.protected,
+                "show_interactions": bool(s.interaction_controller and s.interaction_controller.show),
+                "record_interactions": bool(s.interaction_controller and s.interaction_controller.record),
                 # What this browser is actually sending. Launch-time headers
                 # are otherwise a write-only argument: a client adopting an
                 # already-running browser has no way to tell a current run tag

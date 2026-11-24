@@ -36,7 +36,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from io import TextIOWrapper
 from typing import Any, BinaryIO, cast
@@ -196,7 +196,7 @@ def _divert_stdin() -> tuple[BinaryIO, int | None]:
 
 
 @asynccontextmanager
-async def stdio_server() -> AsyncIterator[tuple[Any, Any]]:
+async def stdio_server() -> AsyncGenerator[tuple[Any, Any], None]:
     """mcp's ``stdio_server`` over the claimed, abandonable stdin.
 
     The bridge's only stdio entry point (tests replace it by this name).

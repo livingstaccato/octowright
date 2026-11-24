@@ -276,10 +276,25 @@ async def _serve_async(
     # connected client pays for Playwright and the whole tool registry before
     # its stdio is even open (tests/test_follower_import_weight.py).
     if daemon_mode:
+        # Before the server import: that is the slow part of startup, and the
+        # election lock has to be held across it (cli/_daemon_startup).
+        from octowright.cli import _daemon_startup
+
+        hold = await _daemon_startup.claim_daemon_start(http_host=http_host, http_port=http_port)
+        if hold is None:
+            return
         from octowright.server import _state
 
         _state.set_leader_mode("daemon")
-        await _run_leader(**leader_kwargs, no_singleton=False, arm_watchdog_immediately=True)
+        try:
+            await _run_leader(
+                **leader_kwargs,
+                no_singleton=False,
+                arm_watchdog_immediately=True,
+                on_lockfile_written=hold.release,
+            )
+        finally:
+            hold.release()
         return
     if no_singleton:
         from octowright.server import _state
@@ -507,8 +522,13 @@ async def _run_leader(
     no_singleton: bool,
     arm_watchdog_immediately: bool = False,
     stdio_streams: tuple[Any, Any] | None = None,
+    on_lockfile_written: Callable[[], None] | None = None,
 ) -> None:
     """Serve MCP stdio + HTTP debugger + (when not --no-http) HTTP-MCP.
+
+    ``on_lockfile_written`` runs right after this leader publishes its
+    lockfile: a daemon started outside an election holds the election lock
+    until then (``cli/_daemon_startup``).
 
     ``stdio_streams`` serves MCP on those (read, write) streams instead of
     opening stdio: an inline fallback reached from the follower bridge, which
@@ -571,6 +591,8 @@ async def _run_leader(
             return
         info = _sn.make_leader_info(host, port, token=leader_token)
         _sn.write_lock(info)
+        if on_lockfile_written is not None:
+            on_lockfile_written()
 
     mcp_task = _asyncio.create_task(_notifications.serve_mcp(mcp, stdio_streams), name="octowright.mcp")
     sidecars: list[_asyncio.Task[object]] = []

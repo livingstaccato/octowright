@@ -20,7 +20,7 @@ async def test_viewport_pill_script_is_injected() -> None:
         label="player",
         instance_id="abc123",
         kind="chromium",
-        badge=False,
+        badge=True,
         badge_position="bottom-right",
         stabilize=False,
         viewport_mode="fixed",
@@ -50,7 +50,7 @@ async def test_viewport_pill_carries_a_null_inset_when_it_was_not_measured() -> 
         label="player",
         instance_id="abc123",
         kind="chromium",
-        badge=False,
+        badge=True,
         badge_position="bottom-right",
         stabilize=False,
         viewport_mode="fixed",
@@ -78,7 +78,7 @@ async def test_viewport_pill_requires_one_second_alt_hold() -> None:
             label="viewport-alt",
             viewport_w=640,
             viewport_h=420,
-            badge=False,
+            badge=True,
         )
         page = pool.get(result["instance_id"]).page
         pill = page.locator("#__octowright_viewport_status__")
@@ -130,7 +130,7 @@ async def test_viewport_pill_is_quiet_bottom_indicator_with_compact_popover() ->
             label="viewport-ui",
             viewport_w=640,
             viewport_h=420,
-            badge=False,
+            badge=True,
         )
         page = pool.get(result["instance_id"]).page
         pill = page.locator("#__octowright_viewport_status__")

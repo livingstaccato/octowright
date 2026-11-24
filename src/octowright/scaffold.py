@@ -144,25 +144,22 @@ label: {label}
 def mcp_registration_block(install_dir: Path | None = None) -> str:
     """Render the JSON snippet a user pastes into .mcp.json or ~/.claude.json.
 
-    `install_dir` defaults to the repo containing this module (so the snippet
-    works for the developer running `octowright init` from a checkout).
+    The default launches the installed console script (see
+    ``daemonize.recommended_serve_command``). ``install_dir`` asks explicitly
+    for the contributor variant — the client launches from that source
+    checkout with ``uv --directory ... run``. That is only correct when
+    leader AND every follower come from the same checkout; mixing a checkout
+    with the packaged install is the skew the recommended block exists to
+    prevent, so it is never the default.
     """
-    if install_dir is None:
-        install_dir = Path(__file__).resolve().parents[2]
-    block = {
-        "mcpServers": {
-            "octowright": {
-                "command": "uv",
-                "args": [
-                    "--directory",
-                    str(install_dir),
-                    "run",
-                    "octowright",
-                    "serve",
-                ],
-            }
-        }
-    }
+    from octowright.daemonize import recommended_serve_command
+
+    if install_dir is not None:
+        command: str = "uv"
+        args: list[str] = ["--directory", str(install_dir), "run", "octowright", "serve"]
+    else:
+        command, args = recommended_serve_command()
+    block = {"mcpServers": {"octowright": {"command": command, "args": args}}}
     return json.dumps(block, indent=2)
 
 

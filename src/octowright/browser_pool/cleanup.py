@@ -60,8 +60,12 @@ async def cleanup_unregistered_launch(
     browser: Any | None,
     video_dir: Path | None,
     recorder: Recorder | None,
+    interaction_controller: Any | None = None,
 ) -> None:
-    await cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
+    try:
+        await cleanup_on_launch_failure(context=context, browser=browser, video_dir=video_dir)
+    finally:
+        await safe_close(interaction_controller)
     if recorder is not None:
         try:
             recorder.close()

@@ -42,6 +42,13 @@ vi.mock("./api.js", async (importOriginal) => {
   return {
     ...actual,
     getSession: vi.fn(),
+    getInteractions: vi.fn(async () => ({
+      available: false,
+      events: [],
+      next_cursor: 0,
+      complete: true,
+      truncated: false,
+    })),
     getEvents: vi.fn(async () => ({ events: [], cursor: 0, total_bytes: 0, complete: false })),
     getConsole: vi.fn(async () => ({ messages: [], cursor: 0, total: 0 })),
     getDownloads: vi.fn(async () => ({ downloads: [], cursor: 0, total: 0 })),
@@ -877,4 +884,22 @@ describe("bootSession — seek closure", () => {
     // Should not throw
     expect(() => capturedSeek!(3)).not.toThrow();
   });
+});
+
+it("mounts interaction controls only for native video and destroys them at unload", async () => {
+  const getSession = await getMockedGetSession();
+  getSession.mockResolvedValueOnce(makeDetail({ video_path: "/v.webm" }));
+  await bootSession(root, "sess-1");
+  expect(root.querySelector(".interaction-controls")?.textContent).toContain("Show interactions");
+  const api = await import("./api.js");
+  expect(api.getInteractions).toHaveBeenCalledTimes(1);
+  window.dispatchEvent(new Event("beforeunload"));
+  expect(root.querySelector(".interaction-controls")).toBeNull();
+});
+it("does not request interaction metadata without native video", async () => {
+  const getSession = await getMockedGetSession();
+  getSession.mockResolvedValueOnce(makeDetail({ video_path: null }));
+  await bootSession(root, "sess-1");
+  const api = await import("./api.js");
+  expect(api.getInteractions).not.toHaveBeenCalled();
 });

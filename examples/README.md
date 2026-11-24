@@ -100,3 +100,10 @@ across participants.
 If you are looking for the promoted hero demos, start with `demo/INDEX.md`.
 Those bundle manifests describe how the raw examples are assembled into catalog
 entries such as `cross-engine-trio` and `seven-mix-orchestration`.
+
+## Interaction indicators
+
+Run `uv run python examples/interaction-indicators.py` for a local-page native
+video with live feedback, metadata capture and a runtime switch to metadata-only
+capture. It prints the recording paths. See the
+[controls and playback limitations](../docs/interaction-indicators.md).

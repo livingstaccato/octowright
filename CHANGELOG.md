@@ -12,7 +12,83 @@ version and a fresh empty `[Unreleased]` takes its place; the holding pen
 exists so post-release work has an honest home instead of being backdated into
 a section that is already tagged and on PyPI.
 
+## [0.27.0] - 2026-11-23
+
 ### Added
+- **Optional interaction indicators cover manual and automated input.** Launch
+  with independent `show_interactions` and `record_interactions` flags (both
+  default false), or change them with `browser_set_interaction_visuals`.
+  Labelled feedback covers clicks, right/middle clicks, taps, doubles, holds,
+  drags and wheel direction across Chromium, Firefox and WebKit. With native
+  video recording enabled, the dashboard's separate Show interactions toggle
+  displays captured metadata with estimated timing and suppresses duplicate
+  markers already drawn into video pixels. Baked indicators cannot be erased;
+  unsupported geometry, including resized Firefox segments, suppresses metadata
+  markers with an explanation. See `docs/interaction-indicators.md`.
+- **Kimi Code is a documented MCP client.** `docs/getting-started.md` names
+  its config file (`~/.kimi-code/mcp.json`, or `$KIMI_CODE_HOME/mcp.json`,
+  in the usual `mcpServers` shape), and the reconnect matrix lists it with
+  Codex CLI, OpenCode and Amp as having no in-session reconnect: Kimi Code
+  2.5.0's `/mcp` only shows server status, so the user restarts it.
+  `octowright doctor` names a follower spawned by `kimi` (native or `node …/bin/kimi`).
+- **The leader narrates follower throttling, and refuses sustained loops.**
+  The new-session rate limit (`OCTOWRIGHT_MCP_NEW_SESSION_MAX`) never logged
+  anything when it fired — invisible without telemetry enabled. It now logs
+  one rate-limited `octowright.mcp.new_session_throttled` warning per source
+  per window, naming the follower key, its admitted window count and the
+  rejections since the previous line, and the 429 body carries the source and
+  `retry_after_seconds`. A source that keeps tripping the limit across
+  `OCTOWRIGHT_MCP_SUSTAINED_REFUSAL_SECONDS` (default ~5 windows; `off`
+  disables) is switched from pacing to `410 Gone` with a body that says the
+  follower is too old or looping for this leader and to reconnect its MCP
+  client — a quiet source is forgiven, so there is no sticky lockout.
+- **Followers honor `Retry-After` and say who is throttling whom.** When the
+  leader rate-limits a reconnect (429) or refuses one (410), the follower now
+  reads the status and `Retry-After` from the HTTP response it got while
+  connecting (mcp's client reports a refused POST as an error answer to the
+  replayed `initialize`, not as an exception) instead of treating it as an
+  ordinary failed connect: it waits at least the leader's
+  `Retry-After` before retrying, and the bridge snapshot `last_error`, the
+  JSON-RPC error text and an `octowright.bridge.leader_throttled` log warning
+  all name the state as "leader throttled this follower …, retry in Ns;
+  follower vX vs leader vY". A streak of 5+ consecutive refusals escalates the
+  wording to a persistent follower/leader mismatch with the reconnect remedy,
+  instead of reading as a flaky network. A successful connect now also clears
+  the snapshot's stale `last_error`.
+- **`octowright doctor` names each problem follower's owner and its reconnect
+  step.** The `followers` check now flags a follower the leader is 429-throttling
+  (not only version skew), and every flagged row carries the owning client —
+  detected from the follower's process tree — with that client's exact
+  reconnect step, rendered from the same `mcp_identity.RECONNECT_STEPS` matrix
+  the server's own `instructions` string is built from (now including pi and
+  omp), so the two can't drift.
+- **`octowright init` registers the installed `octowright serve` by default.**
+  The printed MCP block, README and getting-started guide now point clients at
+  the packaged install (absolute path), and state plainly that a source
+  checkout is for contributors and that leader and every follower must then be
+  the same install. The agy/Gemini plugin manifest renders the same detection
+  at skill-install time (installed script when present, `uvx` fallback), and
+  `scripts/bridge_reconnect_smoke.py --follower previous|X.Y.Z` runs a
+  previous release's follower against this checkout's leader (isolated from
+  the real daemon) to prove N-1 bridge compatibility.
+- **Mouse-wheel, offline mode, connection refusal and phone safe-area
+  emulation are available as browser tools.** `browser_scroll` issues native
+  mouse-wheel deltas (optionally revealing and hovering a selector first) and
+  reports window metrics with a `settled` flag. It observes rendered stability
+  for up to one second after dispatch; unsettled metrics are provisional (or
+  null if unavailable) and do not mean the input should be repeated. Observation
+  runs in the page's main world, so page scripts can block or forge both the
+  `settled` flag and metrics. Failed optional outline capture preserves the
+  delivered-input result with `outline: null` and `outline_error`.
+  `browser_set_offline` takes the whole context
+  offline. `browser_abort_route` aborts matching requests with Playwright's
+  failure codes (`connectionrefused` by default) instead of patching page
+  JavaScript. `browser_set_safe_area` sets all four CSS safe-area insets via
+  Chromium's `Emulation.setSafeAreaInsets` (explicitly rejected on other
+  engines), so fixed bottom bars can respect `env(safe-area-inset-bottom)`.
+  All four are recorded with the other session actions and replay in macros,
+  export scripts and route carry into replacement sessions.
+
 - **Status reports a client holding a different handshake from the
   leader's.** A follower answers `initialize` itself before the election
   returns, and a client can reconnect to a leader restarted on another
@@ -65,6 +141,95 @@ a section that is already tagged and on PyPI.
   dashboard's macro validation says so before the script is run.
 
 ### Fixed
+- **Exported macro CLIs preserve route failures and scroll targets.** Each
+  abort route keeps its own error code when several handlers are installed.
+  Selector scrolling continues to target the main document after a frame
+  switch, matching live sessions and recording exports.
+- **Doctor applies follower identity checks consistently.** Followers from
+  foreign PID namespaces retain their detail rows, throttle warnings and
+  reconnect guidance without being attributed to unrelated host processes.
+  Reused PIDs are excluded from both the summary and follower details.
+- **Playwright 1.65 driver health checks recognize the current connection
+  layout.** Healthy drivers are no longer mistaken for dead ones because
+  connection state moved; older supported layouts retain their checks.
+- **MCP clients no longer drop their Octowright connection after 30 idle
+  minutes.** mcp 2.2.0 changed its session manager's default idle timeout
+  from never to 30 minutes, and `OCTOWRIGHT_MCP_SESSION_IDLE_SECONDS`, off by
+  default, implemented "off" by leaving the manager alone. Any client that
+  paused for 30 minutes had its session reaped, got `Session not found` on
+  its next call, and needed a manual reconnect. The leader now passes the
+  setting to the session manager when it is built (`None` when off) and reads
+  it back: a manager that did not take it logs
+  `octowright.mcp.session_idle_timeout_unconfirmed`, and a value that is not
+  a number (`1800s`, `30m`) still means off but logs
+  `octowright.mcp.session_idle_timeout_unparsable`.
+- **A follower now recovers when the leader forgets its session.** When the
+  leader ended a follower's session (the idle reaper, the session-table cap,
+  the dead-follower reaper) or was restarted with a fresh bridge token, every
+  later call through that follower failed with "Session not found" or "Server
+  returned an error response" until its MCP client was reconnected by hand:
+  the MCP client library reports such a refusal as an error answer rather
+  than a broken connection, so the bridge never reconnected. The follower now
+  reads the HTTP status itself. A 404, 401 or 403 on its current session
+  drops that session, logs `octowright.bridge.session_lost`, reconnects, and
+  re-sends the calls the leader refused; those never ran, so they are
+  re-sent even when they could not otherwise be resumed, and the client sees
+  the real answer instead of the error.
+- **Restarting a service-managed daemon no longer leaves two leaders.** A
+  daemon started by a service manager (for example a systemd user unit
+  running `serve --daemon-mode`) took no election lock, so a client that
+  connected while it was still starting up spawned a daemon of its own, and
+  the second one moved to the next port: two leaders, with browsers split
+  between them. Such a daemon now holds the election lock from before its
+  slow startup until it has published its lockfile, and does not start at
+  all when a live leader is already serving.
+- **A session-creation storm no longer evicts a real client's quiet
+  session.** When the leader's session table goes over its cap it used to
+  shed sessions silent for more than two minutes first, oldest first, so a
+  client that had simply paused lost its session to make room for the
+  storm's fresh ones. Sessions a running follower reports as its own are now
+  evicted last, and among the other silent sessions the newest go first. The
+  cap still holds if live followers alone exceed it, and the leader logs
+  when that happens.
+- **A sandboxed or containerised client's session is no longer cut off by
+  the dead-follower cleanup.** The leader decided a follower was dead when
+  the process id it recorded was gone, but a follower started inside a
+  sandbox or container that shares the state directory records an id from
+  its own process namespace, which means nothing to the leader, so its live
+  session was closed on every cleanup pass. On Linux a follower now also
+  records its process namespace and start time: one from another namespace
+  is left alone, and a reused process id is recognised as the old follower
+  being gone. A session that sent a request in the last two minutes is
+  never closed by this cleanup, which also protects followers too old to
+  record the new fields.
+- **Requests naming an unknown or expired MCP session no longer count as
+  activity.** Such a request is answered 404, but it still counted towards
+  the active-session total the idle watchdog reads and left an entry behind.
+  A request now counts only once its response succeeds.
+- **A follower's early `initialize` answer matches an mcp 2.3 leader again.**
+  mcp 2.3 stopped sending an empty `experimental` object in the server's
+  capabilities, so the answer a follower gives before the election returns
+  differed from the leader's, and every such follower reported a
+  `capabilities` handshake mismatch. The follower now matches whichever mcp
+  is installed.
+- **A stale daemon log is no longer quoted as the daemon's own.** When the
+  leader runs under a service manager (e.g. a systemd user unit whose
+  `ExecStart` runs `serve --daemon-mode`, wiring stderr to the journal), the
+  `octowright-daemon.log` file stops advancing while the daemon is healthy —
+  and every spawn-failure message kept pointing operators at it.
+  `daemon_log_tail()` now detects a live lockfile leader younger than the log
+  and appends the real sink (`journalctl --user -u octowright.service`) next
+  to the actual tail.
+- **`browser_mock_route` accepts a JSON-string body again.** MCP's argument
+  pre-parser decoded it to a dict before validation rejected it as not a
+  string, so no JSON response could be stubbed. The tool normalizes that
+  parsed value back to compact JSON before handing it to Playwright, leaving
+  plain strings and `None` untouched and returning the JSON object the caller
+  intended.
+- **`badge=False` suppresses the viewport status pill too.** It was injected
+  unconditionally even when a caller had disabled the corner badge, leaving a
+  stray `fixed 390x844` corner label visible. The same launch flag now gates
+  both overlays; title tagging and macro status remain independently wired.
 - **`octowright restart` no longer starts a second leader beside one that
   appeared while it waited.** A client that gave up waiting for the election
   lock could start serving inline, and restart then spawned its own daemon
@@ -705,6 +870,16 @@ a section that is already tagged and on PyPI.
   0.44 ms instead of 1.1 ms with 256.
 
 ### Changed
+- **Octowright now requires mcp 2.2.0 or later** (was 2.1.0). 2.2.0 is the
+  first release whose `streamable_http_app()` takes the session idle timeout,
+  which is how the leader now keeps idle sessions open.
+- **The health probe and the follower's tool-list copy do less disk work.**
+  `/api/health` re-reads the installed package version at most once every 30
+  seconds instead of on every probe, which every connected follower sends every
+  couple of seconds on the leader's event loop; a pending upgrade still shows
+  up as `installed_version` within that time. A follower that already wrote an
+  identical `tools/list` answer to its on-disk copy, and finds the file
+  unchanged since, no longer reads it back to compare.
 - **Behaviour change: a macro credential in an `inject_headers` header now
   needs `forward_on_redirect`, even to the session's own origin.** For a
   `fetch`/XHR the pattern scopes only the first request. The browser re-sends
@@ -4100,7 +4275,8 @@ history that led to the first published release.
 [0.12.1]: https://github.com/livingstaccato/octowright/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/livingstaccato/octowright/compare/v0.11.0...v0.12.0
 [0.10.0]: https://github.com/livingstaccato/octowright/compare/v0.9.1...v0.10.0
-[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/livingstaccato/octowright/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/livingstaccato/octowright/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/livingstaccato/octowright/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/livingstaccato/octowright/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/livingstaccato/octowright/compare/v0.23.0...v0.24.0

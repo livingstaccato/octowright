@@ -127,7 +127,7 @@ class TestConstantTables:
         """_ACTION_MAP must keep its kind→method-name binding stable."""
         assert _ACTION_MAP[kind] == method
 
-    def test_action_map_size_is_exactly_37(self) -> None:
+    def test_action_map_size_is_exactly_41(self) -> None:
         """Adding/removing keys to _ACTION_MAP is a contract change — fail loudly.
 
         Went 27 -> 29 when switch_frame and get_text_by became replayable. Both
@@ -139,9 +139,9 @@ class TestConstantTables:
         with a11y_dragdrop (keyboard WAI-ARIA APG drag-and-drop), and 33 -> 34
         with atomic upload_files, and 34 -> 36 with expect_network_clean and
         expect_no_text (the negative assertions a journey check needs), and
-        36 -> 37 with mark_network_clean (a network window spanning macro runs).
+        36 -> 37 with mark_network_clean (a network window spanning macro runs), and 37 -> 41 with the new emulation primitives, all of them recorded and replayed.
         """
-        assert len(_ACTION_MAP) == 37
+        assert len(_ACTION_MAP) == 41
 
     def test_type_kind_maps_to_type_text_not_type(self) -> None:
         """Pin the rename from 'type' kind → session.type_text method (not session.type)."""

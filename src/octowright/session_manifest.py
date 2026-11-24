@@ -20,7 +20,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -102,7 +102,7 @@ def _resolve_path(path: Path | None) -> Path:
 
 
 @contextlib.contextmanager
-def _thread_manifest_lock(path: Path, *, timeout: float) -> Iterator[bool]:
+def _thread_manifest_lock(path: Path, *, timeout: float) -> Generator[bool, None, None]:
     """Boundedly own one ref-counted process-local manifest lock."""
     key = str(path.expanduser().absolute())
     with _THREAD_LOCKS_GUARD:
@@ -170,7 +170,7 @@ def _release_file_lock(fh: Any) -> None:
 
 
 @contextlib.contextmanager
-def _manifest_lock(path: Path) -> Iterator[None]:
+def _manifest_lock(path: Path) -> Generator[None, None, None]:
     """Serialize one manifest transaction across threads and processes.
 
     Atomic replacement prevents torn JSON, but only a stable sibling lock can

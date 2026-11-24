@@ -1,20 +1,37 @@
 # Getting Started
 
-This guide takes you from a fresh clone to a verified-working install in under five
+This guide takes you from a fresh machine to a verified-working install in under five
 minutes. After this, see the topic guides ([personas](personas.md),
 [macros](macros.md), [scenarios](scenarios.md)) for everything else.
 
 ## 1. Install
 
-From the Octowright repo root:
+Recommended: the packaged tool — one install that every MCP client on the
+machine launches (why that matters is in step 2):
 
 ```bash
+uv tool install octowright
+uvx --from octowright playwright install webkit firefox chromium
+```
+
+`uv tool install` puts `octowright` on your PATH (usually `~/.local/bin`); the
+second line resolves Octowright's pinned Playwright and downloads the browser
+binaries it drives.
+
+From source is for **contributing to Octowright itself**:
+
+```bash
+git clone https://github.com/livingstaccato/octowright.git
+cd octowright
 uv sync
 uv run playwright install webkit firefox chromium
 ```
 
-`uv sync` resolves and installs the Python environment from `uv.lock`; the second
-line downloads the actual browser binaries Playwright drives.
+A checkout's `uv run octowright serve` is a *different install*: if one client
+launches from it while the daemon or other clients come from the packaged
+install, leader/follower versions mix — the skew that wedges the leader's
+new-session rate limit into a reconnect/429 loop. While a checkout hosts the
+daemon, every client must launch from that same checkout.
 
 > Octowright uses `uv` exclusively — there are no `pip install` instructions
 > because Octowright depends on `uv.lock` for reproducible dependency resolution.
@@ -31,21 +48,33 @@ is often `.mcp.json`; for Claude Code's global config, use `~/.claude.json`:
 {
   "mcpServers": {
     "octowright": {
-      "command": "uv",
-      "args": ["--directory", "<absolute-path-to-octowright>", "run", "octowright", "serve"]
+      "command": "/home/<you>/.local/bin/octowright",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-Replace `<absolute-path-to-octowright>` with the expanded path on your machine.
-Then reload your MCP client — the tools should appear as
-`mcp__octowright__browser_launch`, `mcp__octowright__browser_click`, etc.
+Per-client config files: Claude Code reads `~/.claude.json`; project-scoped
+clients often read `.mcp.json`; **pi** reads `~/.pi/agent/mcp.json`; **omp**
+reads `~/.omp/agent/mcp.json`; **Kimi Code** reads `~/.kimi-code/mcp.json`
+(or `$KIMI_CODE_HOME/mcp.json`) — all in this `mcpServers` shape. (In a running
+pi/omp session, `/mcp reload` picks up the new server without a restart; Kimi
+Code has no in-session reload, so restart it after editing the file.)
+
+That is the installed script from step 1; `"command": "octowright"` alone works
+when the client inherits a PATH containing `~/.local/bin`, and the absolute path
+works regardless. Register **every** client the same way, because the first one
+to start spawns the shared daemon — launching one client from a source checkout
+with `uv --directory <checkout> run octowright serve` makes that frozen checkout
+a candidate leader and mixes follower/leader versions until the leader's storm
+guard answers with 429 reconnect loops. Then reload your MCP client — the tools
+should appear as `mcp__octowright__browser_launch`, `mcp__octowright__browser_click`, etc.
 
 The shortcut:
 
 ```bash
-uv run octowright init
+octowright init
 ```
 
 This prints a ready-to-paste config snippet with the path filled in for your install,
@@ -86,13 +115,13 @@ Octowright ships a Click-based CLI. Useful subcommands:
 
 ## Slimming the LLM tool surface
 
-The full MCP surface is currently 134 tools on a core install. When a workflow only needs a slice (driving
+The full MCP surface is currently 139 tools on a core install. When a workflow only needs a slice (driving
 a browser, replaying macros, etc.), pass `--profile` to slim what the LLM
 sees at connection time:
 
 ```bash
-octowright serve --profile=core              # 31 tools — browser core + always-on diagnostics
-octowright serve --profile=core,macros       # 46 tools — browser + macro replay + always-on diagnostics
+octowright serve --profile=core              # 32 tools — browser core + always-on diagnostics
+octowright serve --profile=core,macros       # 47 tools — browser + macro replay + always-on diagnostics
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
@@ -109,3 +138,6 @@ and is what the daemon process inherits when `octowright serve` spawns one.
 - Read [personas.md](personas.md) to learn the identity/profile model.
 - Read [macros.md](macros.md) to record and replay flows.
 - Read [scenarios.md](scenarios.md) to orchestrate multiple browsers as a unit.
+
+For optional live pointer feedback and video playback metadata, see
+[Interaction indicators](interaction-indicators.md). Both settings default off.

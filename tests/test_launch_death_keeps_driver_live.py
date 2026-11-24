@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -28,6 +29,14 @@ from octowright.browser_pool.pool import BrowserPool
 pytestmark = pytest.mark.live_browser
 
 PAGE = "data:text/html,<p id=x>alive</p>"
+
+
+def _driver_process(pw: Any) -> Any:
+    """Fault injection through the process owner of either supported SDK shape."""
+    connection = pw._impl_obj._connection
+    if hasattr(connection, "_transport"):
+        return connection._transport._proc
+    return pw.stop.__self__._client._transport._proc
 
 
 @pytest.fixture
@@ -87,7 +96,7 @@ async def test_a_genuinely_dead_driver_is_still_reset_and_the_launch_retried(tmp
         assert pool._pw is not None
         # Process.kill(), not os.kill(pid, SIGKILL): signal.SIGKILL does not
         # exist on Windows, and the Windows legs run live_browser tests.
-        proc = pool._pw._impl_obj._connection._transport._proc
+        proc = _driver_process(pool._pw)
         proc.kill()
         await proc.wait()
 
@@ -108,7 +117,7 @@ async def test_probe_against_a_real_driver() -> None:
     pw = await async_playwright().start()
     try:
         assert await driver_health.driver_confirmed_dead(pw) is False
-        proc = pw._impl_obj._connection._transport._proc
+        proc = _driver_process(pw)
         proc.kill()  # portable: SIGKILL on POSIX, TerminateProcess on Windows
         await proc.wait()
         assert await driver_health.driver_confirmed_dead(pw) is True
@@ -136,7 +145,7 @@ async def test_a_hung_driver_is_not_confirmed_dead_and_its_stop_is_bounded(monke
 
     monkeypatch.setattr(driver_health, "DRIVER_STOP_TIMEOUT_SECONDS", 0.5)
     pw = await async_playwright().start()
-    proc = pw._impl_obj._connection._transport._proc
+    proc = _driver_process(pw)
     os.kill(proc.pid, signal.SIGSTOP)
     try:
         assert await driver_health.driver_confirmed_dead(pw, timeout=0.3) is False

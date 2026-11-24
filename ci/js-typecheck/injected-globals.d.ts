@@ -81,3 +81,31 @@ interface Window {
     request: OctowrightViewportRequest,
   ) => Promise<Record<string, any>>;
 }
+
+// interactions.js -- passive native input observation, independent output modes.
+interface OctowrightInteractionPayload {
+  v: 1;
+  phase: "down" | "move" | "up" | "cancel" | "double" | "wheel";
+  pointer_type: "mouse" | "touch" | "pen";
+  pointer_id: number;
+  button: 0 | 1 | 2;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  at: number;
+  shown: boolean;
+  dx?: number;
+  dy?: number;
+}
+interface Window {
+  __octowrightInteractionConfig?: (
+    request: { time_origin: number; width: number; height: number; dpr: number },
+  ) => Promise<{ show: boolean; record: boolean }>;
+  __octowrightInteractionEvent?: (payload: OctowrightInteractionPayload) => Promise<void>;
+  __octowrightInteractions?: {
+    ready: Promise<void>;
+    configure(options: { show: boolean; record: boolean }): void;
+    destroy(): void;
+  };
+}

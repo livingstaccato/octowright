@@ -55,6 +55,8 @@ class Participant:
     # without a core change -- the dataclass is public plugin API, so every
     # field on it is a compatibility commitment.
     options: dict[str, Any] = field(default_factory=dict)
+    show_interactions: bool | None = None
+    record_interactions: bool | None = None
 
 
 @dataclass
@@ -161,7 +163,7 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
     _validate_optional_ints(raw, ("viewport_w", "viewport_h"), index=index, scenario_name=scenario_name)
     _validate_optional_bools(
         raw,
-        ("stabilize", "record_video", "trace"),
+        ("stabilize", "record_video", "show_interactions", "record_interactions", "trace"),
         index=index,
         scenario_name=scenario_name,
     )
@@ -182,6 +184,8 @@ def _load_yaml_participant(raw: Any, *, index: int, scenario_name: str) -> Parti
         viewport_h=raw.get("viewport_h"),
         stabilize=raw.get("stabilize"),
         record_video=raw.get("record_video"),
+        show_interactions=raw.get("show_interactions"),
+        record_interactions=raw.get("record_interactions"),
         trace=raw.get("trace"),
         options=options,
     )
@@ -502,6 +506,8 @@ def resolve_launch_kwargs(p: Participant) -> dict[str, Any]:
         "viewport_h": p.viewport_h,
         "stabilize": p.stabilize if p.stabilize is not None else False,
         "record_video": p.record_video if p.record_video is not None else False,
+        "show_interactions": p.show_interactions if p.show_interactions is not None else False,
+        "record_interactions": p.record_interactions if p.record_interactions is not None else False,
         "trace": p.trace if p.trace is not None else False,
     }
 

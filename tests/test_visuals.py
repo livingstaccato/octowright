@@ -252,3 +252,40 @@ async def test_real_assets_leave_no_unsubstituted_placeholders(monkeypatch: pyte
     assert scripts, "no init scripts were wired"
     leftovers = sorted({match for script in scripts for match in re.findall(r"__[A-Z][A-Z0-9_]*__", script)})
     assert leftovers == [], f"unsubstituted asset placeholders: {leftovers}"
+
+
+@pytest.mark.anyio
+async def test_badge_off_suppresses_the_viewport_pill_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`badge=False` must mean no corner overlay, not "the persona badge goes
+    but fixed 390x844 still sits there": the separate viewport pill is gated
+    on the same launch option."""
+    import octowright.browser_pool.visuals as vis
+
+    monkeypatch.setattr(vis, "get_default_url", lambda: "http://127.0.0.1:6286/new-tab")
+
+    async def _scripts(badge: bool) -> list[str]:
+        captured: list[str] = []
+
+        class FakeCtx:
+            async def add_init_script(self, *, script: str) -> None:
+                captured.append(script)
+
+        await vis.wire_init_scripts(
+            FakeCtx(),
+            profile=None,
+            label="phone",
+            instance_id="phoneid001",
+            kind="chromium",
+            badge=badge,
+            badge_position="bottom-right",
+            stabilize=False,
+            viewport_mode="fixed",
+            viewport_width=390,
+            viewport_height=844,
+            viewport_frame_inset_w=0,
+            viewport_frame_inset_h=80,
+        )
+        return captured
+
+    assert not any("__octowright_viewport_status__" in s for s in await _scripts(False))
+    assert any("__octowright_viewport_status__" in s for s in await _scripts(True))

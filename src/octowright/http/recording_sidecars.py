@@ -20,6 +20,7 @@ from pathlib import Path
 #   * ``{stem}.jsonl``                  — the main recording (the file itself)
 #   * ``{stem}.markdown.md``            — session/core.py:_markdown_cache_path
 #   * ``{stem}.websocket.jsonl``        — session/core.py:_websocket_cache_path
+#   * ``{stem}.interactions.jsonl``     — interactions.InteractionController
 #   * ``{stem}.har`` / ``{stem}.<n>.har`` — browser_pool/launch_helpers.py
 #     (initial HAR plus rotation suffixes from ``next_har_path``)
 #   * ``{stem}.trace.zip``              — session/core_ops_mixin.py
@@ -37,6 +38,7 @@ RECORDING_SIDECAR_SUFFIXES: frozenset[str] = frozenset(
         ".jsonl",
         ".markdown.md",
         ".websocket.jsonl",
+        ".interactions.jsonl",
         ".har",
         ".trace.zip",
         ".webm",

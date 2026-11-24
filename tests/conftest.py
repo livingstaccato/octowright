@@ -200,18 +200,16 @@ _install_pool_leak_tracking()
 
 
 def _driver_pid(pw: object) -> int | None:
-    """OS pid of a live Playwright driver, or None if the chain has moved.
+    """OS pid on the connection (1.63) or stop's context-manager client (1.65).
 
-    Playwright exposes no public handle on the node process it spawned, so this
-    walks ``_impl_obj._connection._transport._proc`` defensively: every hop is a
-    ``getattr`` and a broken chain simply means no reaping, never an error.
+    No public process handle exists; a broken chain means no reaping.
     """
-    node: object | None = pw
-    for attr in ("_impl_obj", "_connection", "_transport", "_proc"):
-        node = getattr(node, attr, None)
-        if node is None:
-            return None
-    pid = getattr(node, "pid", None)
+    connection = getattr(getattr(pw, "_impl_obj", None), "_connection", None)
+    transport = getattr(connection, "_transport", None)
+    if transport is None:
+        manager = getattr(getattr(pw, "stop", None), "__self__", None)
+        transport = getattr(getattr(manager, "_client", None), "_transport", None)
+    pid = getattr(getattr(transport, "_proc", None), "pid", None)
     return pid if isinstance(pid, int) else None
 
 

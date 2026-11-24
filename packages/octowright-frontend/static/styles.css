@@ -1571,3 +1571,35 @@ code, .mono { font-family: var(--mono); }
   font-size: 11px;
   color: var(--fg-3);
 }
+
+/* Native recorder canvas is contained in the video; metadata never intercepts input. */
+.session-video:has(.interaction-stage) { display: block; }
+.interaction-stage { position: relative; min-height: 240px; display: flex; }
+.interaction-stage video { object-fit: contain; object-position: 50% 50%; }
+.interaction-layer { position: absolute; overflow: hidden; pointer-events: none; }
+.interaction-marker {
+  position: absolute;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  border: 3px solid #0284c7;
+  border-radius: 50%;
+  background: #e0f2fe88;
+  color: #071827;
+  font: bold 11px/24px system-ui;
+  white-space: nowrap;
+  text-align: center;
+  text-shadow: 0 0 3px white;
+  pointer-events: none;
+}
+.interaction-marker[data-button="2"] { border-style: dashed; border-color: #c026d3; }
+.interaction-marker[data-button="1"] { border-radius: 4px; border-color: #ea580c; }
+.interaction-marker[data-pointer="touch"] { border-style: dotted; border-color: #059669; }
+.interaction-marker[data-phase="hold"] { border-width: 5px; background: #fbbf2488; }
+.interaction-marker[data-phase="drag"] { border-radius: 4px; border-style: dashed; }
+.interaction-marker[data-phase="double"] { border: 6px double #7c3aed; width: 38px; height: 38px; }
+.interaction-marker[data-phase="down"] { background: conic-gradient(#fbbf2488 calc(var(--hold-progress) * 1turn), #e0f2fe88 0); }
+.interaction-controls { padding: 10px 14px; background: var(--bg-1); color: var(--fg-2); font-size: 12px; }
+.interaction-controls label { display: inline-flex; align-items: center; gap: 5px; font-weight: bold; }
+.interaction-controls p { margin: 6px 0 0; }

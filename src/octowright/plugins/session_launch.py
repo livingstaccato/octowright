@@ -17,7 +17,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -148,7 +148,7 @@ class PluginContext:
         label: str | None,
         profile: str | None,
         extra: dict[str, Any] | None = None,
-    ) -> AsyncIterator[SessionLaunch]:
+    ) -> AsyncGenerator[SessionLaunch, None]:
         """Open a recording, write the opening row, and guard the launch.
 
         Takes no ``kind``: the context already holds the validated descriptor

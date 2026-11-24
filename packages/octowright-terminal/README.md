@@ -31,7 +31,8 @@ A plain `uv sync` (default groups) does more than skip it: a sync is exact, so o
 Installing the distribution only makes the plugin *discoverable*. Enable it at daemon start with:
 
 ```bash
-OCTOWRIGHT_PLUGINS=terminal uv run octowright serve
+OCTOWRIGHT_PLUGINS=terminal octowright serve                      # packaged install
+OCTOWRIGHT_PLUGINS=terminal uv run octowright serve               # from a source checkout
 ```
 
 Without that env var (or an equivalent `plugins:` entry in `~/.config/octowright/plugins.yaml`), the plugin is merely *discoverable* — `octowright_status()["plugins"]` lists it, but no `terminal_*` tool registers and no terminal pool exists. That is deliberate: installing a distribution that declares this entry point must not silently extend a browser-driving daemon.

@@ -12,54 +12,56 @@ persistent profiles, structured recordings, and a local debugger dashboard.
 
 ## Get started
 
-Octowright is on PyPI (`uv tool install octowright`, or `uvx octowright serve`
-to run it without installing), but this guide walks the
-from-source path: it is what the MCP registration block below assumes, and
-the optional terminal plugin is only installable from the checkout. Octowright
-uses [`uv`](https://docs.astral.sh/uv/) for dependency management. If you
-don't have `uv` yet:
+Octowright is on PyPI. Install it once — every MCP client on the machine
+launches **that same install** (see *one install, one leader* below; a
+source checkout is for contributing, not for daily driving):
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh                              # if you don't have uv yet
+uv tool install octowright
+uvx --from octowright playwright install webkit firefox chromium             # browser binaries
+octowright init                                                              # print MCP registration block + scaffold config
 ```
 
-Then, from any directory you'd like Octowright to live under (e.g. `~/code/`):
-
-```bash
-git clone https://github.com/livingstaccato/octowright.git
-cd octowright
-uv sync                                              # install Python deps
-uv run playwright install webkit firefox chromium    # install browser binaries
-uv run octowright init                               # print MCP registration block + scaffold config
-```
+One-off CLI commands (e.g. `octowright doctor`) also work via `uvx octowright <cmd>`,
+but never register an MCP client with `uvx octowright serve` — it can resolve a
+different version than the installed daemon. The terminal session-kind plugin is
+optional: `uv tool install octowright --with octowright-terminal`, then run with
+`OCTOWRIGHT_PLUGINS=terminal`.
 
 Engine-binary management is currently CLI-driven (`playwright install` /
 `playwright install --list`), not exposed as Octowright MCP tools.
 
-The last command prints a JSON block to paste into an MCP client config, commonly
+`octowright init` prints a JSON block to paste into an MCP client config, commonly
 `.mcp.json` for a project or `~/.claude.json` for Claude Code. It also creates
 Octowright's user config directory with a sample persona, scenario, and macro so
 you have something to play with.
 
-The block it prints looks like this — `init` substitutes your install path
-into `<absolute-path-to-octowright>`:
+The block it prints looks like this — `init` substitutes the absolute path of the
+installed `octowright` script (typically `~/.local/bin/octowright`):
 
 ```json
 {
   "mcpServers": {
     "octowright": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "<absolute-path-to-octowright>",
-        "run",
-        "octowright",
-        "serve"
-      ]
+      "command": "/home/<you>/.local/bin/octowright",
+      "args": ["serve"]
     }
   }
 }
 ```
+
+**One install, one leader.** The first client to start spawns the shared
+daemon, and every other client bridges to it — so the leader is *whichever
+install a client happened to launch from*, and a follower can never pick up a
+newer version without its own client reconnecting. Point every client at the
+same installed `octowright serve`. Launching one client from a source checkout
+(`uv --directory <checkout> run octowright serve`) makes that frozen checkout a
+candidate leader and mixes follower/leader versions — the exact combination
+that wedges the leader's new-session rate limit into a reconnect/429 loop.
+If you develop from a checkout, leader *and* all followers must come from it
+while it is the daemon's home; `octowright doctor`'s `followers` check names
+any client still running an older install, with its reconnect step.
 
 Reload your MCP client. The tools appear as `mcp__octowright__browser_launch`, etc.
 
@@ -423,7 +425,7 @@ without going through an MCP client:
 
 ## Capability profiles
 
-The full MCP tool surface is currently 134 tools on a core install — every workflow Octowright supports
+The full MCP tool surface is currently 139 tools on a core install — every workflow Octowright supports
 (browser driving, macros, scenarios, persona management, etc.) shows up in
 the LLM's tool schema by default. When the LLM only needs a slice, set
 `OCTOWRIGHT_PROFILE` (or pass `--profile` to `octowright serve`) to one or
@@ -434,7 +436,7 @@ find the dashboard, and surface local guidance even under narrow profiles.
 
 | Profile | What | Tool count |
 |---|---|---|
-| `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 24 |
+| `core` | Minimum to drive a browser end-to-end, including compact DOM and HTTP-first discovery. | 25 |
 | `advanced` | Inspection, cached captures, summaries, assertions, viewport controls, and ARIA-locator interactions for stable test automation. | 33 |
 | `macros` | Macro record / list / run / lint / repair / compile + artifact bundles. | 15 |
 | `scenarios` | Scenario orchestration (multi-browser test setups). | 12 |
@@ -442,11 +444,11 @@ find the dashboard, and surface local guidance even under narrow profiles.
 | `goldens` | Accessibility-tree snapshot baselines + diff. | 5 |
 | `terminals` | Terminal sessions, declared by the `octowright-terminal` session-kind plugin (**experimental**; `pip install octowright-terminal`, see AGENTS.md). Only present when the plugin is enabled via `OCTOWRIGHT_PLUGINS=terminal`. | 7 |
 | always-on | Status, storage report, dashboard, takeover detection, and Advisor tools registered under every profile. | 7 |
-| `all` (or unset) | Default — every core-install tool registers. | 134 |
+| `all` (or unset) | Default — every core-install tool registers. | 139 |
 
 ```bash
-octowright serve --profile=core              # 31 tools — core + always-on
-octowright serve --profile=core,macros       # 46 tools — browser + macro pipeline + always-on
+octowright serve --profile=core              # 32 tools — core + always-on
+octowright serve --profile=core,macros       # 47 tools — browser + macro pipeline + always-on
 octowright serve --profile=core,scenarios    # browser + multi-browser orchestration
 ```
 
@@ -490,7 +492,7 @@ trace/metric export to any OTLP collector:
 export PROVIDE_TRACE_ENABLED=1
 export PROVIDE_METRICS_ENABLED=1
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
-uv run octowright serve
+octowright serve
 ```
 
 Full reference: [docs/telemetry.md](docs/telemetry.md).
@@ -525,3 +527,7 @@ Prints the list of registered tools without needing a live MCP client.
 - [docs/troubleshooting.md](https://github.com/livingstaccato/octowright/blob/main/docs/troubleshooting.md): fast diagnosis for common failures.
 - [docs/architecture/](https://github.com/livingstaccato/octowright/tree/main/docs/architecture/): system diagrams and architecture references.
 - [CHANGELOG.md](https://github.com/livingstaccato/octowright/blob/main/CHANGELOG.md): release summaries.
+
+Optional [interaction indicators](docs/interaction-indicators.md) show manual and
+automated clicks, taps, holds, drags and wheel direction live or over recorded
+video. Live display and metadata recording are independent and default off.

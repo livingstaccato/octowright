@@ -56,6 +56,7 @@ from octowright.session.route_carry import replay_onto_session
 if TYPE_CHECKING:
     from octowright.browser_pool.options import LaunchOptions
     from octowright.browser_pool.pool import BrowserPool
+    from octowright.interactions import InteractionController
 
 log = get_logger(__name__)
 
@@ -81,6 +82,7 @@ async def cleanup_failed_launch(
     video_dir: Path | None,
     recorder: Recorder | None,
     pre_register: bool,
+    interaction_controller: InteractionController | None = None,
 ) -> None:
     """Unified cleanup for both launch-failure paths.
 
@@ -99,6 +101,7 @@ async def cleanup_failed_launch(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
         )
 
 
@@ -131,6 +134,7 @@ async def cancel_cleanup_launch(
     browser: Any,
     video_dir: Path | None,
     recorder: Recorder | None,
+    interaction_controller: InteractionController | None = None,
 ) -> None:
     """Complete launch rollback despite level or repeated cancellation."""
     from octowright.session_manifest import wait_task_after_cancellation
@@ -148,6 +152,7 @@ async def cancel_cleanup_launch(
                 video_dir=video_dir,
                 recorder=recorder,
                 pre_register=False,
+                interaction_controller=interaction_controller,
             )
         )
     await wait_task_after_cancellation(cleanup_task)
@@ -170,6 +175,8 @@ def build_launch_result(
     log_viewport: Any,
     protected: bool = False,
     protected_reason: str = "explicit",
+    show_interactions: bool = False,
+    record_interactions: bool = False,
     video_dir: Path | None,
 ) -> dict[str, Any]:
     """Assemble the dict returned to MCP callers from ``BrowserPool.launch``.
@@ -185,6 +192,8 @@ def build_launch_result(
         "url": target_url,
         "log_path": str(log_path),
         "record_video": record_video,
+        "show_interactions": show_interactions,
+        "record_interactions": record_interactions,
         "trace": trace,
         "har": bool(har_path),
         "viewport": log_viewport,
@@ -248,6 +257,7 @@ async def post_context_setup(
     same root operation instead of racing the initial goto.
     """
     recorder: Recorder | None = None
+    interaction_controller: InteractionController | None = None
     registered = False
     try:
         recorder = Recorder(log_path)
@@ -273,6 +283,10 @@ async def post_context_setup(
             user_data_dir=user_data_dir,
             session=session,
         )
+
+        # Preparation owns failures until it returns; keep the controller in
+        # this rollback scope until registry publication transfers ownership.
+        interaction_controller = new_session.interaction_controller
 
         async with new_session.operation("browser_launch_navigation"):
             # Register the session BEFORE navigating so a failed goto doesn't
@@ -347,6 +361,8 @@ async def post_context_setup(
                 target_url=target_url,
                 log_path=log_path,
                 record_video=launch_options.record_video,
+                show_interactions=launch_options.show_interactions,
+                record_interactions=launch_options.record_interactions,
                 trace=launch_options.trace,
                 har_path=har_path,
                 har_mode=launch_options.har_mode,
@@ -374,6 +390,7 @@ async def post_context_setup(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
         )
         raise
     except Exception as exc:
@@ -383,6 +400,7 @@ async def post_context_setup(
             browser=browser,
             video_dir=video_dir,
             recorder=recorder,
+            interaction_controller=interaction_controller,
             pre_register=False,
         )
         wrapped = maybe_wrap_playwright_error(exc, kind=kind)

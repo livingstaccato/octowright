@@ -47,7 +47,7 @@ dependencies = [
     # _config -- and httpx2/httpcore2 expose both with identical shapes.
     "httpx2>=2.5.0",
     # 2.1 introduced UnexpectedToolError, which server/_state.py imports.
-    "mcp>=2.1.0",
+    "mcp>=2.2.0",
     "playwright>=1.63.0",
     "anyio>=4.4.0",
     "provide-telemetry[otel]>=0.4.8",
@@ -412,6 +412,7 @@ source_paths = [
 # workdir doesn't navigate the full repo cleanly (demo bundles, scripts/demos,
 # etc.), so we point it at the targeted unit suites only.
 pytest_add_cli_args_test_selection = [
+    "tests/test_interactions_controls.py",
     "tests/test_macro_blind_scrub_policy.py",
     "tests/test_macro_listing.py",
     "tests/test_macro_network_clean_no_text.py",
@@ -535,6 +536,7 @@ pytest_add_cli_args_test_selection = [
     "tests/test_macro_credential_privacy_contract.py",
     "tests/test_macro_credential_sinks.py",
     "tests/test_macro_descriptions.py",
+    "tests/test_emulation_recorded_replay.py",
     "tests/test_macro_dsl.py",
     "tests/test_macro_dsl_branches.py",
     "tests/test_macro_execution_branches.py",

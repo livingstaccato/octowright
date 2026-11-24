@@ -120,7 +120,14 @@ def test_the_cap_is_not_raised_past_the_measured_safe_value() -> None:
 
 def _worst_case_seconds(wildcards: int, url: str, *, runs: int) -> float:
     """Best-of-*runs* time for the worst pattern with *wildcards* ``**`` segments."""
-    from playwright._impl._glob import glob_to_regex_pattern
+    try:
+        from playwright._impl.isomorphic.url_match import glob_to_regex_pattern
+    except ModuleNotFoundError as exc:
+        # Older supported Playwright releases kept the converter here.
+        # Fail for other missing dependencies rather than hiding import errors.
+        if exc.name not in {"playwright._impl.isomorphic", "playwright._impl.isomorphic.url_match"}:
+            raise
+        from playwright._impl._glob import glob_to_regex_pattern
 
     compiled = re.compile(glob_to_regex_pattern("**a" * (wildcards - 1) + "**b"))
     best = float("inf")

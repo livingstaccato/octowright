@@ -391,31 +391,36 @@ async def wire_init_scripts(
         operation="browser_launch_init_script",
     )
 
-    viewport_payload = {
-        "mode": viewport_mode,
-        "width": viewport_width,
-        "height": viewport_height,
-        # The chrome measured at launch, so the in-page pill can subtract the
-        # same baseline the Python side does and reach the same verdict.
-        # null when unmeasured, which the pill reads as "cannot see the
-        # window" — it then shows the size and never the mismatch warning.
-        "inset_w": viewport_frame_inset_w,
-        "inset_h": viewport_frame_inset_h,
-    }
-    viewport_script = (
-        _viewport_pill_script()
-        .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
-        .replace(
-            "__VIEWPORT_TOKENS__",
-            _json.dumps(
-                {action: viewport_action_token_for(viewport_token, action) for action in VIEWPORT_TOKEN_ACTIONS}
-            ),
+    # The viewport pill is a badge-adjacent corner overlay, not an independent
+    # feature: badge=False means no corner overlays at all (including the
+    # "fixed 390x844" pill), without touching the title-tag or macro-status
+    # scripts, whose hiding was never tied to the badge flag.
+    if badge:
+        viewport_payload = {
+            "mode": viewport_mode,
+            "width": viewport_width,
+            "height": viewport_height,
+            # The chrome measured at launch, so the in-page pill can subtract the
+            # same baseline the Python side does and reach the same verdict.
+            # null when unmeasured, which the pill reads as "cannot see the
+            # window" — it then shows the size and never the mismatch warning.
+            "inset_w": viewport_frame_inset_w,
+            "inset_h": viewport_frame_inset_h,
+        }
+        viewport_script = (
+            _viewport_pill_script()
+            .replace("__VIEWPORT_INFO__", _json.dumps(viewport_payload))
+            .replace(
+                "__VIEWPORT_TOKENS__",
+                _json.dumps(
+                    {action: viewport_action_token_for(viewport_token, action) for action in VIEWPORT_TOKEN_ACTIONS}
+                ),
+            )
         )
-    )
-    await bounded(
-        context.add_init_script(script=viewport_script),
-        operation="browser_launch_init_script",
-    )
+        await bounded(
+            context.add_init_script(script=viewport_script),
+            operation="browser_launch_init_script",
+        )
 
     # WebKit has no browser-chrome Cmd+T; inject a page-level handler so the
     # shortcut still opens /new-tab. Chromium/Firefox handle it natively (and

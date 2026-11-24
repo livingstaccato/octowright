@@ -63,7 +63,9 @@ def build_tracing_http_client(
     *,
     headers: dict[str, str] | None = None,
     on_session_id: Callable[[str], None] | None = None,
+    on_response: Callable[[httpx2.Response], Awaitable[None]] | None = None,
     timeout: float = 30.0,
+    transport: httpx2.AsyncBaseTransport | None = None,
 ) -> httpx2.AsyncClient:
     """Build the httpx2 client the follower bridge hands to the MCP transport.
 
@@ -77,7 +79,10 @@ def build_tracing_http_client(
     * a response hook capturing ``mcp-session-id``, which the bridge records in
       its state file — the leader's pid-liveness reaper matches sessions by
       ``(follower_pid, remote_session_id)``, so losing it would silently disable
-      that reaper.
+      that reaper;
+    * ``on_response``, an extra response hook the bridge uses to see the HTTP
+      status of a refused request, which mcp's transport otherwise turns into a
+      JSON-RPC error frame (``proxy_session_loss``).
 
     Mirrors ``create_mcp_http_client``'s defaults (follow_redirects, 30s).
     """
@@ -92,7 +97,11 @@ def build_tracing_http_client(
         if value:
             on_session_id(value)
 
-    response_hooks = [] if on_session_id is None else [_capture_session_id]
+    response_hooks: list[Callable[[httpx2.Response], Awaitable[None]]] = []
+    if on_session_id is not None:
+        response_hooks.append(_capture_session_id)
+    if on_response is not None:
+        response_hooks.append(on_response)
     kwargs: dict[str, Any] = {
         "follow_redirects": True,
         "timeout": httpx2.Timeout(timeout),
@@ -100,6 +109,8 @@ def build_tracing_http_client(
     }
     if headers is not None:
         kwargs["headers"] = headers
+    if transport is not None:  # tests: an in-process leader
+        kwargs["transport"] = transport
     return httpx2.AsyncClient(**kwargs)
 
 

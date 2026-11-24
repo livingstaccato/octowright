@@ -29,7 +29,7 @@ in the run's own task. Nothing outside a macro step ever binds one, so a direct
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -40,7 +40,7 @@ _CHECK: ContextVar[FillOriginCheck | None] = ContextVar("octowright_fill_origin_
 
 
 @contextmanager
-def fill_origin_check(check: FillOriginCheck | None) -> Iterator[None]:
+def fill_origin_check(check: FillOriginCheck | None) -> Generator[None, None, None]:
     """Bind *check* to every fill/type the enclosed dispatch makes; ``None`` binds nothing.
 
     ``None`` is bound explicitly rather than skipped, so an unmarked step can

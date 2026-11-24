@@ -24,6 +24,13 @@ vi.mock("./session-stream.js", () => ({
 vi.mock("./api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./api.js")>()),
   getSession: getSessionMock,
+  getInteractions: vi.fn(async () => ({
+    available: false,
+    events: [],
+    next_cursor: 0,
+    complete: true,
+    truncated: false,
+  })),
   getEvents: getEventsMock,
 }));
 
@@ -468,6 +475,7 @@ describe("bootSession — plugin registry dispatch", () => {
 
     expect(importRendererMock).toHaveBeenCalledWith("/plugins/p/renderer.js");
     expect(bootStreamSessionMock).toHaveBeenCalledTimes(1);
+    expect((await import("./api.js")).getInteractions).not.toHaveBeenCalled();
     const [, sessionId, detail, mount] = bootStreamSessionMock.mock.calls[0] as [
       HTMLElement,
       string,

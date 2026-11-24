@@ -98,6 +98,12 @@ mismatch means local drift from the shipped copy).
 - **No hooks support.** The agy plugin manifest supports a `hooks.json` but Octowright
   does not ship any hooks for agy. Session-start guidance is delivered via the
   `octowright` skill instead.
-- **`uvx` required for the default config.** The default `mcp_config.json` uses
-  `uvx octowright serve` for portability. Without `uv` installed, edit `mcp_config.json`
-  to point at your install path directly.
+- **Config rendered at install time.** The generated `mcp_config.json` registers
+  the **installed** `octowright serve` when the install machine has the packaged
+  tool (the one-install-one-leader guidance), and falls back to
+  `uvx octowright serve` only when it does not (a plugin install cannot assume
+  the tool exists). Note the fallback's caveat: `uvx` resolves its own cached
+  version, so on a machine whose other clients use the packaged install it can
+  follow a different version — run `uv tool install octowright` and re-run
+  `octowright skill install antigravity --force` to re-render the config with
+  the installed script.

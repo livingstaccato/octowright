@@ -91,6 +91,7 @@ def _fake_session(
         user_data_dir=user_data_dir,
         stabilize=stabilize,
         protected=protected,
+        interaction_controller=None,
         protected_reason="explicit",
         trace=trace,
         page=SimpleNamespace(url=url),
@@ -444,6 +445,8 @@ class TestListSessions:
             "log_path",
             "har_path",
             "protected",
+            "show_interactions",
+            "record_interactions",
             "extra_http_headers",
             "operation_gate",
         }

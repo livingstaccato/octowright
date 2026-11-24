@@ -195,8 +195,17 @@ def _raise_oserror(*_a: object, **_kw: object) -> object:
 
 
 def test_log_guard_returns_when_fstat_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    # fd 2 not stat-able → bail without crashing.
-    monkeypatch.setattr(housekeeping.os, "fstat", _raise_oserror)
+    # fd 2 not stat-able → bail without crashing. Only fd 2 raises: the patch
+    # is process-wide (housekeeping.os is os), and pytest's own machinery
+    # fstats other descriptors during the call.
+    real_fstat = os.fstat
+
+    def _fstat(fd: int) -> os.stat_result:
+        if fd == 2:
+            raise OSError("boom")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(housekeeping.os, "fstat", _fstat)
     ftruncate = MagicMock()
     monkeypatch.setattr(housekeeping.os, "ftruncate", ftruncate)
     housekeeping._guard_daemon_log_size(log=MagicMock())

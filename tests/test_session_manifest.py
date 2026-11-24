@@ -61,6 +61,13 @@ class FakeContext:
     async def close(self) -> None:
         self.closed = True
 
+    async def expose_binding(self, _name: str, _callback: Any) -> None:
+        return None
+
+    def remove_listener(self, event: str, handler: Any) -> None:
+        if self.events.get(event) == handler:
+            self.events.pop(event)
+
     async def add_init_script(self, *, script: str) -> None:
         return None
 

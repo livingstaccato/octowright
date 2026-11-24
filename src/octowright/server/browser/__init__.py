@@ -33,6 +33,7 @@ from octowright.server.browser.input import (
     browser_get_text_by,
     browser_hover,
     browser_press_key,
+    browser_scroll,
     browser_select_option,
     browser_set_input_files,
     browser_type,
@@ -62,6 +63,7 @@ from octowright.server.browser.inspect import (
     browser_tail_recording,
     browser_wait_for,
 )
+from octowright.server.browser.interactions import browser_set_interaction_visuals
 from octowright.server.browser.lifecycle import (
     browser_close,
     browser_close_all,
@@ -74,16 +76,19 @@ from octowright.server.browser.lifecycle import (
     browser_relaunch_fluid,
     browser_resize,
     browser_set_protected,
+    browser_set_safe_area,
     browser_spawn_roster,
     browser_suggest_for_url,
     browser_viewport_status,
     browser_viewport_sync,
 )
 from octowright.server.browser.network import (
+    browser_abort_route,
     browser_mock_route,
     browser_network_requests,
     browser_network_summary,
     browser_set_dialog_policy,
+    browser_set_offline,
     browser_unmock_route,
 )
 from octowright.server.browser.trace import browser_open_trace
@@ -105,6 +110,7 @@ from octowright.server.browser.websockets import (
 
 __all__ = [
     "browser_a11y_dragdrop",
+    "browser_abort_route",
     "browser_artifact_manifest",
     "browser_brief",
     "browser_capture_and_close",
@@ -150,10 +156,14 @@ __all__ = [
     "browser_reset_frame",
     "browser_resize",
     "browser_screenshot",
+    "browser_scroll",
     "browser_select_option",
     "browser_set_dialog_policy",
     "browser_set_input_files",
+    "browser_set_interaction_visuals",
+    "browser_set_offline",
     "browser_set_protected",
+    "browser_set_safe_area",
     "browser_snapshot",
     "browser_spawn_roster",
     "browser_suggest_for_url",

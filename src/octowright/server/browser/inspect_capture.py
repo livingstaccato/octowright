@@ -153,5 +153,5 @@ async def browser_capture_and_close(
     # never a partial one (external closure racing the ticket instead fails
     # the call with SessionClosedError, never lands here).
     assert isinstance(outcome.prepared, dict), "capture-and-close preparation must return a dict on success"  # nosec B101
-    captured = cast(dict[str, Any], outcome.prepared)
-    return cast(BrowserCaptureAndCloseResult, {**captured, "closed": True})
+    captured = cast(BrowserCaptureAndCloseResult, outcome.prepared)
+    return {**captured, "closed": True}

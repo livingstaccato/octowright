@@ -32,12 +32,18 @@ Armed once in the leader (see ``cli.serve._run_leader``) when
    reading output, a long CI run) from one whose OS process is actually gone.
    This job reaps by *PID liveness* instead: bridge-state.json already carries
    each follower's ``(follower_pid, remote_session_id)`` on every activity
-   snapshot, so a follower whose PID no longer exists is unambiguously dead —
-   never a live client being quiet — and its leader-side StreamableHTTP
+   snapshot, so a follower whose PID no longer exists is dead — never a live
+   client being quiet — and its leader-side StreamableHTTP
    session (which pins a per-session server task + transport in memory
    indefinitely once abandoned, the multi-GB leak this job exists to contain)
    gets terminated immediately, independent of idle time and safe to run
-   unconditionally.
+   unconditionally. A pid is only meaningful in the namespace that issued it,
+   so on Linux a follower also records its pid namespace and start time
+   (``process_identity``): one from another namespace (a sandboxed or
+   containerised client sharing the state dir) is never reaped, a live pid
+   with a different start time is a reused pid and counts as dead, and a
+   session that sent a request within the tracker TTL is left for a later
+   cycle whatever its pid says.
 
 4. **Cap the MCP session table.** Job 3 only reaps sessions whose follower
    *process* is dead; a follower that's alive but storming (each RPC opening a
@@ -273,22 +279,45 @@ def _sample_process_rss() -> None:
     _PROCESS_RSS.record(leader + browsers, attributes={"scope": "total"})
 
 
-def _dead_pid_or_none(pid_key: str, pid_is_alive: Any) -> int | None:
+def _dead_pid_or_none(pid_key: str, snap: Any, pid_is_alive: Any) -> int | None:
     """Parse a bridge-state follower key and return its PID if confirmed dead.
 
-    Returns ``None`` for an unparsable key or a PID that's alive (or whose
-    liveness can't be determined — ``pid_is_alive`` raising is treated
-    conservatively as dead, since an unusable/overflowing PID can't belong to
-    a real live follower)."""
+    Returns ``None`` for an unparsable key, a PID that's alive, or a follower
+    recorded from another pid namespace (a sandboxed or containerised client
+    sharing the state dir), whose pid this process cannot look up at all --
+    see ``process_identity.follower_verdict``. A live PID whose start time
+    differs from the recorded one is the dead follower's PID reused, and so
+    is dead. ``pid_is_alive`` raising is treated conservatively as dead, since
+    an unusable/overflowing PID can't belong to a real live follower."""
+    from octowright.process_identity import follower_verdict
+
     try:
         pid = int(pid_key)
     except (TypeError, ValueError):
         return None
     try:
-        alive = pid_is_alive(pid)
+        verdict = follower_verdict(pid, snap, pid_is_alive)
     except (OverflowError, ValueError):
-        alive = False
-    return None if alive else pid
+        verdict = "dead"
+    return pid if verdict == "dead" else None
+
+
+def _recently_active_sessions() -> set[str]:
+    """Session ids the leader saw a request on within the tracker TTL.
+
+    A second witness for the pid verdict: a follower whose session is still
+    sending requests is not dead, whatever its pid says. Guards the cases the
+    recorded identity cannot -- an older follower that records none, sandboxed
+    in another pid namespace. A truly dead follower stops sending, so this
+    delays its reaping by at most ``MCP_SESSION_TTL``. Empty outside a leader.
+    """
+    try:
+        from octowright.http.app import get_mcp_session_tracker
+
+        tracker = get_mcp_session_tracker()
+        return tracker.active_ids() if tracker is not None else set()
+    except Exception:  # never let the witness stop the reaper
+        return set()
 
 
 async def _terminate_follower_transport(instances: dict[str, Any], session_id: Any) -> str | None:
@@ -316,13 +345,19 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
     """Terminate leader-side MCP sessions whose follower process has died.
 
     Reads bridge-state.json for each follower's ``(follower_pid,
-    remote_session_id)``; a PID that ``pid_is_alive`` reports gone means that
-    session is abandoned beyond doubt, so it's terminated here-and-now rather
+    remote_session_id)``; a PID that ``pid_is_alive`` reports gone (or, where
+    the snapshot records a start time, now held by a different process) means
+    that session is abandoned, so it's terminated here-and-now rather
     than waiting on the opt-in idle-time reaper (which can't run this
     conservatively — idle time alone can't distinguish a dead follower from a
     live one that's just quiet). No-ops entirely when this process isn't the
     HTTP-MCP leader (``_session_manager`` is unset), matching how
-    ``_apply_mcp_session_idle_timeout`` guards the same attribute.
+    ``_confirm_mcp_session_idle_timeout`` guards the same attribute.
+
+    Two exceptions keep it from reaping a live follower: one recorded from
+    another pid namespace is skipped (its pid means nothing here), and one
+    whose session the leader saw a request on within the tracker TTL is left
+    for a later cycle.
     """
     from octowright import bridge_state, defaults
     from octowright.http.app import mcp_session_manager
@@ -341,11 +376,15 @@ async def _reap_dead_follower_sessions_once(*, log: Any) -> None:
 
     dead_pids: list[int] = []
     reaped_sessions: list[str] = []
+    recent = _recently_active_sessions()
     for pid_key, snap in followers.items():
         if not isinstance(snap, dict):
             continue
-        pid = _dead_pid_or_none(pid_key, pid_is_alive)
+        pid = _dead_pid_or_none(pid_key, snap, pid_is_alive)
         if pid is None:
+            continue
+        if snap.get("remote_session_id") in recent:
+            # Still sending: keep the entry so the next cycle judges it again.
             continue
         dead_pids.append(pid)
         reaped_session_id = await _terminate_follower_transport(instances, snap.get("remote_session_id"))
@@ -372,22 +411,17 @@ async def _enforce_mcp_session_cap_once(*, log: Any) -> None:
     is dead — it can't touch a follower that's alive but churning sessions in a
     storm. This is the version-agnostic memory bound: when the manager's session
     table is over ``OCTOWRIGHT_MCP_MAX_SESSIONS``, evict the most-idle sessions
-    back down to the cap (abandoned-before-active ordering via the tracker), so
+    back down to the cap (live-follower sessions last, then abandoned-before-active
+    ordering via the tracker -- see ``select_eviction_victims``), so
     the table — and the ~54KB/session it costs — can't grow unbounded no matter
     how a follower misbehaves. No-ops when not the HTTP-MCP leader or when the
     cap is disabled. See ``http/mcp_flap_guard``.
     """
     from octowright.http.mcp_flap_guard import mcp_max_sessions, select_eviction_victims
-    from octowright.server import mcp as _mcp
 
     cap = mcp_max_sessions()
-    if cap is None:
-        return
-    from octowright.http.app import mcp_session_manager
-
-    manager = mcp_session_manager(_mcp)
-    instances = getattr(manager, "_server_instances", None)
-    if not isinstance(instances, dict):
+    instances = _mcp_session_instances() if cap is not None else None
+    if cap is None or instances is None:
         return
     over = len(instances) - cap
     if over <= 0:
@@ -399,12 +433,65 @@ async def _enforce_mcp_session_cap_once(*, log: Any) -> None:
     recent = tracker.active_ids() if tracker is not None else set()
     last_seen = tracker.last_seen_snapshot() if tracker is not None else {}
     instance_ids = [str(sid) for sid in instances]
-    victims = select_eviction_victims(instance_ids, recent, last_seen, over)
+    protected = _live_follower_session_ids()
+    victims = select_eviction_victims(instance_ids, recent, last_seen, over, protected)
 
     evicted = await _evict_sessions(instances, victims, tracker)
     if evicted:
         log.warning("octowright.housekeeping.evicted_over_cap_sessions", count=len(evicted), cap=cap)
         _SESSIONS_EVICTED.add(len(evicted))
+    _log_evicted_live_followers(log, evicted, protected, cap)
+
+
+def _mcp_session_instances() -> dict[Any, Any] | None:
+    """The leader's live MCP session table, or None when this is not the leader."""
+    from octowright.http.app import mcp_session_manager
+    from octowright.server import mcp as _mcp
+
+    instances = getattr(mcp_session_manager(_mcp), "_server_instances", None)
+    return instances if isinstance(instances, dict) else None
+
+
+def _log_evicted_live_followers(log: Any, evicted: list[str], protected: frozenset[str], cap: int) -> None:
+    """Say so when the cap had to take sessions a live follower still names."""
+    evicted_protected = [sid for sid in evicted if sid in protected]
+    if evicted_protected:
+        log.warning(
+            "octowright.housekeeping.evicted_live_follower_sessions",
+            count=len(evicted_protected),
+            session_ids=evicted_protected,
+            protected=len(protected),
+            cap=cap,
+        )
+
+
+def _live_follower_session_ids() -> frozenset[str]:
+    """Session ids a follower whose process is still alive names in
+    bridge-state.json -- the sessions cap eviction must shed last. A follower
+    whose pid is dead (or unreadable, or reused) protects nothing; the
+    dead-follower reaper owns those. One recorded from another pid namespace
+    is protected: its pid cannot be checked from here, so it is presumed
+    live, as the reaper presumes it."""
+    from octowright import bridge_state, defaults
+    from octowright.singleton import pid_is_alive
+
+    followers = bridge_state.read_state(defaults.BRIDGE_STATE_PATH).get("followers")
+    if not isinstance(followers, dict):
+        return frozenset()
+    live: set[str] = set()
+    for pid_key, snap in followers.items():
+        if not isinstance(snap, dict):
+            continue
+        session_id = snap.get("remote_session_id")
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        try:
+            int(pid_key)
+        except (TypeError, ValueError):
+            continue
+        if _dead_pid_or_none(pid_key, snap, pid_is_alive) is None:
+            live.add(session_id)
+    return frozenset(live)
 
 
 async def _evict_sessions(instances: dict[str, Any], victims: list[str], tracker: Any) -> list[str]:

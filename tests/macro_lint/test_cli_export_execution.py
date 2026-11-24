@@ -21,6 +21,7 @@ it made. It is the test that would have caught ``mock_route``'s ``pattern`` vs
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import sys
 import types
@@ -102,6 +103,12 @@ class _FakeLocator:
     async def focus(self) -> None:
         self._rec.record(f"locator.focus:{self._label}")
 
+    async def scroll_into_view_if_needed(self) -> None:
+        self._rec.record(f"locator.scroll_into_view_if_needed:{self._label}")
+
+    async def hover(self) -> None:
+        self._rec.record(f"locator.hover:{self._label}")
+
     async def evaluate(self, expression: str, *args: Any) -> Any:
         """a11y_dragdrop's grab predicate. ``"() => false"`` is a deliberate
         sentinel other expressions never carry, letting a test force a False
@@ -173,11 +180,27 @@ class _FakeKeyboard:
             raise RuntimeError("boom")
 
 
+class _FakeCDPSession:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def send(self, method: str, params: dict[str, Any]) -> None:
+        self._rec.record("cdp.send", method, params)
+
+
 class _FakeContext:
     def __init__(self, rec: _Recorder) -> None:
         self._rec = rec
         self.pages: list[_FakePage] = []
         self.handlers: dict[str, list[Any]] = {}
+        self.cdp = _FakeCDPSession(rec)
+
+    async def set_offline(self, offline: bool) -> None:
+        self._rec.record("context.set_offline", offline)
+
+    async def new_cdp_session(self, page: Any) -> _FakeCDPSession:
+        self._rec.record("context.new_cdp_session", page.tag)
+        return self.cdp
 
     def on(self, event: str, handler: Any) -> None:
         self.handlers.setdefault(event, []).append(handler)
@@ -203,6 +226,14 @@ class _FakeContext:
         self._rec.record("context.unroute", pattern)
 
 
+class _FakeMouse:
+    def __init__(self, rec: _Recorder) -> None:
+        self._rec = rec
+
+    async def wheel(self, delta_x: int, delta_y: int) -> None:
+        self._rec.record("mouse.wheel", delta_x, delta_y)
+
+
 class _FakePage:
     """Records every call the generated dispatch bodies can make on a page."""
 
@@ -210,6 +241,7 @@ class _FakePage:
         self._rec, self.tag = rec, tag
         self.url = "https://example.test/current"
         self.keyboard = _FakeKeyboard(rec)
+        self.mouse = _FakeMouse(rec)
         self.context = context or _FakeContext(rec)
         self.handlers: dict[str, list[Any]] = {}
         self.rendered_text = "hello world"
@@ -397,6 +429,10 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "set_input_files", "selector": "#file", "paths": ["a.txt"]},
     {"action": "upload_files", "selector": "#pick-file", "paths": ["b.txt"], "timeout_ms": 321},
     {"action": "resize", "width": 1280, "height": 800},
+    {"action": "scroll", "selector": "#gallery", "delta_x": 10, "delta_y": 320},
+    {"action": "set_safe_area", "top": 0, "right": 0, "bottom": 34, "left": 0},
+    {"action": "set_offline", "offline": True},
+    {"action": "set_offline", "offline": False},
     {"action": "navigate_back"},
     {"action": "mock_route", "pattern": "**/api/*", "status": 201, "body": "{}"},
     {"action": "unmock_route", "pattern": "**/api/*"},
@@ -409,6 +445,7 @@ _EVERY_ACTION: list[dict[str, Any]] = [
     {"action": "switch_frame", "selector": "iframe#pay"},
     {"action": "reset_frame"},
     {"action": "close_page", "index": 1},
+    {"action": "abort_route", "pattern": "**/api/refused", "error_code": "connectionrefused"},
 ]
 
 
@@ -440,6 +477,65 @@ def _run(monkeypatch: pytest.MonkeyPatch, actions: list[dict[str, Any]]) -> tupl
     # Executing the generated artefact is the point of this module.
     exec(source, namespace)
     return asyncio.run(namespace["run_everything"]()), rec
+
+
+@pytest.mark.parametrize("pattern_field", ["pattern", "url_pattern"])
+@pytest.mark.parametrize("replace", [False, True])
+def test_abort_routes_keep_their_own_delayed_reason(
+    monkeypatch: pytest.MonkeyPatch, pattern_field: str, replace: bool
+) -> None:
+    installed: list[tuple[str, Any]] = []
+    removed: list[tuple[str, Any]] = []
+
+    async def route(_page: _FakePage, pattern: str, handler: Any) -> None:
+        installed.append((pattern, handler))
+
+    async def unroute(_page: _FakePage, pattern: str, handler: Any) -> None:
+        removed.append((pattern, handler))
+
+    monkeypatch.setattr(_FakePage, "route", route)
+    monkeypatch.setattr(_FakePage, "unroute", unroute)
+    second = "**/first" if replace else "**/second"
+    result, _rec = _run(
+        monkeypatch,
+        [
+            {"action": "abort_route", pattern_field: "**/first", "error_code": "connectionrefused"},
+            {"action": "abort_route", pattern_field: second, "error_code": "connectionreset"},
+        ],
+    )
+    assert result == {"executed": 2, "skipped": 0}
+    assert [pattern for pattern, _handler in installed] == ["**/first", second]
+    assert removed == ([installed[0]] if replace else [])
+    reasons: list[str] = []
+
+    class Route:
+        async def abort(self, reason: str) -> None:
+            reasons.append(reason)
+
+    async def delayed_requests() -> None:
+        for _pattern, handler in installed:
+            # Playwright passes request as a second argument when a callback
+            # declares one, including a defaulted capture parameter.
+            assert len(inspect.signature(handler).parameters) == 1
+            await handler(Route())
+
+    asyncio.run(delayed_requests())
+    assert reasons == ["connectionrefused", "connectionreset"]
+
+
+def test_scroll_after_switch_frame_resolves_the_main_page_locator(monkeypatch: pytest.MonkeyPatch) -> None:
+    result, rec = _run(
+        monkeypatch,
+        [
+            {"action": "switch_frame", "selector": "iframe#child"},
+            {"action": "scroll", "selector": "#panel", "delta_x": 0, "delta_y": 200},
+            {"action": "scroll", "delta_x": 10, "delta_y": 0},
+        ],
+    )
+    assert result == {"executed": 3, "skipped": 0}
+    resolved = [(name, args) for name, args, _kw in rec.calls if name.startswith("locator.resolve:")]
+    assert resolved == [("locator.resolve:main", ("#panel",)), ("locator.resolve:main", ("#panel",))]
+    assert [args for name, args, _kw in rec.calls if name == "mouse.wheel"] == [(0, 200), (10, 0)]
 
 
 def test_the_fixture_covers_every_dispatchable_kind() -> None:

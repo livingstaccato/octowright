@@ -19,6 +19,7 @@ from octowright.request_failures import NetworkLedger
 from octowright.session.operation.gate import USE_DEFAULT, OperationGateSnapshot, UseDefault
 
 if TYPE_CHECKING:
+    from octowright.interactions import InteractionController
     from octowright.macros.privacy import DurableTextScrubber
 
 
@@ -31,6 +32,7 @@ class SessionLike(Protocol):
     page: Page
     pages: list[Page]
     recorder: Recorder
+    interaction_controller: InteractionController | None
     log_path: Path
     console: deque[dict[str, Any]]
     console_count: int

@@ -280,6 +280,8 @@ class LaunchOptions:
     #: instead. Grants nothing a ``label`` does not, being the same key. NEVER
     #: read from a JSONL recording (see ``from_launch_record``).
     session_key: str | None = None
+    show_interactions: bool = False
+    record_interactions: bool = False
 
     @classmethod
     def _reject_unknown_options(cls, options: dict[str, Any]) -> None:
@@ -370,6 +372,8 @@ class LaunchOptions:
                 "headed": headed,
                 "stabilize": record.get("stabilize", False),
                 "record_video": bool(record.get("video_dir")),
+                "show_interactions": _record_bool(record, "show_interactions", False),
+                "record_interactions": _record_bool(record, "record_interactions", False),
                 "trace": record.get("trace", False),
                 "har": har and har_path is not None,
                 "har_path": har_path,
